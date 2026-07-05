@@ -25,6 +25,8 @@
 │  src/python/data_merger.py    — DailyContext 結晶化            │
 │  src/python/profiler.py       — 深層プロファイル (手動/IMPORT)  │
 │  src/python/calendar_manager.py / finance_manager.py / ...     │
+│  src/python/calendar_sync.py      — ICS 取込 (stdlib のみ)      │
+│  src/python/apple_calendar_sync.py — macOS ローカル DB 取込     │
 └────────────────────────┬─────────────────────────────────────┘
                          │ subprocess / mmap / JSON
 ┌────────────────────────▼─────────────────────────────────────┐
@@ -43,8 +45,9 @@
 ### 設計原則
 | 原則 | 内容 |
 |---|---|
-| **記録と相談の分離** | RECORD 保存 → `sync_diary_index()` のみ。CONSULT → 検索+LLM |
-| **記録と分析の分離** | RECORD/IMPORT 保存は profiler を走らせない (IMPORT の LINE 取込のみ例外) |
+| **記録と相談の分離** | RECORD / カレンダー同期 → `sync_diary_index()` のみ。CONSULT → 検索+LLM |
+| **記録と分析の分離** | RECORD / カレンダー同期は profiler 非実行。IMPORT の LINE 取込のみ profiler 自動実行 |
+| **手動カレンダー取込** | ICS / Apple は人間がトリガー。クラウド API・バックグラウンド同期なし |
 | **完全遅延初期化** | 埋め込み・llama-server は初回 `consult()` / profiler 実行まで起動しない |
 | **インデックス mtime 同期** | ソース JSON/md/txt の mtime が古い時のみ `vectors.bin` 再構築 |
 | **プロファイル二層** | `fixed_attributes` (手入力・保持) / `inferred_profile` (自動・読取専用) |
@@ -156,7 +159,7 @@ consult(query):
 | タブ | 内容 |
 |---|---|
 | **RECORD** | 週/月カレンダー + 日付バナー + 縦スクロール領域 + **[予定\|家計簿\|日記]** サブタブ + 保存ボタン (Ctrl+S) |
-| **IMPORT** | LINE .txt ドロップ → `line_history.txt` 追記 → **profiler 自動実行** |
+| **IMPORT** | LINE `.txt` ドロップ → `line_history.txt` 追記 → **profiler 自動実行** / **ICS ファイル選択** (tkinter) / **Apple カレンダー同期** (macOS のみ) |
 | **CONSULT** | フル幅チャットのみ (サイドバーなし) |
 | **SETTINGS** | 基本情報6項目 (手入力・保存) + 自動プロフィール (読取専用) + 再分析(profiler) |
 
@@ -170,9 +173,61 @@ consult(query):
 - サブタブ内容: `#record-scroll` 内で縦スクロール
 - 保存ボタン: スクロール外・下部固定
 
+**IMPORT タブ詳細**:
+- **LINE**: 公式エクスポート `.txt` を Input に D&D または Paste → 追記 → profiler ワーカー
+- **Google (ICS)**: 手動エクスポート `.ics` → 「ICSファイルを同期」→ ネイティブファイルダイアログ (tkinter, オフライン)
+- **Apple**: macOS ローカル SQLite (`CalendarItem` / `Event`) を読取。Windows ではボタン無効 + ヒント表示
+- **マージモード**: `#ics-merge-mode` Select — **追記** (`append`) / **上書き** (`overwrite`)。ICS・Apple **共通**
+- **取込後 (ICS/Apple)**: `calendar.json` 更新 → `sync_diary_index(force=True)` のみ。**profiler は走らない**
+- **ICS アーカイブ**: 選択ファイルを `data/raw/calendar_import.ics` にコピー保存
+
 **ウィジェット**:
 - `src/ui/calendar_widget.py` — 月/週切替, 予定マーク `*`, `DateSelected` メッセージ (day button は **id なし**, `name=date` で DuplicateIds 回避)
 - `src/ui/time_picker.py` — `VerticalRollColumn` + `TimePicker`
+
+### 2.8 カレンダー同期 (`calendar_sync.py` / `apple_calendar_sync.py`)
+
+**共通エントリポイント**: `apply_calendar_import(imported, mode, source=...)`  
+→ `calendar_manager.load_calendar()` / `save_calendar()` → `data/raw/calendar.json`
+
+**calendar.json 形式**:
+```json
+{"YYYY-MM-DD": [{"time": "HH:MM", "title": "..."}, ...]}
+```
+
+| モジュール | 入力 | 主 API |
+|---|---|---|
+| `calendar_sync.py` | 手動エクスポート `.ics` | `parse_ics()`, `merge_calendar()`, `sync_from_ics()` |
+| `apple_calendar_sync.py` | macOS SQLite DB | `find_calendar_databases()`, `parse_apple_calendars()`, `sync_from_apple_calendar()` |
+
+**ICS パース** (stdlib のみ):
+- RFC 5545 line folding 展開
+- `DTSTART` (TZID / UTC `Z` / 終日 `VALUE=DATE`) → ローカル `(date, time)`
+- `SUMMARY` → `title`。同一日内は `time` 昇順ソート
+
+**マージ** (`merge_calendar`):
+| モード | 動作 |
+|---|---|
+| `append` | 同一 `(time, title)` は重複排除。既存日付に追加 |
+| `overwrite` | 同一日付キーを取込データで置換 |
+
+**Apple DB**:
+- 候補: `~/Library/Group Containers/group.com.apple.calendar/Calendar.sqlitedb`, `~/Library/Calendars/**/*.sqlite*`
+- テーブル自動検出: `CalendarItem` 優先、次に `Event`
+- Core Data epoch (2001-01-01 起点) をローカル日時へ変換
+- デフォルト範囲: 過去 365 日 + 未来 365 日。複数 DB は `time+title` で統合
+- **非公式スキーマ** — 将来 macOS 更新で壊れる可能性あり。ICS フォールバック推奨
+
+**TUI からの呼び出し** (`src/ui/app.py`):
+- ICS: ワーカースレッド → `_pick_ics_file()` → `calendar_sync.sync_from_ics(path, mode)` → `sync_diary_index(force=True)`
+- Apple: ワーカースレッド → `apple_calendar_sync.sync_from_apple_calendar(mode)` → 同上
+- 完了後: RECORD タブの予定リスト・カレンダーマークを再描画
+
+**CLI / テスト**:
+```powershell
+python tests\test_calendar_sync.py
+python tests\test_apple_calendar_sync.py
+```
 
 ---
 
@@ -186,6 +241,9 @@ consult(query):
 - [x] DailyContext: Calendar + Finance + Diary + AI_Consultations + LINE Sessions
 - [x] ConversationSession + Response Latency
 - [x] `calendar_manager.py`, `finance_manager.py`, `consultation_log.py`
+- [x] **ICS カレンダー同期** (`calendar_sync.py`) + **Apple カレンダー同期** (`apple_calendar_sync.py`)
+- [x] IMPORT タブ: LINE + ICS + Apple、共通マージモード Select
+- [x] カレンダー取込 → `sync_diary_index(force=True)` (profiler 非実行)
 - [x] Future Context (30日) を CONSULT プロンプトに注入
 - [x] AI相談ログ → DailyContext + profiler 入力
 
@@ -202,7 +260,8 @@ consult(query):
 ### TUI
 - [x] 4タブ構成 (RECORD / IMPORT / CONSULT / SETTINGS)
 - [x] RECORD: カレンダー + 予定/家計簿/日記サブタブ + TimePicker + 保存
-- [x] IMPORT: LINE 専用タブ
+- [x] IMPORT: LINE + ICS + Apple カレンダー (macOS)
+- [x] `tests/test_calendar_sync.py`, `tests/test_apple_calendar_sync.py` PASS
 - [x] SETTINGS: fixed_attributes + 読取専用自動プロフィール
 - [x] `tests/ui_smoke.py` PASS
 
@@ -218,7 +277,6 @@ consult(query):
 ### 4.1 プロファイル連携の強化 (要望あり)
 - [ ] **fixed_attributes を profiler LLM プロンプトに注入** (分析の文脈として。上書きはしない)
 - [ ] 基本情報保存時の **自動 profiler 再実行** は未実装 — 必要なら SETTINGS 保存後に `_profiler_worker` 呼び出し
-- [ ] `README.md` / 旧 docstring を v2 UI・v5 スキーマに同期
 
 ### 4.2 RECORD / カレンダー UX
 - [ ] 家計簿入力日・相談日のカレンダーマーク (現状は予定 `*` のみ)
@@ -231,6 +289,7 @@ consult(query):
 - [ ] 実機 ARM64 で benchmark フルサイズ (10k/100k/500k) 計測・記録
 
 ### 4.4 バックログ
+- [ ] Apple カレンダー DB スキーマ変更への追従 (ICS フォールバック維持)
 - [ ] 予定密度 × 意思決定ルールの profiler 共起 (Future Context 深掘り)
 - [ ] `src/python/app.py` (CLI) と `src/ui/app.py` (TUI) 名称衝突 — import 時は `importlib` パターン (`ui_smoke.py` 参照)
 
@@ -244,7 +303,10 @@ cd C:\Users\badger\Documents\cursur\decision_engine
 python src\python\pipeline.py          # インデックス再構築
 python src\python\profiler.py          # 深層プロファイル (--no-llm 可)
 python src\ui\app.py                   # TUI
+python src\python\consultation_engine.py "相談内容"   # CLI 相談 (知識検索統合)
 python tests\ui_smoke.py               # ヘッドレス UI テスト
+python tests\test_calendar_sync.py     # ICS パース・マージ
+python tests\test_apple_calendar_sync.py
 python tests\benchmark.py --quick      # C++ ベンチ (要 build/search_engine.exe)
 
 .\build.ps1                            # C++ ビルド + スモーク実行
@@ -255,18 +317,24 @@ python tests\benchmark.py --quick      # C++ ベンチ (要 build/search_engine.
 src/python/data_merger.py           DailyContext + ConversationSession
 src/python/consultation_engine.py  相談 (遅延初期化, Future Context)
 src/python/profiler.py             deep_profile.v5
+src/python/calendar_sync.py          ICS 取込 (apply_calendar_import 共通)
+src/python/apple_calendar_sync.py  Apple カレンダー (macOS SQLite)
 src/python/llm_config.py           7B 選択・サーバー引数
 src/ui/app.py                      Textual TUI
 src/ui/calendar_widget.py          カレンダー
 src/ui/time_picker.py              時刻ロール
 src/cpp/search_engine.cpp          NEON 検索
 tests/benchmark.py                 QPS ベンチ
-data/raw/{diary.md,calendar.json,finance.json,line_history.txt,ai_consultations.json}
+tests/test_calendar_sync.py
+tests/test_apple_calendar_sync.py
+data/raw/{diary.md,calendar.json,calendar_import.ics,finance.json,line_history.txt,ai_consultations.json}
 data/processed/{vectors.bin,metadata.json,deep_profile.json,user_profile.json}
 ```
 
 ### 既知の制約・注意
-- **基本情報保存 ≠ 自動プロファイling** — profiler は別途「再分析」または IMPORT 時
+- **基本情報保存 ≠ 自動プロファイling** — profiler は別途「再分析」または IMPORT の LINE 取込時
+- **カレンダー同期 (ICS/Apple) ≠ profiler** — インデックス更新 (`sync_diary_index`) のみ
+- **Apple カレンダー同期は macOS のみ** — Windows TUI ではボタン無効
 - **fixed_attributes は CONSULT に使う / profiler 分析入力には未使用**
 - TUI 表示は端末サイズ依存 (24行端末では RECORD 内スクロール必須)
 - 7B 初回ロード ~2–3分。`tests/benchmark.py` は `search_engine.exe` 要ビルド
