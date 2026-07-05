@@ -1,0 +1,23 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# ビルド成果物
+build/
+*.o
+*.obj
+
+# 大きなバイナリ（Git に載せない）
+models/*.gguf
+tools/llama-arm64/
+
+# 個人データ・生成物（GitHub 公開時は除外）
+data/raw/
+data/processed/
+
+# OS / エディタ
+.DS_Store
+Thumbs.db
+.cursor/
