@@ -44,6 +44,7 @@ from .paths import (
     KNOWLEDGE_META,
     LINE_HISTORY,
     LLAMA_DIR,
+    LLAMA_SERVER_EXE,
     MODELS_DIR,
     PROCESSED,
     PROJECT_ROOT as ROOT,
@@ -58,14 +59,37 @@ from .profile_store import (
     load_user_profile,
     save_fixed_attributes,
 )
+from .search_daemon import SearchDaemonClient, SearchDaemonError
 from . import pipeline  # noqa: E402
-from .llm_config import find_gguf, llama_server_cmd, SERVER_PORT  # noqa: E402
+from .llm_config import (  # noqa: E402
+    find_gguf,
+    generation_params,
+    llama_server_cmd,
+    SERVER_PORT,
+)
 
 SYSTEM_PROMPT = (
     "あなたはユーザーの思考・価値観を完全に理解する分身AIである。"
     "ユーザーの意思決定を支援せよ。"
     "与えられたユーザー属性・深層プロファイル・過去の日記・外部知識のみを根拠として、"
-    "本人に寄り添いながら誠実かつ論理的に助言すること。"
+    "本人に寄り添いながら誠実かつ論理的に助言すること。\n\n"
+    "【回答前の思考プロセス (必須)】\n"
+    "回答を書き始める前に、思考フェーズで必ず次の3点を検証せよ:\n"
+    "1. このユーザーの主観的バイアスは何か — 提供された「主観と客観のギャップ」"
+    "を参照し、相談文自体がそのバイアスの産物である可能性を疑うこと。\n"
+    "2. 実際の行動データ (支出額・予定・他者への発話) から言える事実は何か — "
+    "本人の自己申告と矛盾する場合は、行動データの方を信頼すること。\n"
+    "3. 自分がこれから出す助言は、ギャップを埋める行動を促すか、それとも"
+    "本人の思い込みを心地よく強化するだけか — 後者なら助言を書き直すこと。\n"
+    "思考フェーズの内容は最終回答に含めず、検証を通過した結論のみを"
+    "指定の4セクション形式で出力すること。事実に基づく指摘は誠実に、"
+    "ただし断罪ではなく本人が動ける形で伝えること。\n\n"
+    "【外部知識リクエスト (任意・厳格運用)】\n"
+    "提供された知識だけでは答えられない客観的・一般的な専門知識が必要な場合のみ、"
+    "回答本文の末尾に <fetch_query>検索クエリ</fetch_query> を出力してよい "
+    "(最大2件)。クエリは一般名詞のみで構成し、ユーザーの個人情報"
+    "(氏名・所属・日記の内容・金額等) を絶対に含めないこと。"
+    "取得はユーザーの明示許可時のみ実行され、次回の相談から検索コンテキストに反映される。"
 )
 
 OUTPUT_FRAMEWORK = """回答は必ず以下の4セクション構成のMarkdownで出力すること:
@@ -88,6 +112,109 @@ OUTPUT_FRAMEWORK = """回答は必ず以下の4セクション構成のMarkdown�
 物理的に実行可能か、キャパシティオーバーにならないかを厳密に評価せよ。
 実行困難な提案は縮小・延期・代替案を提示し、セクション4の重み付けを
 Future Context の制約に合わせて調整すること。"""
+
+# ============================================================ 面接シミュレーション
+INTERVIEWER_SYSTEM_PROMPT = (
+    "あなたは外資系IT企業・外資系金融 (HFT/クオンツ) の採用面接を長年担当してきた"
+    "厳格かつ建設的な面接官である。ケース面接・グループディスカッション (GD) を"
+    "模擬的に実施する。ルール:\n"
+    "- 一度に1つの問いだけを投げ、候補者に考えさせる。答えを先に言わない。\n"
+    "- 候補者の回答の曖昧な前提・MECE でない分解・数字の根拠欠如を短く突く。\n"
+    "- 高圧的にせず、実際のトップティア面接の温度感を保つ。\n"
+    "- 出力は簡潔に。長い講義をしない。"
+)
+
+# ケースバンク: 出題は決定論的 (セッション毎にカーソル巡回)。乱数を使わない。
+INTERVIEW_CASE_BANK: list[dict] = [
+    {"industry": "外資IT", "format": "ケース面接",
+     "theme": "日本国内のクラウドインフラ市場の年間売上を推定し、後発企業の参入戦略を提案せよ"},
+    {"industry": "外資金融 (HFT)", "format": "ケース面接",
+     "theme": "取引システムのレイテンシを1桁改善する投資の費用対効果を構造化して評価せよ"},
+    {"industry": "外資IT", "format": "GD",
+     "theme": "エンジニア採用において『ポテンシャル』と『即戦力』のどちらを優先すべきか"},
+    {"industry": "外資金融 (クオンツ)", "format": "ケース面接",
+     "theme": "個人向け株取引アプリの手数料無料化が収益構造に与える影響を分解せよ"},
+    {"industry": "外資IT", "format": "GD",
+     "theme": "生成AIによってジュニアエンジニアの育成モデルはどう変わるべきか"},
+]
+
+INTERVIEW_END_COMMANDS = ("終了", "講評", "講評して", "review", "end")
+INTERVIEW_START_COMMANDS = ("開始", "start", "次の問題", "新しい問題")
+
+
+def _format_latency_section(latencies: list[dict]) -> str:
+    """講評プロンプト用の応答時間セクション (記録なしなら空文字)。"""
+    if not latencies:
+        return ""
+    lines = "\n".join(
+        f"- 候補者発言 {l['turn']}: {l['sec']} 秒" for l in latencies)
+    return f"\n# 候補者の応答時間 (Response Latency)\n{lines}\n"
+
+# ============================================================ カオス GD シミュレーター
+GD_SYSTEM_PROMPT = (
+    "あなたはグループディスカッション (GD) シミュレーターである。1回の応答の中で、"
+    "以下の3人の学生を同時に演じ、各発言を [学生A] [学生B] [学生C] の書式で出力する。\n"
+    "- 学生A (クラッシャー): 論理が破綻しているが自信満々。他者の発言にマウントを"
+    "取り、声の大きさで議論を支配しようとする。\n"
+    "- 学生B (フリーライダー): ほとんど発言しない。発言しても「Aさんに賛成です」等の"
+    "同調のみ。沈黙する場合は [学生B] (沈黙) と書く。\n"
+    "- 学生C (クラウザー): 話題をすぐ別の方向へ逸らし、議論の焦点を壊す。\n"
+    "ルール:\n"
+    "- 司会者・まとめ役を演じない。議論を勝手に収束させない。\n"
+    "- ユーザー (候補者) が介入しなければ、カオスは放置されたまま進行する。\n"
+    "- 3人合わせて簡潔に。ユーザーが介入できる余白を必ず残す。"
+)
+
+# ES が無い場合のドメイン非依存 GD テーマ (決定論的巡回)
+GD_THEME_BANK = [
+    "新しい事業を1つ立ち上げるなら何をすべきか、チームとして結論を出せ",
+    "組織の生産性を最も高める施策を3つに絞り、優先順位を付けよ",
+    "限られた予算で最大の社会的インパクトを生む方法について合意を形成せよ",
+]
+
+# 動的 GD ペルソナ: フロントエンドから渡される属性ラベル → 挙動指示。
+# ラベル外の自由記述はそのまま挙動指示として使う (ドメイン非依存)。
+PRESET_PERSONA_TRAITS = {
+    "クラッシャー": "論理が破綻しているが自信満々。他者の発言にマウントを取り、"
+                   "声の大きさで議論を支配しようとする",
+    "フリーライダー": "ほとんど発言しない。発言しても同調のみで貢献しない。"
+                     "沈黙する場合は (沈黙) と書く",
+    "クラウザー": "話題をすぐ別の方向へ逸らし、議論の焦点を壊す",
+    "協調型": "他者の意見を整理して橋渡しするが、自分の主張は弱く流されやすい",
+    "論理的": "構造化と定義の厳密さにこだわるが、細部に固執して進行を遅らせる",
+    "アイデア型": "発想は豊富だが実現可能性を検討せず、次々に新案を出して発散させる",
+}
+MAX_GD_PERSONAS = 9
+
+
+def build_gd_system_prompt(personas: list[dict] | None) -> str:
+    """N 人 (最大9) のペルソナ配列から GD 多重人格プロンプトを動的展開する。
+
+    personas 未指定なら既定の3人構成 (GD_SYSTEM_PROMPT) — 後方互換。"""
+    if not personas:
+        return GD_SYSTEM_PROMPT
+    names = []
+    lines = []
+    for i, p in enumerate(personas[:MAX_GD_PERSONAS]):
+        name = str(p.get("name") or f"学生{chr(ord('A') + i)}").strip()
+        trait = str(p.get("trait") or "協調型").strip()
+        desc = PRESET_PERSONA_TRAITS.get(trait, trait)
+        names.append(name)
+        lines.append(f"- [{name}] ({trait}): {desc}。")
+    roster = "\n".join(lines)
+    fmt = " ".join(f"[{n}]" for n in names[:3]) + (" …" if len(names) > 3 else "")
+    return (
+        f"あなたはグループディスカッション (GD) シミュレーターである。1回の応答の中で、"
+        f"以下の {len(names)} 人の参加者を同時に演じ、各発言を {fmt} の書式で出力する。\n"
+        f"{roster}\n"
+        "ルール:\n"
+        "- 司会者・まとめ役を演じない。議論を勝手に収束させない。\n"
+        "- ユーザー (候補者) が介入しなければ、各参加者の性格に従った"
+        "力学がそのまま進行する。\n"
+        "- 全員が毎ターン話す必要はない。性格上発言するはずの参加者だけが話す。\n"
+        "- 全体で簡潔に。ユーザーが介入できる余白を必ず残す。"
+    )
+
 
 DEFAULT_ATTRIBUTES = {
     "age": "",
@@ -132,13 +259,25 @@ ATTRIBUTE_FIELDS = list(ATTRIBUTE_LABELS.items())
 
 
 # ============================================================ 知識チャンク分割
+def _read_text_lenient(path: Path) -> str:
+    """UTF-8 を第一候補、cp932 (Windows ANSI 保存) をフォールバックに読む。"""
+    raw = path.read_bytes()
+    try:
+        return raw.decode("utf-8")
+    except UnicodeDecodeError:
+        try:
+            return raw.decode("cp932")
+        except UnicodeDecodeError:
+            return raw.decode("utf-8", errors="replace")
+
+
 def load_knowledge_chunks() -> list[dict]:
     chunks: list[dict] = []
     KNOWLEDGE_DIR.mkdir(parents=True, exist_ok=True)
     for f in sorted(KNOWLEDGE_DIR.iterdir()):
         if f.suffix.lower() not in (".md", ".txt"):
             continue
-        text = f.read_text(encoding="utf-8")
+        text = _read_text_lenient(f)
         title, body = f.stem, []
         for line in text.splitlines():
             m = re.match(r"^##\s+(.*)", line)
@@ -172,6 +311,7 @@ class LlamaServerBackend:
     def __init__(self, exe: Path, model: Path, port: int):
         self.exe, self.model, self.port = exe, model, port
         self.proc: subprocess.Popen | None = None
+        self._slot_cache = None  # KV プレフィックス・ピニング (遅延生成)
         import atexit
         atexit.register(self.stop)
 
@@ -183,7 +323,7 @@ class LlamaServerBackend:
 
     def start(self, timeout_s: int | None = None) -> None:
         import urllib.request
-        from llm_config import model_startup_timeout
+        from .llm_config import model_startup_timeout
         if timeout_s is None:
             timeout_s = model_startup_timeout(self.model)
         if self.proc is not None and self.proc.poll() is None:
@@ -205,19 +345,76 @@ class LlamaServerBackend:
         self.stop()
         raise RuntimeError("llama-server の起動がタイムアウトしました")
 
-    def generate(self, system: str, user: str, max_tokens: int = 900) -> str:
+    def _slot_cache_client(self):
+        """KV スロットキャッシュのクライアント (遅延生成・サーバー非対応なら不使用)。"""
+        from .llm_config import server_supports_slot_save
+        if self._slot_cache is None and server_supports_slot_save(self.exe):
+            from .kv_cache import SlotCacheClient
+            self._slot_cache = SlotCacheClient(self.port)
+        return self._slot_cache
+
+    def generate(self, system: str, user: str, max_tokens: int | None = None,
+                 on_token=None, prefix_hash: str | None = None) -> str:
+        """on_token が渡された場合は SSE ストリーミングでトークン毎に呼ぶ。
+
+        prefix_hash を渡すと KV プレフィックス・ピニングが有効化される:
+        生成前にディスクからスロット復元を試み、生成後 (初回のみ) 保存する。
+        キャッシュ操作の失敗は無視される (best-effort — 生成は必ず続行)。
+        温度・トークン上限は config/model_params.json (generation) で管理。"""
         import urllib.request
         self.start()
-        payload = json.dumps({
+        slot_client = self._slot_cache_client() if prefix_hash else None
+        if slot_client is not None:
+            try:
+                outcome = slot_client.ensure_prefix(prefix_hash)
+                print(f"[kv_cache] prefix {prefix_hash[:8]}: {outcome}",
+                      file=sys.stderr)
+            except Exception:  # noqa: BLE001 — キャッシュ不調で生成を止めない
+                slot_client = None
+        gen = generation_params()
+        body: dict = {
             "messages": [{"role": "system", "content": system},
                          {"role": "user", "content": user}],
-            "max_tokens": max_tokens, "temperature": 0.6,
-        }).encode("utf-8")
+            "max_tokens": max_tokens if max_tokens is not None else gen["max_tokens"],
+            "temperature": gen["temperature"],
+            "stream": on_token is not None,
+        }
+        if prefix_hash is not None:
+            from .kv_cache import SLOT_ID
+            body["id_slot"] = SLOT_ID       # 復元したスロットで生成する
+            body["cache_prompt"] = True     # 共通トークン接頭辞の再利用を明示
+        payload = json.dumps(body).encode("utf-8")
         req = urllib.request.Request(
             f"http://127.0.0.1:{self.port}/v1/chat/completions",
             data=payload, headers={"Content-Type": "application/json"})
         with urllib.request.urlopen(req, timeout=600) as r:
-            return json.load(r)["choices"][0]["message"]["content"].strip()
+            if on_token is None:
+                answer = json.load(r)["choices"][0]["message"]["content"].strip()
+            else:
+                parts: list[str] = []
+                for raw in r:  # SSE: "data: {...}\n" 行を逐次読む
+                    line = raw.decode("utf-8", errors="replace").strip()
+                    if not line.startswith("data:"):
+                        continue
+                    data = line[len("data:"):].strip()
+                    if data == "[DONE]":
+                        break
+                    try:
+                        delta = json.loads(data)["choices"][0].get("delta", {})
+                    except (json.JSONDecodeError, KeyError, IndexError):
+                        continue
+                    piece = delta.get("content")
+                    if piece:
+                        parts.append(piece)
+                        on_token(piece)
+                answer = "".join(parts).strip()
+        # 生成成功後にのみ保存 (プレフィックスの KV が確実に温まっている状態)
+        if slot_client is not None:
+            try:
+                slot_client.commit_prefix(prefix_hash)
+            except Exception:  # noqa: BLE001 — 保存失敗は高速化の機会損失に過ぎない
+                pass
+        return answer
 
     def stop(self) -> None:
         """自分が起動したサーバーを確実に終了させる (Terminate → Kill)。"""
@@ -240,11 +437,15 @@ class RuleBasedBackend:
 
     name = "rule-based reasoner (LLMなしフォールバック)"
 
-    def generate(self, system: str, user: str, max_tokens: int = 0) -> str:
-        return ("## 1. 現状分析\n(ローカルLLM未検出のため簡易応答)\n\n"
-                "## 2. 価値観との整合性\ndeep_profile.json の value_hierarchy を参照。\n\n"
-                "## 3. 必要なスキルギャップ\ndata/knowledge/ を参照。\n\n"
-                "## 4. 次の一手\nmodels/ にGGUFを配置するとLLM推論が有効化される。")
+    def generate(self, system: str, user: str, max_tokens: int = 0,
+                 on_token=None, prefix_hash: str | None = None) -> str:
+        answer = ("## 1. 現状分析\n(ローカルLLM未検出のため簡易応答)\n\n"
+                  "## 2. 価値観との整合性\ndeep_profile.json の value_hierarchy を参照。\n\n"
+                  "## 3. 必要なスキルギャップ\ndata/knowledge/ を参照。\n\n"
+                  "## 4. 次の一手\nmodels/ にGGUFを配置するとLLM推論が有効化される。")
+        if on_token is not None:
+            on_token(answer)
+        return answer
 
     def stop(self) -> None:
         pass
@@ -260,6 +461,14 @@ class ConsultationEngine:
     def __init__(self):
         self._embedder = None
         self._backend = None
+        # 検索デーモン (mmap ゼロコピー IPC)。初回検索まで起動しない遅延初期化
+        self._search_daemon: SearchDaemonClient | None = None
+        self._search_daemon_failed = False
+        # interview_sim / gd_sim: エンジンプロセス存続中のみ保持するセッション状態
+        self._interview_state: dict | None = None
+        self._interview_cursor = 0
+        self._gd_state: dict | None = None
+        self._gd_cursor = 0
 
     # ---- 埋め込み (pipeline.py と同一空間) --------------------------------
     @property
@@ -293,6 +502,7 @@ class ConsultationEngine:
             sources.append(FINANCE_JSON)
         if not force and not self._stale(DIARY_BIN, *sources):
             return False
+        self._release_index_mapping(DIARY_BIN)  # 再構築前にデーモンの mmap を解放
         chunks = pipeline.load_chunks()  # 日付結合済み DailyContext
         pipeline.build_index(chunks, DIARY_BIN, DIARY_META,
                              embedder=self.embedder,
@@ -306,12 +516,50 @@ class ConsultationEngine:
             return False
         if not force and not self._stale(KNOWLEDGE_BIN, *sources):
             return False
+        self._release_index_mapping(KNOWLEDGE_BIN)  # 再構築前にデーモンの mmap を解放
         chunks = load_knowledge_chunks()
         pipeline.build_index(chunks, KNOWLEDGE_BIN, KNOWLEDGE_META,
                              embedder=self.embedder, source="data/knowledge/")
         return True
 
     # ---- a. C++検索エンジン呼び出し ---------------------------------------
+    # フォールバック連鎖: 常駐デーモン (mmap ゼロコピー) → 1-shot exe → NumPy。
+    # NumPy 分岐は exe 不在環境の生命線 — 削除禁止 (AI_SKILLS §9)。
+
+    def _get_search_daemon(self) -> SearchDaemonClient | None:
+        """常駐デーモンを遅延起動する。一度でも失敗したら以後このプロセスでは
+        使わない (クラッシュするデーモンの respawn ループを避ける。1-shot /
+        NumPy が残るため機能は失われない)。"""
+        if self._search_daemon_failed:
+            return None
+        if self._search_daemon is None:
+            try:
+                daemon = SearchDaemonClient()
+                daemon.start()
+                self._search_daemon = daemon
+            except SearchDaemonError:
+                self._search_daemon_failed = True
+        return self._search_daemon
+
+    def _drop_search_daemon(self) -> None:
+        daemon, self._search_daemon = self._search_daemon, None
+        self._search_daemon_failed = True
+        if daemon is not None:
+            daemon.close()
+
+    def _release_index_mapping(self, bin_path: Path) -> None:
+        """インデックス再構築 (上書き) の前に必ず呼ぶ。Windows ではデーモンが
+        mmap を保持したままだと bin の書き込みが PermissionError になる
+        (AI_SKILLS §9.3)。remap に失敗した場合はデーモンごと終了させて
+        プロセス死によるマッピング解放を保証する。"""
+        daemon = self._search_daemon
+        if daemon is None:
+            return
+        try:
+            daemon.remap(bin_path)
+        except SearchDaemonError:
+            self._drop_search_daemon()
+
     def search_index(self, bin_path: Path, meta_path: Path, qvec,
                      top_k: int = 3) -> list[dict]:
         if not bin_path.exists():
@@ -320,7 +568,14 @@ class ConsultationEngine:
         chunks = {c["id"]: c for c in meta["chunks"]}
 
         hits: list[tuple[int, float]] = []
-        if SEARCH_EXE.exists():
+        daemon = self._get_search_daemon()
+        if daemon is not None:
+            try:
+                hits = daemon.search(bin_path, qvec, top_k)
+            except SearchDaemonError:
+                self._drop_search_daemon()  # 以後は 1-shot / NumPy 経路
+                hits = []
+        if not hits and SEARCH_EXE.exists():
             tmp = PROCESSED / f"_ce_query_{os.getpid()}.bin"
             tmp.write_bytes(qvec.tobytes())
             try:
@@ -406,13 +661,18 @@ class ConsultationEngine:
         if not DEEP_PROFILE.exists():
             return "(未生成: profiler.py 未実行)"
         p = json.loads(DEEP_PROFILE.read_text(encoding="utf-8"))
-        lines = ["価値観(重み順): " + " > ".join(
-            f"{v['value']}" for v in p["value_hierarchy"][:4])]
-        biases = [b for b in p["cognitive_biases"] if b["hit_count"] > 0][:3]
+        # 部分生成・スキーマ移行期の deep_profile でも落ちないよう防御的に読む
+        lines = []
+        values = p.get("value_hierarchy", [])
+        if values:
+            lines.append("価値観(重み順): " + " > ".join(
+                f"{v['value']}" for v in values[:4]))
+        biases = [b for b in p.get("cognitive_biases", [])
+                  if b.get("hit_count", 0) > 0][:3]
         if biases:
             lines.append("注意すべきバイアス: " + ", ".join(b["bias"] for b in biases))
         seen = []
-        for r in p["decision_rules"]:
+        for r in p.get("decision_rules", []):
             if r["recommended_action"] not in seen:
                 seen.append(r["recommended_action"])
             if len(seen) >= 5:
@@ -443,13 +703,63 @@ class ConsultationEngine:
         return "\n".join(f"- {l}" for l in lines)
 
     @staticmethod
+    def _gap_section() -> str:
+        """profiler が検出した主観×客観ギャップを CONSULT に強制注入する。
+
+        相談は本人の主観の産物であるため、行動データとの乖離を毎回
+        コンテキストとして与え、LLM の思考フェーズで検証させる。"""
+        if not DEEP_PROFILE.exists():
+            return "(未生成: profiler.py を実行するとギャップ分析が有効になる)"
+        try:
+            p = json.loads(DEEP_PROFILE.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            return "(読込失敗)"
+        gap = p.get("gap_analysis", {})
+        if not gap:
+            return "(未生成: profiler を再実行するとギャップ分析が有効になる)"
+        from .gap_analysis import format_gap_table
+        text = format_gap_table(gap, max_gaps=4)
+        llm_syn = gap.get("llm_synthesis", {}).get("analysis", "").strip()
+        if llm_syn:
+            if len(llm_syn) > 500:
+                llm_syn = llm_syn[:500] + "…"
+            text += f"\n\n[LLMによる言語化 (抜粋)]\n{llm_syn}"
+        return text
+
+    @staticmethod
     def _future_context_section(days_ahead: int = 30) -> str:
         from .calendar_manager import format_future_context, load_future_events
         events = load_future_events(days_ahead=days_ahead)
         return format_future_context(events)
 
-    def build_prompt(self, query: str, diary_hits: list[dict],
-                     knowledge_hits: list[dict]) -> str:
+    def build_static_prefix(self) -> str:
+        """KV キャッシュ (プレフィックス・ピニング) 対象の静的プレフィックス。
+
+        【不変条件】プロファイル由来の情報のみで構成すること。相談文・検索
+        ヒット・日付依存情報 (Future Context 等) を混ぜた瞬間、毎回ハッシュが
+        変わりキャッシュが機能しなくなる。また、このプレフィックスは必ず
+        プロンプトの先頭に置くこと (KV は共通トークン接頭辞でのみ再利用される)。"""
+        return f"""# 基本情報 (本人入力・固定)
+{self._fixed_attributes_section()}
+
+# 推定プロフィール (日記・LINE・相談から自動抽出)
+{self._inferred_profile_section()}
+
+# 深層プロファイル (profiler.py 多層分析)
+{self._profile_section()}
+
+# 主観と客観のギャップ (認知的不協和 — 日記/相談 × 家計簿/予定/LINE の突合)
+※ 相談内容がこのバイアスの産物でないか、思考フェーズで必ず検証すること
+{self._gap_section()}
+
+"""
+
+    def build_dynamic_suffix(self, query: str, diary_hits: list[dict],
+                             knowledge_hits: list[dict]) -> str:
+        """相談ごとに変わる動的サフィックス (検索ヒット + Future Context + 相談文)。
+
+        Future Context はプロファイルではなく日付依存のため、静的プレフィックス
+        ではなくこちらに置く (静的側に移すと日付が変わるたびキャッシュ全滅)。"""
         def _tag(c: dict) -> str:
             return ("その日の行動ログ(日記+LINE)" if c.get("is_full_day_log")
                     else "日記" if c.get("has_diary") else "LINE")
@@ -460,16 +770,7 @@ class ConsultationEngine:
             f"[知識 {c['title']} / 類似度{c['score']:.3f}]\n{c['text'].strip()[:500]}"
             for c in knowledge_hits) or "(該当なし)"
         future_ctx = self._future_context_section(days_ahead=30)
-        return f"""# 基本情報 (本人入力・固定)
-{self._fixed_attributes_section()}
-
-# 推定プロフィール (日記・LINE・相談から自動抽出)
-{self._inferred_profile_section()}
-
-# 深層プロファイル (profiler.py 多層分析)
-{self._profile_section()}
-
-# コンテキスト1: 関連する過去の日記 (NEONベクトル検索)
+        return f"""# コンテキスト1: 関連する過去の日記 (NEONベクトル検索)
 {diary_ctx}
 
 # コンテキスト2: 関連する外部知識 (NEONベクトル検索)
@@ -483,20 +784,339 @@ class ConsultationEngine:
 
 {OUTPUT_FRAMEWORK}"""
 
+    def build_prompt(self, query: str, diary_hits: list[dict],
+                     knowledge_hits: list[dict]) -> str:
+        """完全なプロンプト = 静的プレフィックス + 動的サフィックス (順序固定)。"""
+        return (self.build_static_prefix()
+                + self.build_dynamic_suffix(query, diary_hits, knowledge_hits))
+
     # ---- c. 推論 -----------------------------------------------------------
     @property
     def backend(self):
         if self._backend is None:
-            model = find_gguf()
-            server = LLAMA_DIR / "llama-server.exe"
+            model = find_gguf(role="consult")
+            server = LLAMA_SERVER_EXE
             if model and server.exists():
                 self._backend = LlamaServerBackend(server, model, SERVER_PORT)
             else:
                 self._backend = RuleBasedBackend()
         return self._backend
 
-    def consult(self, query: str, top_k: int = 3, status=None) -> str:
-        """相談1件を処理して4セクションMarkdownを返す。status は進捗コールバック。"""
+    # ---- 面接シミュレーション (mode="interview_sim") ----------------------
+    def _consult_interview_sim(self, query: str, status=None, on_token=None,
+                               response_time_sec: float | None = None) -> str:
+        """ES 駆動の敵対的 (Adversarial) 面接シミュレーション (状態保持型)。
+
+        フロー: 出題 → 複数ターンの議論 → 「講評」で論理・防御の講評 +
+        gap_insights (日常行動のギャップ分析) と統合した改善アクション提示。
+
+        【情報の非対称性 — 変更禁止】
+        出題・議論フェーズのプロンプトには「ES とトランスクリプトのみ」を与え、
+        gap_insights (_gap_section) は絶対に注入しない。面接官が候補者の
+        日常プロファイルを知っている状況は本番に存在せず、漏らした瞬間に
+        ストレステストとしての価値が消える。統合は講評フェーズのみ。
+        data/es/ に ES が無い場合はケースバンクへフォールバックする。
+        ベクトル検索・インデックス同期は行わない。"""
+        from .es_manager import (
+            build_interviewer_persona, es_body_for_prompt, select_es,
+        )
+        say = status or (lambda msg: None)
+        q = query.strip()
+
+        if self._interview_state is None or q in INTERVIEW_START_COMMANDS:
+            es = select_es(None)
+            if es is not None:
+                # ES 駆動: 面接官の専門性は ES のターゲットドメインに動的追従
+                system = build_interviewer_persona(es)
+                self._interview_state = {
+                    "case": None, "es": es, "system": system,
+                    "transcript": [], "latencies": []}
+                say(f"敵対的 ES 面接を開始: {es['target_domain']}")
+                prompt = (
+                    f"# 候補者が提出した ES\n{es_body_for_prompt(es)}\n\n"
+                    "この ES の記載内容【のみ】を根拠に面接を開始せよ。"
+                    "ES の中で最も防御が甘い主張・矛盾・技術的/戦略的選択を1点特定し、"
+                    "悪意を持った圧迫質問 (Adversarial Attack) を1つだけ投げること。"
+                )
+            else:
+                case = INTERVIEW_CASE_BANK[self._interview_cursor % len(INTERVIEW_CASE_BANK)]
+                self._interview_cursor += 1
+                system = INTERVIEWER_SYSTEM_PROMPT
+                self._interview_state = {
+                    "case": case, "es": None, "system": system,
+                    "transcript": [], "latencies": []}
+                say(f"面接シミュレーション開始: {case['industry']} / {case['format']}")
+                prompt = (
+                    f"面接形式: {case['format']} ({case['industry']})\n"
+                    f"テーマ: {case['theme']}\n\n"
+                    "候補者への最初の出題を行え。テーマを提示し、"
+                    "最初に確認すべき前提を1つだけ問うこと。"
+                )
+            answer = self.backend.generate(system, prompt, on_token=on_token)
+            self._interview_state["transcript"].append(("面接官", answer))
+            return answer
+
+        state = self._interview_state
+        transcript_text = "\n".join(
+            f"[{role}] {text}" for role, text in state["transcript"])
+
+        if q in INTERVIEW_END_COMMANDS:
+            say("講評を生成中… (ES・会話録・日常行動ギャップ分析を統合)")
+            from .es_manager import es_body_for_prompt as _es_body
+            case = state.get("case")
+            es = state.get("es")
+            if es is not None:
+                subject = f"敵対的 ES 面接 ({es['target_domain']})"
+                es_section = f"\n# 提出 ES\n{_es_body(es)}\n"
+                log_label = f"[interview_sim] ES面接: {es['name']}"
+            else:
+                subject = f"{case['format']} ({case['industry']}): {case['theme']}"
+                es_section = ""
+                log_label = f"[interview_sim] {case['format']}: {case['theme']}"
+            eval_prompt = f"""以下の面接議論を面接官として講評せよ。
+
+# 出題
+{subject}
+{es_section}
+# 議論トランスクリプト
+{transcript_text or '(候補者の発言なし)'}
+{_format_latency_section(state.get('latencies', []))}
+# 講評指示
+1. 論理性の評価: MECE な分解ができていたか、前提と数字の扱いは妥当か、
+   構造化の癖と抜けを具体的な発言を引用して指摘せよ。
+2. 防御の評価: 敵対的な質問に対する防御の甘さ・言い淀み・過剰な自己正当化・
+   当事者意識の欠如がどこで露呈したかを特定せよ。
+   応答時間の記録がある場合、トップティア (HFT・戦略コンサル等) のケース
+   面接基準でこの思考速度が適切であったかも評価対象に含めよ。
+   即答の浅さ・長考の割に構造化されていない回答は特に指摘すること。
+3. 【最重要】下記「日常行動のギャップ分析」と突合し、面接で露呈した防御の甘さが、
+   日常のどの行動パターン (タスク逃避・人間関係の摩擦回避・一人で完結する作業への
+   閉じこもり・知性化・真の熱量の所在など) に起因するかを突きつけよ。
+   面接は日常の縮図である、という観点で書くこと。
+4. 明日から実行可能な「日常の」改善アクションを2つ提示せよ
+   (面接テクニックではなく、日常行動の変更であること)。
+
+# 日常行動のギャップ分析 (profiler 自動生成)
+{self._gap_section()}"""
+            answer = self.backend.generate(
+                state["system"], eval_prompt, on_token=on_token)
+            answer = re.sub(r"<think>.*?</think>\s*", "", answer,
+                            flags=re.DOTALL).strip()
+            from .consultation_log import append_consultation
+            append_consultation(log_label, answer, simulated=True)
+            self._interview_state = None
+            say("面接シミュレーション終了 (講評を相談履歴に保存)")
+            return answer
+
+        # 議論の継続ターン — gap_insights は隔離 (ES とトランスクリプトのみ)
+        state["transcript"].append(("候補者", q))
+        latency_note = ""
+        if response_time_sec is not None:
+            state.setdefault("latencies", []).append(
+                {"turn": len(state["transcript"]),
+                 "sec": round(float(response_time_sec), 1)})
+            latency_note = (
+                f"\n(候補者はこの回答に {float(response_time_sec):.1f} 秒を要した。"
+                "不自然な長考・即答であれば面接官として言及してよい)")
+        say("面接官が応答中…")
+        es = state.get("es")
+        es_ctx = ""
+        if es is not None:
+            from .es_manager import es_body_for_prompt as _es_body
+            es_ctx = f"# 候補者が提出した ES\n{_es_body(es)}\n\n"
+        prompt = f"""{es_ctx}# これまでの議論
+{transcript_text}
+[候補者] {q}{latency_note}
+
+面接官として応答せよ。候補者の直前の発言の弱点 (前提の曖昧さ・MECE でない
+分解・数字の根拠欠如・ES 記載との矛盾) を1点だけ短く突き、
+次の問いを1つ投げること。"""
+        answer = self.backend.generate(state["system"], prompt, on_token=on_token)
+        state["transcript"].append(("面接官", answer))
+        return answer
+
+    # ---- ES 添削 (mode="es_review") ---------------------------------------
+    def _consult_es_review(self, query: str, status=None, on_token=None) -> str:
+        """ターゲットドメインのトップ層採用担当者ペルソナによる容赦ない ES 添削。
+
+        【隔離原則 — 変更禁止】このモードは gap_insights (_gap_section) を
+        絶対に注入しない。ドキュメント単体の論理的強度のみをテストする。
+        日常プロファイルを混ぜると「書類が弱いのか、人が弱いのか」の
+        切り分けができなくなる。"""
+        from .es_manager import build_reviewer_persona, es_body_for_prompt, select_es
+        say = status or (lambda msg: None)
+        name_hint = query.strip()
+        es = select_es(name_hint if name_hint and name_hint not in
+                       INTERVIEW_START_COMMANDS else None)
+        if es is None:
+            return ("data/es/ に ES (.md / .txt) が見つかりません。"
+                    "添削対象のファイルを配置してから再実行してください。")
+        say(f"ES 添削中… (ターゲットドメイン: {es['target_domain']})")
+        prompt = f"""# 添削対象 ES: {es['title']}
+{es_body_for_prompt(es)}
+
+# 添削指示
+1. 論理破綻・因果の飛躍を、該当箇所を引用して容赦なく指摘せよ。
+2. 定量的根拠の欠如・主語の曖昧さ・再現性の説明不足をすべて列挙せよ。
+3. この ES で最も弱い一文を特定し、書き直し例を示せ。
+4. 「{es['target_domain']}」のトップ層選考を通過する確率を上げる修正方針を3点提示せよ。"""
+        answer = self.backend.generate(
+            build_reviewer_persona(es), prompt, on_token=on_token)
+        answer = re.sub(r"<think>.*?</think>\s*", "", answer,
+                        flags=re.DOTALL).strip()
+        from .consultation_log import append_consultation
+        append_consultation(f"[es_review] {es['name']}", answer, simulated=True)
+        say("ES 添削完了 (相談履歴に保存)")
+        return answer
+
+    # ---- カオス GD シミュレーター (mode="gd_sim") --------------------------
+    def _consult_gd_sim(self, query: str, status=None, on_token=None,
+                        personas: list[dict] | None = None,
+                        response_time_sec: float | None = None) -> str:
+        """AI が「厄介な参加者 N 人 (最大9)」を同時に演じる多重人格 GD。
+
+        personas はフロントエンドのロビー画面から渡されるペルソナ配列
+        [{"name": ..., "trait": ...}, ...]。未指定なら既定の3人構成。
+        議論フェーズはペルソナ + トランスクリプトのみ (gap 隔離)。
+        講評フェーズで gap_insights と統合し、GD 内の振る舞い (フリーライダー
+        放置・クラッシャーへの敗北等) を日常の「人間関係の摩擦 (Friction)
+        回避」構造と接続する。"""
+        from .es_manager import select_es
+        say = status or (lambda msg: None)
+        q = query.strip()
+
+        if self._gd_state is None or q in INTERVIEW_START_COMMANDS:
+            es = select_es(None)
+            if es is not None:
+                topic_hint = (f"候補者のターゲットドメイン「{es['target_domain']}」"
+                              "に関連する GD テーマを1つ設定せよ。")
+            else:
+                theme = GD_THEME_BANK[self._gd_cursor % len(GD_THEME_BANK)]
+                self._gd_cursor += 1
+                topic_hint = f"GD テーマ: {theme}"
+            system = build_gd_system_prompt(personas)
+            self._gd_state = {
+                "topic_hint": topic_hint, "system": system,
+                "personas": list(personas or [])[:MAX_GD_PERSONAS],
+                "transcript": [], "latencies": [],
+            }
+            n = len(self._gd_state["personas"]) or 3
+            say(f"カオス GD を開始 (参加者 {n} 人)")
+            if self._gd_state["personas"]:
+                first = (self._gd_state["personas"][0].get("name")
+                         or "学生A")
+                prompt = (
+                    f"{topic_hint}\n\n"
+                    f"テーマを提示し、[{first}] の最初の発言から議論を開始せよ。"
+                    "各参加者は設定された性格に忠実に振る舞うこと。"
+                )
+            else:
+                prompt = (
+                    f"{topic_hint}\n\n"
+                    "テーマを提示し、[学生A] (クラッシャー) の自信満々だが論理の甘い"
+                    "最初の発言から議論を開始せよ。[学生B] は同調か沈黙、"
+                    "[学生C] は早速話を逸らすこと。"
+                )
+            answer = self.backend.generate(system, prompt, on_token=on_token)
+            self._gd_state["transcript"].append(("参加者", answer))
+            return answer
+
+        state = self._gd_state
+        transcript_text = "\n".join(
+            f"[{role}] {text}" for role, text in state["transcript"])
+
+        if q in INTERVIEW_END_COMMANDS:
+            say("GD 講評を生成中… (日常の摩擦回避構造と接続)")
+            eval_prompt = f"""以下のグループディスカッションを選考官として講評せよ。
+
+# GD 設定
+{state['topic_hint']}
+
+# 議論トランスクリプト
+{transcript_text or '(候補者の発言なし)'}
+{_format_latency_section(state.get('latencies', []))}
+# 講評指示
+1. 候補者 (あなた以外の唯一の人間) の介入行動を評価せよ:
+   クラッシャー型参加者の論理破綻を指摘できたか、それとも論破されたか。
+   フリーライダー型参加者に発言機会を作ったか、それとも放置したか。
+   クラウザー型参加者の脱線を軌道修正できたか。
+   応答時間の記録がある場合、介入までの思考速度がトップティア選考の
+   GD 基準で適切だったかも評価に含めよ。
+2. 【最重要】下記「日常行動のギャップ分析」と突合せよ。フリーライダーの放置や
+   クラッシャーへの敗北は、日常の組織マネジメント等における
+   「人間関係の摩擦 (Friction) からの逃避」と同じ構造ではないか。
+   一人で完結する作業への閉じこもり・対人調整タスクの先延ばしなど、
+   日常のどの行動パターンが GD の振る舞いとして再演されたかを突きつけよ。
+3. 明日から実行可能な「日常の対人行動」の改善アクションを2つ提示せよ
+   (GD テクニックではなく、日常の摩擦に向き合う行動であること)。
+
+# 日常行動のギャップ分析 (profiler 自動生成)
+{self._gap_section()}"""
+            answer = self.backend.generate(
+                state["system"], eval_prompt, on_token=on_token)
+            answer = re.sub(r"<think>.*?</think>\s*", "", answer,
+                            flags=re.DOTALL).strip()
+            from .consultation_log import append_consultation
+            append_consultation(f"[gd_sim] {state['topic_hint'][:60]}", answer,
+                                simulated=True)
+            self._gd_state = None
+            say("GD シミュレーション終了 (講評を相談履歴に保存)")
+            return answer
+
+        # 議論の継続ターン — gap_insights は隔離
+        state["transcript"].append(("候補者", q))
+        latency_note = ""
+        if response_time_sec is not None:
+            state.setdefault("latencies", []).append(
+                {"turn": len(state["transcript"]),
+                 "sec": round(float(response_time_sec), 1)})
+            latency_note = (
+                f"\n(候補者は介入までに {float(response_time_sec):.1f} 秒を要した)")
+        say("参加者が応答中…")
+        if state.get("personas"):
+            turn_rule = (
+                "候補者の発言を受けて、各参加者が設定された性格に忠実に次の発言を"
+                "出力せよ。候補者が特定の参加者に発言を振った場合のみ、"
+                "その参加者は必ず応じること。"
+            )
+        else:
+            turn_rule = (
+                "候補者の発言を受けて、学生A/B/C の次の発言を出力せよ。\n"
+                "候補者が構造化や交通整理を試みた場合、学生A はマウントで潰しにかかり、\n"
+                "学生C は別の話題を持ち出すこと。候補者が誰かに発言を振った場合のみ、\n"
+                "その学生は応じてよい。"
+            )
+        prompt = f"""# これまでの議論
+{transcript_text}
+[候補者] {q}{latency_note}
+
+{turn_rule}"""
+        answer = self.backend.generate(state["system"], prompt, on_token=on_token)
+        state["transcript"].append(("参加者", answer))
+        return answer
+
+    def consult(self, query: str, top_k: int = 3, status=None,
+                on_token=None, mode: str = "consult",
+                personas: list[dict] | None = None,
+                response_time_sec: float | None = None) -> str:
+        """相談1件を処理して4セクションMarkdownを返す。
+
+        status は進捗コールバック、on_token は生成トークンの逐次コールバック。
+        mode: "consult" (通常相談) / "interview_sim" (敵対的 ES 面接) /
+              "es_review" (ES 添削・gap 非注入) / "gd_sim" (カオス GD)。
+        personas: gd_sim 用の参加者配列 (最大9人)。
+        response_time_sec: UI で計測した「AI 表示 → 送信」までの経過秒。
+        面接/GD の思考速度評価に使う (通常相談では無視)。"""
+        if mode == "interview_sim":
+            return self._consult_interview_sim(
+                query, status=status, on_token=on_token,
+                response_time_sec=response_time_sec)
+        if mode == "es_review":
+            return self._consult_es_review(query, status=status, on_token=on_token)
+        if mode == "gd_sim":
+            return self._consult_gd_sim(
+                query, status=status, on_token=on_token,
+                personas=personas, response_time_sec=response_time_sec)
         say = status or (lambda msg: None)
 
         say("クエリをベクトル化中…")
@@ -510,11 +1130,36 @@ class ConsultationEngine:
         diary_hits = self.search_daily(qvec, top_k)
         knowledge_hits = self.search_index(KNOWLEDGE_BIN, KNOWLEDGE_META, qvec, top_k)
 
-        prompt = self.build_prompt(query, diary_hits, knowledge_hits)
+        # KV プレフィックス・ピニング: 静的 (プロファイル) + 動的 (ヒット+相談) に
+        # 分離し、静的部分のハッシュでキャッシュの復元/保存/パージを制御する
+        static_prefix = self.build_static_prefix()
+        prompt = static_prefix + self.build_dynamic_suffix(
+            query, diary_hits, knowledge_hits)
+        from .kv_cache import prefix_hash as _prefix_hash
+        phash = _prefix_hash(SYSTEM_PROMPT, static_prefix)
 
         say(f"ローカルLLMで推論中… ({self.backend.name})")
         t0 = time.perf_counter()
-        answer = self.backend.generate(SYSTEM_PROMPT, prompt)
+        answer = self.backend.generate(SYSTEM_PROMPT, prompt, on_token=on_token,
+                                       prefix_hash=phash)
+        # DeepSeek-R1 系は <think>…</think> の思考過程を出力する。
+        # 保存・最終表示からは除去する (ストリーミング中は生表示され、
+        # 最終応答での置換時にクリーンな本文だけが残る)。
+        answer = re.sub(r"<think>.*?</think>\s*", "", answer, flags=re.DOTALL).strip()
+
+        # <fetch_query> フック: 本文から除去してキューへ永続化するだけ。
+        # ここでネットワークへ出ることは絶対にない (knowledge_fetcher の原則参照)。
+        from .knowledge_fetcher import extract_fetch_queries, queue_fetch_queries
+        answer, fetch_queries = extract_fetch_queries(answer)
+        if fetch_queries:
+            added = queue_fetch_queries(fetch_queries)
+            say(f"外部知識リクエストを {added} 件キューに追加 (取得は明示許可時のみ)")
+            answer += (
+                f"\n\n---\n※ 外部知識リクエストを {len(fetch_queries)} 件キューしました: "
+                + " / ".join(fetch_queries)
+                + "\n(取得して反映するには「知識フェッチ」を明示的に実行してください。"
+                "オフラインのままにする場合は data/knowledge/ に資料を手動配置でも可)"
+            )
         say(f"生成完了 ({time.perf_counter() - t0:.1f}s)")
 
         log = PROCESSED / "last_consultation.md"
@@ -532,6 +1177,11 @@ class ConsultationEngine:
     def shutdown(self) -> None:
         if self._backend:
             self._backend.stop()
+        # failed フラグは倒さない: shutdown 後にエンジンが再利用されたら
+        # 次の検索でデーモンを再起動してよい (障害による drop とは別物)
+        daemon, self._search_daemon = self._search_daemon, None
+        if daemon is not None:
+            daemon.close()
 
 
 # ============================================================ CLI (検証用)

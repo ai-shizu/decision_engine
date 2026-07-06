@@ -1,0 +1,128 @@
+# PKB 開発ルール (.cursorrules)
+# 完全版は docs/AI_SKILLS.md — 本ファイルはその要約 + 絶対規則。
+
+## 第0原則: 実装前の自己コンテキストロード (メタ学習ループ)
+
+いかなるタスク (機能追加・改修・デバッグ・リファクタ) であっても、コードを
+書き始める前に必ず docs/AI_SKILLS.md を全文読み込み、過去の実装者が残した
+「アーキテクチャの不変条件」と「ハマりどころ」をコンテキストにロードして
+から思考を開始せよ。このプロジェクトの不変条件の多くは「破ってもエラーが
+出ず、ただ静かに劣化する」種類のもの (KVキャッシュの順序・情報隔離・
+建前人格の重み等) であり、コードを読むだけでは検出できない。
+また、実装を終えたら AI_SKILLS.md に新たな不変条件とハマりどころを追記して
+から離れること。読む→実装→書き残す、のループを省略した作業は未完了とみなす。
+迷ったら docs/AI_SKILLS.md → docs/HANDOFF.md → docs/CONTEXT.md を読め。
+
+## 絶対原則 (交渉不可)
+
+1. 完全オフライン。外部 API・CDN・テレメトリ・自動ダウンロードを書くな。
+   許可される通信は llama-server への http://127.0.0.1 と Tauri↔Python の stdio パイプのみ。
+   唯一の公認例外 = core/knowledge_fetcher.py (デフォルト無効 / PKB_ALLOW_ONLINE_FETCH=1 /
+   ユーザー明示起動 / クエリ監査可能 の4条件。1つでも緩めたら原則違反。AI_SKILLS §7.2)。
+   consult 中の自動通信は絶対禁止 — <fetch_query> はキュー永続化まで。
+2. 個人データ (data/raw/, data/processed/, models/, logs/) をコミットするな。
+   テストが実データを書き換えるならバックアップ→復元を必ず実装 (tests/ui_smoke.py 参照)。
+3. stdio IPC (JSON) プロトコル厳守:
+   - Python エンジンの stdout は Rust 専用。print は stderr へ (engine_stdio.py の構造を変えるな)。
+   - 応答 = {"id", "ok", ...} / 中間イベント = {"id", "event", ...} (ok キーを持たせるな)。
+   - ファイル I/O・subprocess は全箇所 encoding="utf-8" 明示 (Windows cp932 対策)。
+4. 責務分離:
+   - C++ (src/cpp/) = 384次元 AoSoA 内積・Top-K のみ。ビジネスロジック禁止。
+   - Python core (src/python/core/) = オーケストレーション。UI 依存 1 行でも禁止。
+   - UI (React / Textual) = 表示と入力のみ。新機能は facade.py → engine_stdio.py → engine.ts の順に配線。
+   - バイナリ形式 PKBVEC01 は pipeline.py と C++ で 1 バイト単位同期。片方だけ変更禁止。
+5. 記録と分析の分離: RECORD 保存で profiler を走らせるな (sync_diary_index のみ)。
+   profiler 自動実行は LINE 取込のみ。LLM・埋め込みは初回 consult まで遅延初期化。
+
+## Gap Analysis (主観×客観 差分分析) — 推論コアの保護 (詳細: docs/AI_SKILLS.md §6)
+
+- core/gap_analysis.py は「日記・相談 (主観)」と「家計簿・予定・LINE発話 (客観)」の
+  差分から認知的不協和 (intention_gap) と盲点 (blind_spot) を検出する第2世代プロファイラ。
+- 【最重要・削除禁止】LINE の自分発話は客観軸。主観コーパスに混入させるな
+  (他者への発話は日記より行動に近い。test_gap_analysis.py が回帰ガード)。
+- ギャップの発見は決定論アルゴリズム、LLM は言語化のみ。LLM にギャップ発見を任せるな。
+- 非線形モデル (task_avoidance=双曲割引 / true_gakuchika=乖離ペア /
+  intellectualization_gap=知性化 / stabilizer_effect=充電効果) の判定条件を単純化するな。
+  特に「双曲→指数への変更」「知性化のアクション0条件の削除」「宣言検出の完了マーカー
+  除外の削除」「スタビライザーの事後効率向上条件の削除」は退化 (AI_SKILLS §6.4)。
+- stabilizer_effect は唯一のポジティブ・フラグ。欠陥指摘に書き換えるな (罪悪感の反証が目的)。
+- interview_sim (consult mode) の講評から gap_insights 接続ステップを削るな。
+  セッション状態は永続化禁止・出題は決定論 (AI_SKILLS §7.1)。
+- シミュレーターの情報隔離 (AI_SKILLS §7.1〜7.1.2) を破るな:
+  interview_sim/gd_sim の議論フェーズと es_review には gap_insights を絶対注入禁止
+  (統合は講評フェーズのみ)。test_integration.py の _assert_no_gap_leak が回帰ガード。
+- es_manager のドメイン抽出に特定業界の if-elif を書くな (常に ES テキストから導出)。
+- gd_sim に司会者・まとめ役ペルソナを追加するな (カオスの収束 = 機能の破壊)。
+- 建前人格の隔離 (AI_SKILLS §7.1.4): シミュレーターのログ保存には必ず
+  append_consultation(..., simulated=True)。gap 主観スコアは 0.1 重み、profiler の
+  自己テキストからは除外。新モード追加時のフラグ付け忘れが最頻退化バグ。
+- gd_sim の personas 未指定時は GD_SYSTEM_PROMPT 定数と完全一致 (後方互換を壊すな)。
+- response_time_sec の計測は UI の責務 (起点 = AI メッセージ表示完了時刻)。
+
+## KV プレフィックス・ピニング (AI_SKILLS §8) — 静かに死ぬ系の不変条件
+
+- プロンプトは build_static_prefix() が必ず先頭。順序変更・動的情報の静的側混入は
+  「エラーなくキャッシュ全ミス」になる最悪の退化。Future Context は動的側固定。
+- ハッシュは SYSTEM_PROMPT + 静的プレフィックスの両方 (kv_cache.prefix_hash)。
+- キャッシュ操作は best-effort。失敗で consult を落とすコードはバグ。
+- --slot-save-path は server_supports_slot_save() のプローブ経由でのみ付与
+  (旧ビルドに盲渡しするとサーバー起動ごと死ぬ)。404/501=恒久無効化、500=一時扱い。
+- 保存はハッシュ変化時の初回のみ + 旧ファイル即パージ (KV は数百MB級)。
+- プロンプト構築セクション (_profile_section 等) は全キーを .get() で防御的に読め
+  (部分 deep_profile の KeyError = consult 全滅、を実際に踏んだ)。
+- 全ギャップに定量証拠 (金額・件数・引用) 添付。data_sufficiency の確度注記を消すな。
+- CONSULT への _gap_section() 注入は毎回強制。オプション化禁止。
+- SYSTEM_PROMPT の「回答前3点検証」(バイアス疑い/行動データ優先/助言の自己検証) を弱めるな。
+
+## mmap ゼロコピー IPC (Target Bravo / AI_SKILLS §9)
+
+- 共有 scratch (magic "PKBSCR01", 2072B) の対応物は search_engine.cpp の ScratchBuffer と
+  core/search_daemon.py の 2 つだけ。変更は両方同時 + magic バージョン更新 (PKBVEC01 と同規則)。
+- デーモンモードの stdout はプロトコル専用線。seq 一致検証 (seqlock) と stdin EOF 自己終了を削るな。
+- mmap 中のファイルは Windows で truncate 不可 — scratch は "r+b" in-place 書きのみ。
+  インデックス再構築の前には必ず _release_index_mapping() (sync_* に配線済み) で解放させろ。
+- 検索経路はデーモン → 1-shot exe → NumPy の三段連鎖。どの段も削除禁止。
+  デーモンは初回検索で遅延起動、障害時は drop して respawn しない (shutdown 後の再利用は再起動可)。
+- results 未使用スロット = chunk_id -1 (PKBVEC01 墓標規約と同一)。
+
+## モデル戦略
+
+- 単一の真実 = config/model_params.json (env 変数 > config > llm_config.py デフォルト)。
+- default 役割: Qwen2.5-7B-Instruct (IQ4_XS 優先) / consult 役割: DeepSeek-R1-Distill-Qwen-7B。
+- 7B 未満 (3.5GB 未満) のモデルは原則禁止。解除は PKB_ALLOW_SMALL_LLM=1 のみ。
+- サイズ下限を 4GB に戻すな (IQ4_XS 7B ≈ 3.9GB が弾かれる実バグ)。
+- モデル名・temperature・max_tokens のハードコード禁止。llm_config.py の API を使え。
+
+## 頻出バグと対処 (詳細は docs/AI_SKILLS.md §2, §4)
+
+- LNK4272/LNK1120 (ARM64 に x64 混入): `python -c "import platform; print(platform.machine())"`
+  → ARM64 でなければその Python が犯人。`dumpbin /headers *.exe | findstr machine` で exe 確認。
+- アーキ不一致 (macOS): `uname -m` / `file <binary>` / `rustc -vV | grep host` の 3 点一致を機械的に確認。
+  PyInstaller はクロスコンパイル不可 — aarch64 は macos-14、x86_64 は macos-13 ランナーで。
+- TCC 権限 (Apple カレンダー): SQLite 直読みに entitlement は存在しない。フルディスクアクセスの
+  手動許可が正解。拒否時は DB が「存在しない」ように見える。FULL_DISK_ACCESS_HINT を消すな。
+- JSON パースエラー (IPC): stdout を汚すライブラリ (tqdm 等) を疑え。
+  `echo '{"id":1,"cmd":"health","params":{}}' | python -X utf8 src\python\engine_stdio.py` で切り分け。
+- JS の toISOString() は UTC。日付は dateUtils.todayIso() を使え (JST で 1 日ずれる)。
+- .sh は LF 必須 (.gitattributes 済み)。Textual カレンダー日ボタンに id を付けるな。
+
+## コード品質
+
+- 最小 diff。依頼外リファクタ禁止。コメントは「なぜ」のみ。コミットはユーザー明示指示時のみ。
+- ループ内ファイル I/O 禁止。計算量を言語化できないネストループを書くな。
+- React: 装飾より情報密度。新 UI ライブラリ導入禁止。長時間処理には進捗表示を必ず付けろ。
+- C++: ホットループに分岐・ヒープ確保禁止。SIMD 変更は benchmark.py で前後計測し数字を出せ。
+
+## 品質ゲート — テストが通るまで、実装完了と言うな
+
+python -m py_compile <変更した .py 全部>
+python tests\test_calendar_sync.py        # ALL PASS 必須
+python tests\test_apple_calendar_sync.py  # ALL PASS 必須
+python tests\test_gap_analysis.py         # ALL PASS 必須
+python tests\test_integration.py          # ALL PASS 必須
+python tests\ui_smoke.py                  # ALL PASS 必須
+npx tsc --noEmit                          # (apps/desktop, フロント変更時)
+cargo check                               # (src-tauri, Rust 変更時。paths.rs を触ったら
+                                          #  --target aarch64-apple-darwin でも確認)
+
+エラーが出たら自分で直せ。「たぶん動く」「環境の問題」で完了報告することを禁止する。
