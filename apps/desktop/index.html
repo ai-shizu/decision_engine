@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/svg+xml" href="/vite.svg" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>PKB</title>
+    <style>
+      html, body {
+        margin: 0;
+        min-height: 100vh;
+        background: #0f1419;
+        color: #e8eaed;
+        font-family: "Segoe UI", system-ui, sans-serif;
+      }
+      #boot-fallback {
+        display: grid;
+        place-items: center;
+        min-height: 100vh;
+        padding: 24px;
+        text-align: center;
+      }
+    </style>
+  </head>
+
+  <body>
+    <div id="root">
+      <div id="boot-fallback">
+        <h1>PKB</h1>
+        <p>起動中…</p>
+      </div>
+    </div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

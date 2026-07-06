@@ -1,4 +1,4 @@
-# PKB プロジェクト — コンテキスト引継ぎ (2026-07-05 更新)
+# PKB プロジェクト — コンテキスト引継ぎ (2026-07-06 更新)
 
 > 新規チャットセッションの AI が瞬時に開発再開できるための高密度サマリ。  
 > 対象環境: **Snapdragon X / Windows on ARM64**, **Python 3.12-arm64**, **llvm-mingw clang++**。
@@ -14,19 +14,93 @@
 - **CONSULT 送信時のみ** C++ NEON ベクトル検索 + 7B ローカル LLM で 4 セクション回答
 - 外部 API 不使用 (`HF_HUB_OFFLINE=1`, llama-server は 127.0.0.1 のみ)
 
-### 二層 + 推論パイプライン
+### 製品形態 (2026-07)
+
+| 形態 | 状態 | 備考 |
+|---|---|---|
+| **デスクトップアプリ** (`apps/desktop/`) | **主軸** | Tauri v2 + React。Python エンジンは stdio JSON IPC |
+| Textual TUI (`src/python/ui_tui/app.py`) | 維持 | 開発・デバッグ用。`core/facade.py` を直接呼び出し |
+| Web アプリ / ブラウザ配信 | **見送り** | ローカル完結・オフライン設計と相性が悪い |
+
+### 三層アーキテクチャ (フェーズ B 以降)
+
+```mermaid
+flowchart TB
+  subgraph Desktop["デスクトップ (主軸)"]
+    React["apps/desktop/src/\nReact 4タブ UI"]
+    TauriCmd["Tauri pkb_invoke"]
+    Rust["src-tauri/engine.rs\nEngineManager"]
+  end
+  subgraph IPC["Stdio IPC"]
+    Stdio["engine_stdio.py\nstdin/stdout JSON 1行"]
+    RunEngine["run_engine.py\n起動エントリ"]
+  end
+  subgraph Core["Python コア (UI 非依存)"]
+    Facade["core/facade.py\n共通 API"]
+    CE["core/consultation_engine.py"]
+    Pipe["core/pipeline.py / data_merger.py"]
+    Prof["core/profiler.py"]
+  end
+  subgraph TUI["TUI (開発用)"]
+    Textual["ui_tui/app.py"]
+  end
+  subgraph Native["ネイティブ"]
+    CPP["build/search_engine.exe\nNEON Top-K"]
+    LLM["llama-server\n127.0.0.1"]
+  end
+
+  React --> TauriCmd --> Rust --> RunEngine --> Stdio --> Facade
+  Textual --> Facade
+  Facade --> CE --> CPP
+  CE --> LLM
+  Facade --> Pipe
+  Facade --> Prof --> LLM
+```
+
+**デスクトップ IPC フロー (詳細):**
+
+```
+React (engine.ts)
+  → invoke("pkb_invoke", { cmd, params })
+  → Rust EngineManager::invoke_sync()
+  → Python 子プロセス stdin へ JSON 1 行
+  → engine_stdio.dispatch(cmd, params)
+  → core/facade.py
+  → stdout へ { id, ok, result } JSON 1 行
+```
+
+起動時、Python は stdout へ `{"event":"ready","offline":true}` を送出。  
+HTTP サーバーは**使用しない** (llama-server のみ 127.0.0.1)。
+
+**Stdio コマンド一覧** (`engine_stdio.py`):
+
+| cmd | 用途 |
+|---|---|
+| `health` | 生存確認 |
+| `record.load` / `record.save` | 予定・家計簿・日記 |
+| `calendar.event_dates` | カレンダーマーク用日付一覧 |
+| `calendar.sync` | ICS / Apple カレンダー取込 |
+| `import.line` | LINE 履歴 + profiler 自動実行 |
+| `consult` | 相談 (検索 + LLM) |
+| `settings.get` / `settings.save_fixed` | 基本情報 |
+| `settings.run_profiler` | 深層プロファイル再分析 |
+| `shutdown` | エンジン停止 |
+
+### 従来パイプライン (コア内部)
 
 ```
 ┌──────────────────────────────────────────────────────────────┐
-│  UI / オーケストレーション (Python 3.12 + Textual 8.x)         │
-│  src/ui/app.py              — 4タブ TUI                       │
-│  src/python/consultation_engine.py — 相談時のみ起動           │
-│  src/python/pipeline.py       — ベクトル化                     │
-│  src/python/data_merger.py    — DailyContext 結晶化            │
-│  src/python/profiler.py       — 深層プロファイル (手動/IMPORT)  │
-│  src/python/calendar_manager.py / finance_manager.py / ...     │
-│  src/python/calendar_sync.py      — ICS 取込 (stdlib のみ)      │
-│  src/python/apple_calendar_sync.py — macOS ローカル DB 取込     │
+│  UI / オーケストレーション                                     │
+│  apps/desktop/src/          — React + Tauri (主軸)            │
+│  src/python/ui_tui/app.py   — Textual TUI (開発用)            │
+│  src/python/core/facade.py  — 共通ビジネス API                 │
+│  src/python/core/consultation_engine.py — 相談時のみ起動       │
+│  src/python/core/pipeline.py       — ベクトル化                │
+│  src/python/core/data_merger.py    — DailyContext 結晶化       │
+│  src/python/core/profiler.py       — 深層プロファイル          │
+│  src/python/core/calendar_manager.py / finance_manager.py    │
+│  src/python/core/calendar_sync.py      — ICS 取込              │
+│  src/python/core/apple_calendar_sync.py — macOS ローカル DB   │
 └────────────────────────┬─────────────────────────────────────┘
                          │ subprocess / mmap / JSON
 ┌────────────────────────▼─────────────────────────────────────┐
@@ -43,6 +117,7 @@
 ```
 
 ### 設計原則
+
 | 原則 | 内容 |
 |---|---|
 | **記録と相談の分離** | RECORD / カレンダー同期 → `sync_diary_index()` のみ。CONSULT → 検索+LLM |
@@ -52,6 +127,15 @@
 | **インデックス mtime 同期** | ソース JSON/md/txt の mtime が古い時のみ `vectors.bin` 再構築 |
 | **プロファイル二層** | `fixed_attributes` (手入力・保持) / `inferred_profile` (自動・読取専用) |
 | **ゾンビ禁止** | `LlamaServerBackend.stop()` Terminate→Kill + `atexit` + TUI `on_unmount` |
+| **UI とコアの分離** | ビジネスロジックは `core/` のみ。UI は `facade` または stdio 経由 |
+
+### データ配置
+
+| 環境 | ルート |
+|---|---|
+| 開発 | リポジトリ `data/` (`PKB_PROJECT_ROOT` 未設定時) |
+| インストール版 | `%LOCALAPPDATA%\PKB\` |
+| パス解決 | `core/paths.py` — `PROJECT_ROOT = os.environ.get("PKB_PROJECT_ROOT", ...)` |
 
 ---
 
@@ -59,7 +143,7 @@
 
 ### 2.1 DailyContext (1日 = 1ベクトルチャンク)
 
-**生成**: `data_merger.load_daily_contexts()` — 以下を日付キーで結合:
+**生成**: `core/data_merger.load_daily_contexts()` — 以下を日付キーで結合:
 
 | ソース | ファイル | セクション |
 |---|---|---|
@@ -69,14 +153,12 @@
 | AI相談 | `data/raw/ai_consultations.json` | `## AI_Consultations` |
 | LINE | `data/raw/line_history.txt` | `## LINE_ConversationSessions` |
 
-**主要 dict フィールド**: `date`, `title`, `text`, `self_text`, `diary_text`, `line_self_text`, `calendar_events`, `finance_text`, `consultation_text`, `conversation_sessions[]`, `has_*` フラグ群。
-
-**ベクトル化**: `pipeline.build_index()` → `data/processed/vectors.bin` + `metadata.json`  
+**ベクトル化**: `core/pipeline.build_index()` → `data/processed/vectors.bin` + `metadata.json`  
 - 384次元 L2正規化 (`paraphrase-multilingual-MiniLM-L12-v2` / オフライン時 hashed n-gram fallback)
 
 ### 2.2 ConversationSession (状態保持型)
 
-**生成**: `data_merger.extract_conversation_sessions()` — 単純 Stimulus→Response ペアは廃止。
+**生成**: `core/data_merger.extract_conversation_sessions()` — 単純 Stimulus→Response ペアは廃止。
 
 | ルール | 内容 |
 |---|---|
@@ -84,8 +166,6 @@
 | 継続 | ユーザー初回返信までクローズしない (24h超可) |
 | 確定 | ユーザー返信後 **30分** 空白で1セッション確定 |
 | 未返信 | `awaiting_user=True` は確定しない |
-
-**Response Latency** = 相手最終発言 → ユーザー初回返信。profiler のレイテンシ分析・矛盾検出に使用。
 
 ### 2.3 C++ AoSoA バイナリ (Python/C++ 完全同期)
 
@@ -95,20 +175,9 @@ VectorBlock (6160B): float data[384][4] + int32 chunk_ids[4]  (パディング=-
 ```
 
 - CLI: `build/search_engine.exe vectors.bin query.bin [top_k]`
-- 内蔵ベンチ: 100 iter avg → `latency: X us/query`
-- `consultation_engine.search_daily()`: 日記+LINE両方の日は **ranking_score × 1.15**
+- `core/consultation_engine.search_daily()`: 日記+LINE両方の日は **ranking_score × 1.15**
 
-**ベンチマーク**: `tests/benchmark.py` — AoSoA ダミーデータ生成 + QPS計測 (`--quick` 可)
-
-### 2.4 プロファイリング (`profiler.py` → `deep_profile.v5`)
-
-| レイヤー | 内容 |
-|---|---|
-| ルールベース | 認知バイアス, 価値観階層, 感情パターン, 意思決定ルール, cross_source, interaction_sessions |
-| factual_signals | ログから推定 (職業文脈, 健康シグナル等) — **手入力は使わない** |
-| abstract_identity | コアドライブ, 認知スタイル, 内的葛藤, 抽象ヒューリスティック, 対人スタンス |
-| meta_narrative | 上記を2〜3文に統合 |
-| llm_interaction_insights | 7B 深層分析 (セクション7: 抽象自己モデル含む) + 家計簿×感情相関 |
+### 2.4 プロファイリング (`core/profiler.py` → `deep_profile.v5`)
 
 **user_profile.json (`user_profile.v2`)**:
 ```json
@@ -120,114 +189,64 @@ VectorBlock (6160B): float data[384][4] + int32 chunk_ids[4]  (パディング=-
 }
 ```
 
-**重要**: `update_user_profile()` は `fixed_attributes` を**保持するのみ**。profiler の分析入力には未使用。CONSULT プロンプトでは `fixed_attributes` を「基本情報 (本人入力・固定)」として注入。
+**重要**: `fixed_attributes` は CONSULT プロンプトに注入。profiler 分析入力には**未使用** (要望: 注入のみ・上書きなし)。
 
-### 2.5 llm_config.py
+### 2.5 llm_config.py (`core/llm_config.py`)
 
 ```python
 PREFERRED_7B = models/Qwen2.5-7B-Instruct-Q4_K_M.gguf
-MIN_7B_BYTES = 4_000_000_000   # 破損検出 → 1.5B フォールバック
-
-find_gguf()              # 7B優先
-llama_server_cmd()       # --ctx-size 8192 --threads 8 --batch-size 512 --no-webui
-model_startup_timeout()  # 7B: 300s
-
 # 環境変数: PKB_LLAMA_THREADS, PKB_LLAMA_CTX, PKB_LLAMA_BATCH, PKB_LLM_PORT, PKB_MODELS_DIR, PKB_LLAMA_DIR
 ```
 
-### 2.6 相談パイプライン (`consultation_engine.py`)
+### 2.6 相談パイプライン (`core/consultation_engine.py`)
 
 ```
 consult(query):
   1. embed(query)
-  2. sync_diary_index() / sync_knowledge_index()   # mtime チェック
-  3. search_daily(qvec) + search_index(knowledge)  # NEON Top-K
-  4. build_prompt:
-       - 基本情報 (fixed_attributes)
-       - 推定プロフィール (inferred_profile)
-       - 深層プロファイル (deep_profile.json 要約)
-       - 過去 DailyContext ヒット
-       - 外部知識ヒット
-       - Future Context (calendar.json 30日先)
-       - 相談 + 4セクション出力指示
+  2. sync_diary_index() / sync_knowledge_index()
+  3. search_daily(qvec) + search_index(knowledge)
+  4. build_prompt (fixed_attributes, inferred_profile, deep_profile, hits, Future Context)
   5. LlamaServerBackend.generate()
   6. consultation_log 保存 → sync_diary_index(force=True)
 ```
 
-### 2.7 TUI (`src/ui/app.py`)
+### 2.7 TUI (`src/python/ui_tui/app.py`)
 
 | タブ | 内容 |
 |---|---|
-| **RECORD** | 週/月カレンダー + 日付バナー + 縦スクロール領域 + **[予定\|家計簿\|日記]** サブタブ + 保存ボタン (Ctrl+S) |
-| **IMPORT** | LINE `.txt` ドロップ → `line_history.txt` 追記 → **profiler 自動実行** / **ICS ファイル選択** (tkinter) / **Apple カレンダー同期** (macOS のみ) |
-| **CONSULT** | フル幅チャットのみ (サイドバーなし) |
-| **SETTINGS** | 基本情報6項目 (手入力・保存) + 自動プロフィール (読取専用) + 再分析(profiler) |
+| **RECORD** | 週/月カレンダー + **[予定\|家計簿\|日記]** + 保存 (Ctrl+S) |
+| **IMPORT** | LINE / ICS / Apple (macOS) |
+| **CONSULT** | フル幅チャット |
+| **SETTINGS** | fixed_attributes + 読取専用プロフィール + profiler 再分析 |
 
-**RECORD サブタブ詳細**:
-- **予定**: 時刻ピッカー (時/分を ▲数字▼ で縦ロール) + 内容 + 追加 → `calendar.json`
-- **家計簿**: 支出/収入を上下2行フォーム → `finance.json`
-- **日記**: TextArea → `diary.md` (日付単位)
-
-**UI レイアウト (2026-07-05)**:
-- カレンダー: 上部固定 + グリッド横スクロール (`HorizontalScroll`)
-- サブタブ内容: `#record-scroll` 内で縦スクロール
-- 保存ボタン: スクロール外・下部固定
-
-**IMPORT タブ詳細**:
-- **LINE**: 公式エクスポート `.txt` を Input に D&D または Paste → 追記 → profiler ワーカー
-- **Google (ICS)**: 手動エクスポート `.ics` → 「ICSファイルを同期」→ ネイティブファイルダイアログ (tkinter, オフライン)
-- **Apple**: macOS ローカル SQLite (`CalendarItem` / `Event`) を読取。Windows ではボタン無効 + ヒント表示
-- **マージモード**: `#ics-merge-mode` Select — **追記** (`append`) / **上書き** (`overwrite`)。ICS・Apple **共通**
-- **取込後 (ICS/Apple)**: `calendar.json` 更新 → `sync_diary_index(force=True)` のみ。**profiler は走らない**
-- **ICS アーカイブ**: 選択ファイルを `data/raw/calendar_import.ics` にコピー保存
+**互換起動**: `python src/ui/app.py` → `ui_tui/app.py` へ委譲。
 
 **ウィジェット**:
-- `src/ui/calendar_widget.py` — 月/週切替, 予定マーク `*`, `DateSelected` メッセージ (day button は **id なし**, `name=date` で DuplicateIds 回避)
-- `src/ui/time_picker.py` — `VerticalRollColumn` + `TimePicker`
+- `ui_tui/calendar_widget.py` — 月/週切替, 予定マーク `*`
+- `ui_tui/time_picker.py` — `VerticalRollColumn` + `TimePicker`
 
-### 2.8 カレンダー同期 (`calendar_sync.py` / `apple_calendar_sync.py`)
+### 2.8 デスクトップ UI (`apps/desktop/`)
 
-**共通エントリポイント**: `apply_calendar_import(imported, mode, source=...)`  
-→ `calendar_manager.load_calendar()` / `save_calendar()` → `data/raw/calendar.json`
+| ファイル | 役割 |
+|---|---|
+| `src/App.tsx` | 4 タブシェル、エンジン ready 待機 |
+| `src/lib/engine.ts` | `pkb_invoke` ラッパー |
+| `src/components/RecordTab.tsx` 等 | TUI 相当機能 |
+| `src-tauri/src/engine.rs` | Python 子プロセス + stdio JSON |
+| `src-tauri/src/commands.rs` | `pkb_invoke`, `pkb_engine_ready` |
+| `src-tauri/src/paths.rs` | データルート、`PKB_PROJECT_ROOT` |
 
-**calendar.json 形式**:
-```json
-{"YYYY-MM-DD": [{"time": "HH:MM", "title": "..."}, ...]}
-```
+**開発**: `apps/desktop/dev.cmd`  
+**リリース**: `build.cmd` → NSIS。エンジン同梱は `scripts/build-engine.ps1` (PyInstaller)。
+
+### 2.9 カレンダー同期 (`core/calendar_sync.py` / `core/apple_calendar_sync.py`)
+
+**共通**: `apply_calendar_import()` → `calendar.json` → `sync_diary_index(force=True)`
 
 | モジュール | 入力 | 主 API |
 |---|---|---|
-| `calendar_sync.py` | 手動エクスポート `.ics` | `parse_ics()`, `merge_calendar()`, `sync_from_ics()` |
-| `apple_calendar_sync.py` | macOS SQLite DB | `find_calendar_databases()`, `parse_apple_calendars()`, `sync_from_apple_calendar()` |
-
-**ICS パース** (stdlib のみ):
-- RFC 5545 line folding 展開
-- `DTSTART` (TZID / UTC `Z` / 終日 `VALUE=DATE`) → ローカル `(date, time)`
-- `SUMMARY` → `title`。同一日内は `time` 昇順ソート
-
-**マージ** (`merge_calendar`):
-| モード | 動作 |
-|---|---|
-| `append` | 同一 `(time, title)` は重複排除。既存日付に追加 |
-| `overwrite` | 同一日付キーを取込データで置換 |
-
-**Apple DB**:
-- 候補: `~/Library/Group Containers/group.com.apple.calendar/Calendar.sqlitedb`, `~/Library/Calendars/**/*.sqlite*`
-- テーブル自動検出: `CalendarItem` 優先、次に `Event`
-- Core Data epoch (2001-01-01 起点) をローカル日時へ変換
-- デフォルト範囲: 過去 365 日 + 未来 365 日。複数 DB は `time+title` で統合
-- **非公式スキーマ** — 将来 macOS 更新で壊れる可能性あり。ICS フォールバック推奨
-
-**TUI からの呼び出し** (`src/ui/app.py`):
-- ICS: ワーカースレッド → `_pick_ics_file()` → `calendar_sync.sync_from_ics(path, mode)` → `sync_diary_index(force=True)`
-- Apple: ワーカースレッド → `apple_calendar_sync.sync_from_apple_calendar(mode)` → 同上
-- 完了後: RECORD タブの予定リスト・カレンダーマークを再描画
-
-**CLI / テスト**:
-```powershell
-python tests\test_calendar_sync.py
-python tests\test_apple_calendar_sync.py
-```
+| `calendar_sync.py` | 手動 `.ics` | `parse_ics()`, `merge_calendar()`, `sync_from_ics()` |
+| `apple_calendar_sync.py` | macOS SQLite | `sync_from_apple_calendar()` |
 
 ---
 
@@ -236,62 +255,44 @@ python tests\test_apple_calendar_sync.py
 ### インフラ
 - [x] Python 3.12 ARM64 + numpy + sentence-transformers (オフライン fallback あり)
 - [x] llvm-mingw clang + OpenMP, llama.cpp ARM64, Qwen2.5-7B Q4_K_M
+- [x] **フェーズ B**: `core/` 分離 + `facade.py` 共通 API
+- [x] **デスクトップ**: Tauri v2 + React + stdio IPC
+- [x] TUI → `ui_tui/` 移行 + `src/ui/app.py` 互換ラッパー
 
 ### データ / パイプライン
 - [x] DailyContext: Calendar + Finance + Diary + AI_Consultations + LINE Sessions
-- [x] ConversationSession + Response Latency
-- [x] `calendar_manager.py`, `finance_manager.py`, `consultation_log.py`
-- [x] **ICS カレンダー同期** (`calendar_sync.py`) + **Apple カレンダー同期** (`apple_calendar_sync.py`)
-- [x] IMPORT タブ: LINE + ICS + Apple、共通マージモード Select
-- [x] カレンダー取込 → `sync_diary_index(force=True)` (profiler 非実行)
+- [x] ICS / Apple カレンダー同期 + IMPORT タブ (TUI + デスクトップ)
 - [x] Future Context (30日) を CONSULT プロンプトに注入
-- [x] AI相談ログ → DailyContext + profiler 入力
 
 ### C++ / ベンチ
 - [x] AoSoA NEON 4-lane + OpenMP Top-K + Windows mmap
-- [x] `tests/benchmark.py` (PKBVEC01 ダミー生成 + QPS)
+- [x] `tests/benchmark.py` (PKBVEC01)
 
-### プロファイラ
-- [x] `deep_profile.v5` (abstract_identity, factual_signals, meta_narrative)
-- [x] `user_profile.v2` (fixed / inferred / auto_extracted 分離)
-- [x] LLM 深層分析 (対話+日記+家計簿相関)
-- [x] `--no-llm` でルールベースのみ完走
-
-### TUI
-- [x] 4タブ構成 (RECORD / IMPORT / CONSULT / SETTINGS)
-- [x] RECORD: カレンダー + 予定/家計簿/日記サブタブ + TimePicker + 保存
-- [x] IMPORT: LINE + ICS + Apple カレンダー (macOS)
-- [x] `tests/test_calendar_sync.py`, `tests/test_apple_calendar_sync.py` PASS
-- [x] SETTINGS: fixed_attributes + 読取専用自動プロフィール
-- [x] `tests/ui_smoke.py` PASS
-
-### 品質
-- [x] llama-server ライフサイクル管理
-- [x] カレンダー DuplicateIds 修正
-- [x] RECORD レイアウト: スクロール + 入力欄表示修正
+### プロファイラ / TUI / デスクトップ
+- [x] `deep_profile.v5`, `user_profile.v2`
+- [x] 4 タブ TUI + デスクトップ UI 同等機能
+- [x] `tests/ui_smoke.py`, カレンダー同期テスト PASS
 
 ---
 
 ## 4. 次に実装すべきタスク
 
-### 4.1 プロファイル連携の強化 (要望あり)
-- [ ] **fixed_attributes を profiler LLM プロンプトに注入** (分析の文脈として。上書きはしない)
-- [ ] 基本情報保存時の **自動 profiler 再実行** は未実装 — 必要なら SETTINGS 保存後に `_profiler_worker` 呼び出し
+### 4.1 プロファイル連携の強化
+- [ ] **fixed_attributes を profiler LLM プロンプトに注入** (分析文脈として。上書きはしない)
+- [ ] 基本情報保存時の自動 profiler 再実行 (任意)
 
 ### 4.2 RECORD / カレンダー UX
 - [ ] 家計簿入力日・相談日のカレンダーマーク (現状は予定 `*` のみ)
-- [ ] 月表示時の縦スクロール UX 改善 (狭い端末)
-- [ ] CONSULT 回答の **streaming 表示**
+- [ ] CONSULT 回答の **streaming 表示** (デスクトップ)
 
 ### 4.3 分析・品質
 - [ ] `data_merger` 未返信セッション (`awaiting_user`) の UI 表示
 - [ ] CI: `tests/ui_smoke.py` + `tests/boost_check.py` + `tests/benchmark.py --quick`
-- [ ] 実機 ARM64 で benchmark フルサイズ (10k/100k/500k) 計測・記録
+- [ ] 実機 ARM64 benchmark フルサイズ計測
 
 ### 4.4 バックログ
-- [ ] Apple カレンダー DB スキーマ変更への追従 (ICS フォールバック維持)
-- [ ] 予定密度 × 意思決定ルールの profiler 共起 (Future Context 深掘り)
-- [ ] `src/python/app.py` (CLI) と `src/ui/app.py` (TUI) 名称衝突 — import 時は `importlib` パターン (`ui_smoke.py` 参照)
+- [ ] Apple カレンダー DB スキーマ変更への追従
+- [ ] CONSULT stdio 経由の status コールバック (進捗表示)
 
 ---
 
@@ -300,46 +301,63 @@ python tests\test_apple_calendar_sync.py
 ```powershell
 cd C:\Users\badger\Documents\cursur\decision_engine
 
-python src\python\pipeline.py          # インデックス再構築
-python src\python\profiler.py          # 深層プロファイル (--no-llm 可)
-python src\ui\app.py                   # TUI
-python src\python\consultation_engine.py "相談内容"   # CLI 相談 (知識検索統合)
-python tests\ui_smoke.py               # ヘッドレス UI テスト
-python tests\test_calendar_sync.py     # ICS パース・マージ
-python tests\test_apple_calendar_sync.py
-python tests\benchmark.py --quick      # C++ ベンチ (要 build/search_engine.exe)
+# デスクトップ (推奨)
+cd apps\desktop
+.\dev.cmd
 
-.\build.ps1                            # C++ ビルド + スモーク実行
+# TUI
+python src\python\ui_tui\app.py
+
+# パイプライン / プロファイラ
+python src\python\core\pipeline.py
+python src\python\core\profiler.py          # --no-llm 可
+
+# CLI 相談
+python src\python\core\consultation_engine.py "相談内容"
+
+# テスト
+python tests\ui_smoke.py
+python tests\test_calendar_sync.py
+python tests\benchmark.py --quick
+
+# C++ ビルド
+.\build.ps1
 ```
 
 ### 重要パス
+
 ```
-src/python/data_merger.py           DailyContext + ConversationSession
-src/python/consultation_engine.py  相談 (遅延初期化, Future Context)
-src/python/profiler.py             deep_profile.v5
-src/python/calendar_sync.py          ICS 取込 (apply_calendar_import 共通)
-src/python/apple_calendar_sync.py  Apple カレンダー (macOS SQLite)
-src/python/llm_config.py           7B 選択・サーバー引数
-src/ui/app.py                      Textual TUI
-src/ui/calendar_widget.py          カレンダー
-src/ui/time_picker.py              時刻ロール
-src/cpp/search_engine.cpp          NEON 検索
-tests/benchmark.py                 QPS ベンチ
-tests/test_calendar_sync.py
-tests/test_apple_calendar_sync.py
-data/raw/{diary.md,calendar.json,calendar_import.ics,finance.json,line_history.txt,ai_consultations.json}
+apps/desktop/                       Tauri + React デスクトップ (主軸)
+apps/desktop/src/lib/engine.ts      フロント → Tauri IPC
+src/python/engine_stdio.py          stdio JSON dispatch
+src/python/run_engine.py            エンジン起動
+src/python/core/facade.py           共通ビジネス API
+src/python/core/data_merger.py      DailyContext + ConversationSession
+src/python/core/consultation_engine.py  相談 (遅延初期化, Future Context)
+src/python/core/profiler.py         deep_profile.v5
+src/python/core/calendar_sync.py    ICS 取込
+src/python/core/apple_calendar_sync.py  Apple カレンダー
+src/python/core/llm_config.py       7B 選択・サーバー引数
+src/python/ui_tui/app.py            Textual TUI
+src/python/ui_tui/calendar_widget.py
+src/python/ui_tui/time_picker.py
+src/ui/app.py                       TUI 互換ラッパー
+src/cpp/search_engine.cpp           NEON 検索
+tests/benchmark.py
+data/raw/{diary.md,calendar.json,finance.json,line_history.txt,ai_consultations.json}
 data/processed/{vectors.bin,metadata.json,deep_profile.json,user_profile.json}
 ```
 
 ### 既知の制約・注意
+
 - **基本情報保存 ≠ 自動プロファイling** — profiler は別途「再分析」または IMPORT の LINE 取込時
-- **カレンダー同期 (ICS/Apple) ≠ profiler** — インデックス更新 (`sync_diary_index`) のみ
-- **Apple カレンダー同期は macOS のみ** — Windows TUI ではボタン無効
+- **カレンダー同期 ≠ profiler** — インデックス更新 (`sync_diary_index`) のみ
+- **Apple カレンダー同期は macOS のみ**
 - **fixed_attributes は CONSULT に使う / profiler 分析入力には未使用**
-- TUI 表示は端末サイズ依存 (24行端末では RECORD 内スクロール必須)
-- 7B 初回ロード ~2–3分。`tests/benchmark.py` は `search_engine.exe` 要ビルド
-- Textual カレンダー日ボタンに **id を付けない** (再描画時 DuplicateIds 防止)
+- 7B 初回ロード ~2–3分
+- Textual カレンダー日ボタンに **id を付けない** (DuplicateIds 防止)
+- デスクトップ: `pkb-desktop.exe` 直接起動は不可 — 必ず `dev.cmd` 経由
 
 ---
 
-*Generated: 2026-07-05 — PKB handoff for new chat session*
+*Generated: 2026-07-06 — Phase B refactoring + Tauri desktop integration*

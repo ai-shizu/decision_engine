@@ -8,8 +8,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src" / "python"))
 
-import calendar_manager as cal  # noqa: E402
-import calendar_sync  # noqa: E402
+from core import calendar_manager as cal  # noqa: E402
+from core import calendar_sync  # noqa: E402
 
 SAMPLE_ICS = """\
 BEGIN:VCALENDAR

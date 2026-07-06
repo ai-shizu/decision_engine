@@ -5,7 +5,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src" / "python"))
 
-from consultation_engine import ConsultationEngine
+from core.consultation_engine import ConsultationEngine
 
 e = ConsultationEngine()
 q = e.embed("飲み会の誘いを断ってばかりで人間関係が心配")

@@ -15,7 +15,7 @@ if (-not $SkipPy) {
     Write-Host "== [1/3] Python pipeline ==" -ForegroundColor Cyan
     $py = (Get-Command python -ErrorAction SilentlyContinue) ?? (Get-Command py -ErrorAction SilentlyContinue)
     if (-not $py) { throw "python が見つかりません" }
-    & $py.Source "$root\src\python\pipeline.py"
+    & $py.Source "$root\src\python\core\pipeline.py"
     if ($LASTEXITCODE -ne 0) { throw "pipeline.py failed" }
 }
 

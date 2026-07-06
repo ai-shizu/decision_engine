@@ -1,0 +1,2 @@
+# Windows on ARM64: Visual Studio の link.exe (ARM64) が必要な場合があります。
+# 「Developer PowerShell for VS 2022」から build.cmd / dev.cmd を実行してください。

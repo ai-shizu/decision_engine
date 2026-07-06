@@ -11,8 +11,8 @@ from unittest.mock import patch
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src" / "python"))
 
-import calendar_manager as cal  # noqa: E402
-import apple_calendar_sync as acs  # noqa: E402
+from core import apple_calendar_sync as acs  # noqa: E402
+from core import calendar_manager as cal  # noqa: E402
 
 CORE_OFFSET = acs.CORE_DATA_EPOCH_OFFSET
 

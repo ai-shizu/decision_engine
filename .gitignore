@@ -16,8 +16,25 @@ tools/llama-arm64/
 # 個人データ・生成物（GitHub 公開時は除外）
 data/raw/
 data/processed/
+data/**/*.bin
+data/**/*.json
+!data/knowledge/
+
+# 実行ログ
+logs/
+*.log
 
 # OS / エディタ
 .DS_Store
 Thumbs.db
 .cursor/
+
+# Tauri desktop app
+apps/desktop/node_modules/
+apps/desktop/dist/
+apps/desktop/build-engine/
+apps/desktop/build-sidecar/
+apps/desktop/src-tauri/target/
+apps/desktop/src-tauri/binaries/pkb-engine*
+apps/desktop/src-tauri/binaries/pkb-api*
+!apps/desktop/src-tauri/binaries/README.md

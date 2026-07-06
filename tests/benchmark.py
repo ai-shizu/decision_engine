@@ -26,7 +26,7 @@ import numpy as np
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src" / "python"))
 
-from pipeline import (  # noqa: E402
+from core.pipeline import (  # noqa: E402
     BLOCK_BYTES,
     DIM,
     LANES,

@@ -13,14 +13,18 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src" / "python"))
+sys.path.insert(0, str(ROOT / "src" / "ui"))
 
 from textual.containers import Grid  # noqa: E402
 from textual.widgets import Input, Markdown, TabbedContent, TextArea  # noqa: E402
 
-# src/python/app.py (CLI) と名前が衝突するため、UIモジュールはパス指定でロード
 import importlib.util  # noqa: E402
 
-_spec = importlib.util.spec_from_file_location("pkb_ui_app", ROOT / "src" / "ui" / "app.py")
+import core.facade as facade  # noqa: E402
+
+_spec = importlib.util.spec_from_file_location(
+    "pkb_ui_app", ROOT / "src" / "python" / "ui_tui" / "app.py",
+)
 ui_app = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(ui_app)
 
@@ -28,13 +32,19 @@ _spec.loader.exec_module(ui_app)
 async def main() -> None:
     dashboard = ui_app.DecisionDashboard()
 
-    calls = {"sync": 0, "consult": []}
-    dashboard.engine.sync_diary_index = lambda force=False: calls.__setitem__("sync", calls["sync"] + 1) or True
-    dashboard.engine.consult = lambda q, top_k=3, status=None: (
-        calls["consult"].append(q),
-        status and status("mocked"),
-        "## 1. 現状分析\nmock\n## 2. 価値観との整合性\nmock\n## 3. 必要なスキルギャップ\nmock\n## 4. 次の一手\nmock",
-    )[-1]
+    calls = {"consult": []}
+
+    def _mock_consult(q, status=None):
+        calls["consult"].append(q)
+        if status:
+            status("mocked")
+        return (
+            "## 1. 現状分析\nmock\n## 2. 価値観との整合性\nmock\n"
+            "## 3. 必要なスキルギャップ\nmock\n## 4. 次の一手\nmock"
+        )
+
+    _real_consult = facade.consult
+    facade.consult = _mock_consult
 
     diary_before = ui_app.DIARY_MD.read_text(encoding="utf-8")
 
@@ -56,11 +66,6 @@ async def main() -> None:
         dashboard._update_date_labels()
         await pilot.press("ctrl+s")
         await pilot.pause()
-        for _ in range(50):
-            if calls["sync"]:
-                break
-            await asyncio.sleep(0.1)
-        assert calls["sync"] >= 1, "同期ワーカーが呼ばれていない"
         assert "TUIスモーク" in ui_app.DIARY_MD.read_text(encoding="utf-8")
 
         # ---- CONSULT: フォーカス、属性、チャット ----
@@ -94,8 +99,9 @@ async def main() -> None:
 
     # 後始末: テストで追記した日記を元に戻す
     ui_app.DIARY_MD.write_text(diary_before, encoding="utf-8")
+    facade.consult = _real_consult
     print("UI smoke test: ALL PASS")
-    print(f"  sync_worker_calls={calls['sync']} consult_calls={calls['consult']}")
+    print(f"  consult_calls={calls['consult']}")
 
 
 if __name__ == "__main__":
