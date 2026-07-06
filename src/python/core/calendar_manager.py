@@ -58,6 +58,14 @@ def dates_with_events() -> set[str]:
     return {d for d, evs in load_calendar().items() if evs}
 
 
+def dates_with_diary() -> set[str]:
+    """日記本文がある日付 (YYYY-MM-DD) の集合。"""
+    if not DIARY_MD.exists():
+        return set()
+    _, sections = _parse_diary_sections(DIARY_MD.read_text(encoding="utf-8"))
+    return {d for d, body in sections.items() if body.strip()}
+
+
 def get_events_for_date(date_str: str) -> list[dict]:
     """指定日の予定リスト (時間順)。"""
     events = list(load_calendar().get(date_str, []))

@@ -37,6 +37,9 @@ def load_consultations() -> dict[str, list[dict]]:
                     "timestamp": str(e.get("timestamp", "")),
                     "query": str(e.get("query", "")),
                     "response": str(e.get("response", "")),
+                    # 面接・GD・ES添削での発言 = 選考用の建前人格。
+                    # gap_analysis / profiler の主観チャネルでは低ウェイト扱いされる
+                    "is_simulated_persona": bool(e.get("is_simulated_persona", False)),
                 }
                 for e in v if isinstance(e, dict)
             ]
@@ -51,14 +54,20 @@ def save_consultations(data: dict[str, list[dict]]) -> None:
 
 
 def append_consultation(query: str, response: str,
-                        timestamp: datetime | None = None) -> dict:
-    """相談ペアを当日分として追記保存し、保存したエントリを返す。"""
+                        timestamp: datetime | None = None,
+                        simulated: bool = False) -> dict:
+    """相談ペアを当日分として追記保存し、保存したエントリを返す。
+
+    simulated=True は面接・GD・ES添削シミュレーション由来のログを意味する。
+    このフラグ付きテキストは「選考用の建前人格」とみなされ、gap_analysis の
+    主観スコアでは重み 0.1、profiler の自己テキスト収集からは除外される。"""
     ts = timestamp or datetime.now()
     date_str = ts.strftime("%Y-%m-%d")
     entry = {
         "timestamp": ts.strftime("%Y-%m-%d %H:%M:%S"),
         "query": query.strip(),
         "response": response.strip(),
+        "is_simulated_persona": bool(simulated),
     }
     data = load_consultations()
     data.setdefault(date_str, []).append(entry)
@@ -84,6 +93,15 @@ def format_consultations_text(consultations: list[dict]) -> str:
     return "\n".join(lines)
 
 
-def extract_user_queries(consultations: list[dict]) -> str:
-    """profiler 用: ユーザー発話 (Query) のみを連結。"""
-    return "\n".join(c["query"] for c in consultations if c.get("query", "").strip())
+def extract_user_queries(consultations: list[dict],
+                         include_simulated: bool = False) -> str:
+    """profiler 用: ユーザー発話 (Query) のみを連結。
+
+    is_simulated_persona 付きエントリ (面接・GD・ES添削の建前人格) は既定で
+    除外する。profiler のルールベース分析には重み機構がないため、混入は
+    0/1 でしか制御できない — 建前は 0 (除外) が正 (gap_analysis 側は 0.1)。"""
+    return "\n".join(
+        c["query"] for c in consultations
+        if c.get("query", "").strip()
+        and (include_simulated or not c.get("is_simulated_persona"))
+    )

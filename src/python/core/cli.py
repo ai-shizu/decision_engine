@@ -209,7 +209,7 @@ class LlamaServerBackend:
             return s.connect_ex(("127.0.0.1", self.port)) == 0
 
     def start(self, timeout_s: int | None = None) -> None:
-        from llm_config import model_startup_timeout
+        from .llm_config import model_startup_timeout
         if timeout_s is None:
             timeout_s = model_startup_timeout(self.model)
         if self._port_open():
@@ -319,9 +319,11 @@ data/knowledge/ の外部知識を参照のこと (LLM無効のため自動要�
 
 
 def select_backend(profile: dict, chunks: list[dict]):
+    from .paths import LLAMA_CLI_EXE, LLAMA_SERVER_EXE
+
     model = find_gguf()
-    server_exe = LLAMA_DIR / "llama-server.exe"
-    cli_exe = LLAMA_DIR / "llama.exe"
+    server_exe = LLAMA_SERVER_EXE
+    cli_exe = LLAMA_CLI_EXE
     if model and server_exe.exists():
         return LlamaServerBackend(server_exe, model, SERVER_PORT)
     if model and cli_exe.exists():

@@ -85,6 +85,36 @@
   デーモンは初回検索で遅延起動、障害時は drop して respawn しない (shutdown 後の再利用は再起動可)。
 - results 未使用スロット = chunk_id -1 (PKBVEC01 墓標規約と同一)。
 
+## LSM化 (Target Charlie C1 / AI_SKILLS §10)
+
+- セグメント (vectors.seg-NNNNNN.bin) の中身は PKBVEC01 のまま。バージョニングは
+  segments.json マニフェスト側のみ。C++/pipeline.to_aosoa/write_binary は無改造。
+- index_in_segment は明示フィールド。chunk_id からの逆算 (min値推定) は墓標書き後に壊れる。
+- content_hash は embed 入力そのもの (title+text) をハッシュ。ソース列挙方式は追従漏れの罠。
+- 手順順序: 新セグメント確定 (meta→manifest) → 墓標 → remap → コンパクション判定。
+  コンパクションの unlink は必ず release_fn (remap) の後 — Windows PermissionError の変奏。
+- manifest/metadata の書き込みは親ディレクトリ mkdir を自前でやれ (書き込み関数の鉄則)。
+- consultation_engine.py の未使用に見える paths re-import を消す前に、facade.py 等の
+  re-export 依存 (from .consultation_engine import LINE_HISTORY 等) を grep で確認しろ。
+
+## Delta-LINE DL1: 対人プロトコル・テレメトリ (AI_SKILLS §11)
+
+- extract_conversation_sessions() は相手起点の会話しか捉えない一方向状態機械。
+  line_telemetry.py は独自の対称バースト抽出を持つ (日付/時刻パースのみ再利用)。
+- 摩擦検出は2-of-3多重シグナル必須。単一キーワード判定は仲良しdyadを誤検出する (T-11)。
+- レイテンシ異常判定は「本人自身のuser_median」との比較。他者のpeer_medianと比べるな。
+- 深夜除外は着信側(prev.end)の時刻で判定。返信時刻(b.start)で判定すると逆効果。
+- 第三者は salt付き一方向alias のみ。実名は永続化しない。グループチャットはv1で除外。
+- exchanges<20のdyadは3軸の計算対象外。score=Noneで返せ (0や中央値で埋めるな)。
+- DL2実装済み: analyze_social_positioning は既存intention_gap/blind_spot型に合流させる
+  (新type不要)。_gap_section()経由のみなのでinterview_sim/gd_sim/es_reviewは無改造。
+  Bounty(register_bounties)は theme/type/tension/status のみ保持、insight/quotesは持たせるな。
+- D3実装済み: question_bank.select_question はBounty のid/type/tension/statusのみ読み、
+  theme/insightは参照しない。注入は議論ターンのみ(openingは触らない)。テキストのみ注入。
+- narrative_compiler.compile_narrative は deep_profile.gap_analysis.gapsのみを素材にする
+  (5軸/HistoricalNodeは未実装のため)。[ref:N]無し段落は幻覚として破棄、最大2回リトライ。
+  Recruiter's Eyeは別呼び出しで生成し、draft_*.mdにはes_textのみ書く(メタ解説を含めるな)。
+
 ## モデル戦略
 
 - 単一の真実 = config/model_params.json (env 変数 > config > llm_config.py デフォルト)。

@@ -32,17 +32,11 @@ os.environ.setdefault("HF_HUB_OFFLINE", "1")
 os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
 
 from .paths import (
-    AI_CONSULTATIONS_JSON,
-    CALENDAR_JSON,
     DEEP_PROFILE,
-    DIARY_BIN,
-    DIARY_MD,
     DIARY_META,
-    FINANCE_JSON,
     KNOWLEDGE_BIN,
     KNOWLEDGE_DIR,
     KNOWLEDGE_META,
-    LINE_HISTORY,
     LLAMA_DIR,
     LLAMA_SERVER_EXE,
     MODELS_DIR,
@@ -59,6 +53,7 @@ from .profile_store import (
     load_user_profile,
     save_fixed_attributes,
 )
+from . import lsm_index
 from .search_daemon import SearchDaemonClient, SearchDaemonError
 from . import pipeline  # noqa: E402
 from .llm_config import (  # noqa: E402
@@ -185,6 +180,10 @@ PRESET_PERSONA_TRAITS = {
     "アイデア型": "発想は豊富だが実現可能性を検討せず、次々に新案を出して発散させる",
 }
 MAX_GD_PERSONAS = 9
+# Puppeteer (Target Delta D3): 1セッションあたりの Bounty 駆動質問の注入上限。
+# 増やしすぎると議論ターンの大半が定型質問で埋まり、面接官自身の
+# アドリブ (Adversarial Attack) の比重が薄れる。
+MAX_INJECTED_QUESTIONS = 2
 
 
 def build_gd_system_prompt(personas: list[dict] | None) -> str:
@@ -492,23 +491,11 @@ class ConsultationEngine:
 
     def sync_diary_index(self, force: bool = False) -> bool:
         """diary.md / line_history.txt / calendar.json / ai_consultations.json /
-        finance.json が更新されていれば DailyContext インデックスを再構築する。"""
-        sources = [DIARY_MD, LINE_HISTORY]
-        if CALENDAR_JSON.exists():
-            sources.append(CALENDAR_JSON)
-        if AI_CONSULTATIONS_JSON.exists():
-            sources.append(AI_CONSULTATIONS_JSON)
-        if FINANCE_JSON.exists():
-            sources.append(FINANCE_JSON)
-        if not force and not self._stale(DIARY_BIN, *sources):
-            return False
-        self._release_index_mapping(DIARY_BIN)  # 再構築前にデーモンの mmap を解放
-        chunks = pipeline.load_chunks()  # 日付結合済み DailyContext
-        pipeline.build_index(chunks, DIARY_BIN, DIARY_META,
-                             embedder=self.embedder,
-                             source=("diary.md + line_history.txt + calendar.json "
-                                     "+ ai_consultations.json + finance.json (DailyContext)"))
-        return True
+        finance.json の変更日数だけを再埋め込みし、DailyContext インデックスへ
+        差分反映する (LSM化 / Target Charlie C1)。全文re-embedはしない —
+        重い処理はコンテンツハッシュが変わった日付のみ。実体は core/lsm_index.py。
+        """
+        return lsm_index.sync_diary_index_lsm(self, force=force)
 
     def sync_knowledge_index(self, force: bool = False) -> bool:
         sources = [f for f in KNOWLEDGE_DIR.glob("*") if f.is_file()]
@@ -606,8 +593,13 @@ class ConsultationEngine:
 
     def search_daily(self, qvec, top_k: int = 3) -> list[dict]:
         """DailyContextインデックスを検索し、日記+LINEが揃った日を重み付けして
-        リランキングする。候補は top_k の2倍取得してから絞り込む。"""
-        hits = self.search_index(DIARY_BIN, DIARY_META, qvec, top_k * 2)
+        リランキングする。候補は top_k の2倍取得してから絞り込む。
+
+        LSM化 (Target Charlie): 全セグメントを既存 search_index() で個別に
+        検索し、日付デデュープしてマージする (core/lsm_index.search_lsm)。
+        C++ 側 (search_engine.cpp / search_daemon.py) は無改造のまま。
+        """
+        hits = lsm_index.search_lsm(self, qvec, top_k * 2)
         for h in hits:
             full = h.get("has_diary") and h.get("has_line")
             h["is_full_day_log"] = bool(full)
@@ -852,6 +844,20 @@ class ConsultationEngine:
                     "候補者への最初の出題を行え。テーマを提示し、"
                     "最初に確認すべき前提を1つだけ問うこと。"
                 )
+            # Puppeteer (黒幕・Target Delta D3): tension の高い Bounty (矛盾) の
+            # type に一致する QUESTION_BANK の質問を決定論的に選び、議論ターンへの
+            # 注入キューに積む。ここで扱うのは Bounty の id/type/tension のみ —
+            # theme/insight 等の生テキストはこのメソッド内で一切参照しない
+            # (不変条件 I-11 / I-14。開示は講評フェーズの _gap_section() 経由のみ)。
+            from . import question_bank
+            from .line_telemetry import load_bounties, mark_bounty_status
+            selected = question_bank.select_question(load_bounties(), k=MAX_INJECTED_QUESTIONS)
+            self._interview_state["priority_queue"] = [s["text"] for s in selected]
+            self._interview_state["injected_bounty_ids"] = [s["bounty_id"] for s in selected]
+            for s in selected:
+                mark_bounty_status(s["bounty_id"], "queued",
+                                   bank_question_id=s["question_id"])
+
             answer = self.backend.generate(system, prompt, on_token=on_token)
             self._interview_state["transcript"].append(("面接官", answer))
             return answer
@@ -904,6 +910,9 @@ class ConsultationEngine:
                             flags=re.DOTALL).strip()
             from .consultation_log import append_consultation
             append_consultation(log_label, answer, simulated=True)
+            from .line_telemetry import mark_bounty_status
+            for bid in state.get("injected_bounty_ids", []):
+                mark_bounty_status(bid, "resolved")
             self._interview_state = None
             say("面接シミュレーション終了 (講評を相談履歴に保存)")
             return answer
@@ -924,13 +933,23 @@ class ConsultationEngine:
         if es is not None:
             from .es_manager import es_body_for_prompt as _es_body
             es_ctx = f"# 候補者が提出した ES\n{_es_body(es)}\n\n"
+        # Puppeteer: キューに積まれた質問があれば「テキストのみ」を注入する。
+        # なぜこの質問が選ばれたか (Bounty の theme/insight/tension) はここでは
+        # 一切参照しない — 面接官が読むのは QUESTION_BANK の文言そのものだけ。
+        injection_note = ""
+        queue = state.get("priority_queue") or []
+        if queue:
+            injected_text = queue.pop(0)
+            injection_note = (
+                f"\n\nまた、以下の一般的な質問も自然な流れで織り交ぜて尋ねよ:\n"
+                f"「{injected_text}」")
         prompt = f"""{es_ctx}# これまでの議論
 {transcript_text}
 [候補者] {q}{latency_note}
 
 面接官として応答せよ。候補者の直前の発言の弱点 (前提の曖昧さ・MECE でない
 分解・数字の根拠欠如・ES 記載との矛盾) を1点だけ短く突き、
-次の問いを1つ投げること。"""
+次の問いを1つ投げること。{injection_note}"""
         answer = self.backend.generate(state["system"], prompt, on_token=on_token)
         state["transcript"].append(("面接官", answer))
         return answer

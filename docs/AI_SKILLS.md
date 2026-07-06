@@ -482,3 +482,86 @@ consult プロンプトの静的部分 (プロファイル群) の KV テンソ�
 - 実デーモンの E2E は **exe 不在なら SKIP (FAIL ではない)** のゲート付き。one-hot ベクトル (dot = query の該当次元値) で期待値が厳密に既知の index を stdlib `struct` だけで生成する — numpy 禁止・乱数禁止・実データ非接触の三原則を守ったまま実カーネルを検証できる。
 - C++ 変更時は `tests/benchmark.py --quick` で前後の QPS を計測して数字を出す (Step 1: 10k vectors で前 101.63 µs/q → 後 101.38 µs/q — カーネル非改変のパリティ確認)。
 
+---
+
+## 10. Target Charlie C1: PKBVEC01 の LSM 化 (`core/lsm_index.py`)
+
+日記の同期を「O(全履歴) の再埋め込み」から「O(変更日数) の再埋め込み」へ縮める機構。セグメントファイル (`vectors.seg-NNNNNN.bin`) の中身は既存 `PKBVEC01` 形式のまま 1 バイトも変えない — バージョニングは `segments.json` マニフェスト側でのみ行う。**C++ (`search_engine.cpp`) / `pipeline.py` の `to_aosoa`/`write_binary` は無改造のまま流用する。**
+
+### 10.1 アーキテクチャの不変条件
+
+1. **`index_in_segment` は明示フィールドとして manifest に持つ。chunk_id からの逆算 (min 値推定など) はしない。** 墓標書きで生存エントリが間引かれると、セグメント内で最小の chunk_id がインデックス 0 に対応しなくなる — 実装中に一度この設計で書いて自己発見したバグ。`write_segment()` は `date -> index_in_segment` を返し、呼び出し側が `_tomb_offset(idx)` を都度算出する。
+2. **content_hash は embed 入力そのもの (`title+text`) をハッシュする。** 個々のソース (日記/LINE/家計簿/予定/相談) を列挙して結合する方式は「ソース追加時に hash 側の更新を忘れる」事故 (SPEC 罠 T-3) を構造的に踏み得る。embed に渡す文字列と同じものをハッシュすれば、その文字列が変わらない限り再埋め込み不要という判定が自動的に正しくなる。
+3. **手順順序 (§2.1.3 由来。変えるな)**: 新セグメント確定 (metadata → manifest の順で `os.replace`) → 墓標書き (in-place) → **デーモンへの remap** (`engine._release_index_mapping`) → コンパクション判定。墓標を書いた直後に remap を送らないと、デーモンが保持する読み取り専用 mmap の可視性が OS 依存になる (§9 と同じ罠)。
+4. **コンパクションの unlink は必ず remap の後。** `maybe_compact(manifest, release_fn=...)` は `release_fn(path)` を呼んでから `unlink()` する。Windows でマップ中のファイルを削除しようとすると PermissionError — Bravo で踏んだ時限爆弾の変奏。`release_fn` を省略して直接 unlink するコードを書いたらレビューで落とせ。
+5. **bootstrap は rename ではなく copy。** 既存 (非LSM) `vectors.bin` を `seg-000001.bin` として採用する際、`core/cli.py` が `VECTORS_BIN`(=`DIARY_BIN`) を直接参照する検証ツールのため、legacy ファイルは残す。1 回だけのコストなので許容する。
+6. **bootstrap 結果は「変更なし」でも即座に永続化する。** `sync_diary_index_lsm` は `not LSM_MANIFEST.exists()` を検出したら、diff 判定の結果を待たずに manifest を書き出す。これを怠ると、初回同期後に「今日は差分なし」が続く限り毎回 legacy `metadata.json` を全走査して manifest を再構成する羽目になり、読み取りパスに O(全履歴) が舞い戻る (実装中に自己発見)。
+7. **埋め込み空間の同一性 (I-6)。** `manifest["embedder_id"]` (`{name}#{DIM}`) が現在の embedder と不一致なら、diff 判定をバイパスして全日付を「変更」扱いにする。異空間ベクトルの混在検索は「エラーの出ない乱数」になる。
+8. **検索はセグメントごとに既存 `search_index()` を無改造で呼び、Python 側で日付デデュープ**(同一日付は score 最大のみ採用)。C++ 側マージ (マイルストーン C2) は実測が遅い場合のみ検討 — 現状は 1 セグメントあたり ~10µs (Bravo 実測) なので着手不要。
+9. **`metadata.json` は全セグメント共通の生存チャンク台帳。** セグメントごとに分けない。`chunk_id` はグローバル一意なので、どのセグメントのヒットでも同じ metadata から解決できる。
+
+### 10.2 実際に踏んだ罠 (次の実装者への警告)
+
+- **min(chunk_id) を index_in_segment の代用にすると、墓標書き後に壊れる。** §10.1-1 参照。テストで tombstone 後の compaction を必ず往復させろ (`test_compaction_byte_copy_no_reembed`)。
+- **manifest/metadata の書き込みは親ディレクトリの存在を仮定するな。** `atomic_save_manifest`/`_save_meta` は `parent.mkdir(parents=True, exist_ok=True)` を自前で行う。フレッシュインストール (data/processed が未作成) での実機 E2E で実際に `FileNotFoundError` を踏んだ。`pipeline.write_binary` は既にこれをやっている — 新しい書き込み関数を足すたびに確認しろ。
+- **他モジュールがフラットな再エクスポートに依存している。** `consultation_engine.py` から未使用に見える `paths` の re-import (`DIARY_MD`, `LINE_HISTORY` 等) を削除すると、`facade.py` が `from .consultation_engine import LINE_HISTORY` で壊れる (実際に `ui_smoke` が ImportError で落ちた)。未使用インポートを消す前に `grep -rn "from .consultation_engine import\|from core.consultation_engine import"` で依存元を全部確認しろ。
+- **コンパクションは埋め込みモデルに一切触れない。** `maybe_compact()` はベクトルをバイトとして読み書きするだけ (NumPy の `frombuffer`/`view` のみ)。embedder を渡す引数がそもそも存在しない設計にした — 「うっかり再埋め込みする」の芽を型シグネチャで摘む。
+
+### 10.3 検証の作法
+
+`tests/test_lsm_index.py` (9 ケース、全て決定論・stdlib+numpy のみ・`HashedNgramEmbedder` 使用): レイアウト計算の単体テスト、差分同期での再埋め込み件数を `CountingEmbedder` (encode 呼び出しテキストを記録するラッパー) で検証、埋め込み空間不一致での全再構築、legacy bootstrap での再埋め込みゼロ確認、`search_lsm` の日付デデュープ (クラッシュ窓の再現)、コンパクションのバイトコピー往復 (NumPy デコードで生存ベクトルの一致を確認)。実機 E2E は一時 `PKB_PROJECT_ROOT` + 実 `search_engine.exe` daemon で、差分同期 2 回 + remap + consult() フルフローがデーモンを生かしたまま完走することを確認した。
+
+---
+
+## 11. Target Delta-LINE DL1: 対人プロトコル・テレメトリ (`core/line_telemetry.py`)
+
+LINE 全ログ (本人+他者) を「人間関係の物理的衝突ログ」として解析する第3チャネル。docs/SPEC_CHARLIE_DELTA.md §3.9 の実装。**発見は決定論のみ。LLM による感情推定は一切使わない** (gap_analysis の統治原則を継承)。
+
+### 11.1 アーキテクチャの不変条件
+
+1. **既存 `extract_conversation_sessions()` は流用不可。理由を忘れるな。** この状態機械は「相手が発言 → 本人が返信」の一方向専用 (本人が会話を始めたバーストは構造的に捨てられる)。`core/line_telemetry.py` は独自の対称なバースト抽出 (`_bursts_by_contact`) を持つ。日付/時刻パースのみ `data_merger.normalize_date`/`_parse_dt` を再利用する。SPEC_CHARLIE_DELTA.md §3.9.1 の訂正コメント参照。
+2. **摩擦検出は 2-of-3 多重シグナル必須。単一キーワード判定は禁止。** `FRICTION_MARKERS` の出現だけでフラグすると、仲の良い dyad ほど摩擦だらけに誤認される (親密なほど否定語彙の遊びが増える系統誤差 — SPEC 罠 T-11)。`_detect_friction_events` は (a) 相手の摩擦語彙 + (b) 本人の**自己ベースライン**からの返信遅延 (3倍超) + (c) スレッド死/謝罪、のうち (a) 確定を前提に (b)(c) から最低1つを要求する。
+3. **(b) の比較基準は「本人自身の user_median」であって「相手の peer_median」ではない。** 実装時に一度このバグを書いた — 別人の返信速度と比較しても「いつもより遅い」の検出にならない。
+4. **深夜到着 (23:00-08:00) は着信側の時刻で判定する。返信時刻ではない。** 判定対象を `b["start"]`(返信時刻) にすると深夜返信そのものを弾いてしまい、本来除きたい「深夜に届いたから気づけなかった」交絡因子を除けない。正しくは `prev["end"]` (着信側の終端時刻)。実装時に一度この向きを逆に書いたバグを踏んだ。
+5. **第三者は salt 付き一方向 alias のみ。実名は一切永続化しない (I-15)。** `contact_alias()` は blake2b(実名, salt) — salt を知っていても alias→実名は戻せない。salt 自体は `data/processed/line_telemetry_salt.bin` に平文保存されるが、これは「alias の安定性」のためであって「実名の保護」の対象ではない (salt 単体からは実名は導出できない)。
+6. **グループチャットは v1 で全指標から除外。** 多者間の発話帰属は曖昧で、2者間モデルの F/L/P 軸に混ぜると意味をなさない (`compute_dyad_stats(..., group_contacts=...)` で明示的に除外)。
+7. **confidence ゲート: `exchanges < MIN_EXCHANGES(=20)` の dyad は3軸の計算対象から除外。** 標本不足で人間関係を断定しない (gap_analysis の `data_sufficiency` と同じ思想)。有効 dyad が無ければ `score=None, confidence=0.0` を返す — 0.0 や中央値で埋めるな。
+8. **再計算トリガは `import.line` のみ。** RECORD 保存・consult では走らせない (AI_SKILLS §1 の profiler 自動実行規約に相乗り)。
+
+### 11.2 テストで固定した対照群 (退化させるな)
+
+- 摩擦語彙が出ても即レス・スレッド継続なら**フラグしない** (`test_friction_requires_multi_signal_not_keyword_alone` — 罠 T-11 の直接回帰ガード)。
+- 深夜到着への返信は latency 中央値の計算から除外される (`test_night_arrival_excluded_from_latency`)。
+- 自分起点/相手起点、両方の会話を対称に数えられる (`test_initiation_ratio_symmetric` — 旧 `extract_conversation_sessions` の非対称バグの回帰確認でもある)。
+
+### 11.3 DL2: 一人称×二人称の衝突 (`analyze_social_positioning`) と Bounty
+
+`profiler.py` の `gap_analysis.analyze_gaps()` 呼び出し直後で `line_telemetry.sync_line_telemetry()` → `analyze_social_positioning(daily, dyads)` → `gap_result["gaps"].extend(...)` の順に合流させる (`profiler.py` の該当箇所参照)。**`_gap_section()` (講評フェーズのみが呼ぶ既存の唯一のゲート) を経由するだけなので、interview_sim/gd_sim/es_review 側のコードは 1 行も変更していない。**
+
+1. **`_assert_no_gap_leak` は本番コードの関数ではなく test_integration.py 内のテストヘルパーである。** SPEC I-14 の当初案は「本番の検査関数にキーを追加する」ように読めたが誤り — 実際の隔離は「`_gap_section()` を呼ぶメソッドと呼ばないメソッドが分かれている」という**コード構造そのもの**によって保証されている。ガードは `GAP_LEAK_MARKERS` タプルへのマーカー追加 + `_write_phase3_assets()` フィクスチャへの対応エントリ追加、という形で拡張した (`tests/test_integration.py`)。「ガードが先、機能が後」は本セッションでは「マーカーと講評フェーズでの存在アサーションを追加してから profiler.py を配線する」という順序で実践した。
+2. **既存の `intention_gap`/`blind_spot` 型名をそのまま再利用し、新規 type `social_positioning_gap` は作らなかった (Architect's Override)。** `format_gap_table` のラベル表は未知の type 名をそのまま表示するフォールバックを持つが、既存2型に合流させれば表示品質もテストの型チェックも既存のものに完全に乗る。新規テーマ名 `"対人関係・役割認識"` は THEME_TAXONOMY に登録不要 (`format_gap_table` はテーマ名を検証しない)。
+3. **Bounty はここでは「存在するだけ」。中身は theme/type/tension/status/bank_question_id のみで、insight/quotes 等の生テキストを持たせない。** これは意図的なデータ最小化であり、D3 (Puppeteer) が Bounty を扱う際に生テキストが誤って面接官コンテキストへ流れる経路をそもそも作らない設計。`register_bounties` の閾値 (`BOUNTY_TENSION_THRESHOLD=0.3`) 未満は登録しない。ID は内容ベースの安定ハッシュ (`_bounty_id`) — 同一内容の再登録は重複しない。
+4. **`build_subjective_corpus` の weight を尊重する。** 建前人格 (simulated) の発話から「聞き役」自認の引用証拠を採らない (`GENUINE_DOC_MIN_WEIGHT` 未満は quotes に含めない) — gap_analysis 本体の規律 (§7.1.4) をそのまま踏襲。
+5. **対照群テスト必須。** 自認と実測が一致する dyad (聞き役自認なし・会話量対等・関係維持言及あり) はフラグしない (`test_social_positioning_control_group_no_false_positive`)。有効 dyad が `min_dyads`(既定3) 未満なら断定を避けて空リストを返す。
+
+### 11.4 D3: Puppeteer (`core/question_bank.py`) — 完遂済み
+
+`select_question(bounties, k)` は Bounty の **id/type/tension/status/bank_question_id のみ**を読み、theme/insight は一切参照しない。tension 降順 (同値は id で安定化) に走査し、type 一致のバンク質問を辞書順の先頭から選ぶ (乱数不使用)。既出判定は `Bounty.bank_question_id` フィールドをそのまま「使用済み」の記録として使う専用の永続化を新設していない。type 一致が尽きたら未使用の質問へフォールバックする (面接を止めない)。
+
+1. **注入は議論ターンのみ。opening ターンには一切触れない。** 既存の ES 駆動オープニング (`test_adversarial_interview_with_es` 等) の互換性を壊さないための意図的な制約。`_interview_state["priority_queue"]` はメモリ内のみ (永続化しない、既存のセッション状態規約と同一)。
+2. **面接官プロンプトに追記するのは `QUESTION_BANK` の質問テキストそのものだけ。** Bounty の theme/tension/insight を組み立てる `_consult_interview_sim` の discussion-turn コードには一切現れない (`state["priority_queue"]` に積む時点で既にテキストへ変換済み)。
+3. **ガードは機能より先に書いた。** `tests/test_integration.py::test_puppeteer_injects_whitelisted_text_only` は Puppeteer 配線前に一度 RED (未検出でAssertionError) を確認してからコードを書いた。Bounty の `theme` 文字列 (`"課外活動・組織運営"`) が議論プロンプトに含まれないことを明示的にアサートする。
+4. **講評終了時に `mark_bounty_status(bid, "resolved")`。** キューに積まれたが未使用の質問が残っていても (`priority_queue` に残余があっても) 気にしない — 次回セッションでまた選ばれるだけ。
+
+### 11.5 D3: Narrative Compiler (`core/narrative_compiler.py`) — 完遂済み (スコープ限定)
+
+**Architect's Override**: SPEC 原案は HumanSourceCode (5軸・D1 未着手) と HistoricalNode (信頼済み事実グラフ・D1/D2 未着手) を入力に想定していたが、これらは存在しない。実装は `deep_profile.json["gap_analysis"]["gaps"]` (証拠付きの決定論的ギャップ。true_gakuchika を含む) のみを素材として使う — 存在しないデータへの参照より、実在するデータで確実に動く設計を選んだ。5軸/HistoricalNode が実装されたら `_select_material` の入力をそちらに差し替えるだけで昇格できる設計にしてある。
+
+1. **証拠 (quotes または calendar/LINE evidence) を持たないギャップは素材にしない。** 反証可能性の原則 (AI_SKILLS §6.2-3) を Narrative Compiler にも適用する。
+2. **`[ref:N]` タグの無い段落は幻覚として破棄する。** スタイルの問題ではなく正誤の問題として扱う — 「もっと自然な文章にして」ではなく「その段落は無かったことにする」。最大 `MAX_RETRIES(=2)` 回リトライし、それでも 0 件なら `ok=False, reason="no_valid_claims"` を返す。**この場合 draft ファイルは書かず、consultation_log にも記録しない** (中途半端な生成物を成果物として残さない)。
+3. **Recruiter's Eye は本文生成と別の `backend.generate()` 呼び出しで作る。** 同じ呼び出しで「本文+メタ解説」を一度に出させると、パース処理が複雑化するだけでなく、メタ解説の文言が本文に混入するリスクが生まれる。
+4. **`data/es/draft_*.md` に書き込むのは `es_text` のみ。** Recruiter's Eye を同じファイルに書くと、es_review モード (「ドキュメント単体評価」原則, §7.1.1) がこのドラフトを添削する際にメタ解説まで一緒に添削されてしまう。Recruiter's Eye は result dict 経由で UI にだけ渡す。
+5. **narrative_compile のログは `simulated=True`。** AI が生成した ES 文面であり本人の自己申告ではない — gap_analysis の主観チャネルを汚染させない (es_review/interview_sim と同じ規約)。
+
+D3 完遂によりTarget Charlie / Target Delta (DL1・DL2・D3) は全て実装済み。残るは Target Delta の D1/D2 サブトラック (HumanSourceCode 5軸・PROBE・HistoricalNode) のみ — これは今回未着手。
+

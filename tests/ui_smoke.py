@@ -47,6 +47,10 @@ async def main() -> None:
     facade.consult = _mock_consult
 
     diary_before = ui_app.DIARY_MD.read_text(encoding="utf-8")
+    profile_path = facade.USER_PROFILE
+    profile_before = (
+        profile_path.read_text(encoding="utf-8") if profile_path.exists() else None
+    )
 
     async with dashboard.run_test(size=(120, 40)) as pilot:
         main = dashboard.query_one("#main-tabs", TabbedContent)
@@ -86,10 +90,11 @@ async def main() -> None:
         # ---- SETTINGS: 基本情報 + 読み取り専用プロフィール ----
         main.active = "settings"
         await pilot.pause()
-        assert dashboard.focused.id == "fixed-age"
+        first_key = ui_app.FIXED_FIELDS[0][0]
+        assert dashboard.focused.id == f"fixed-{first_key}"
         assert dashboard.query_one("#fixed-grid", Grid) is not None
         assert len(dashboard.query("#fixed-grid Input")) == 6
-        dashboard.query_one("#fixed-age", Input).value = "30"
+        dashboard.query_one("#fixed-height", Input).value = "170"
         await pilot.click("#save-fixed-attrs")
         await pilot.pause()
         summary = dashboard.query_one("#profile-summary", TextArea)
@@ -97,8 +102,12 @@ async def main() -> None:
         text = summary.text
         assert "自動生成" in text or "価値観" in text or "プロフィール未生成" in text
 
-    # 後始末: テストで追記した日記を元に戻す
+    # 後始末: テストで書き換えた日記・プロフィールを元に戻す
     ui_app.DIARY_MD.write_text(diary_before, encoding="utf-8")
+    if profile_before is not None:
+        profile_path.write_text(profile_before, encoding="utf-8")
+    elif profile_path.exists():
+        profile_path.unlink()
     facade.consult = _real_consult
     print("UI smoke test: ALL PASS")
     print(f"  consult_calls={calls['consult']}")

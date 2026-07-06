@@ -461,7 +461,7 @@ class DecisionDashboard(App):
         elif pane == "settings":
             self._load_fixed_attributes()
             self._load_profile_summary()
-            self.query_one("#fixed-age", Input).focus()
+            self.query_one(f"#fixed-{FIXED_FIELDS[0][0]}", Input).focus()
 
     @on(CalendarWidget.DateSelected)
     def _on_calendar_date_selected(self, event: CalendarWidget.DateSelected) -> None:

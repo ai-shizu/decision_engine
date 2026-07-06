@@ -27,6 +27,12 @@ from .calendar_sync import (
 
 CORE_DATA_EPOCH_OFFSET = 978307200  # 1970-01-01 → 2001-01-01 (秒)
 
+# macOS TCC (プライバシー保護) でカレンダー DB が読めない時のユーザー向け対処
+FULL_DISK_ACCESS_HINT = (
+    "システム設定 > プライバシーとセキュリティ > フルディスクアクセス で "
+    "PKB (またはターミナル) を許可してから再試行してください"
+)
+
 _EVENT_SCHEMAS: dict[str, dict[str, tuple[str, ...]]] = {
     "CalendarItem": {
         "title": ("summary", "title"),
@@ -213,7 +219,10 @@ def parse_apple_calendars(
     """複数 DB 候補から予定を統合 (重複は time+title で排除)。"""
     paths = db_paths if db_paths else find_calendar_databases()
     if not paths:
-        raise FileNotFoundError("Apple カレンダー DB が見つかりません")
+        # TCC 未許可だと DB ファイル自体が「存在しない」ように見える
+        raise FileNotFoundError(
+            f"Apple カレンダー DB が見つかりません。{FULL_DISK_ACCESS_HINT}"
+        )
 
     merged: CalendarEvents = {}
     errors: list[str] = []
@@ -228,7 +237,10 @@ def parse_apple_calendars(
 
     if not merged:
         detail = "; ".join(errors) if errors else "予定 0 件"
-        raise ValueError(f"Apple カレンダーから予定を抽出できませんでした ({detail})")
+        hint = f" — {FULL_DISK_ACCESS_HINT}" if errors else ""
+        raise ValueError(
+            f"Apple カレンダーから予定を抽出できませんでした ({detail}){hint}"
+        )
     return merged
 
 
@@ -244,9 +256,14 @@ def sync_from_apple_calendar(
         raise RuntimeError("Apple カレンダー同期は macOS でのみ利用できます")
 
     if db_path is not None:
-        imported = parse_apple_calendar_db(
-            db_path, days_back=days_back, days_ahead=days_ahead,
-        )
+        try:
+            imported = parse_apple_calendar_db(
+                db_path, days_back=days_back, days_ahead=days_ahead,
+            )
+        except sqlite3.OperationalError as exc:
+            raise RuntimeError(
+                f"カレンダー DB を開けません ({exc})。{FULL_DISK_ACCESS_HINT}"
+            ) from exc
         source = f"apple_calendar:{Path(db_path).name}"
         db_count = 1
     else:

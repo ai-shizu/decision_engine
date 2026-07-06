@@ -9,7 +9,7 @@ import json
 import sys
 import traceback
 from pathlib import Path
-from typing import Any, TextIO
+from typing import Any, Callable, TextIO
 
 _PYTHON_ROOT = Path(__file__).resolve().parent
 if str(_PYTHON_ROOT) not in sys.path:
@@ -50,7 +50,10 @@ def _import_facade():
     return facade
 
 
-def dispatch(cmd: str, params: dict[str, Any]) -> Any:
+EventEmitter = Callable[[dict[str, Any]], None]
+
+
+def dispatch(cmd: str, params: dict[str, Any], emit: EventEmitter | None = None) -> Any:
     if cmd == "health":
         return {"status": "ok", "offline": True}
 
@@ -85,8 +88,21 @@ def dispatch(cmd: str, params: dict[str, Any]) -> Any:
         query = str(params.get("query", "")).strip()
         if not query:
             raise ValueError("query is required")
-        answer = facade.consult(query)
-        return {"query": query, "answer": answer}
+        mode = str(params.get("mode", "consult"))
+        personas = params.get("personas")
+        if not isinstance(personas, list):
+            personas = None
+        rts = params.get("response_time_sec")
+        response_time_sec = float(rts) if isinstance(rts, (int, float)) else None
+        # emit があれば進捗 status と生成トークンをイベント行として逐次送出する
+        status = (lambda msg: emit({"event": "status", "message": msg})) if emit else None
+        on_token = (lambda text: emit({"event": "chunk", "text": text})) if emit else None
+        answer = facade.consult(
+            query, status=status, on_token=on_token, mode=mode,
+            personas=personas, response_time_sec=response_time_sec)
+        return {"query": query, "mode": mode, "answer": answer}
+    if cmd == "knowledge.fetch_pending":
+        return facade.fetch_pending_knowledge()
     if cmd == "calendar.sync":
         source = params["source"]
         mode = params.get("mode", "append")
@@ -94,6 +110,14 @@ def dispatch(cmd: str, params: dict[str, Any]) -> Any:
             return facade.sync_calendar_ics_batch(params["ics_files"], mode)
         if source == "ics" and params.get("ics_content"):
             return facade.sync_calendar_ics_content(params["ics_content"], mode)
+        if source == "apple":
+            return facade.sync_calendar(
+                "apple",
+                mode,
+                db_path=params.get("db_path"),
+                days_back=int(params.get("days_back", 365)),
+                days_ahead=int(params.get("days_ahead", 365)),
+            )
         return facade.sync_calendar(source, mode, ics_path=params.get("ics_path"))
     if cmd == "import.line":
         files = params.get("files")
@@ -105,6 +129,8 @@ def dispatch(cmd: str, params: dict[str, Any]) -> Any:
         )
     if cmd == "settings.run_profiler":
         return facade.run_profiler()
+    if cmd == "narrative.compile":
+        return facade.compile_narrative(params.get("target_domain"))
     if cmd == "shutdown":
         facade.shutdown_engine()
         return {"status": "stopped"}
@@ -122,7 +148,11 @@ def main() -> None:
         try:
             req = json.loads(line)
             req_id = req.get("id")
-            result = dispatch(req["cmd"], req.get("params") or {})
+
+            def emit_event(payload: dict[str, Any], _id=req_id) -> None:
+                _emit({"id": _id, **payload})
+
+            result = dispatch(req["cmd"], req.get("params") or {}, emit=emit_event)
             out: dict[str, Any] = {"id": req_id, "ok": True, "result": result}
         except Exception as exc:  # noqa: BLE001
             traceback.print_exc(file=sys.stderr)

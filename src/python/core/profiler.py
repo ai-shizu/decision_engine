@@ -525,7 +525,7 @@ def llm_interaction_analysis(daily: list[dict]) -> dict | None:
     from .llm_config import find_gguf
 
     model = find_gguf()
-    server = ce.LLAMA_DIR / "llama-server.exe"
+    server = ce.LLAMA_SERVER_EXE
     if not (model and server.exists()):
         print("[profiler] ローカルLLM未検出 → LLM因果分析をスキップ")
         return None
@@ -951,7 +951,7 @@ def build_profile(use_llm: bool = True) -> dict:
           f" AI相談: {consult_days}日, 家計簿: {finance_days}日)")
 
     profile = {
-        "schema": "deep_profile.v5",
+        "schema": "deep_profile.v6",
         "sources": {
             "diary": {"path": str(DIARY.relative_to(ROOT)), "entries": len(diary)},
             "line": {"path": str(LINE_HISTORY.relative_to(ROOT)), "messages": len(msgs)},
@@ -974,6 +974,31 @@ def build_profile(use_llm: bool = True) -> dict:
     profile["factual_signals"] = factual
     profile["abstract_identity"] = abstract
     profile["meta_narrative"] = build_meta_narrative(factual, abstract)
+
+    # 主観 (日記・相談) × 客観 (家計簿・予定・LINE発話) の差分分析
+    from .gap_analysis import analyze_gaps, llm_gap_analysis
+    gap_result = analyze_gaps(daily)
+
+    # 一人称×二人称の衝突 (Target Delta-LINE DL2): LINE テレメトリを再計算し、
+    # 対人プロトコル3軸 + social_positioning_gap を既存 gaps へ合流させる。
+    # 【隔離原則】ここで gap_result["gaps"] へ追加した内容が触れる出口は
+    # _gap_section() (講評フェーズのみ呼ばれる) だけであり、interview_sim/
+    # gd_sim の議論フェーズ・es_review には一切渡らない (AI_SKILLS §7.1/§11,
+    # SPEC I-14)。新しい直接呼び出しをそれらのメソッドに追加しないこと。
+    from .line_telemetry import (
+        analyze_social_positioning, register_bounties, sync_line_telemetry,
+    )
+    telemetry = sync_line_telemetry()
+    social_gaps = analyze_social_positioning(daily, telemetry["dyads"])
+    gap_result["gaps"].extend(social_gaps)
+    gap_result["interpersonal"] = telemetry["interpersonal"]
+    register_bounties(gap_result["gaps"])
+
+    profile["gap_analysis"] = gap_result
+    print(f"[profiler] Gap分析: {len(gap_result['gaps'])} 件のギャップ検出 "
+          f"(データ充足度 {gap_result['data_sufficiency']:.0%}、"
+          f"対人ギャップ {len(social_gaps)} 件)")
+
     if use_llm:
         try:
             llm = llm_interaction_analysis(daily)
@@ -981,6 +1006,12 @@ def build_profile(use_llm: bool = True) -> dict:
                 profile["llm_interaction_insights"] = llm
         except Exception as e:
             print(f"[profiler] LLM分析失敗 (ルールベースのみ完走): {type(e).__name__}: {e}")
+        try:
+            llm_gap = llm_gap_analysis(gap_result, daily)
+            if llm_gap:
+                profile["gap_analysis"]["llm_synthesis"] = llm_gap
+        except Exception as e:
+            print(f"[profiler] Gap LLM深化失敗 (決定論結果は維持): {type(e).__name__}: {e}")
     return profile
 
 
@@ -1047,6 +1078,11 @@ def update_user_profile(profile: dict) -> None:
             "latency_insights": [
                 lp["insight"] for lp in
                 profile.get("interaction_patterns", {}).get("latency_patterns", [])
+            ][:4],
+            "gap_insights": [
+                {"theme": g["theme"], "type": g["type"], "gap": g["gap"],
+                 "insight": g["insight"]}
+                for g in profile.get("gap_analysis", {}).get("gaps", [])
             ][:4],
             "session_count": profile.get("interaction_patterns", {}).get("sessions_analyzed", 0),
         },

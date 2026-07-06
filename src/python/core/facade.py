@@ -21,13 +21,12 @@ from . import finance_manager as fin
 from .consultation_engine import (
     ConsultationEngine,
     FIXED_ATTRIBUTE_FIELDS,
-    LINE_HISTORY,
     USER_PROFILE,
     format_user_profile_summary,
     load_user_profile,
     save_fixed_attributes,
 )
-from .paths import DIARY_MD, PROJECT_ROOT, PROCESSED
+from .paths import DIARY_MD, LINE_HISTORY, PROJECT_ROOT, PROCESSED
 
 StatusCallback = Callable[[str], None]
 
@@ -75,8 +74,49 @@ def save_record(
     return {"date": date_str, "saved": True, "index_rebuilt": rebuilt}
 
 
-def consult(query: str, status: StatusCallback | None = None) -> str:
-    return get_engine().consult(query, status=status)
+def consult(
+    query: str,
+    status: StatusCallback | None = None,
+    on_token: StatusCallback | None = None,
+    mode: str = "consult",
+    personas: list[dict] | None = None,
+    response_time_sec: float | None = None,
+) -> str:
+    return get_engine().consult(
+        query, status=status, on_token=on_token, mode=mode,
+        personas=personas, response_time_sec=response_time_sec)
+
+
+def compile_narrative(target_domain: str | None = None) -> dict:
+    """NARRATIVE COMPILER (Target Delta D3): gap_analysis の証拠付きギャップから
+    ES ドラフト + Recruiter's Eye (メタ解説) を生成する。"""
+    from .narrative_compiler import compile_narrative as _compile
+    return _compile(get_engine(), target_domain=target_domain)
+
+
+def fetch_pending_knowledge() -> dict:
+    """<fetch_query> キューを処理し、取得済み知識をインデックスへ統合する。
+
+    ネットワーク取得は PKB_ALLOW_ONLINE_FETCH=1 の時のみ。未許可時は
+    pending 件数を返すだけで一切通信しない (完全オフライン維持)。"""
+    from .knowledge_fetcher import load_queue, online_fetch_allowed, process_pending
+
+    summary = process_pending()
+    if summary["processed"]:
+        summary["index_rebuilt"] = get_engine().sync_knowledge_index(force=True)
+    pending = sum(1 for e in load_queue() if e["status"] == "pending")
+    summary["pending"] = pending
+    summary["online_allowed"] = online_fetch_allowed()
+    if summary["processed"]:
+        summary["message"] = (
+            f"{summary['processed']} 件の外部知識を取得し、知識インデックスへ統合しました")
+    elif not summary["online_allowed"] and pending:
+        summary["message"] = (
+            f"pending {pending} 件 — ネットワーク取得は無効です "
+            "(PKB_ALLOW_ONLINE_FETCH=1 で許可、または data/knowledge/ に手動配置)")
+    else:
+        summary["message"] = "処理対象の外部知識リクエストはありません"
+    return summary
 
 
 def sync_diary_index(force: bool = False) -> bool:
@@ -88,6 +128,9 @@ def sync_calendar(
     mode: str = "append",
     *,
     ics_path: str | Path | None = None,
+    db_path: str | Path | None = None,
+    days_back: int = 365,
+    days_ahead: int = 365,
 ) -> dict:
     if mode not in ("append", "overwrite"):
         raise ValueError(f"不明なマージモード: {mode}")
@@ -96,7 +139,10 @@ def sync_calendar(
             raise ValueError("ICS 同期には ics_path が必要です")
         summary = calendar_sync.sync_from_ics(ics_path, mode=mode)
     elif source == "apple":
-        summary = apple_calendar_sync.sync_from_apple_calendar(mode=mode)
+        summary = apple_calendar_sync.sync_from_apple_calendar(
+            mode=mode, db_path=db_path,
+            days_back=days_back, days_ahead=days_ahead,
+        )
     else:
         raise ValueError(f"不明な同期ソース: {source}")
     summary["index_rebuilt"] = get_engine().sync_diary_index(force=True)
@@ -104,7 +150,14 @@ def sync_calendar(
 
 
 def calendar_event_dates() -> list[str]:
-    return sorted(cal.dates_with_events())
+    """カレンダーマーク用: 予定・日記・家計簿・AI相談のいずれかが存在する日付。"""
+    from .consultation_log import load_consultations
+
+    dates = set(cal.dates_with_events())
+    dates |= cal.dates_with_diary()
+    dates |= {d for d, txs in fin.load_finance().items() if txs}
+    dates |= {d for d, entries in load_consultations().items() if entries}
+    return sorted(dates)
 
 
 def _run_profiler() -> dict:
@@ -221,7 +274,9 @@ __all__ = [
     "PROCESSED",
     "USER_PROFILE",
     "calendar_event_dates",
+    "compile_narrative",
     "consult",
+    "fetch_pending_knowledge",
     "format_user_profile_summary",
     "get_engine",
     "get_settings",
