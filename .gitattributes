@@ -1,0 +1,8 @@
+# シェルスクリプトは macOS/Linux で実行されるため常に LF
+# (CRLF だと "bash: /bin/bash^M: bad interpreter" で即死する)
+*.sh text eol=lf
+*.plist text eol=lf
+
+# Windows 専用スクリプトは CRLF で問題ない
+*.ps1 text
+*.cmd text

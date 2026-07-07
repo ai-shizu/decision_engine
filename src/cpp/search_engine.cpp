@@ -40,6 +40,7 @@
 #include <map>
 #include <memory>
 #include <string>
+#include <type_traits>
 #include <vector>
 
 #if defined(__ARM_NEON) || defined(__ARM_NEON__)
@@ -126,6 +127,52 @@ static_assert(offsetof(ScratchBuffer, results)      == 24 + kDim * 4,
               "ScratchBuffer.results offset");                   // 1560
 static_assert(sizeof(ScratchBuffer) == 24 + kDim * 4 + kScratchMaxK * 8,
               "ScratchBuffer total size mismatch");              // 2072
+
+// ---------------------------------------------------------------- Target Echo: PKBTEN01
+// 日次×特徴量テンソル (mmap ゼロコピー共有)。docs/SPEC_ECHO_GENESIS.md §5.1/§5.1.1。
+// Python 側の唯一の対応物は core/tensor_store.py。変更は両方同時 + magic バージョン更新。
+//
+// v1 (E1〜E4) では C++ はこの struct を読まない (numpy が同一ファイルを
+// ゼロコピーで読む)。境界面を将来も動かさないため struct だけ今日凍結する。
+// 全フィールド自然整列 (header 64B、row 136B ≡ 0 mod 8)。little-endian。
+constexpr uint32_t kTenFeat = 32;
+constexpr char     kTensorMagic[8] = {'P','K','B','T','E','N','0','1'};
+
+#pragma pack(push, 1)
+struct TensorHeader {            // 64 bytes — Python "<8sIIIIiIQ24x"
+    char     magic[8];           // "PKBTEN01"
+    uint32_t version;            // = 1
+    uint32_t n_rows;             // 日数 (密。row i = epoch_day + i 日)
+    uint32_t n_features;         // 使用レーン数 (<= kTenFeat)
+    uint32_t row_stride;         // = sizeof(TensorRow) = 136 (読み手は必ずこれを使う)
+    int32_t  epoch_day;          // row 0 の日付 (1970-01-01 からの日数, ローカル暦日)
+    uint32_t flags;              // bit0: dyad スコープ / 他ビット予約 (0)
+    uint64_t content_hash64;     // 入力スナップショット blake2b 先頭 8B (鮮度判定)
+    uint8_t  reserved[24];       // 0 埋め
+};
+
+struct TensorRow {               // 136 bytes — Python "<iI32f"
+    int32_t  day_index;          // 常に行番号と一致 (整合性検証用の冗長フィールド)
+    uint32_t valid_mask;         // bit k = レーン k 観測済み。欠測は値 0.0f + bit 0
+    float    f[kTenFeat];        // NaN 格納禁止 (I-18)
+};
+#pragma pack(pop)
+
+static_assert(sizeof(TensorHeader) == 64,               "TensorHeader layout mismatch");
+static_assert(offsetof(TensorHeader, version)       ==  8, "TensorHeader.version offset");
+static_assert(offsetof(TensorHeader, n_rows)        == 12, "TensorHeader.n_rows offset");
+static_assert(offsetof(TensorHeader, n_features)    == 16, "TensorHeader.n_features offset");
+static_assert(offsetof(TensorHeader, row_stride)    == 20, "TensorHeader.row_stride offset");
+static_assert(offsetof(TensorHeader, epoch_day)     == 24, "TensorHeader.epoch_day offset");
+static_assert(offsetof(TensorHeader, flags)         == 28, "TensorHeader.flags offset");
+static_assert(offsetof(TensorHeader, content_hash64)== 32, "TensorHeader.hash offset");
+static_assert(sizeof(TensorRow) == 136,                 "TensorRow layout mismatch");
+static_assert(offsetof(TensorRow, f) == 8,              "TensorRow.f offset");
+static_assert(sizeof(TensorRow) % 8 == 0,               "TensorRow 8-byte alignment");
+// W-3: コンパイラ依存パディング/コピー挙動の排除 (bool/enum/ビットフィールド不使用の裏付け)
+static_assert(std::is_standard_layout<TensorHeader>::value, "TensorHeader must be standard-layout");
+static_assert(std::is_standard_layout<TensorRow>::value,    "TensorRow must be standard-layout");
+static_assert(std::is_trivially_copyable<TensorRow>::value, "TensorRow must be memcpy-safe");
 
 // ---------------------------------------------------------------- mmap 抽象化
 #ifdef _WIN32

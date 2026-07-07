@@ -1,13 +1,41 @@
 use std::env;
 use std::path::{Path, PathBuf};
 
-/// ユーザーデータ用ルート (%LOCALAPPDATA%\PKB 等)
+/// ユーザーデータ用ルート
+///   Windows: %LOCALAPPDATA%\PKB
+///   macOS:   ~/Library/Application Support/PKB
+///   Linux:   $XDG_DATA_HOME/PKB または ~/.local/share/PKB
+#[cfg(windows)]
 pub fn user_data_root() -> PathBuf {
     if let Ok(local) = env::var("LOCALAPPDATA") {
         return PathBuf::from(local).join("PKB");
     }
     if let Ok(home) = env::var("USERPROFILE") {
         return PathBuf::from(home).join("PKB");
+    }
+    PathBuf::from(".")
+}
+
+#[cfg(target_os = "macos")]
+pub fn user_data_root() -> PathBuf {
+    if let Ok(home) = env::var("HOME") {
+        return PathBuf::from(home)
+            .join("Library")
+            .join("Application Support")
+            .join("PKB");
+    }
+    PathBuf::from(".")
+}
+
+#[cfg(all(unix, not(target_os = "macos")))]
+pub fn user_data_root() -> PathBuf {
+    if let Ok(xdg) = env::var("XDG_DATA_HOME") {
+        if !xdg.is_empty() {
+            return PathBuf::from(xdg).join("PKB");
+        }
+    }
+    if let Ok(home) = env::var("HOME") {
+        return PathBuf::from(home).join(".local").join("share").join("PKB");
     }
     PathBuf::from(".")
 }

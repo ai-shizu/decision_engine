@@ -1,0 +1,37 @@
+{
+  "schema": "model_params.v1",
+  "_comment": "ローカルLLM戦略。優先順位: 環境変数 > このファイル > llm_config.py の組み込みデフォルト。個人データは含めないこと (コミット可)。",
+  "roles": {
+    "default": {
+      "_comment": "標準 (profiler / 汎用)。IQ4_XS を最優先、無ければ Q4_K_M。",
+      "preferred": [
+        "Qwen2.5-7B-Instruct-IQ4_XS.gguf",
+        "qwen2.5-7b-instruct-iq4_xs.gguf",
+        "Qwen2.5-7B-Instruct-Q4_K_M.gguf",
+        "qwen2.5-7b-instruct-q4_k_m.gguf"
+      ]
+    },
+    "consult": {
+      "_comment": "相談専用。推論特化の R1 蒸留を優先。無ければ default へフォールバック。",
+      "preferred": [
+        "DeepSeek-R1-Distill-Qwen-7B*.gguf",
+        "deepseek-r1-distill-qwen-7b*.gguf"
+      ]
+    }
+  },
+  "policy": {
+    "_comment": "7B 未満モデルは原則禁止。IQ4_XS 7B ≈ 3.9GB のため下限は 3.5GB。",
+    "min_model_bytes": 3500000000,
+    "allow_small_models": false
+  },
+  "server": {
+    "port": 18081,
+    "threads": 8,
+    "ctx": 8192,
+    "batch": 512
+  },
+  "generation": {
+    "temperature": 0.6,
+    "max_tokens": 900
+  }
+}

@@ -131,6 +131,18 @@ def dispatch(cmd: str, params: dict[str, Any], emit: EventEmitter | None = None)
         return facade.run_profiler()
     if cmd == "narrative.compile":
         return facade.compile_narrative(params.get("target_domain"))
+    if cmd == "oracle.payload":
+        return facade.oracle_payload(params.get("scope", "global"), alias=params.get("alias"))
+    if cmd == "oracle.report":
+        status = (lambda msg: emit({"event": "status", "message": msg})) if emit else None
+        return facade.oracle_report(
+            params.get("scope", "global"), alias=params.get("alias"), status=status)
+    if cmd == "twin.forecast":
+        return facade.twin_forecast(
+            params.get("scenario", {}), scope=params.get("scope", "global"),
+            alias=params.get("alias"))
+    if cmd == "tensor.rebuild":
+        return facade.tensor_rebuild()
     if cmd == "shutdown":
         facade.shutdown_engine()
         return {"status": "stopped"}

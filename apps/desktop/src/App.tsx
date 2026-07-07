@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { ConsultTab } from "./components/ConsultTab";
 import { ImportTab } from "./components/ImportTab";
+import { InterviewTab } from "./components/InterviewTab";
 import { RecordTab } from "./components/RecordTab";
 import { SettingsTab } from "./components/SettingsTab";
 import { engineHealth, engineReady } from "./lib/engine";
@@ -21,6 +22,7 @@ const TABS: { id: MainTab; label: string }[] = [
   { id: "record", label: "RECORD" },
   { id: "import", label: "IMPORT" },
   { id: "consult", label: "CONSULT" },
+  { id: "interview", label: "INTERVIEW" },
   { id: "settings", label: "SETTINGS" },
 ];
 
@@ -86,6 +88,7 @@ export default function App() {
         {tab === "record" && <RecordTab />}
         {tab === "import" && <ImportTab />}
         {tab === "consult" && <ConsultTab />}
+        {tab === "interview" && <InterviewTab />}
         {tab === "settings" && <SettingsTab />}
       </main>
     </div>

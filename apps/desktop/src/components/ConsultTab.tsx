@@ -1,6 +1,7 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { listen } from "@tauri-apps/api/event";
 import { consult } from "../lib/engine";
-import type { ChatMessage } from "../lib/types";
+import type { ChatMessage, EngineEvent } from "../lib/types";
 
 export function ConsultTab() {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -9,25 +10,75 @@ export function ConsultTab() {
   const [status, setStatus] = useState("");
   const logRef = useRef<HTMLDivElement>(null);
 
+  function scrollToBottom(smooth = false) {
+    requestAnimationFrame(() => {
+      logRef.current?.scrollTo({
+        top: logRef.current.scrollHeight,
+        behavior: smooth ? "smooth" : "auto",
+      });
+    });
+  }
+
+  // Python エンジンの中間イベント (進捗 status / 生成トークン chunk) を受信する
+  useEffect(() => {
+    const unlisten = listen<EngineEvent>("pkb-engine-event", ({ payload }) => {
+      if (payload.event === "status" && payload.message) {
+        setStatus(payload.message);
+        return;
+      }
+      if (payload.event === "chunk" && payload.text) {
+        setMessages((prev) => {
+          const last = prev[prev.length - 1];
+          if (!last || last.role !== "assistant" || !last.streaming) return prev;
+          return [...prev.slice(0, -1), { ...last, text: last.text + payload.text }];
+        });
+        scrollToBottom();
+      }
+    });
+    return () => {
+      void unlisten.then((fn) => fn());
+    };
+  }, []);
+
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     const q = input.trim();
     if (!q || busy) return;
     setInput("");
-    setMessages((prev) => [...prev, { role: "user", text: q }]);
+    setMessages((prev) => [
+      ...prev,
+      { role: "user", text: q },
+      { role: "assistant", text: "", streaming: true },
+    ]);
     setBusy(true);
     setStatus("考え中…");
     try {
       const res = await consult(q);
-      setMessages((prev) => [...prev, { role: "assistant", text: res.answer }]);
+      // ストリーミング中の一時テキストを最終回答で確定置換する
+      setMessages((prev) => {
+        const last = prev[prev.length - 1];
+        if (last?.role === "assistant" && last.streaming) {
+          return [...prev.slice(0, -1), { role: "assistant", text: res.answer }];
+        }
+        return [...prev, { role: "assistant", text: res.answer }];
+      });
       setStatus("");
     } catch (err) {
+      // 空のプレースホルダーは取り除き、エラーは status 行に出す
+      setMessages((prev) => {
+        const last = prev[prev.length - 1];
+        if (last?.role === "assistant" && last.streaming && !last.text) {
+          return prev.slice(0, -1);
+        }
+        if (last?.role === "assistant" && last.streaming) {
+          return [...prev.slice(0, -1), { ...last, streaming: false }];
+        }
+        return prev;
+      });
       setStatus(String(err));
     } finally {
       setBusy(false);
-      requestAnimationFrame(() => {
-        logRef.current?.scrollTo({ top: logRef.current.scrollHeight, behavior: "smooth" });
-      });
+      scrollToBottom(true);
     }
   }
 
@@ -53,7 +104,10 @@ export function ConsultTab() {
           messages.map((m, i) => (
             <div key={i} className={`chat-bubble ${m.role}`}>
               <span className="chat-role">{m.role === "user" ? "あなた" : "PKB"}</span>
-              <pre className="chat-text">{m.text}</pre>
+              <pre className="chat-text">
+                {m.text}
+                {m.streaming && <span className="chat-cursor">▌</span>}
+              </pre>
             </div>
           ))
         )}

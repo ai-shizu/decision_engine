@@ -456,6 +456,17 @@ button:disabled {
   font-size: 0.95rem;
 }
 
+.chat-cursor {
+  color: #3498db;
+  animation: chat-blink 1s step-end infinite;
+}
+
+@keyframes chat-blink {
+  50% {
+    opacity: 0;
+  }
+}
+
 .consult-form {
   display: flex;
   flex-direction: column;
@@ -472,6 +483,139 @@ button:disabled {
   font-family: inherit;
   font-size: 1rem;
   resize: vertical;
+}
+
+/* Interview (LINE 風チャット + GD ロビー) */
+.interview-panel .chat-log.line-chat {
+  height: 420px;
+  background: #0d1b2a;
+}
+
+.line-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.line-row.user {
+  justify-content: flex-end;
+}
+
+.line-row.feedback {
+  justify-content: center;
+}
+
+.line-bubble {
+  max-width: 78%;
+  padding: 8px 12px;
+  border-radius: 14px;
+  position: relative;
+}
+
+.line-bubble.user {
+  background: #2e7d4f;
+  color: #fff;
+  border-bottom-right-radius: 4px;
+}
+
+.line-bubble.ai {
+  background: #1e2a38;
+  border-bottom-left-radius: 4px;
+}
+
+.line-bubble.feedback {
+  max-width: 92%;
+  background: #2a1215;
+  border: 2px solid #e74c3c;
+  border-radius: 8px;
+}
+
+.feedback-label {
+  display: block;
+  color: #e74c3c;
+  font-size: 0.78rem;
+  font-weight: 700;
+  margin-bottom: 6px;
+}
+
+.feedback-btn {
+  border: 2px solid #e74c3c;
+  background: transparent;
+  color: #e74c3c;
+  padding: 6px 14px;
+  border-radius: 8px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.feedback-btn:hover {
+  background: #e74c3c;
+  color: #fff;
+}
+
+.speaker-name {
+  display: block;
+  font-size: 0.72rem;
+  color: #9aa4b2;
+  margin-bottom: 2px;
+}
+
+.persona-avatar {
+  flex-shrink: 0;
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: #0f1419;
+  font-weight: 700;
+  font-size: 0.85rem;
+}
+
+.latency-tag {
+  display: block;
+  text-align: right;
+  font-size: 0.68rem;
+  color: rgba(255, 255, 255, 0.65);
+  margin-top: 2px;
+}
+
+.gd-lobby {
+  margin-bottom: 12px;
+  padding: 12px;
+  border: 1px solid #2a3441;
+  border-radius: 8px;
+  background: #121820;
+}
+
+.gd-lobby h3 {
+  margin: 0 0 10px;
+  font-size: 0.95rem;
+}
+
+.persona-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin-bottom: 8px;
+}
+
+.persona-row input,
+.persona-row select {
+  padding: 6px 10px;
+  border-radius: 6px;
+  border: 1px solid #2a3441;
+  background: #0b1016;
+  color: #e8eaed;
+  font-family: inherit;
+  font-size: 0.85rem;
+}
+
+.persona-row input {
+  flex: 1;
+  min-width: 80px;
 }
 
 /* Settings */

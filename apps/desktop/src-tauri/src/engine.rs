@@ -4,7 +4,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use serde_json::{json, Value};
-use tauri::AppHandle;
+use tauri::{AppHandle, Emitter};
 
 use crate::paths::{
     bundled_engine_path, ensure_data_layout, find_python_executable, project_root, run_engine_script,
@@ -22,6 +22,7 @@ pub struct EngineManager {
     process: Mutex<Option<EngineProcess>>,
     ready: Mutex<bool>,
     restart_lock: Mutex<()>,
+    app: Mutex<Option<AppHandle>>,
 }
 
 impl EngineManager {
@@ -30,6 +31,7 @@ impl EngineManager {
             process: Mutex::new(None),
             ready: Mutex::new(false),
             restart_lock: Mutex::new(()),
+            app: Mutex::new(None),
         })
     }
 
@@ -57,10 +59,20 @@ impl EngineManager {
         *self.ready.lock().unwrap() = false;
     }
 
-    pub async fn start(self: &Arc<Self>, _app: AppHandle) -> Result<(), String> {
+    pub async fn start(self: &Arc<Self>, app: AppHandle) -> Result<(), String> {
+        *self.app.lock().unwrap() = Some(app);
         let _lock = self.restart_lock.lock().unwrap();
         self.shutdown();
         self.boot_engine()
+    }
+
+    /// Python からの中間イベント行 ({"id", "event", ...}) をフロントへ転送する。
+    fn forward_event(self: &Arc<Self>, payload: &Value) {
+        if let Some(app) = self.app.lock().unwrap().as_ref() {
+            if let Err(e) = app.emit("pkb-engine-event", payload) {
+                Self::log(&format!("イベント転送失敗: {e}"));
+            }
+        }
     }
 
     pub async fn restart(self: &Arc<Self>) -> Result<(), String> {
@@ -160,19 +172,27 @@ impl EngineManager {
             return Err(format!("エンジン flush 失敗: {e}"));
         }
 
-        let response_line = read_line(&mut proc.stdout)?;
-        let response: Value = serde_json::from_str(&response_line)
-            .map_err(|e| format!("応答 JSON 解析失敗: {e} — {response_line}"))?;
+        // 最終応答 ({"ok": ...}) まで読み続け、途中のイベント行はフロントへ転送する
+        loop {
+            let response_line = read_line(&mut proc.stdout)?;
+            let response: Value = serde_json::from_str(&response_line)
+                .map_err(|e| format!("応答 JSON 解析失敗: {e} — {response_line}"))?;
 
-        if !response.get("ok").and_then(|v| v.as_bool()).unwrap_or(false) {
-            let err = response
-                .get("error")
-                .and_then(|v| v.as_str())
-                .unwrap_or("unknown error");
-            return Err(err.to_string());
+            if response.get("ok").is_none() && response.get("event").is_some() {
+                self.forward_event(&response);
+                continue;
+            }
+
+            if !response.get("ok").and_then(|v| v.as_bool()).unwrap_or(false) {
+                let err = response
+                    .get("error")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("unknown error");
+                return Err(err.to_string());
+            }
+
+            return Ok(response.get("result").cloned().unwrap_or(Value::Null));
         }
-
-        Ok(response.get("result").cloned().unwrap_or(Value::Null))
     }
 }
 

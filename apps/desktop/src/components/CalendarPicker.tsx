@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { monthLabel } from "../lib/dateUtils";
+import { monthLabel, todayIso } from "../lib/dateUtils";
 
 interface Props {
   selected: string;
@@ -44,7 +44,7 @@ export function CalendarPicker({ selected, eventDates, onSelect }: Props) {
     }
   }
 
-  const today = new Date().toISOString().slice(0, 10);
+  const today = todayIso();
 
   return (
     <div className="calendar">

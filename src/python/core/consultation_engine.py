@@ -719,6 +719,25 @@ class ConsultationEngine:
         return text
 
     @staticmethod
+    def _oracle_section() -> str:
+        """Target Echo (coupling/digital_twin) が算出した物理量ベースの分析を
+        CONSULT / 講評フェーズへ注入する。gap_analysis と同じく profiler 再実行
+        時のみ更新されるデータであるため、_gap_section() と並べて静的プレフィックス
+        (KV キャッシュ対象) に置く — 動的サフィックスへ置くより KV 再利用効率が
+        高く、かつ I-22 の合法出口 (consult) の要件も満たす。"""
+        if not DEEP_PROFILE.exists():
+            return "(未生成: profiler.py を実行すると Echo 分析が有効になる)"
+        try:
+            p = json.loads(DEEP_PROFILE.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            return "(読込失敗)"
+        payload = p.get("oracle_payload")
+        if not payload:
+            return "(未生成: profiler 実行後、テンソル同期が完了すると Echo 分析が有効になる)"
+        from .oracle import render_oracle_consult
+        return render_oracle_consult(payload)
+
+    @staticmethod
     def _future_context_section(days_ahead: int = 30) -> str:
         from .calendar_manager import format_future_context, load_future_events
         events = load_future_events(days_ahead=days_ahead)
@@ -743,6 +762,9 @@ class ConsultationEngine:
 # 主観と客観のギャップ (認知的不協和 — 日記/相談 × 家計簿/予定/LINE の突合)
 ※ 相談内容がこのバイアスの産物でないか、思考フェーズで必ず検証すること
 {self._gap_section()}
+
+# Echo: 物理量に基づく客観的分析 (認知リソース状態・結合行列・介入候補)
+{self._oracle_section()}
 
 """
 
@@ -903,7 +925,10 @@ class ConsultationEngine:
    (面接テクニックではなく、日常行動の変更であること)。
 
 # 日常行動のギャップ分析 (profiler 自動生成)
-{self._gap_section()}"""
+{self._gap_section()}
+
+# Echo: 物理量に基づく客観的分析 (認知リソース状態・結合行列・介入候補)
+{self._oracle_section()}"""
             answer = self.backend.generate(
                 state["system"], eval_prompt, on_token=on_token)
             answer = re.sub(r"<think>.*?</think>\s*", "", answer,
@@ -1070,7 +1095,10 @@ class ConsultationEngine:
    (GD テクニックではなく、日常の摩擦に向き合う行動であること)。
 
 # 日常行動のギャップ分析 (profiler 自動生成)
-{self._gap_section()}"""
+{self._gap_section()}
+
+# Echo: 物理量に基づく客観的分析 (認知リソース状態・結合行列・介入候補)
+{self._oracle_section()}"""
             answer = self.backend.generate(
                 state["system"], eval_prompt, on_token=on_token)
             answer = re.sub(r"<think>.*?</think>\s*", "", answer,

@@ -34,8 +34,18 @@ export async function calendarEventDates(): Promise<string[]> {
   return res.dates;
 }
 
-export async function consult(query: string): Promise<{ query: string; answer: string }> {
-  return pkbInvoke("consult", { query });
+export interface ConsultOptions {
+  mode?: "consult" | "interview_sim" | "es_review" | "gd_sim";
+  personas?: { name: string; trait: string }[];
+  /** AI 表示 → ユーザー送信までの経過秒 (面接/GD の思考速度評価用) */
+  response_time_sec?: number;
+}
+
+export async function consult(
+  query: string,
+  opts: ConsultOptions = {},
+): Promise<{ query: string; mode?: string; answer: string }> {
+  return pkbInvoke("consult", { query, ...opts });
 }
 
 export async function syncIcsContent(
@@ -96,4 +106,96 @@ export async function runProfiler(): Promise<{ ok: boolean; message: string }> {
 
 export async function readFileAsText(file: File): Promise<string> {
   return file.text();
+}
+
+// ---------------------------------------------------------------- Target Echo (E4)
+// oracle.payload は無菌 JSON のみ (LLM 呼び出しなし)。oracle.report は言語化込み
+// (7B の生成を待つ)。UI の数値表示は必ず oraclePayload() を使うこと — 7B の
+// 生成待ちで PROFILE ペインの表示が遅延するのは不合格 (SPEC_ECHO §5.10.5)。
+export interface OraclePayload {
+  schema: string;
+  generated: string;
+  scope: { kind: "global" | "dyad"; alias: string | null };
+  sufficiency: {
+    days_observed: number;
+    coverage: number;
+    dead_lanes: string[];
+    twin_bss: number;
+    n_lapse_test: number;
+    gate_passed: boolean;
+  };
+  state: {
+    r_now: number | null;
+    r_trend_7d: number | null;
+    oii_ema: number | null;
+    oii_streak_days: number;
+  };
+  couplings: {
+    src: string;
+    dst: string;
+    lag_days: number;
+    rho: number;
+    n_eff: number;
+    null_q99: number;
+    sig: boolean;
+  }[];
+  forecast: {
+    horizon_days: number;
+    r_q10: number[];
+    r_q50: number[];
+    r_q90: number[];
+    p_lapse: number[];
+    critical_days: string[];
+  };
+  findings: { rule_id: string; severity: number; metrics: Record<string, number> }[];
+  interventions: {
+    bank_id: string;
+    trigger_rule: string;
+    target_lane: number;
+    params: Record<string, number>;
+  }[];
+}
+
+export async function oraclePayload(
+  scope: "global" | "dyad" = "global",
+  alias?: string,
+): Promise<OraclePayload> {
+  return pkbInvoke("oracle.payload", { scope, alias: alias ?? null });
+}
+
+export async function oracleReport(
+  scope: "global" | "dyad" = "global",
+  alias?: string,
+): Promise<{ payload: OraclePayload; analysis: string }> {
+  return pkbInvoke("oracle.report", { scope, alias: alias ?? null });
+}
+
+export interface TwinScenario {
+  horizon_days: number;
+  calendar: { date: string; time: string; title: string }[];
+  mode?: "daily" | "interview";
+  interview_turns?: number | null;
+}
+
+export interface TwinForecast {
+  gate_passed: boolean;
+  reason?: string;
+  horizon_days?: number;
+  r_q10?: number[];
+  r_q50?: number[];
+  r_q90?: number[];
+  p_lapse?: (number | null)[];
+  critical_days?: string[];
+}
+
+export async function twinForecast(
+  scenario: TwinScenario,
+  scope: "global" | "dyad" = "global",
+  alias?: string,
+): Promise<TwinForecast> {
+  return pkbInvoke("twin.forecast", { scenario, scope, alias: alias ?? null });
+}
+
+export async function tensorRebuild(): Promise<{ rebuilt: boolean; rows: number }> {
+  return pkbInvoke("tensor.rebuild");
 }

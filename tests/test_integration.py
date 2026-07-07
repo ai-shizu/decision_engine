@@ -51,7 +51,10 @@ from core.paths import (  # noqa: E402
 # 議論フェーズのプロンプトにこれらが混入したら情報漏洩 (隔離違反) である。
 # "既読スルー" = Target Delta-LINE DL2 (social_positioning_gap 合流) の
 # 隔離ガード専用マーカー (AI_SKILLS §11 / SPEC I-14)。
-GAP_LEAK_MARKERS = ("躰道部", "パートナー", "既読スルー")
+# "oracle_payload"/"twin_forecast"/"coupling"/"OII"/"認知リソース" = Target Echo
+# E0 の隔離ガード専用マーカー (docs/SPEC_ECHO_GENESIS.md §5.5-1 / I-22)。
+GAP_LEAK_MARKERS = ("躰道部", "パートナー", "既読スルー",
+                    "oracle_payload", "twin_forecast", "coupling", "OII", "認知リソース")
 
 
 def _day(date: str, diary: str = "", events: list[dict] | None = None,
@@ -301,11 +304,6 @@ def _write_phase3_assets() -> None:
                             "連絡・調整タスクを先延ばしにしている",
                  "subjective": {"quotes": [
                      {"date": "2026-06-01", "quote": "…合宿の調整は明日やる…"}]}},
-                {"theme": "技術開発・ものづくり", "type": "true_gakuchika",
-                 "gap": 0.6,
-                 "insight": "一人で完結するコーディングに閉じこもる傾向。"
-                            "実熱量は低レイヤ開発に集中している",
-                 "subjective": {"quotes": []}},
                 {"theme": "充電効果: パートナーとの時間", "type": "stabilizer_effect",
                  "gap": 0.5,
                  "insight": "パートナーとの時間の後に生産性が向上しており、充電として機能",
@@ -317,6 +315,22 @@ def _write_phase3_assets() -> None:
                  "gap": 0.4,
                  "insight": "友人からの相談には既読スルーしがちな傾向があり、"
                             "関係維持コストへの言及が主観コーパスに一度もない",
+                 "subjective": {"quotes": []}},
+                # Target Echo E0: oracle.build_oracle_payload が合流させる想定の
+                # 認知リソース枯渇の兆候 (docs/SPEC_ECHO_GENESIS.md §4)。講評フェーズ
+                # 以外のプロンプトに絶対に出てはならない (GAP_LEAK_MARKERS 参照)。
+                {"theme": "認知リソース枯渇の兆候 (Target Echo)", "type": "blind_spot",
+                 "gap": 0.4,
+                 "insight": "認知リソースの枯渇兆候が oracle_payload の coupling / "
+                            "twin_forecast (OII 含む) から検出されているが、"
+                            "本人はこれを自覚していない",
+                 "subjective": {"quotes": []}},
+                # format_gap_table の既定 max_gaps=4 切り詰めの外側に置く
+                # (このエントリの内容は他テストで参照されない — 切り詰められてよい)。
+                {"theme": "技術開発・ものづくり", "type": "true_gakuchika",
+                 "gap": 0.6,
+                 "insight": "一人で完結するコーディングに閉じこもる傾向。"
+                            "実熱量は低レイヤ開発に集中している",
                  "subjective": {"quotes": []}},
             ],
             "interpersonal": {
@@ -399,6 +413,7 @@ def test_adversarial_interview_with_es() -> None:
     assert "可視化エンジン" in user3, "講評に ES が未統合"
     assert "躰道部" in user3, "講評に gap_insights が未統合"
     assert "既読スルー" in user3, "講評に Delta-LINE 対人ギャップが未統合 (DL2)"
+    assert "認知リソース" in user3, "講評に Target Echo oracle_payload が未統合 (E0 ガード)"
     assert "防御" in user3 and "改善アクション" in user3
     assert eng._interview_state is None
 
@@ -407,6 +422,57 @@ def test_adversarial_interview_with_es() -> None:
     assert any("[interview_sim] ES面接: opengl_engine" in e["query"]
                for e in entries)
     print("  adversarial interview (ES-driven) OK")
+
+
+# ============================================================ Target Echo E4: oracle 実配線
+def test_oracle_payload_isolated_to_review_phase() -> None:
+    """E0 の隔離ガード (GAP_LEAK_MARKERS) は _write_phase3_assets() のフィクスチャ
+    経由で検証済みだが、これは実配線 (_oracle_section()) を経由していない。
+    ここでは実在の oracle_payload (gate_passed=True・具体的な介入ラベル付き) を
+    deep_profile.json に書き、_oracle_section() の実配線そのものが (1) 議論
+    フェーズへ絶対に漏れず、(2) 講評フェーズにのみ現れることを検証する。"""
+    _write_phase3_assets()
+    profile = json.loads(DEEP_PROFILE.read_text(encoding="utf-8"))
+    profile["oracle_payload"] = {
+        "schema": "oracle_payload.v1",
+        "generated": "2026-07-07",
+        "scope": {"kind": "global", "alias": None},
+        "sufficiency": {"days_observed": 400, "coverage": 0.8, "dead_lanes": [],
+                        "twin_bss": 0.12, "n_lapse_test": 15, "gate_passed": True},
+        "state": {"r_now": 0.32, "r_trend_7d": -0.05, "oii_ema": None, "oii_streak_days": 0},
+        "couplings": [{"src": "cal_private_hours", "dst": "productivity_idx",
+                      "lag_days": 1, "rho": 0.44, "n_eff": 210, "null_q99": 0.3,
+                      "sig": True}],
+        "forecast": {"horizon_days": 14, "r_q10": [0.2], "r_q50": [0.3], "r_q90": [0.4],
+                    "p_lapse": [0.1], "critical_days": ["2026-07-10"]},
+        "findings": [{"rule_id": "R-GATE-01", "severity": 0.6,
+                     "metrics": {"r_now": 0.32, "theta_r": 0.4}}],
+        "interventions": [{"bank_id": "iv-003", "trigger_rule": "R-GATE-01",
+                          "target_lane": 18, "params": {}}],
+    }
+    DEEP_PROFILE.write_text(json.dumps(profile, ensure_ascii=False), encoding="utf-8")
+
+    fake = FakeBackend()
+    eng = ConsultationEngine()
+    eng._backend = fake
+
+    # (1) 議論フェーズ: 介入ラベル・bank_id・R 値のいずれも漏れてはならない
+    eng.consult("開始", mode="interview_sim")
+    sys1, user1 = fake.calls[0]
+    eng.consult("市場を法人と個人にMECEに分割して推定します", mode="interview_sim")
+    sys2, user2 = fake.calls[1]
+    for blob in (sys1, user1, sys2, user2):
+        assert "意思決定モラトリアム" not in blob, "介入ラベルが議論フェーズへ漏洩 (I-22 違反)"
+        assert "iv-003" not in blob, "bank_id が議論フェーズへ漏洩 (I-22 違反)"
+        assert "0.32" not in blob, "R 実測値が議論フェーズへ漏洩 (I-22 違反)"
+
+    # (2) 講評フェーズ: 実配線 (_oracle_section -> render_oracle_consult) の
+    # 出力が実際に統合されていることを確認 (プレースホルダ文言ではない)
+    eng.consult("講評", mode="interview_sim")
+    _, user3 = fake.calls[2]
+    assert "意思決定モラトリアム" in user3, "講評に oracle の介入が未統合 (E4 実配線)"
+    assert "R-GATE-01" in user3, "講評に rule_id が未統合"
+    print("  oracle payload isolated to review phase (E4 real wiring) OK")
 
 
 def test_gd_sim_chaos() -> None:
@@ -434,6 +500,7 @@ def test_gd_sim_chaos() -> None:
     _, user3 = fake.calls[2]
     assert "躰道部" in user3, "GD 講評に gap_insights が未統合"
     assert "既読スルー" in user3, "GD 講評に Delta-LINE 対人ギャップが未統合 (DL2)"
+    assert "認知リソース" in user3, "GD 講評に Target Echo oracle_payload が未統合 (E0 ガード)"
     assert "摩擦" in user3 and "Friction" in user3
     assert "フリーライダー" in user3 and "クラッシャー" in user3
     assert eng._gd_state is None
@@ -702,6 +769,7 @@ if __name__ == "__main__":
         test_es_manager_dynamic_domain()
         test_es_review_isolation()
         test_adversarial_interview_with_es()
+        test_oracle_payload_isolated_to_review_phase()
         test_gd_sim_chaos()
         # ---- Target Delta D3 (Puppeteer) ----
         test_puppeteer_injects_whitelisted_text_only()

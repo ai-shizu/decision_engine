@@ -1,7 +1,15 @@
 const WEEKDAYS = "月火水木金土日";
 
+export function toIsoDate(d: Date): string {
+  // toISOString() は UTC 基準のため JST 深夜〜朝に日付がずれる。ローカル時刻で組み立てる。
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
+
 export function todayIso(): string {
-  return new Date().toISOString().slice(0, 10);
+  return toIsoDate(new Date());
 }
 
 export function formatDateLabel(dateStr: string): string {

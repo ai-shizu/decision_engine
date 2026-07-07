@@ -40,6 +40,14 @@ USER_PROFILE = DATA_PROCESSED / "user_profile.json"
 # llama-server の KV キャッシュ (プレフィックス・ピニング) 永続化先
 KV_SLOTS_DIR = DATA_PROCESSED / "kv_slots"
 
+# Target Echo (PKBTEN01): 日次×特徴量テンソル。dyad スコープはファイル名に
+# alias のみを含む (実名の永続化は I-15 によりファイル名の全経路で禁止)。
+TENSOR_GLOBAL_BIN = DATA_PROCESSED / "tensor_global.bin"
+
+
+def tensor_dyad_bin(alias: str) -> Path:
+    return DATA_PROCESSED / f"tensor_dyad_{alias}.bin"
+
 # ネイティブ実行ファイル名 (Windows のみ .exe)
 _EXE_SUFFIX = ".exe" if os.name == "nt" else ""
 SEARCH_EXE = BUILD_DIR / f"search_engine{_EXE_SUFFIX}"

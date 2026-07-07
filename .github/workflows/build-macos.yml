@@ -1,0 +1,95 @@
+# ============================================================================
+# PKB macOS ビルド (Apple Silicon + Intel) — DMG / .app 生成
+#
+# 起動方法: 手動 (workflow_dispatch) または v* タグ push
+#
+# 設計メモ:
+#   - PyInstaller (Python sidecar) はクロスコンパイル不可。
+#     そのため aarch64 は Apple Silicon ランナー (macos-14)、
+#     x86_64 は Intel ランナー (macos-13) でネイティブビルドする。
+#   - 署名・公証は Secrets が設定されている場合のみ有効化される
+#     (未設定でも ad-hoc 署名でビルド自体は成功する)。
+#     必要な Secrets: APPLE_CERTIFICATE, APPLE_CERTIFICATE_PASSWORD,
+#     APPLE_SIGNING_IDENTITY, APPLE_ID, APPLE_PASSWORD, APPLE_TEAM_ID
+#     (詳細は docs/AI_SKILLS.md §4 を参照)
+# ============================================================================
+name: build-macos
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ["v*"]
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-14 # Apple Silicon (M1) ランナー
+            target: aarch64-apple-darwin
+          - os: macos-13 # Intel ランナー
+            target: x86_64-apple-darwin
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: アーキテクチャ検証 (ランナーと target の不一致を即検出)
+        run: |
+          echo "runner arch: $(uname -m) / target: ${{ matrix.target }}"
+          case "${{ matrix.target }}" in
+            aarch64-*) test "$(uname -m)" = "arm64" ;;
+            x86_64-*)  test "$(uname -m)" = "x86_64" ;;
+          esac
+
+      - name: C++ 検索コアをビルド (NEON は aarch64 で自動有効)
+        run: bash build.sh --skip-py
+
+      - name: Python sidecar (stdio エンジン) をビルド
+        run: bash apps/desktop/scripts/build-sidecar.sh
+
+      - name: sidecar のアーキテクチャ検証
+        run: |
+          BIN="apps/desktop/src-tauri/binaries/pkb-engine-${{ matrix.target }}"
+          file "$BIN"
+          case "${{ matrix.target }}" in
+            aarch64-*) file "$BIN" | grep -q "arm64" ;;
+            x86_64-*)  file "$BIN" | grep -q "x86_64" ;;
+          esac
+
+      - name: npm ci
+        working-directory: apps/desktop
+        run: npm ci
+
+      - name: Tauri build (app + dmg)
+        working-directory: apps/desktop
+        env:
+          # 署名 (p12 の base64 とパスワード)。未設定なら ad-hoc 署名
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          # 公証 (App 用パスワード方式)。未設定なら公証スキップ
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: npx tauri build --target ${{ matrix.target }}
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pkb-macos-${{ matrix.target }}
+          path: |
+            apps/desktop/src-tauri/target/${{ matrix.target }}/release/bundle/dmg/*.dmg
+            build/search_engine
+          if-no-files-found: error
