@@ -1,14 +1,27 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   calendarEventDates,
   loadRecord,
   saveRecord,
 } from "../lib/engine";
 import { formatDateLabel, parseAmount, summarizeDay, todayIso } from "../lib/dateUtils";
+import { isCommitEnter } from "../lib/keyUtils";
 import { defaultTime } from "../lib/timeUtils";
 import type { RecordEvent, RecordSubTab, Transaction } from "../lib/types";
 import { CalendarPicker } from "./CalendarPicker";
 import { TimePicker } from "./TimePicker";
+
+// SPEC_FOXTROT_UI.md §2.1.1 (Rev.4) 裁定1: タブアンマウント中の書きかけ draft を
+// ファイルローカル・シングルトンで保持する (Redux/Context ではない)。アプリ終了で
+// 揮発し、ディスク内容 (baseline) が保存時から変化していた場合は破棄する。
+type DraftSnapshot = { events: RecordEvent[]; transactions: Transaction[]; diary: string };
+let recordDraft:
+  | { date: string; subTab: RecordSubTab; baseline: DraftSnapshot; work: DraftSnapshot }
+  | null = null;
+
+function snapshotsEqual(a: DraftSnapshot, b: DraftSnapshot): boolean {
+  return JSON.stringify(a) === JSON.stringify(b);
+}
 
 export function RecordTab() {
   const [date, setDate] = useState(todayIso());
@@ -29,6 +42,19 @@ export function RecordTab() {
   const [expAmt, setExpAmt] = useState("");
   const [incCat, setIncCat] = useState("");
   const [incAmt, setIncAmt] = useState("");
+  const [noticeVisible, setNoticeVisible] = useState(false);
+
+  const diaryRef = useRef<HTMLTextAreaElement>(null);
+  const noticeTimerRef = useRef<number | null>(null);
+  // baseline = 直近にディスクから読んだ内容 (裁定1)。unmount 時の draft 保存で
+  // 使うため、常に最新の {date, subTab, events, transactions, diary} を ref に
+  // 複製しておく — useEffect(cleanup) のクロージャが古い state を掴む (stale
+  // closure) のを避けるための ref ミラー (W-26 と同じ思想)。
+  const baselineRef = useRef<DraftSnapshot | null>(null);
+  const liveRef = useRef({ date, subTab, events, transactions, diary });
+  useEffect(() => {
+    liveRef.current = { date, subTab, events, transactions, diary };
+  });
 
   const refreshMarks = useCallback(async () => {
     try {
@@ -43,9 +69,29 @@ export function RecordTab() {
     setStatus("");
     try {
       const data = await loadRecord(d);
-      setEvents(data.events);
-      setTransactions(data.transactions);
-      setDiary(data.diary);
+      const diskSnapshot: DraftSnapshot = {
+        events: data.events,
+        transactions: data.transactions,
+        diary: data.diary,
+      };
+      baselineRef.current = diskSnapshot;
+      // 裁定1-②: 同じ日付 かつ ディスクが保存時から変化していない場合のみ
+      // draft を復元する。不一致ならディスクが正で、キャッシュは破棄する。
+      if (
+        recordDraft &&
+        recordDraft.date === d &&
+        snapshotsEqual(recordDraft.baseline, diskSnapshot)
+      ) {
+        setEvents(recordDraft.work.events);
+        setTransactions(recordDraft.work.transactions);
+        setDiary(recordDraft.work.diary);
+        setSubTab(recordDraft.subTab);
+      } else {
+        setEvents(data.events);
+        setTransactions(data.transactions);
+        setDiary(data.diary);
+        recordDraft = null;
+      }
     } catch (err) {
       setStatus(String(err));
     } finally {
@@ -59,6 +105,45 @@ export function RecordTab() {
       await loadDay(date);
     })();
   }, []);
+
+  // 裁定1-①: アンマウント時に書きかけの内容を draft として退避する。
+  useEffect(() => {
+    return () => {
+      const live = liveRef.current;
+      const baseline = baselineRef.current;
+      if (baseline) {
+        recordDraft = {
+          date: live.date,
+          subTab: live.subTab,
+          baseline,
+          work: { events: live.events, transactions: live.transactions, diary: live.diary },
+        };
+      }
+    };
+  }, []);
+
+  // SPEC §2.1 (F-4): diary サブタブ表示時に textarea へ autofocus。
+  // subTab 切替・タブ復帰 (マウント時の draft 復元) の両方でこの effect が
+  // 走るため、常に最新の subTab を反映する。
+  useEffect(() => {
+    if (subTab === "diary") {
+      diaryRef.current?.focus();
+    }
+  }, [subTab]);
+
+  // saveNotice の cleanup (W-26 系: setTimeout はアンマウント/再発火時に必ず解除)。
+  useEffect(() => {
+    return () => {
+      if (noticeTimerRef.current !== null) window.clearTimeout(noticeTimerRef.current);
+    };
+  }, []);
+
+  function showNotice(text: string, kind: "success" | "error") {
+    setSaveNotice({ text, kind });
+    setNoticeVisible(true);
+    if (noticeTimerRef.current !== null) window.clearTimeout(noticeTimerRef.current);
+    noticeTimerRef.current = window.setTimeout(() => setNoticeVisible(false), 3000);
+  }
 
   async function handleDateSelect(d: string) {
     setDate(d);
@@ -105,21 +190,25 @@ export function RecordTab() {
 
   const handleSave = useCallback(async () => {
     if (!events.length && !transactions.length && !diary.trim()) {
-      setSaveNotice({ text: "予定・家計簿・日記がすべて空です", kind: "error" });
+      showNotice("予定・家計簿・日記がすべて空です", "error");
       return;
     }
     setBusy(true);
     setSaveNotice(null);
+    setNoticeVisible(false);
     try {
       const result = await saveRecord(date, events, transactions, diary);
       await refreshMarks();
       const syncMsg = result.index_rebuilt
         ? "DailyContext結晶化+ベクトル同期完了"
         : "同期不要 (最新)";
-      setSaveNotice({ text: `${date} を保存しました — ${syncMsg}`, kind: "success" });
+      // 裁定1-③: 保存された瞬間 draft はディスクの記録へ昇格済みなので破棄する。
+      recordDraft = null;
+      baselineRef.current = { events, transactions, diary };
+      showNotice(`${date} を保存しました — ${syncMsg}`, "success");
       setStatus("");
     } catch (err) {
-      setSaveNotice({ text: String(err), kind: "error" });
+      showNotice(String(err), "error");
     } finally {
       setBusy(false);
     }
@@ -127,10 +216,16 @@ export function RecordTab() {
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.ctrlKey && e.key === "s") {
+      if (e.ctrlKey && !e.altKey && e.key === "s") {
         e.preventDefault();
         e.stopPropagation();
         void handleSave();
+        return;
+      }
+      if (e.ctrlKey && !e.altKey && (e.key === "1" || e.key === "2" || e.key === "3")) {
+        e.preventDefault();
+        const map: Record<string, RecordSubTab> = { "1": "events", "2": "finance", "3": "diary" };
+        setSubTab(map[e.key]);
       }
     };
     window.addEventListener("keydown", onKey, { capture: true });
@@ -174,8 +269,9 @@ export function RecordTab() {
               <li className="hint">(この日の予定はまだありません)</li>
             ) : (
               events.map((ev, i) => (
-                <li key={i}>
-                  {ev.time} {ev.title}
+                <li key={i} className="record-item">
+                  <span className="record-item-time">{ev.time}</span>
+                  <span className="record-item-label">{ev.title}</span>
                 </li>
               ))
             )}
@@ -186,6 +282,12 @@ export function RecordTab() {
               <input
                 value={eventTitle}
                 onChange={(e) => setEventTitle(e.target.value)}
+                onKeyDown={(e) => {
+                  if (isCommitEnter(e) && !busy) {
+                    e.preventDefault();
+                    addEvent();
+                  }
+                }}
                 placeholder="ミーティング名など"
               />
               <button type="button" onClick={addEvent}>
@@ -207,9 +309,11 @@ export function RecordTab() {
               <li className="hint">(この日の取引はまだありません)</li>
             ) : (
               transactions.map((tx, i) => (
-                <li key={i}>
-                  [{tx.type === "expense" ? "支出" : "収入"}] {tx.category}:{" "}
-                  {tx.amount.toLocaleString()}円
+                <li key={i} className="record-item">
+                  <span className="record-item-label">
+                    [{tx.type === "expense" ? "支出" : "収入"}] {tx.category}
+                  </span>
+                  <span className="record-item-amount">{tx.amount.toLocaleString()}円</span>
                 </li>
               ))
             )}
@@ -220,11 +324,23 @@ export function RecordTab() {
               <input
                 value={expCat}
                 onChange={(e) => setExpCat(e.target.value)}
+                onKeyDown={(e) => {
+                  if (isCommitEnter(e) && !busy) {
+                    e.preventDefault();
+                    addTx("expense", expCat, expAmt);
+                  }
+                }}
                 placeholder="食費・交通費など"
               />
               <input
                 value={expAmt}
                 onChange={(e) => setExpAmt(e.target.value)}
+                onKeyDown={(e) => {
+                  if (isCommitEnter(e) && !busy) {
+                    e.preventDefault();
+                    addTx("expense", expCat, expAmt);
+                  }
+                }}
                 placeholder="5000"
               />
               <button type="button" onClick={() => addTx("expense", expCat, expAmt)}>
@@ -236,11 +352,23 @@ export function RecordTab() {
               <input
                 value={incCat}
                 onChange={(e) => setIncCat(e.target.value)}
+                onKeyDown={(e) => {
+                  if (isCommitEnter(e) && !busy) {
+                    e.preventDefault();
+                    addTx("income", incCat, incAmt);
+                  }
+                }}
                 placeholder="給与・副業など"
               />
               <input
                 value={incAmt}
                 onChange={(e) => setIncAmt(e.target.value)}
+                onKeyDown={(e) => {
+                  if (isCommitEnter(e) && !busy) {
+                    e.preventDefault();
+                    addTx("income", incCat, incAmt);
+                  }
+                }}
                 placeholder="300000"
               />
               <button type="button" onClick={() => addTx("income", incCat, incAmt)}>
@@ -254,6 +382,7 @@ export function RecordTab() {
       {subTab === "diary" && (
         <div className="sub-panel">
           <textarea
+            ref={diaryRef}
             className="diary-editor"
             value={diary}
             onChange={(e) => setDiary(e.target.value)}
@@ -267,9 +396,11 @@ export function RecordTab() {
         <button type="button" className="primary" onClick={() => void handleSave()} disabled={busy}>
           {busy ? "保存中…" : "保存 (Ctrl+S)"}
         </button>
-        {saveNotice && (
-          <p className={`save-notice ${saveNotice.kind}`}>{saveNotice.text}</p>
-        )}
+        <p
+          className={`save-notice ${saveNotice?.kind ?? ""} ${noticeVisible ? "visible" : ""}`}
+        >
+          {saveNotice?.text ?? ""}
+        </p>
         <span className="hint">選択中の日付を一括保存</span>
       </div>
       {status && <p className="status-line">{status}</p>}

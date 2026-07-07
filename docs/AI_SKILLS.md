@@ -801,7 +801,7 @@ TOTAL:                                          ~1.6-2.2 秒 (< 3000ms ゲート
 
 ---
 
-## 13. Target Foxtrot — UI/UX 設計 (`docs/SPEC_FOXTROT_UI.md`。F0 完遂・F1〜F6 未着手)
+## 13. Target Foxtrot — UI/UX 設計 (`docs/SPEC_FOXTROT_UI.md`。F0/F7/F1 完遂・F2〜F6 未着手)
 
 フロントエンド (Tauri + React) の設計仕様。**§3.4 (React UI 規約) が上位法** —
 SPEC はその適用解釈を確定させるもの。コードより先に存在する凍結事項:
@@ -840,6 +840,50 @@ SPEC はその適用解釈を確定させるもの。コードより先に存在
 vite 単体プレビューでの実描画確認 (`.app.loading` の computed `color` が
 `rgb(232, 234, 237)` = `#e8eaed` と厳密一致 — CSS カスタムプロパティが
 元のリテラル値と数学的に同一に解決されることを実測で確認)。
+
+### F7 完遂 (2026-07-08) — as-built
+
+`TitleBar.tsx` 新設 + `tauri.conf.json` の `decorations: false`。ドラッグ領域
+とウィンドウボタンは兄弟要素 (W-27)。`"__TAURI_INTERNALS__" in window` で
+ブラウザ/ネイティブを判定し、vite 単体プレビューではボタン非表示 (F0 の
+検証パイプラインを壊さない)。
+
+検証: `tsc`/`cargo check` エラーなし、`ui_smoke.py` ALL PASS (Textual TUI
+側の回帰確認 — React 側の直接検証ではないことに注意、後述)、`cargo tauri dev`
+実起動でビルド成功・エンジン ready まで到達 (ログ実測)。**ネイティブウィンドウ
+のドラッグ・ボタンクリックという GUI 操作自体は、本セッションの検証ツール
+(CDP ベースの vite プレビュー) では自動化不可能** — 起動確認はログで、
+実際の操作感は指揮官の目視確認に委ねた。
+
+### F1 完遂 (2026-07-08) — as-built (RECORD タブ)
+
+`RecordTab.tsx` にファイルローカル・シングルトン `recordDraft` を新設し、
+タブアンマウント時の draft 退避・マウント時の決定論的復元 (ディスク内容が
+`baseline` と一致する場合のみ) を実装。`lib/keyUtils.ts::isCommitEnter()`
+を QuickAdd 系の全単一行 input (event/expense/income) の `onKeyDown` に配線
+(diary の textarea には適用しない)。`Ctrl+1/2/3` はサブタブ切替として既存
+Ctrl+S リスナーへ相乗り、`Alt+1..5` は `App.tsx` にメインタブ切替として
+新設 (`ready` 後のみ登録)。両者は修飾キーで直交するため `stopPropagation`
+は新設分に付けていない。diary autofocus は `useRef` + `useEffect([subTab])`
+(subTab 切替・draft 復元による remount 後の両方で発火)。`saveNotice` は
+条件レンダリングを廃し常駐要素 + `visible` クラスの opacity transition に
+変更 (`--t-fast`)、タイマーは `useRef` 保持で cleanup 必須。予定の時刻・
+家計簿の金額は `.record-item-time`/`.record-item-amount` (`--font-mono` +
+右揃え) に分離。`CalendarPicker` の `.cal-day.selected.has-events::after`
+の背景 `#fff` を `var(--text)` に置換 (RECORD の子要素ツリー内で唯一の
+背景/枠線 white — 他タブ共通の `color:#fff` (ボタンテキスト等) は F0 で
+既に「トークン不在のため意図的保持」と申告済みのため今回は対象外)。
+
+**仕様との差異 (申告)**: SPEC §2.1.1 裁定1 は draft の unmount 保存を
+「アンマウント時」とだけ規定していたが、実装では stale closure を避けるため
+`liveRef`/`baselineRef` の 2 段 ref ミラーを追加した (SPEC は明示していない
+実装詳細だが W-26 の思想と矛盾しない拡張)。
+
+検証: `tsc`/`cargo check` エラーなし、`ui_smoke.py` ALL PASS (Textual TUI
+の回帰確認のみ — RecordTab.tsx は対象外)。**IME 誤爆防止・draft 復元の
+実機での対話的確認は、ネイティブ GUI 操作を自動化する手段がなくコード
+トレースによる論理検証に留まる** — `cargo tauri dev` を再起動しウィンドウは
+起動済みだが、実際のキー入力・タブ往復操作は指揮官の実施を要する。
 
 ---
 

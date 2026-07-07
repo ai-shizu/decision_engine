@@ -64,6 +64,25 @@ export default function App() {
     };
   }, []);
 
+  // SPEC_FOXTROT_UI.md §3.6 (キーボード予約表): Alt+1..5 でメインタブ切替。
+  // ready 後のみ登録 (裁定3)。Ctrl 系 (RECORD サブタブ) とは修飾キーで直交
+  // するため stopPropagation は不要。
+  useEffect(() => {
+    if (!ready) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.altKey && !e.ctrlKey && /^[1-5]$/.test(e.key)) {
+        const idx = Number(e.key) - 1;
+        const target = TABS[idx];
+        if (target) {
+          e.preventDefault();
+          setTab(target.id);
+        }
+      }
+    };
+    window.addEventListener("keydown", onKey, { capture: true });
+    return () => window.removeEventListener("keydown", onKey, { capture: true });
+  }, [ready]);
+
   if (!ready) {
     return <LoadingScreen message={status} />;
   }

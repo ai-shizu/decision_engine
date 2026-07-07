@@ -7,6 +7,9 @@
 #   §2.7 F7 (Desktop Native Chrome)、§3.6 (キーボード予約表)、§6 (W-22〜W-27
 #   React 実装罠) を追加。F6 (PROBE) の様式定義は D2/E4 完成後の着手時に確定
 #   させる (ゲートは不変)。
+# Rev.4 (2026-07-08): F7 完遂を受けた F1 着工前裁定。§2.1 に F1 専用の 3 裁定
+#   (recordDraft によるタブローカル state 隔離・isCommitEnter による IME
+#   ガード共通化・Alt/Ctrl キーボード配線レイヤ) を追加。
 
 > **読者への前提命令**: 本書を読む前に `docs/AI_SKILLS.md` §0 のルーティング表
 > に従い §1 + UI タスク該当節を読め (2026-07-08 改訂 — 全文読了の強制は撤回済み)。
@@ -152,6 +155,67 @@ RecordTab                          ← 状態: date, subTab, events[], transacti
   ダイアログ・トースト禁止 (視線移動 = フリクション)。
 - 「白基調」は却下済み (§0-2)。ミニマルの実体は**フォーム要素数を増やさない
   こと** — 新しい入力 UI を足す変更はこのタブでは原則リジェクト。
+
+### 2.1.1 F1 着工前裁定 (Rev.4) — State隔離・IMEガード・キーボード配線
+
+**裁定1 (state 隔離 — F-11 の具現化)**: RECORD タブが非アクティブ (アンマウ
+ント) の間、書きかけの日記・追加済み予定・家計簿行を**完全揮発させるのも
+App.tsx へ昇格させるのも却下する**。前者はユーザーの記録を破壊する行為で
+あり (RECORD の存在意義と矛盾)、後者は §3.4-5 (状態は最小に) の退行で
+F-11 が消したい「非アクティブタブの生きた state」を親に移すだけで漏洩面積
+は減らない。
+
+採用案: `RecordTab.tsx` **ファイル内・コンポーネント外**のモジュールレベル
+シングルトン `recordDraft` のみを唯一の例外として認可する
+(Redux/Context/グローバルストアではない — ただのファイルローカル変数)。
+
+```tsx
+type DraftSnapshot = { events: RecordEvent[]; transactions: Transaction[]; diary: string };
+let recordDraft: { date: string; subTab: RecordSubTab;
+                   baseline: DraftSnapshot; work: DraftSnapshot } | null = null;
+```
+
+規約 (1 つでも欠けたらレビュー落ち):
+1. アンマウント時 (`useEffect` cleanup) に `{date, subTab, baseline(=直近に
+   ディスクからロードした内容), work(=現在の state)}` を保存する。
+2. マウント/`loadDay(d)` 時: ディスク取得後、`recordDraft.date === d` **かつ**
+   ディスク内容が `baseline` と深い等価 (`JSON.stringify` 比較で可 — 同一
+   シリアライザ由来なので決定論) の場合**のみ** `work` を復元する。
+   不一致ならディスクが正・キャッシュは破棄する。
+3. 保存成功時に `recordDraft = null` にする (保存された瞬間、draft は
+   ディスクの記録へ昇格済みのため)。
+4. キャッシュに入れてよいのは上記 4 フィールドのみ。QuickAdd の入力途中
+   文字列 (`eventTitle` 等の断片) は**含めない**。oracle/twin 系の値は
+   RECORD が Echo データに触れない設計のため構造的に混入し得ない — これが
+   F-11 (分析出力の漏洩面積) と draft 保全を両立させる根拠である。
+
+**裁定2 (IME ガード — W-25 の共通化)**: `lib/keyUtils.ts` に `isCommitEnter()`
+を新設し、**全ての単一行入力がこの1関数を通る**ことを規律とする (各所
+コピペの微妙な差異がバグの温床になるため)。
+
+```tsx
+export function isCommitEnter(e: React.KeyboardEvent): boolean {
+  return e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing && e.keyCode !== 229;
+}
+```
+
+適用規約: ①`onKeyDown` のみで判定 (`onKeyUp` 禁止)。②適用対象は QuickAdd
+系の単一行 `<input>` のみ — **diary の `<textarea>` には絶対に付けない**
+(Enter=改行が正)。③ commit 時は `e.preventDefault()` してから追加処理。
+④ `busy` 中は発火させない。
+
+**裁定3 (キーボード配線のレイヤ)**: Alt 系とCtrl 系は修飾キーで直交して
+おり、`stopPropagation` は不要 (既存 Ctrl+S の `stopPropagation` は維持
+してよいが、新設分には付けるな — 将来のリスナーを黙って殺す時限爆弾になる)。
+
+| キー | 捕捉レイヤ | 根拠 |
+|---|---|---|
+| `Alt+1..5` (メインタブ) | `App.tsx` の `window` keydown (`ready` 後のみ登録・cleanup 必須) | タブ切替はシェルの責務。どのタブがマウントされていても効く必要がある |
+| `Ctrl+1..3` (サブタブ) | `RecordTab` の既存 Ctrl+S リスナーへ相乗り (`window` + `capture:true`) | リスナーを増やさない。RECORD アンマウントで自然消滅 = F-11 がスコープ制御を無償で提供 |
+
+判定は修飾キーの厳密一致 (`e.altKey && !e.ctrlKey` / `e.ctrlKey && !e.altKey`)。
+`preventDefault()` は必須 (Windows の Alt メニューアクセラレータ抑止)。
+入力欄フォーカス中でも発火させる — 筋肉記憶はフォーカス位置に依存しない。
 
 ## 2.2 IMPORT — 認知負荷: 低 (一覧性 = 統制感)
 

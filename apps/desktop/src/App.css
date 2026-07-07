@@ -252,7 +252,7 @@ body {
 }
 
 .cal-day.selected.has-events::after {
-  background: #fff;
+  background: var(--text);
 }
 
 .cal-pad {
@@ -288,6 +288,30 @@ body {
 
 .item-list li {
   padding: 4px 0;
+}
+
+/* F1 (SPEC_FOXTROT_UI.md §2.1 / F-10): 時刻・金額はmono右揃え */
+.record-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: var(--s2);
+}
+
+.record-item-time {
+  font-family: var(--font-mono);
+  color: var(--text-muted);
+  flex-shrink: 0;
+}
+
+.record-item-label {
+  flex: 1;
+}
+
+.record-item-amount {
+  font-family: var(--font-mono);
+  text-align: right;
+  flex-shrink: 0;
 }
 
 .form-row {
@@ -428,6 +452,12 @@ body {
   margin: 0;
   font-size: 0.9rem;
   line-height: 1.4;
+  opacity: 0;
+  transition: opacity var(--t-fast);
+}
+
+.save-notice.visible {
+  opacity: 1;
 }
 
 .save-notice.success {
@@ -789,4 +819,12 @@ button.secondary {
   font-size: 0.9rem;
   max-height: 280px;
   overflow-y: auto;
+}
+
+/* F-3 (SPEC_FOXTROT_UI.md §3.2-4): モーション低減設定では全 transition を無効化 */
+@media (prefers-reduced-motion: reduce) {
+  * {
+    transition-duration: 0.01ms !important;
+    animation-duration: 0.01ms !important;
+  }
 }
