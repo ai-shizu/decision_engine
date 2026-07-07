@@ -565,3 +565,380 @@ LINE 全ログ (本人+他者) を「人間関係の物理的衝突ログ」と�
 
 D3 完遂によりTarget Charlie / Target Delta (DL1・DL2・D3) は全て実装済み。残るは Target Delta の D1/D2 サブトラック (HumanSourceCode 5軸・PROBE・HistoricalNode) のみ — これは今回未着手。
 
+---
+
+## 12. Target Echo — 設計のみ完了 (`docs/SPEC_ECHO_GENESIS.md`。実装は全て未着手)
+
+時系列直交結合マトリクス (PKBTEN01) / 敵対的デジタルツイン / Hyper-Personalized
+Oracle の設計仕様。**実装着手前に同書を全文読め。** コードより先に存在する凍結事項:
+
+1. **PKBTEN01 レイアウトは凍結済み** (header 64B "<8sIIIIiIQ24x" / row 136B "<iI32f"
+   / 特徴量レーン番号表 §5.2)。実装時は C++ struct と tensor_store.py を同時に
+   書き、PKBSCR01 と同じ相互 assert で釘付けにする。レーン番号の再利用禁止。
+2. **欠測 = valid_mask のみ (I-18)。** NaN 格納禁止。「支出 0 円」と「未記録」の
+   混同 (マスクを見ない集計) が Echo 最頻の静かな死と予測されている (罠 T-15)。
+3. **乱数は Philox + 入力内容由来 seed のみ (I-17)。** unseeded np.random は 1 箇所
+   でもバグ。モンテカルロは「同一入力 → ビット同一出力」が不変条件。
+4. **ツインはスキルゲート付き (I-20)**: walk-forward BSS ≥ 0.05 ∧ 検証失策数 ≥ 10
+   を満たさない限り forecast/介入は空。in-sample 適合をスキルと呼ぶな (罠 T-18)。
+5. **介入の標的は本人側特徴量レーンのみ (I-19)。** 第三者の反応・感情を最適化
+   目標にする介入・数式・プロンプトは憲法 7 の系として禁止。INTERVENTION_BANK は
+   QUESTION_BANK と同じ「生成ではなく選択」+ target_lane の import 時機械検査。
+6. **Echo 出力の聖域 (I-22)**: oracle_payload/twin/coupling/OII は面接官・GD 議論・
+   es_review に不出。合法出口は consult 動的サフィックス (静的側に置くと KV 全滅
+   — §8.1-2)・講評フェーズ・PROFILE UI の 3 つだけ。実装順序は E0 (憲法ガード
+   RED 確認) が最初 — 「ガードが先、機能が後」。
+7. **E5 (C++ カーネル) は計測ゲート封印**: E1〜E4 の numpy 実装が profiler 1 回
+   あたり合計 3000ms を超えない限り着手禁止 (C2 と同じ規律)。scratch (2072B) は
+   拡張しない。scipy 導入は却下済み (SPEC §2 Note 2) — 再提案するな。
+8. **test_oracle.py はゲート付き SKIP (Rev.2 訂正)**: `core.oracle`/`core.tensor_store`
+   の ImportError のみを SKIP 扱いにし、それ以外は FAIL とする (I-5 の確立パターンに
+   合流)。「削除・スキップ化せず常設 RED を保持せよ」という当初指示は DoD
+   (全スイート PASS まで完了と言わない) と矛盾するため、レビューで訂正済み。
+   E4 のゲートは「本ファイルが SKIP なしで GREEN」。
+
+### E0/E1 完遂 (2026-07-07) — as-built
+
+- **E0**: `tests/test_integration.py` の `GAP_LEAK_MARKERS` に 5 マーカー追加 +
+  `_write_phase3_assets()` へ対応エントリ追加 (DL2 と同一手順)。**踏んだ罠**:
+  `format_gap_table(max_gaps=4)` の既定切り詰めにより 5 件目以降の gap が
+  無言で無視される。他テストで内容参照のない `true_gakuchika` エントリを配列末尾
+  (切り詰め対象) へ退避し、必須マーカーを持つ4件を先頭に揃えて解決した。
+  `tests/test_oracle.py` を新規作成し I-19 (target_lane ホワイトリスト) /
+  `_assert_sterile` のガードを先置き。
+- **E1**: `src/python/core/tensor_store.py` (新規) + `src/cpp/search_engine.cpp` へ
+  `TensorHeader`/`TensorRow` (PKBTEN01) を追加。`tests/test_tensor_store.py` が
+  E1 ゲート (レイアウト相互検証/mask対照群/rebuild-under-handle/simulated除外/
+  日付格子) を全て GREEN。
+
+**新規に踏んだ罠 (T-14 の具体化 — 次の実装者への警告)**:
+`np.frombuffer(mmap_obj, ...)` で作った ndarray (またはそのスライス/フィールド
+ビュー) が 1 つでも生きている状態で `mmap.close()` を呼ぶと
+`BufferError: cannot close exported pointers exist` になる。これは「長期保持」
+に限らず、**同一関数内で `window()` の戻り値を使った直後に `close()` を呼ぶ
+だけでも発生する** (戻り値がローカル変数としてまだ束縛されているため)。
+対策は 2 段: (1) `TensorStore.close()` は自身の `self._rows` 参照を `None` に
+してから `mmap.close()` する、(2) それでも呼び出し側が `window()` の戻り値を
+束縛したままなら防げない — **呼び出し側が close() 前に del するか、長期保持
+するなら `.copy()` する規律を必ず守ること**。「.copy() は長期保持の時だけ」
+という当初の理解は誤りで、**同一スコープでの短命な使用でも close() の直前では
+参照を手放す必要がある**。
+
+### E1.1 是正 + E2 完遂 (2026-07-07) — as-built
+
+**E1.1 (SPEC Rev.3 §5.10.2 是正指令)**: `_task_daily_counts()` が
+`(declared, declared_observed, executed, executed_observed)` の4値を返すよう
+拡張し、`build_tensor()` は `*_observed` 集合に無い日付を mask=0 のまま残す
+ように変更 (lane 18/19)。`_line_daily_aggregates()` は LINE ログのカバレッジ窓
+(最古日, 最新日) を第2戻り値として返すよう拡張し、窓内で当日データが無い日は
+lane 11,12,13,15,16,17 を mask=1/value=0 (観測済み沈黙) にする第2パスを
+`build_tensor()` に追加 (lane 14 は対象外)。対照群テスト2本
+(`test_task_lanes_mask_only_on_observed_days` / `test_line_silence_within_coverage_is_observed_zero`)
+を `tests/test_tensor_store.py` に追加、全 GREEN。
+
+**E2**: `core/coupling.py` (新規)。§3.2 ランク変換 (argsort×2 の平均ランク、
+乱数不使用) + §3.3 の6配列 FFT 相互相関 (n, S_xy, S_x, S_y, S_xx, S_yy) +
+遠ラグ帰無 (NULL_LAG_RANGE=45〜365) による自給的有意性判定。
+`tests/test_coupling.py` (6ケース): 既知ラグ注入検出 / 独立系列の帰無対照群
+(素朴な固定閾値なら誤検出するケースを自給帰無が正しく棄却することを実測で
+確認) / 決定論 (2回実行の完全一致) / **W-8 共有欠測対照群** (同一欠測パターンを
+共有する無関係な2レーンが sig にならない) / **W-11 ラグ符号恒等式**
+(rho_ij(tau)==rho_ji(-tau) を列入替え呼び出しで実測検証) / 系列長不足の
+CouplingError。全 GREEN。
+
+**踏まなかった罠 (設計時点で SPEC の W-1〜W-14 が事前に塞いだため実装中に
+発現しなかった)**: W-9 (irfft の整数量) は `np.rint` を先に入れていたため
+未発現、W-10 (分散項の微小負) も `max(·,0.0)` クランプを先に入れていたため
+未発現。**これは「バグが起きなかった」のではなく「バグを起こす前に塞いだ」
+ことが正確な表現である** — レビューが実装より先に警告を発行した効果の実例。
+
+### E3 完遂 (2026-07-07) — as-built
+
+`core/digital_twin.py` (新規): 認知リソース状態方程式 (§3.4) + IRLS ハザード
+(§3.5, W-0 訂正込み) + walk-forward スキルゲート (I-20) + モンテカルロ (§3.5)。
+
+- **trailing causal baseline (W-19 の実装形)**: 失策ラベルの分位点閾値
+  (p90/p95/p50) と D(t) の正規化 (median/MAD) は `_rolling_quantile_causal`/
+  `_rolling_median_mad_causal` により「時刻 t は [t-180, t) の有効値のみ参照」
+  する trailing 方式で実装した。これにより fold 単位の再計算を待たず、
+  ラベル/D(t) 自体が構成的に未来を見ない。**θ_dyn (状態方程式パラメータ) は
+  全履歴 1 回の SSE グリッド探索で fit する設計上の割り切り** — SPEC §3.4 に
+  walk-forward の指示が無く、walk-forward は §3.5 のハザードモデルにのみ適用
+  されるため。この境界は `digital_twin.py` 冒頭の docstring に明記済み。
+- **W-19 の実測効果 (test_digital_twin.py で実証)**: 無関係な時間トレンドを
+  共有するだけの合成データ (R が緩やかに減衰・spend_hedonic が無関係な上昇
+  トレンド) に対し、素朴なグローバル分位点閾値は BSS=+0.12 (ゲート閾値 0.05
+  を超え「本物のスキルがある」と誤判定) を出したが、trailing causal baseline
+  は BSS=-0.0007 (正しく棄却) だった。**これは机上の懸念ではなく実測できる
+  失敗モードである。**
+- **W-16 (分離対照群)**: 完全分離データ (下位20%だけ lapse=1) で IRLS が
+  収束し `‖β‖<100` に収まることを確認 — Hessian のみのリッジ (Rev.1 の式) では
+  満たせなかったはずの条件。
+- **TwinParams.theta_r は `float | None` に変更 (Rev.1 からの必要な型修正)**:
+  κ≤0 (R と失策が無関係) の場合 `beta0/kappa` は無意味かつ `inf` は JSON
+  非互換になり得るため、`abs(kappa)>1e-9` を満たさない場合は `None` を返す。
+  `gate_passed` は既にこのケースで False になるため実害はない。
+- テストは `TensorStore` の duck-type フェイク (`FakeTensorStore`) で依存注入
+  (`SearchDaemonClient(spawn=...)` と同じ確立済みパターン) — 実ファイルを
+  書かず、`window()`/`dates`/`content_hash64`/`flags` のみ提供する。
+  `tests/test_digital_twin.py` (10ケース) 全 GREEN: fit_twin 決定論 /
+  walk-forward ゲート落ち (失策数不足・失策皆無の2種) / MC seed 再現性 /
+  MC 出力サイズの paths 非依存 (O(P) メモリの構造確認) / W-16 分離対照群 /
+  W-15 非有限値の入口拒否 (TwinParams 側・状態方程式入力側の2箇所) / W-19
+  ラベル漏洩回帰 / compute_oii の dyad スコープ限定ガード。
+
+### E4 完遂 (2026-07-07) — as-built
+
+`core/oracle.py` (新規): `INTERVENTION_BANK` (6件、全 target_lane を import 時
+assert — I-19) + `ORACLE_RULES` (6ルール、R-GATE-01/SWITCH-01/VOL-01/NIGHT-01/
+RECOVERY-01/SPEND-01) + `_assert_sterile()` (本番コードの実行時ガード) +
+`build_oracle_payload()` + `render_oracle_consult()`。
+
+- **oracle.payload / oracle.report の cmd 分離**: `facade.oracle_payload()`
+  (LLM なし・無菌 JSON のみ) と `facade.oracle_report()` (LLM 言語化込み) を
+  別関数・別 stdio cmd (`"oracle.payload"`/`"oracle.report"`) に分離した。
+  `twin.forecast`/`tensor.rebuild` も追加。`apps/desktop/src/lib/engine.ts` に
+  型付きラッパー4本を配線 (UI コンポーネントは Foxtrot 側で実装)。
+- **oracle_payload の合法出口の是正 (SPEC 本文の誤りを訂正)**: SPEC_ECHO_GENESIS
+  §4 は「consult の動的サフィックス」としていたが、gap_analysis の既存配置
+  (静的プレフィックス — profiler 再実行時のみ更新されるため KV キャッシュ効率が
+  高い) を確認し、`_oracle_section()` を `_gap_section()` と並べて
+  `build_static_prefix()` に置いた。interview_sim/gd_sim の講評フェーズにも
+  `_gap_section()` の直後へ追加 (議論フェーズには一切触れない — 既存の
+  非対称構造を維持)。**この配置判断は as-built が正であり、SPEC 本文の
+  「動的サフィックス」表記は誤り (次回 SPEC 改訂時に訂正すること)。**
+- **deep_profile への追加**: `profiler.build_profile()` の末尾に Echo パイプライン
+  (`tensor_store.build_tensor()` → `oracle.build_oracle_payload("global")`) を
+  try/except で追加 (失敗しても既存分析は維持 — LLM 分析と同じ耐性パターン)。
+  `deep_profile["oracle_payload"]` は自己バージョン (`"schema": "oracle_payload.v1"`)
+  を持つ新規トップレベルキーとして追加し、**外側の `"deep_profile.v6"` は
+  据え置いた** (gap_analysis/interpersonal 追加時の前例を踏襲。「読み手側の
+  追従」は新設の `_oracle_section()` そのものであり、既存の `_gap_section()`/
+  `update_user_profile()` に変更は不要だった)。
+- **dyad スコープは正直な unratable スタブ**: `scope="dyad"` は
+  `sufficiency.gate_passed=False` の空 payload を返す (グローバルデータでの
+  代用はしない — I-19/T-19 の温床)。
+- **境界防衛**: `engine_stdio.dispatch()` は `params.get()` ベースの既知キー
+  抽出のみ (未知パラメータは構造的に無視される) — `test_oracle.py` に
+  monkey-patch による回帰テストを追加し固定した。
+- **test_oracle.py が SKIP なしで全 GREEN** (E4 ゲート達成)。ケース: I-19
+  ホワイトリスト / 無菌検査 / **`build_oracle_payload()` の実テンソルによる
+  E2E** (下記の実バグ2件を検出した回帰ガード) / stdio 境界防衛。
+
+**実装中に発見した実バグ2件 (単体テストが実経路を一度も通していなかったため
+単体テストをすり抜けていた — N=3650 ベンチマークで初めて発覚)**:
+1. `TensorStore.close()` と同型の T-14: `build_oracle_payload()` 自身が
+   `window()` の戻り値 (`values`/`mask`) を保持したまま `store.close()` を
+   呼んでおり `BufferError` になっていた。coupling 計算後、必要な値
+   (`n_rows`/`dead_lanes`/`coverage`) を先に確定させてから `del values, mask`
+   で明示的に手放す修正を入れた。
+2. `tensor_store.py` が `paths.TENSOR_GLOBAL_BIN`/`tensor_dyad_bin` を
+   再エクスポートしておらず、`oracle.py`/`facade.py` の
+   `tensor_store.TENSOR_GLOBAL_BIN` 参照が `AttributeError` になっていた。
+   `tensor_store.py` へ `from .paths import TENSOR_GLOBAL_BIN, tensor_dyad_bin`
+   を追加して解決。
+**教訓**: hand-crafted payload dict によるテスト (E0/E4 の隔離ガード検証) は
+実配線の構造は検証するが、実コードパスの実行は検証しない。**「生成物の形」を
+テストするテストと「生成する経路」を実行するテストは別物であり、両方が
+無ければ E2E バグは踏めない。** `test_build_oracle_payload_end_to_end_real_tensor`
+をこの教訓の回帰ガードとして残した。
+
+**N=3650 (10年相当) 実測 — E5 (C++カーネル) 着手条件の判定**:
+```
+tensor build:                                   ~230-330 ms
+build_oracle_payload (coupling+twin+MC+無菌検査): ~1,150-1,810 ms
+TOTAL:                                          ~1.6-2.2 秒 (< 3000ms ゲート)
+```
+**E5 着手条件 (3000ms 超過) を満たさない — E5 は現時点で着手しない。**
+2回目実行 (テンソル再構築 → payload 再計算のフルサイクル) でも `TensorStore`
+の解放 (T-14) が正しく機能し、ハンドルリークなく完走することを確認した。
+
+**アーキテクトへの確認待ち事項 (Sonnet5 の判断で最小拡張した箇所)**:
+1. `cal_private_hours` (lane 9): calendar.json は開始時刻のみで終了時刻を
+   持たない (`calendar_manager.py`)。「合計時間」の真値は測定不能なため、
+   1 件あたり `PRIVATE_EVENT_NOMINAL_HOURS = 1.5` の名目値で近似した
+   (`tensor_store.py` 内に理由を明記)。
+2. `build_tensor()` の実引数に `line_messages`/`group_contacts`/`contact`
+   (keyword-only) を追加した。SPEC の位置引数シグネチャ (`daily, dyads, out_path,
+   scope, alias`) はそのまま維持しているが、dyads (履歴全体の集計値) には
+   日付分解能が無く、lane 11-17 (LINE 由来) の日次集計には日付付き生メッセージ
+   が別途必要なため。LINE のバースト抽出/摩擦検出は `line_telemetry.py` の
+   既存実装 (DL1) を呼ぶのみで、状態機械の再実装はしていない。
+3. dyad スコープ (`scope="dyad"`) の lane 5-7 (`spend_tagged` 読み替え) は
+   タグ規則の config が現時点で存在しないため、構造 (flags bit0/ファイル名) は
+   実装したが値は常に mask=0 のまま (未実装として明示。E2 以降で config が
+   定義されたら差し替える)。
+
+---
+
+## 13. Target Foxtrot — UI/UX 設計のみ完了 (`docs/SPEC_FOXTROT_UI.md`。実装は全て未着手)
+
+フロントエンド (Tauri + React) の設計仕様。**§3.4 (React UI 規約) が上位法** —
+SPEC はその適用解釈を確定させるもの。コードより先に存在する凍結事項:
+
+1. **ライブラリ 0 依存を再確認**: Tailwind / Framer Motion / Recharts / D3 /
+   Three.js は SPEC §0 で個別に検討の上**全て却下済み**。再提案するな。
+   グラフは全てインライン SVG (座標は閉形式の三角関数 — 力学レイアウトの
+   揺らぎは決定論の放棄)。
+2. **デザイントークン (F-1)**: 色は App.css から抽出した 15 トークンで閉じる。
+   新しい hex / リテラル px の新規記述はレビュー落ち。F0 (トークン移行) の
+   ゲートは「視覚的差分ゼロ」。
+3. **F-5 (最重要)**: Echo/twin/oracle のデータで**セッション中の面接 UI を
+   駆動しない** (ツイン予測 → UI 妨害 → 成績低下 → 予測的中、の自己成就予言
+   ループ = 罠 T-8 の UI 版)。接続点はセッション前ブリーフィングと講評後表示
+   の 2 つだけ。TensionMeter はセッション内観測量のみ・表示専用・非永続。
+4. **運動の法 (F-3)**: 状態フィードバックの transition (--t-fast 120ms,
+   opacity/transform) のみ。自発的に動く UI (点滅・パルス・パーティクル) 禁止。
+   prefers-reduced-motion 対応必須。
+5. **PROBE タブは D2 + E4 完成が前提条件** — プレースホルダタブの追加も禁止。
+6. UI は要約してよいが**捏造してはならない** (偽の数値・偽のランダム性・
+   偽の緊急性の禁止 — 憲法 6 の UI 側対偶)。
+
+---
+
+## 14. インシデント 2026-07-07: metadata.json 4.2GB 肥大 (IMP-1 是正指令)
+
+### 検死結果 (読み取り専用フォレンジックで確定した事実)
+
+- 台帳エントリは **208 件・chunk_id 重複ゼロ・単一世代** — LSM (Charlie) の
+  追記/墓標/コンパクション機構は**無罪**。
+- 肥大は約 195 件の「鯨チャンク」(各 ~21.6MB) の text/conversation_sessions
+  フィールド内部にあり、中身は**同一メッセージ列の多重反復** (本文・実名を
+  含むためログ・ドキュメントへの引用禁止。検死サンプルは確認後に削除済み)。
+- 真犯人は **import 層の冪等性欠如**: `facade._append_line_text` は無条件
+  append であり、`data/raw/line_history.txt` に **同一エクスポートが 12 回**
+  取り込まれていた ([LINE] ヘッダ 12 個 / 135,225 行中ユニーク 53,058 行 /
+  最頻行の重複度 48 = 12 インポート × 同一分内の実反復 ~4)。
+- 増幅機構: 重複メッセージが `extract_conversation_sessions` のギャップ検出を
+  破壊しセッションが橋渡しされて巨大化・多数日にまたがり、`data_merger` は
+  「その日を含む全セッションの全文」を**各日に**添付するため乗算複製、さらに
+  チャンクが text と conversation_sessions の両方に同内容を持つため倍加。
+  7.3MB (raw) → 4.2GB (台帳) の ~600 倍増幅はこの合成である。
+
+### IMP-1 是正指令 (実装は Sonnet5。ui_smoke が赤い間、E4 は未完了扱い)
+
+1. **隔離 (証拠保全 + 解除)**: `data/processed/_quarantine_20260707/` を作り
+   metadata.json / segments.json / vectors.bin / vectors.seg-*.bin を **move**
+   (rename。同一ボリュームで即時)。tensor_*.bin・deep_profile・salt・
+   telemetry・bounty には触れない。実行前にエンジンプロセス不在を確認
+   (mmap 保持者ゼロは検死時に確認済み)。**raw (line_history.txt) は改変しない**
+   — 記録は聖域。修復は分析・ロード層で行う。
+2. **根治 = ロード層の多重集合デデュープ**: `profiler.load_line_messages()` に
+   エクスポートブロック単位 ([LINE] ヘッダ区切り) の**多重集合和**を実装する。
+   キー (contact, date, time, sender, text) の出現数を各ブロック内で数え、
+   ブロック間では **max を採る (sum ではない)**。同一分内の本物の連投
+   (同文を 2 回送る) は 1 ブロック内の多重度 2 として保存され、12 回の再取込は
+   max=1 に潰れる — 「実データの反復」と「取込の重複」を区別できる唯一の
+   決定論的意味論。対照群テスト必須: (a) 同一エクスポート 2 回取込 → 件数不変、
+   (b) 部分重複エクスポート (旧 ⊂ 新) → 和集合、(c) **1 ブロック内の本物の
+   連投は失われない**。
+3. **トリップワイヤ**: `_save_meta` に台帳シリアライズサイズの上限
+   (200MB) を置き、超過時は黙って書かず診断メッセージ (import 重複を疑え) 付きで
+   即エラー。静かな破損を騒がしい失敗に変換する。
+4. **再構築と検収**: 修復後にフレッシュ再構築 (隔離により legacy 不在 →
+   pipeline がゼロから構築)。ゲート: 全 13 スイート + **ui_smoke GREEN**
+   (これが E4 ゲートの残項目)。完走後、隔離ディレクトリは指揮官の承認を得て削除。
+
+**教訓 (T-20 として凍結)**: 追記式取込 (append) は冪等ではない。取込 API を
+書くときは「同じものを 2 回入れたら何が起きるか」を最初に問え。増幅は
+単層では起きない — 「重複 (import) × 橋渡し (session) × 日数複製 (merger) ×
+二重保持 (chunk)」のような**無害に見える設計の積が爆発する**。
+
+### IMP-2 是正指令 (2026-07-07 同日再発。IMP-1 完了後、実データ検証で発覚)
+
+**再発の経緯**: IMP-1 (T-20 デデュープ) 適用後、隔離済みディレクトリからの
+フレッシュ再構築で `ui_smoke.py` を実データに対して実行したところ、
+`_save_meta` の 200MB トリップワイヤが **8,515.5MB** で発火 (IMP-1 前の
+4.2GB より悪化)。デデュープ自体は正常動作していたが、デデュープの
+**下流**で新たな増幅源が発覚した。
+
+**検死確定事実**:
+- **T-21 (is_self 全滅)**: `"is_self": sender == "自分"` のハードコード判定が
+  実 LINE エクスポート (本人も実名で記録される) で 129,635 件中 **9 件**しか
+  一致せず、`extract_conversation_sessions` の「返信待ちセッション
+  (`awaiting_user`) は最大 24h 超でもクローズしない」ルールが恒久的に
+  解除されず、**253 日・121,818 ターンの巨大セッション**が形成された。
+- **T-22 (日次フル添付の増幅)**: `data_merger.py` がセッション全文を
+  「セッションが触れる全日」に複製添付する設計だったため、鯨セッション
+  1 個 (32 万文字) × 253 日 = **8.2 億文字**の添付総量になった。
+- **T-23 (ヘッダ無し追記によるブロック融合)**: `[LINE]` ヘッダを伴わない
+  追記がブロック境界を消し、T-20 の「ブロック間 max」が「ブロック内 sum」
+  に退化 (多重度 6/12/18/24/30/36 の系列として検出)。
+- **T-25 (グループチャットの dyad 前提破綻。T-21〜24 是正後に新規発覚)**:
+  is_self を正しく直した後も同一コンタクトで再度トリップワイヤが発火。
+  検死の結果、そのコンタクトは **sender が 11 人のグループチャット**で
+  あり、本人はほぼ発言していなかった (46,318 件中 3 件のみ)。
+  `extract_conversation_sessions` の状態機械は「本人の返信を待つ 1 対 1
+  dyad」を前提としており、本人が寡黙な大人数グループに適用すると
+  「返信待ち」のまま無限に蓄積し続ける。T-24 トリップワイヤが実際に
+  この実例を正しく検知・阻止した。
+
+**是正内容 (実装は Sonnet5、全て `tests/test_line_dedup.py` に回帰ガード
+11 ケースあり)**:
+1. **T-21**: `profiler._resolve_self_by_contact()` — is_self をコンタクト
+   単位の 3 段階決定論で解決 (① `user_profile.fixed_attributes
+   .line_self_name` 明示設定 → ② `"自分"/"self"` リテラル → ③ フォール
+   バック: **真の 1 対 1 (sender がちょうど 2 種) コンタクト全体**に共通する
+   sender の積集合)。感情推定・ハードコード禁止、集合演算のみ。
+2. **T-22**: `_session_from_buffer()` に `turns_by_date`/`responses_by_date`
+   を追加し、`_render_text`/`load_daily_contexts` は当日分のターンのみを
+   添付する (全ターンは必ずどこか 1 日にのみ属し情報ロスなし。セッション
+   自体の `text`/`turns`/`stimulus`/`response` は dyad 分析用の完全版として
+   従来通り保持)。
+3. **T-23**: `load_line_messages` が日付の後退 (`cur_date` が過去に戻る)
+   もブロック境界とみなす。さらに `facade.format_line_import()` を新設し、
+   全 3 つの append 経路 (`_append_line_text` / `import_line_history` /
+   `ui_tui/app.py::_import_line_file`) がヘッダ無しテキストに自前ヘッダを
+   付与してから追記するよう統一 (DRY 化も兼ねる)。
+4. **T-24**: `extract_conversation_sessions` に span>30日 or turns>5000 の
+   トリップワイヤ。200MB ワイヤより上流で、より具体的な診断とともに
+   騒がしく死ぬ。
+5. **T-25 Rev.1 (棄却)**: 初版は「sender が 3 人以上のコンタクトを session
+   抽出から完全除外」だったが、これは「情報ロスゼロ」原則違反としてアーキ
+   テクト自身が自己監査で訂正した (Architect's Note 参照)。グループの会話は
+   「本人の対話」ではないが「本人の認知への入力」であり、丸ごと破棄すると
+   デジタルツインの解像度 (周囲環境の認識) を損なう。
+6. **T-25 Rev.2 (確定)**: グループチャットを「状態レスの受動観測ログ」
+   として扱う。`data_merger.extract_group_daily_logs()` — 状態機械
+   (`awaiting_user`) を一切通さず `(contact, date)` で単純に群化・時刻順
+   整列するだけの決定論的処理。増幅率は恒等的に 1 (各メッセージが自分の
+   date キーにちょうど1回だけ属する) であり、鯨が構造的に発生し得ない。
+   DailyContext に新フィールド `group_line_text` / `has_line_group` /
+   sources の `"line_group"` を追加、`_render_text` に
+   `## LINE_GroupActivity (受動観測)` セクションを新設。**隔離ガード
+   (最重要)**: `line_self_text`/`self_text`/`has_line` (dyad 意味論) には
+   一切合流させない — simulated persona (§7.1.4) と同型の非対称
+   (記録としては本物、自己分析チャネルからは除外)。
+   `profiler._resolve_self_by_contact` の tier3 積集合計算は
+   `len(senders) == 2` (グループを含まない真の dyad のみ) に限定し、
+   グループの sender 集合が積集合を空へ潰す汚染を防止 (Rev.1 から継続)。
+
+**効果 (実データ実測)**: metadata.json **8,515.5MB → 80,041 バイト
+(T-21〜24) → 5,953,139 バイト (T-25 Rev.2 適用、グループ観測ログ復元後)**。
+約 6MB は raw テキスト量に対する線形成長であり、200MB トリップワイヤに
+対して安全マージンを持つ。セッション最大 span **253 日 → 2 日**。日次
+添付総量 **8.2 億文字 → 1,184 文字** (dyad 分)。`ui_smoke.py` 実データ実行で
+ALL PASS 確認済み — **E4 正式クローズ**。回帰ガードは `tests/test_line_dedup.py`
+に 15 ケース (T-20〜T-25 Rev.2 の増幅ゼロ証明・鯨阻止・隔離ガード・dyad
+不変を含む)。
+
+**教訓 (T-21〜T-25 として凍結)**: デデュープ (T-20) は「取込の重複」を
+消したが、「取込の下流にあるドメインロジック側の前提」(is_self・dyad・
+日次添付) が実データの多様性 (実名記録・グループチャット) を想定して
+いなければ、別の増幅源が新たに顕在化する。**1 つの層を直しても、
+「疑ったら計測しろ」を隣接する全層に対して再度実行せよ** — 本インシデント
+は IMP-1 → IMP-2 → (T-21〜24 是正後の再計測で) T-25 Rev.1 → (情報ロスゼロ
+原則との衝突で自己監査) T-25 Rev.2、と多段階の実測と自己訂正を経て
+初めて根治した。**「増幅を止める」だけでなく「受け皿を設計する」こと**
+— ガードは破棄ではなく隔離であるべき、という訂正も含めて記録する。
+
+## 15. The Final 5 Legacies — 青写真のみ (`docs/MASTER_PLAN_LEGACIES.md`)
+
+将来ターゲットの青写真 (詳細 SPEC は各着手時に錬成): L1 LARYNX (発話物理
+テレメトリ — 音調感情推定は永久禁止) / L2 SCAVENGER (デジタル排気 importer —
+coverage() 必須の型強制) / L3 BLACKBOX (実戦結果台帳 — 実選考の合否による
+システム校正。面接官プロファイル構築禁止) / L4 CHRONOSCOPE (介入効果の
+会計監査 — n=1 の効果推定を「証明」と呼ぶな) / L5 PHANTOM (合成ペルソナ
+known-answer 校正 — fixture-blindness 規律)。**着手順序は PHANTOM が最初**
+(校正装置なしの計測器増築は倒錯)。着手時は個別 SPEC → 憲法ガード RED → 実装。
+
