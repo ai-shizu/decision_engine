@@ -25,6 +25,13 @@ from .paths import DIARY_MD, LINE_HISTORY, PROJECT_ROOT as ROOT
 
 IDLE_CLOSE = timedelta(minutes=30)
 
+# T-24 (IMP-2): is_self 判定の失敗 (T-21) はセッションが「返信待ち」のまま
+# 無限に継続する退化を招き、日次添付 (T-22) と合成して致命的な台帳肥大を
+# 引き起こす (docs/AI_SKILLS.md §14)。200MB トリップワイヤより上流で、
+# より具体的な診断とともに騒がしく死ぬための閾値。
+_MAX_SESSION_SPAN_DAYS = 30
+_MAX_SESSION_TURNS = 5000
+
 _DATE_PATTERNS = [
     re.compile(r"^(\d{4})-(\d{1,2})-(\d{1,2})"),
     re.compile(r"^(\d{4})/(\d{1,2})/(\d{1,2})"),
@@ -67,10 +74,63 @@ def _fmt_session_range(start: datetime, end: datetime) -> str:
             f"{end.strftime('%Y-%m-%d %H:%M')}")
 
 
+def _group_chat_contacts(line_messages: list[dict]) -> set[str]:
+    """T-25 (IMP-2): sender が3人以上のコンタクット = グループチャット。
+
+    ConversationSession の awaiting_user 状態機械は「本人の返信を待つ1対1
+    dyad」を前提とする。本人がほぼ発言しないグループチャットにこれを適用
+    すると「返信待ち」のまま無限に蓄積し続ける (T-24 トリップワイヤが実際に
+    検知した実例)。1対1分析 (dyad telemetry/coupling/gap_analysis) の設計
+    意図とも整合するため、ここで自動除外する (docs/AI_SKILLS.md §14)。
+    """
+    per_contact: dict[str, set[str]] = {}
+    for m in line_messages:
+        per_contact.setdefault(m["contact"], set()).add(m["sender"])
+    return {c for c, senders in per_contact.items() if len(senders) >= 3}
+
+
+def extract_group_daily_logs(line_messages: list[dict]) -> dict[str, list[str]]:
+    """T-25 Rev.2 (IMP-2): グループチャット (sender>=3) を「受動観測ログ」
+    として状態レスに日次平坦化する (docs/AI_SKILLS.md §14)。
+
+    ConversationSession の awaiting_user 状態機械は一切通さない —
+    (contact, date) で単純に群化し時刻順に整列するだけの決定論的処理。
+    増幅率は恒等的に 1 (各メッセージは自分の date キーにちょうど1回だけ
+    属する) であり、鯨セッション (T-21/T-24) が構造的に発生し得ない。
+
+    戻り値: {date: [グループ活動ブロック文字列, ...]}。self_text/
+    line_self_text/has_line (dyad 意味論) には合流させない — 呼び出し側
+    (load_daily_contexts) の責務として厳格に隔離すること。
+    """
+    group_contacts = _group_chat_contacts(line_messages)
+    by_group_date: dict[tuple[str, str], list[dict]] = {}
+    for m in line_messages:
+        if m["contact"] not in group_contacts:
+            continue
+        d = normalize_date(m.get("date") or "")
+        if not d or not m.get("time"):
+            continue
+        by_group_date.setdefault((m["contact"], d), []).append(m)
+
+    out: dict[str, list[str]] = {}
+    for (contact, d), msgs in sorted(by_group_date.items()):
+        msgs = sorted(msgs, key=lambda x: x["time"])
+        block = [f"[Group: {contact} | {len(msgs)}件]"]
+        block.extend(f"- {m['time']} {m['sender']}: {m['text']}" for m in msgs)
+        out.setdefault(d, []).append("\n".join(block))
+    return out
+
+
 def extract_conversation_sessions(line_messages: list[dict]) -> list[dict]:
-    """全LINEメッセージから ConversationSession を状態保持型で抽出する。"""
+    """全LINEメッセージから ConversationSession を状態保持型で抽出する。
+
+    T-25 (IMP-2): グループチャット (_group_chat_contacts) はここで除外する。
+    """
+    group_contacts = _group_chat_contacts(line_messages)
     by_contact: dict[str, list[dict]] = {}
     for m in line_messages:
+        if m["contact"] in group_contacts:
+            continue
         d = normalize_date(m.get("date") or "")
         if not d or not m.get("time"):
             continue
@@ -82,7 +142,16 @@ def extract_conversation_sessions(line_messages: list[dict]) -> list[dict]:
     def _finalize(active: dict | None, contact: str) -> None:
         if active is None or active["awaiting_user"]:
             return  # 未返信セッションは確定しない
-        sessions.append(_session_from_buffer(active, contact))
+        session = _session_from_buffer(active, contact)
+        span_days = len(session["dates"])
+        if span_days > _MAX_SESSION_SPAN_DAYS or session["turn_count"] > _MAX_SESSION_TURNS:
+            raise RuntimeError(
+                f"[{contact}] の LINE セッションが異常肥大 (span={span_days}日 / "
+                f"turns={session['turn_count']}) — is_self 判定の失敗による"
+                "セッション無限継続 (T-21) を疑え。詳細は docs/AI_SKILLS.md "
+                "§14 (IMP-2) を参照。"
+            )
+        sessions.append(session)
 
     for contact, msgs in by_contact.items():
         msgs.sort(key=lambda x: x["dt"])
@@ -143,6 +212,18 @@ def _session_from_buffer(active: dict, contact: str) -> dict:
     opponent = " / ".join(m["text"] for m in msgs if not m["is_self"])
     user = " / ".join(m["text"] for m in msgs if m["is_self"])
 
+    # T-22 (IMP-2): DailyContext への添付はセッション全文ではなく当日分のみに
+    # 絞る (docs/AI_SKILLS.md §14)。全ターンをここで日付別に分解しておき、
+    # 情報ロスなく (全ターンが必ずどこかの日付キーに1回だけ入る) 参照できる
+    # ようにする。セッション自体 (text/turns/stimulus/response) は dyad 分析
+    # 用の完全版として従来通り保持する。
+    turns_by_date: dict[str, list[str]] = {}
+    responses_by_date: dict[str, list[str]] = {}
+    for m, line in zip(msgs, turn_lines):
+        turns_by_date.setdefault(m["date"], []).append(line)
+        if m["is_self"]:
+            responses_by_date.setdefault(m["date"], []).append(m["text"])
+
     return {
         "contact": contact,
         "start_date": dates[0],
@@ -151,6 +232,8 @@ def _session_from_buffer(active: dict, contact: str) -> dict:
         "header": header,
         "text": header + "\n" + "\n".join(turn_lines),
         "turns": turn_lines,
+        "turns_by_date": turns_by_date,
+        "responses_by_date": responses_by_date,
         "stimulus": opponent,
         "response": user,
         "response_latency": latency_str,
@@ -170,7 +253,8 @@ def _format_calendar_events(events: list[dict]) -> str:
 
 def _render_text(date: str, calendar_events: list[dict], finance_text: str,
                  diary_text: str, consultation_text: str,
-                 sessions_on_day: list[dict]) -> str:
+                 sessions_on_day: list[dict],
+                 group_lines: list[str] | None = None) -> str:
     lines = [f"# DailyContext: {date}", "## Calendar"]
     lines.append(_format_calendar_events(calendar_events))
     lines.append("## Finance (家計簿)")
@@ -180,13 +264,29 @@ def _render_text(date: str, calendar_events: list[dict], finance_text: str,
     lines.append("## AI_Consultations")
     lines.append(consultation_text)
     lines.append("## LINE_ConversationSessions")
-    if sessions_on_day:
-        for s in sessions_on_day:
-            lines.append(s["header"])
-            lines.extend(s["turns"])
+    # T-22 (IMP-2): 複数日にまたがるセッションでも、この日には当日分のターン
+    # のみを載せる (docs/AI_SKILLS.md §14)。全文を毎日複製すると span(日数)
+    # に比例して台帳が増幅する — 全ターンは必ずどこか1日にのみ属する。
+    rendered_any = False
+    for s in sessions_on_day:
+        day_turns = s.get("turns_by_date", {}).get(date, [])
+        if not day_turns:
+            continue
+        rendered_any = True
+        lines.append(s["header"])
+        lines.extend(day_turns)
+        lines.append("")
+    if not rendered_any:
+        lines.append("(この日の確定セッションなし)")
+    lines.append("## LINE_GroupActivity (受動観測)")
+    # T-25 Rev.2 (IMP-2): グループは対話ではなく「その日に観測された環境
+    # ログ」として当日分のみ平坦記録する。状態機械を通さないため増幅なし。
+    if group_lines:
+        for block in group_lines:
+            lines.append(block)
             lines.append("")
     else:
-        lines.append("(この日の確定セッションなし)")
+        lines.append("(この日のグループ観測なし)")
     return "\n".join(lines).strip()
 
 
@@ -201,6 +301,7 @@ def load_daily_contexts() -> list[dict]:
     diary_entries = profiler.load_diary_entries()
     line_messages = profiler.load_line_messages()
     all_sessions = extract_conversation_sessions(line_messages)
+    group_daily_logs = extract_group_daily_logs(line_messages)
     calendar = load_calendar()
     consultations_by_date = load_consultations()
     finance_by_date = load_finance()
@@ -256,12 +357,29 @@ def load_daily_contexts() -> list[dict]:
             if "line" not in dc["sources"]:
                 dc["sources"].append("line")
 
+    # T-25 Rev.2 (IMP-2): グループ観測日を sources に line_group を付与
+    # (dyad 意味論の "line" とは独立。has_line/line_self_text には触れない)。
+    for d in group_daily_logs:
+        dc = day(d)
+        if "line_group" not in dc["sources"]:
+            dc["sources"].append("line_group")
+
     contexts = []
     for d in sorted(days):
         dc = days[d]
         day_sessions = [s for s in all_sessions if d in s["dates"]]
-        line_text = "\n".join(s["text"] for s in day_sessions)
-        line_self = "\n".join(s["response"] for s in day_sessions if s["response"])
+        # T-22 (IMP-2): line_text/line_self も当日分のみ (全文複製の増幅源だった)
+        line_text = "\n".join(
+            s["header"] + "\n" + "\n".join(s["turns_by_date"][d])
+            for s in day_sessions if s["turns_by_date"].get(d)
+        )
+        line_self = "\n".join(
+            t for s in day_sessions for t in s.get("responses_by_date", {}).get(d, [])
+        )
+        # T-25 Rev.2 (IMP-2): グループ観測は独立フィールド。line_self_text/
+        # self_text/has_line (dyad 意味論) には一切合流させない (隔離ガード)。
+        group_lines_today = group_daily_logs.get(d, [])
+        group_line_text = "\n\n".join(group_lines_today)
         cal_events = dc["calendar_events"]
         cal_text = _format_calendar_events(cal_events)
         consult_entries = dc["consultations"]
@@ -274,7 +392,7 @@ def load_daily_contexts() -> list[dict]:
             "title": d,
             "date": d,
             "text": _render_text(d, cal_events, finance_text, dc["diary_text"],
-                                 consult_text, day_sessions),
+                                 consult_text, day_sessions, group_lines_today),
             "calendar_text": cal_text,
             "calendar_events": cal_events,
             "finance_text": finance_text,
@@ -284,11 +402,13 @@ def load_daily_contexts() -> list[dict]:
             "diary_text": dc["diary_text"],
             "line_text": line_text,
             "line_self_text": line_self,
+            "group_line_text": group_line_text,
             "self_text": "\n".join(p for p in self_parts if p.strip()).strip(),
             "conversation_sessions": day_sessions,
             "sources": dc["sources"],
             "has_diary": "diary" in dc["sources"],
             "has_line": "line" in dc["sources"],
+            "has_line_group": "line_group" in dc["sources"],
             "has_calendar": "calendar" in dc["sources"],
             "has_consultation": "consultation" in dc["sources"],
             "has_finance": "finance" in dc["sources"],

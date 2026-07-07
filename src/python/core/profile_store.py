@@ -17,6 +17,9 @@ FIXED_ATTRIBUTES = {
     "weight": "",
     "address": "",
     "occupation": "",
+    # T-21 (IMP-2): is_self 判定 tier1 の明示上書き用。SETTINGS UI には未露出
+    # (Foxtrot 凍結中) — 直接 JSON 編集 or 将来の API 経由でのみ設定可能。
+    "line_self_name": "",
 }
 
 FIXED_ATTRIBUTE_LABELS = {

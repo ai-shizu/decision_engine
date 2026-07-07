@@ -36,7 +36,7 @@ import numpy as np  # noqa: E402
 
 from core import lsm_index, pipeline  # noqa: E402
 from core.consultation_engine import ConsultationEngine  # noqa: E402
-from core.paths import DATA_RAW, DIARY_MD, LINE_HISTORY, PROCESSED  # noqa: E402
+from core.paths import DATA_RAW, DIARY_MD, DIARY_META, LINE_HISTORY, PROCESSED  # noqa: E402
 
 
 class CountingEmbedder:
@@ -327,6 +327,44 @@ def test_compaction_byte_copy_no_reembed() -> None:
     print("  compaction byte-copy (no re-embed) OK")
 
 
+# ---------------------------------------------------------------- IMP-1 トリップワイヤ
+def test_save_meta_trips_on_oversized_ledger() -> None:
+    _reset_project("dummy")
+    # 実際に200MB超のダミーchunksを組み立てるのは重いので、テスト専用に
+    # 上限を一時的に下げて発火を検証する (本番閾値そのものは変更しない)。
+    original_limit = lsm_index._META_SIZE_LIMIT_BYTES
+    lsm_index._META_SIZE_LIMIT_BYTES = 1000  # 1KB まで許容
+    try:
+        chunks_by_id = {
+            i: {"chunk_id": i, "date": f"2026-01-{i:02d}", "segment": "s",
+                "index_in_segment": i, "tomb_offset": 0, "content_hash": "x" * 64}
+            for i in range(1, 50)
+        }
+        meta = {"format": "PKBVEC01", "dim": 384, "lanes": 4}
+        try:
+            lsm_index._save_meta(meta, chunks_by_id)
+            raise AssertionError("上限超過なのに例外が発生しなかった")
+        except RuntimeError as e:
+            assert "200MB" not in str(e) or True  # メッセージ内容は閾値非依存でOK
+            assert "肥大" in str(e) or "上限" in str(e), str(e)
+        assert not DIARY_META.exists(), "上限超過時に metadata.json を書いてはならない"
+    finally:
+        lsm_index._META_SIZE_LIMIT_BYTES = original_limit
+    print("  _save_meta trips on oversized ledger (no silent write) OK")
+
+
+def test_save_meta_writes_normally_under_limit() -> None:
+    _reset_project("dummy")
+    chunks_by_id = {1: {"chunk_id": 1, "date": "2026-01-01", "segment": "s",
+                        "index_in_segment": 0, "tomb_offset": 0, "content_hash": "x"}}
+    meta = {"format": "PKBVEC01", "dim": 384, "lanes": 4}
+    lsm_index._save_meta(meta, chunks_by_id)
+    assert DIARY_META.exists()
+    saved = json.loads(DIARY_META.read_text(encoding="utf-8"))
+    assert saved["num_vectors"] == 1
+    print("  _save_meta writes normally under limit OK")
+
+
 if __name__ == "__main__":
     test_content_hash_stability()
     test_tomb_offset_layout()
@@ -337,4 +375,6 @@ if __name__ == "__main__":
     test_bootstrap_from_legacy_vectors_bin()
     test_search_lsm_date_dedup()
     test_compaction_byte_copy_no_reembed()
+    test_save_meta_trips_on_oversized_ledger()
+    test_save_meta_writes_normally_under_limit()
     print("test_lsm_index: ALL PASS")

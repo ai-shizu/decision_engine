@@ -688,7 +688,7 @@ class DecisionDashboard(App):
                     "LINE履歴 (.txt) のみ取り込めます")
                 return
             with open(LINE_HISTORY, "a", encoding="utf-8") as f:
-                f.write("\n" + text.strip() + "\n")
+                f.write("\n" + facade.format_line_import(text, path.name) + "\n")
             self.call_from_thread(
                 self._status, "import-status",
                 f"LINE履歴を取り込みました: {path.name} — 裏で価値観を再分析中…")

@@ -137,13 +137,25 @@ def _load_meta() -> dict:
             "lsm": True, "chunks": []}
 
 
+_META_SIZE_LIMIT_BYTES = 200 * 1024 * 1024  # IMP-1 トリップワイヤ (docs/AI_SKILLS.md §14)
+
+
 def _save_meta(meta: dict, chunks_by_id: dict[int, dict]) -> None:
     meta["chunks"] = [chunks_by_id[i] for i in sorted(chunks_by_id)]
     meta["num_vectors"] = len(chunks_by_id)
     meta["lsm"] = True
+    serialized = json.dumps(meta, ensure_ascii=False, indent=2)
+    size = len(serialized.encode("utf-8"))
+    if size > _META_SIZE_LIMIT_BYTES:
+        raise RuntimeError(
+            f"metadata.json のシリアライズサイズが上限を超過"
+            f" ({size / 1e6:.1f}MB > {_META_SIZE_LIMIT_BYTES / 1e6:.0f}MB) — "
+            "書き込みを中止した。台帳の異常肥大 (import 重複・セッション橋渡し"
+            "の増幅など) を疑え。詳細は docs/AI_SKILLS.md §14 (IMP-1) を参照。"
+        )
     DIARY_META.parent.mkdir(parents=True, exist_ok=True)
     tmp = DIARY_META.with_suffix(".json.tmp")
-    tmp.write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
+    tmp.write_text(serialized, encoding="utf-8")
     os.replace(tmp, DIARY_META)
 
 

@@ -21,6 +21,7 @@ import json
 import re
 import statistics
 import sys
+from collections import Counter
 from datetime import datetime, date, timedelta
 from .paths import DEEP_PROFILE, DIARY_MD, LINE_HISTORY, PROJECT_ROOT as ROOT, USER_PROFILE
 
@@ -198,29 +199,126 @@ def generate_dummy_line_history(path: Path) -> None:
     print(f"[profiler] ダミーLINE履歴を生成: {path}")
 
 
+def _declared_self_name() -> str:
+    """user_profile.json に明示設定された本人の LINE 表示名 (T-21 tier1)。"""
+    from .profile_store import load_user_profile
+
+    name = load_user_profile().get("fixed_attributes", {}).get("line_self_name", "")
+    return name.strip()
+
+
+def _resolve_self_by_contact(blocks: list[list[tuple]]) -> dict[str, str]:
+    """T-21 (IMP-2): is_self をコンタクト単位の3段階決定論で解決する。
+
+    感情推定・ハードコードなし、集合演算のみ:
+      1. user_profile 明示設定 (line_self_name) がそのコンタクトの sender
+         集合に含まれていれば採用。
+      2. "自分"/"self" (ダミーデータ互換の既定リテラル) が含まれていれば採用。
+      3. フォールバック: 「真の1対1 (sender がちょうど2種の) コンタクト」
+         全体に共通する sender の積集合が単一要素ならそれを採用。実 LINE
+         エクスポートは自分の表示名が全コンタクトで一貫するため、複数
+         コンタクトを横断する唯一の共通 sender = 本人となる。sender が
+         1種類しかない自己メモ的コンタクトや、3人以上のグループチャット
+         (T-25) は積集合を汚染するため除外する — グループは自分がほぼ
+         発言しないことも多く、sender 集合に自分の表示名が含まれない
+         場合に積集合を空集合へ潰してしまう (docs/AI_SKILLS.md §14)。
+    戻り値: {contact: 本人 sender 名}。解決できないコンタクトは含めない
+    (安全側フォールバック — is_self=False のまま、データは失わない)。
+    """
+    per_contact: dict[str, set[str]] = {}
+    for block in blocks:
+        for contact, _date, _time, sender, _text in block:
+            per_contact.setdefault(contact, set()).add(sender)
+
+    declared = _declared_self_name()
+    dyad_sets = [senders for senders in per_contact.values() if len(senders) == 2]
+    common_fallback: str | None = None
+    if len(dyad_sets) >= 2:
+        common = set.intersection(*dyad_sets)
+        if len(common) == 1:
+            common_fallback = next(iter(common))
+
+    resolved: dict[str, str] = {}
+    for contact, senders in per_contact.items():
+        if declared and declared in senders:
+            resolved[contact] = declared
+        elif "自分" in senders:
+            resolved[contact] = "自分"
+        elif "self" in senders:
+            resolved[contact] = "self"
+        elif common_fallback is not None and common_fallback in senders:
+            resolved[contact] = common_fallback
+    return resolved
+
+
 def load_line_messages() -> list[dict]:
-    """line_history.txt をメッセージ単位にパースし source タグを付ける。"""
+    """line_history.txt をメッセージ単位にパースし source タグを付ける。
+
+    T-20/T-23 (IMP-1/IMP-2): 追記式取込 (import.line) は冪等ではなく、同一
+    エクスポートの再取込や `[LINE]` ヘッダの無い追記でブロック境界が失われ
+    うる。ブロックは `[LINE]` ヘッダに加え、日付の後退 (通常あり得ない逆行 —
+    ヘッダ無し追記の兆候) でも区切る。ブロック単位の多重集合として扱い、
+    キー (contact, date, time, sender, text) の出現数はブロック間で **max**
+    を採る (sum ではない)。1 ブロック内の多重度は「同一分内の本物の連投」
+    としてそのまま保存される (docs/AI_SKILLS.md §14)。
+    T-21 (IMP-2): is_self は _resolve_self_by_contact() の3段階決定論で解決
+    する (実 LINE エクスポートは本人も実名で記録されるため "自分" 固定判定
+    は実データで全滅する)。
+    """
     if not LINE_HISTORY.exists():
         generate_dummy_line_history(LINE_HISTORY)
 
-    messages: list[dict] = []
-    contact, cur_date = "不明", None
+    blocks: list[list[tuple]] = []
+    contact = "不明"
+    cur_date: str | None = None
+    prev_date: str | None = None
+    cur_block: list[tuple] = []
+
+    def _flush_block() -> None:
+        if cur_block:
+            blocks.append(cur_block)
+
     for line in LINE_HISTORY.read_text(encoding="utf-8").splitlines():
         m = re.match(r"^\[LINE\]\s*(.+?)とのトーク履歴", line)
         if m:
+            _flush_block()
+            cur_block = []
             contact = m.group(1).strip()
+            cur_date = None
+            prev_date = None
             continue
         m = re.match(r"^(\d{4}/\d{2}/\d{2})", line)
         if m:
-            cur_date = m.group(1)
+            new_date = m.group(1)
+            if prev_date is not None and new_date < prev_date:
+                _flush_block()
+                cur_block = []
+            cur_date = new_date
+            prev_date = new_date
             continue
         m = re.match(r"^(\d{1,2}:\d{2})\t([^\t]+)\t(.*)", line)
         if m:
-            messages.append({
-                "source": "line", "contact": contact, "date": cur_date,
-                "time": m.group(1), "sender": m.group(2), "text": m.group(3),
-                "is_self": m.group(2) == "自分",
-            })
+            cur_block.append((contact, cur_date, m.group(1), m.group(2), m.group(3)))
+    _flush_block()
+
+    self_by_contact = _resolve_self_by_contact(blocks)
+
+    merged_max: dict[tuple, int] = {}
+    for block in blocks:
+        counts = Counter(block)
+        for key, cnt in counts.items():
+            if cnt > merged_max.get(key, 0):
+                merged_max[key] = cnt
+
+    messages: list[dict] = []
+    for key, cnt in merged_max.items():
+        contact_k, date_k, time_k, sender_k, text_k = key
+        msg = {
+            "source": "line", "contact": contact_k, "date": date_k,
+            "time": time_k, "sender": sender_k, "text": text_k,
+            "is_self": sender_k == self_by_contact.get(contact_k),
+        }
+        messages.extend([msg] * cnt)
     return messages
 
 
@@ -998,6 +1096,20 @@ def build_profile(use_llm: bool = True) -> dict:
     print(f"[profiler] Gap分析: {len(gap_result['gaps'])} 件のギャップ検出 "
           f"(データ充足度 {gap_result['data_sufficiency']:.0%}、"
           f"対人ギャップ {len(social_gaps)} 件)")
+
+    # Target Echo (E1-E4): 日次テンソル (PKBTEN01) の全再構築 + oracle_payload。
+    # 再計算トリガは profiler 実行 / import.line のみ (I-3)。失敗しても既存の
+    # 分析結果 (gap_analysis 等) は維持する (LLM 分析と同じ耐性パターン)。
+    try:
+        from . import oracle as _oracle
+        from . import tensor_store as _tensor_store
+        _tensor_store.build_tensor(
+            daily, None, _tensor_store.TENSOR_GLOBAL_BIN, line_messages=msgs)
+        profile["oracle_payload"] = _oracle.build_oracle_payload("global")
+        print(f"[profiler] Echo: テンソル同期 + oracle_payload 更新 "
+              f"(gate_passed={profile['oracle_payload']['sufficiency']['gate_passed']})")
+    except Exception as e:
+        print(f"[profiler] Echo 分析失敗 (既存分析は維持): {type(e).__name__}: {e}")
 
     if use_llm:
         try:

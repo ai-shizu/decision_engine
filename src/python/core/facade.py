@@ -94,6 +94,74 @@ def compile_narrative(target_domain: str | None = None) -> dict:
     return _compile(get_engine(), target_domain=target_domain)
 
 
+def oracle_payload(scope: str = "global", alias: str | None = None) -> dict:
+    """Target Echo (E4): 無菌化された oracle_payload.v1 のみを返す (LLM 呼び出し
+    なし)。UI の数値表示・ui_smoke はこの経路だけで完結し、7B の生成を待たない
+    (SPEC_ECHO_GENESIS.md §5.10.5 の E4 実装ノート — oracle.payload/oracle.report
+    の cmd 分離)。"""
+    from . import oracle as _oracle
+    return _oracle.build_oracle_payload(scope, alias=alias)
+
+
+def oracle_report(scope: str = "global", alias: str | None = None,
+                  status: StatusCallback | None = None) -> dict:
+    """Target Echo (E4): oracle_payload + LLM による言語化。"""
+    from . import oracle as _oracle
+
+    if status:
+        status("Echo: テンソル・結合行列・ツインを評価中…")
+    payload = _oracle.build_oracle_payload(scope, alias=alias)
+    text = _oracle.render_oracle_consult(payload)
+    if payload["sufficiency"]["gate_passed"]:
+        if status:
+            status("Echo: 言語化を生成中…")
+        system = ("あなたは本人の物理量データ (LINE 上の観測範囲に限定) を"
+                 "解釈するアシスタントである。以下の事実のみを根拠に、"
+                 "新しい事実や介入を創作せず簡潔に助言せよ。")
+        analysis = get_engine().backend.generate(system, text)
+        import re as _re
+        analysis = _re.sub(r"<think>.*?</think>\s*", "", analysis, flags=_re.DOTALL).strip()
+    else:
+        analysis = text
+    return {"payload": payload, "analysis": analysis}
+
+
+def twin_forecast(scenario: dict, scope: str = "global", alias: str | None = None) -> dict:
+    """Target Echo (E4): モンテカルロ予測のみ (LLM なし)。"""
+    from . import digital_twin as _dt
+    from . import tensor_store as _ts
+
+    if scope == "dyad":
+        return {"gate_passed": False, "reason": "dyad focus 未配線"}
+    path = _ts.TENSOR_GLOBAL_BIN
+    if not path.exists():
+        return {"gate_passed": False, "reason": "tensor 未構築"}
+    store = _ts.TensorStore(path)
+    try:
+        params = _dt.fit_twin(store)
+        if not params.gate_passed:
+            return {"gate_passed": False, "reason": "walk-forward スキルゲート未達",
+                   "bss": params.bss, "n_lapse_test": params.n_lapse_test}
+        return {"gate_passed": True, **_dt.simulate(params, store, scenario)}
+    finally:
+        store.close()
+
+
+def tensor_rebuild() -> dict:
+    """Target Echo (E4): PKBTEN01 の全再構築。自動発火は profiler 実行 /
+    import.line からのみ (I-3)。本関数は手動再構築 (Advanced 設定) 用にも公開する。"""
+    from . import tensor_store as _ts
+    from .data_merger import load_daily_contexts
+    from .profiler import load_line_messages
+
+    daily = load_daily_contexts()
+    if not daily:
+        return {"rebuilt": False, "rows": 0}
+    messages = load_line_messages()
+    _ts.build_tensor(daily, None, _ts.TENSOR_GLOBAL_BIN, line_messages=messages)
+    return {"rebuilt": True, "rows": len(daily)}
+
+
 def fetch_pending_knowledge() -> dict:
     """<fetch_query> キューを処理し、取得済み知識をインデックスへ統合する。
 
@@ -180,13 +248,26 @@ def run_profiler() -> dict:
     return _run_profiler()
 
 
+def format_line_import(text: str, filename: str = "") -> str:
+    """T-23 (IMP-2): [LINE] ヘッダの無い追記はエクスポートのブロック境界を
+    消し、profiler.load_line_messages() の多重集合デデュープ (max) を
+    ブロック内 sum に退化させる (docs/AI_SKILLS.md §14)。取込側でヘッダを
+    補ってから追記することで、全 append 経路が必ずブロック境界を持つ。
+    """
+    body = text.strip()
+    if "[LINE]" not in body:
+        label = Path(filename).stem if filename else "不明"
+        body = f"[LINE] {label}とのトーク履歴\n{body}"
+    return body
+
+
 def _append_line_text(text: str, filename: str = "") -> None:
     head = text[:2000]
     stem = Path(filename).stem.lower() if filename else ""
     if "[LINE]" not in head and "line" not in stem and not filename.lower().endswith(".txt"):
         raise ValueError("LINE履歴 (.txt) のみ取り込めます")
     with open(LINE_HISTORY, "a", encoding="utf-8") as f:
-        f.write("\n" + text.strip() + "\n")
+        f.write("\n" + format_line_import(text, filename) + "\n")
 
 
 def import_line_text(text: str, filename: str = "") -> dict:
@@ -257,9 +338,10 @@ def get_settings() -> dict:
 
 
 def import_line_history(path: str | Path) -> None:
-    text = Path(path).read_text(encoding="utf-8", errors="replace")
+    path = Path(path)
+    text = path.read_text(encoding="utf-8", errors="replace")
     with open(LINE_HISTORY, "a", encoding="utf-8") as f:
-        f.write("\n" + text.strip() + "\n")
+        f.write("\n" + format_line_import(text, path.name) + "\n")
 
 
 def profiler_script_path() -> Path:
@@ -277,12 +359,17 @@ __all__ = [
     "compile_narrative",
     "consult",
     "fetch_pending_knowledge",
+    "format_line_import",
     "format_user_profile_summary",
     "get_engine",
     "get_settings",
     "import_line_batch",
     "import_line_text",
+    "oracle_payload",
+    "oracle_report",
     "run_profiler",
+    "tensor_rebuild",
+    "twin_forecast",
     "sync_calendar_ics_batch",
     "sync_calendar_ics_content",
     "load_record",
