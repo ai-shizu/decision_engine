@@ -12,6 +12,11 @@
 # Rev.5 (2026-07-07): E3 完遂を受けた統合裁定 (§5.10.5)。実装順序 = E4 先行・
 #   Foxtrot 後続。E4 の境界防衛規律と実装ノート (payload/report 分離・schema
 #   追従・dyad 延期・実測義務・store ライフサイクル) を追加。
+# Rev.6 (2026-07-08): §4/§4.1/I-22 の記載訂正。「oracle 出力は consult 動的
+#   サフィックス」は誤りで、as-built は _gap_section と同居する**静的
+#   プレフィックス** (profiler 再実行時のみ更新されるため KV 効率が高い)。
+#   E4 as-built (docs/AI_SKILLS.md §12) との不整合を解消する未処理債務の
+#   返済 (IMP-1/IMP-2 完遂・E4 正式クローズ後の負債整理)。
 
 > **読者への前提命令**: 本書を読む前に `docs/AI_SKILLS.md` を全文読め (第0原則)。
 > 不変条件については AI_SKILLS.md が正、Echo の未実装設計については本書が正。
@@ -326,8 +331,9 @@ data/raw (日記/LINE/家計簿/予定)     data/processed/line_telemetry.json (
                                                         │
               ┌─────────────────────────────────────────┤
               ▼ 合法出口 (3 つだけ)                       ▼ 遮断 (I-22)
-  (1) consult の動的サフィックス                 面接官/GD議論/es_review へは
-      (KV: 静的側に置くな — 毎日変わる)          いかなるキーも不出。
+  (1) consult の静的プレフィックス                面接官/GD議論/es_review へは
+      (_gap_section と同居。profiler 再実行時       いかなるキーも不出。
+       のみ更新されるため KV 効率が高い — Rev.6)
   (2) 講評フェーズ (_gap_section 系統合点)       GAP_LEAK_MARKERS へ
   (3) UI PROFILE タブ (表示専用)                 "oracle_payload"/"twin"/
                                                  "coupling"/"OII" を追加し
@@ -343,8 +349,11 @@ data/raw (日記/LINE/家計簿/予定)     data/processed/line_telemetry.json (
   正規化 JSON, 8B)。不一致なら全再構築 (<100ms、差分機構は作らない §1.6)。
 - **再構築順序 (I-9 の適用)**: 全 TensorStore ハンドルの close → tmp へ書き →
   `os.replace`。mmap 保持中の上書きは Windows で PermissionError (Bravo の実証)。
-- **KV キャッシュ**: oracle 出力は**動的サフィックス限定**。静的側に混ぜると
-  ハッシュが毎日変わりキャッシュ全滅 (AI_SKILLS §8.1-2 と同じ静かな死)。
+- **KV キャッシュ**: oracle 出力は **as-built では静的プレフィックス側**
+  (`_gap_section` と同居)。profiler 再実行時のみ内容が変わるため、consult
+  毎に変わる動的サフィックスへ置くより KV 再利用率が高い (Rev.6 訂正 —
+  初版は逆の記述だったが、oracle 出力は日次で変化しないため静的側が正しい。
+  AI_SKILLS §8.1-2 の「静的→動的の順序を守れ」原則そのものは不変)。
 
 ## 4.2 ツインの無菌性 (憲法 3/5 の継承構造)
 
@@ -668,7 +677,8 @@ gate_passed=false のとき `forecast`/`interventions` は**空配列** (I-20)�
 - **I-21 (テンソルの無菌性)**: PKBTEN01 に文字列・生テキストを入れない。数値 +
   マスク + alias (ファイル名) のみ。テキストが要るならそれはテンソルの仕事ではない。
 - **I-22 (聖域の拡張)**: Echo の全出力は面接官/GD 議論/es_review に不出。合法出口は
-  consult 動的サフィックス・講評フェーズ・PROFILE UI の 3 つだけ。
+  consult **静的プレフィックス** (Rev.6 訂正。§4.1 参照)・講評フェーズ・
+  PROFILE UI の 3 つだけ。
 - **T-14 (view の use-after-unmap)**: `window()` の戻り値 view を保持したまま
   rebuild すると BufferError/未定義動作。長期保持は .copy()、rebuild は全ハンドル
   close が先 (レジストリで機械的に検査)。
