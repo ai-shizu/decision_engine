@@ -3,8 +3,13 @@
 # Rev.1
 # Rev.2 (2026-07-07): E4/Foxtrot 統合裁定 (SPEC_ECHO §5.10.5) を受け F-11/F-12 を
 #   追加。実装順序は E4 完遂後に F0 から着手 (並行禁止)。
+# Rev.3 (2026-07-08): F0 完遂を受けた裁定。F-14 (サイバーパンク演出の不変条件)、
+#   §2.7 F7 (Desktop Native Chrome)、§3.6 (キーボード予約表)、§6 (W-22〜W-27
+#   React 実装罠) を追加。F6 (PROBE) の様式定義は D2/E4 完成後の着手時に確定
+#   させる (ゲートは不変)。
 
-> **読者への前提命令**: 本書を読む前に `docs/AI_SKILLS.md` を全文読め (第0原則)。
+> **読者への前提命令**: 本書を読む前に `docs/AI_SKILLS.md` §0 のルーティング表
+> に従い §1 + UI タスク該当節を読め (2026-07-08 改訂 — 全文読了の強制は撤回済み)。
 > 特に §3.4 (React UI 規約) は本書の**上位法**である。本書と §3.4 が矛盾して
 > 見えたら §3.4 が正 — ただし本書 §0 の Architect's Note は §3.4 の適用解釈を
 > 確定させるものであり、両者は矛盾しない。
@@ -251,6 +256,37 @@ SettingsTab (既存 149 行を再構成)
   同期状態) を畳んだらレビュー落ち。実装は native `<details>` — JS 状態を
   持たない。
 
+## 2.7 DESKTOP CHROME (F7) — OS ネイティブウィンドウ枠の排除
+
+**「ブラウザで動く画面」ではなく「インストール版デスクトップアプリ」の
+外郭を完遂する。** Tauri v2 標準機構のみで達成する (新規依存 0)。
+
+```
+TitleBar (新設。App.tsx 最上位・shell の最初の子要素)
+├── DragRegion                    ← data-tauri-drag-region 属性の div。
+│                                    左: "PKB" (--font-mono・小さく)
+└── WindowControls                ← ドラッグ領域の【兄弟要素】(W-27)
+    ├── MinimizeBtn                ← "─" (mono・絵文字禁止)
+    ├── MaximizeBtn                ← "□"
+    └── CloseBtn                   ← "✕"・hover 時のみ background: var(--err)
+```
+
+- `apps/desktop/src-tauri/tauri.conf.json` の `app.windows[].decorations` を
+  `false` にする。OS 既定のタイトルバー・ボーダーを消す。
+- ドラッグ・ダブルクリック最大化・Windows スナップは `data-tauri-drag-region`
+  属性が**ネイティブに処理する** — mousedown リスナー等の自前実装をするな
+  (Tauri が壊れていない機構を再発明する行為であり、OS ごとの挙動差異という
+  罠を自ら踏みに行くことになる)。
+- ウィンドウ操作は `@tauri-apps/api/window` の `getCurrentWindow()` から
+  `minimize()` / `toggleMaximize()` / `close()` を呼ぶ。
+- **ブラウザ互換性 (必須)**: `"__TAURI_INTERNALS__" in window` でフィーチャー
+  検出し、ブラウザ (vite 単体プレビュー等) ではウィンドウボタン群を
+  非表示にする。DragRegion 自体は残してよい (drag region 属性はブラウザで
+  無害)。この検出を省くと `window.__TAURI__` 未定義で例外を投げ、
+  ブラウザ側の検証パイプライン (F0 で使用した vite プレビュー) が死ぬ。
+- ウィンドウ位置・サイズの永続化は本マイルストーンのスコープ外
+  (プラグイン追加または Rust 側実装が要る別途裁定事項)。
+
 ---
 
 # §3【Sonnet-Control Directives】実装拘束
@@ -316,6 +352,15 @@ SettingsTab (既存 149 行を再構成)
 - **F-13 (Rev.2)**: engine.ts のリクエスト組み立てで UI state のスプレッド展開
   (`...state`) 禁止。送信フィールドは凍結 interface の明示列挙のみ
   (echo-back 漏洩の遮断 — SPEC_ECHO §5.10.5)。
+- **F-14 (Rev.3)**: サイバーパンク演出 (F6 PROBE 等) は**「本物のデータの
+  提示密度」でのみ**構成する。許される手段は等幅書体・大文字ラベル・
+  `letter-spacing`・擬似要素によるコーナーブラケット (`::before`/`::after`
+  の border) ・テキストプロンプト記号 (`>` 等)・既存 `chat-blink` keyframe
+  の点滅キャレット・`stroke-dasharray` の未確定線のみ — 全て F-1〜F-3 の
+  範囲内 (新規 box-shadow/gradient/filter/パーティクルは禁止のまま)。
+  **偽のランダム点滅・演出目的の文字化け・データと無関係なダミー数値の
+  流し込みは永久禁止** — deep_profile に嘘を書くのと同罪 (憲法 6 の系)。
+  「発光」はネオンではなく `--accent`/`--ok` と `--bg-deep` の彩度対比で表現する。
 
 ## 3.5 Definition of Done (フロント変更時)
 
@@ -325,6 +370,25 @@ python tests\ui_smoke.py  # ALL PASS
 cargo check               # src-tauri (Rust に触れた場合のみ)
 ```
 + F0 (トークン移行) のみ追加ゲート: 前後スクリーンショットの視覚的差分ゼロ。
+
+## 3.6 キーボード予約表 (Rev.3 — 衝突防止の法制化)
+
+**新規ショートカットを追加する前に必ずこの表を確認せよ。競合するキーを
+無断で再割当てすることを禁ずる。**
+
+| キー | スコープ | 用途 | 出典 |
+|---|---|---|---|
+| `Ctrl+S` | 全タブ共通 | 保存 | 既存規約 (AI_SKILLS §3.4-4) |
+| `Ctrl+Enter` | 全タブ共通 | 送信 (consult 等) | 既存規約 |
+| `Ctrl+1` / `Ctrl+2` / `Ctrl+3` | **RECORD タブ内のみ** | サブタブ切替
+  (events\|money\|diary) | §2.1 (F-4) |
+| `Alt+1`〜`Alt+5` | メインタブ切替 (グローバル) |
+  RECORD/IMPORT/CONSULT/INTERVIEW/SETTINGS (PROBE 追加時は `Alt+6`) | Rev.3 新設 |
+| `Enter` | RECORD QuickAddRow | 行追加 | §2.1 (**W-25 の IME ガード必須**) |
+
+メインタブに `Ctrl+1〜5` を使わないのは、RECORD のサブタブ予約と衝突する
+ため (グローバルとローカルで同じキーを持たせるとフォーカス依存の誤爆が
+起きる)。メインタブ切替は `Alt` 系に系統的に分離する。
 
 ---
 
@@ -379,14 +443,47 @@ TensionMeter・進行度高水位標)。**偽の数値・偽のランダム性�
 
 ```
 F0: App.css トークン移行 (視覚差分ゼロ)          ゲート: スクショ比較 + ui_smoke
+F7: Desktop Chrome (§2.7。カスタムタイトルバー・decorations:false)
+    ゲート: tsc + cargo check + ui_smoke + tauri:dev 実起動でボタン動作確認
 F1: RECORD フリクション監査 (autofocus / Enter 追加 / Ctrl+1-3)
 F2: IMPORT 等幅ダッシュボード (グリフバッジ + status 逐次表示)
 F3: CONSULT 可読測度 + スクロール追従規律
 F4: INTERVIEW SessionHUD (PreSessionBriefing は E4 完成後に接続)
 F5: SETTINGS iOS 化 (CSS Toggle + Advanced <details>)
-F6: PROBE タブ (D2 + E4 完成が前提条件 — それまで着手禁止)
+F6: PROBE タブ (D2 + E4 完成が前提条件 — それまで着手禁止。様式は F-14 準拠)
 各段: npx tsc --noEmit + ui_smoke ALL PASS。コミットは指揮官の指示時のみ。
 ```
+
+---
+
+# §6【実装者への警告 (W-22〜W-27)】Rev.3 — React 再構築の死角
+
+Foxtrot 本格実装 (F7・F1〜F6) で踏み抜きやすい罠。**新規タブ実装のたびに
+本リストと照合せよ。**
+
+- **W-22 (Tauri `listen()` の非同期クリーンアップ漏れ)**: `listen()` は
+  `Promise<UnlistenFn>` を返す。`useEffect` 内で解除関数を確実に `return`
+  しないと、タブ往復のたびに購読が積み重なり、consult の chunk が
+  二重三重に追記される (症状: 回答テキストの重複)。既存 ConsultTab.tsx の
+  購読パターンを踏襲し、新規購読も同型で書け。
+- **W-23 (React 19 StrictMode の二重実行)**: 開発モードは effect を 2 回
+  発火する。購読・タイマーの初期化が冪等でないと開発時だけ壊れ、「本番では
+  直る」という最悪の診断難易度を生む。
+- **W-24 (F-11 の退行禁止)**: タブ切替を速くする目的で `useMemo` /
+  `display:none` / keep-alive 化する誘惑を禁ずる。`{tab === "x" && <X/>}`
+  の条件レンダリングは oracle/twin 系 state の構造的消去装置であることが
+  F-11 で確定済み — 高速化の理由でこれを外すな。
+- **W-25 (日本語 IME 合成中の Enter 誤爆)**: RECORD の「Enter で QuickAdd
+  追加」は、日本語 IME の変換確定 Enter を誤って発火させ得る。
+  `KeyboardEvent.isComposing` (または `keyCode === 229`) によるガード
+  **無しの Enter ハンドラはレビュー落ち**。本アプリの入力は日本語が主であり、
+  これを怠るとフリクションレスどころか入力破壊になる。
+- **W-26 (`setInterval` の stale closure)**: LatencyTimer 等の秒表示が
+  state を直接閉じ込めると表示が凍る。開始時刻は `useRef` に置き、
+  再レンダリングで変化させるのは表示用 state のみにせよ。
+- **W-27 (ドラッグ領域によるクリック横取り)**: `data-tauri-drag-region`
+  の**子要素に置いたボタンはクリックがドラッグ判定に食われる**。
+  WindowControls (§2.7) はドラッグ領域の兄弟要素として配置せよ。
 
 ---
 *装飾は 1 ピクセルも要らない (AI_SKILLS §3.4)。ハッカーが信頼するのは、

@@ -18,7 +18,8 @@
         "height": 800,
         "visible": true,
         "center": true,
-        "backgroundColor": "#0f1419"
+        "backgroundColor": "#0f1419",
+        "decorations": false
       }
     ],
     "security": {

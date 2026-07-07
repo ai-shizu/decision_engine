@@ -4,17 +4,21 @@ import { ImportTab } from "./components/ImportTab";
 import { InterviewTab } from "./components/InterviewTab";
 import { RecordTab } from "./components/RecordTab";
 import { SettingsTab } from "./components/SettingsTab";
+import { TitleBar } from "./components/TitleBar";
 import { engineHealth, engineReady } from "./lib/engine";
 import type { MainTab } from "./lib/types";
 import "./App.css";
 
 function LoadingScreen({ message }: { message: string }) {
   return (
-    <main className="app loading">
-      <h1>PKB</h1>
-      <p className="status-line">{message}</p>
-      <p className="hint">初回起動はエンジン展開に 30 秒ほどかかることがあります。</p>
-    </main>
+    <div className="shell">
+      <TitleBar />
+      <main className="app loading">
+        <h1>PKB</h1>
+        <p className="status-line">{message}</p>
+        <p className="hint">初回起動はエンジン展開に 30 秒ほどかかることがあります。</p>
+      </main>
+    </div>
   );
 }
 
@@ -66,6 +70,7 @@ export default function App() {
 
   return (
     <div className="shell">
+      <TitleBar />
       <header className="topbar">
         <div>
           <h1>PKB</h1>

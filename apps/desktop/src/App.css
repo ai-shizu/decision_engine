@@ -55,6 +55,60 @@ body {
   min-height: 100vh;
 }
 
+/* F7 (SPEC_FOXTROT_UI.md §2.7): カスタムタイトルバー (decorations:false 代替) */
+.titlebar {
+  display: flex;
+  justify-content: space-between;
+  align-items: stretch;
+  height: 32px;
+  flex-shrink: 0;
+  background: var(--bg);
+  border-bottom: 1px solid var(--border);
+}
+
+.titlebar-drag {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  padding-left: var(--s3);
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+.titlebar-label {
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  letter-spacing: 0.05em;
+}
+
+.titlebar-controls {
+  display: flex;
+}
+
+.titlebar-btn {
+  width: 46px;
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 0.85rem;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.titlebar-btn:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+
+.titlebar-btn-close:hover {
+  background: var(--err);
+  color: #fff;
+}
+
 .topbar {
   display: flex;
   justify-content: space-between;
