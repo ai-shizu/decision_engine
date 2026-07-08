@@ -9,6 +9,7 @@ UI 依存は一切含まない。
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 import sys
@@ -392,6 +393,124 @@ def import_line_batch(files: list[dict], *, status: StatusCallback | None = None
     }
 
 
+# ============================================================ F2-EXT: 汎用インポート
+# SPEC_FOXTROT_UI.md §2.2.2 (Rev.6): 「判別は提案、書き込みは明示」の権限分離。
+# classify_document は読み取り専用の純関数。import_document は UI が明示した
+# dest (es/knowledge の2値のみ) にのみ書く — バックエンドは自分の推測に基づいて
+# 書き込まない。IMP-2 の教訓 (取込 API の冪等性・データ爆弾トリップワイヤ) を
+# 汎用口にも適用する。
+
+_ALLOWED_DOCUMENT_EXTENSIONS = {".txt", ".md", ".csv", ".json", ".ics"}
+_MAX_DOCUMENT_BYTES = 10 * 1024 * 1024  # データ爆弾トリップワイヤ (IMP の系譜)
+_ES_SIGNAL_RE = re.compile(r"志望動機|自己PR|自己ＰＲ|ガクチカ|志望職種|志望業界|応募職種")
+_DOCUMENT_DEST_DIRS = {"es": ES_DIR, "knowledge": DATA_KNOWLEDGE}
+
+
+def classify_document(content: str, filename: str = "") -> dict:
+    """決定論的・順序固定・先勝ちの分類 (§2.2.2 裁定1)。読み取り専用の純関数
+    — 一切の書き込みを行わない。戻り値の reasons はUIが判定根拠を表示する
+    ためのものであり、ブラックボックス化を防ぐ防止線。
+    """
+    size = len(content.encode("utf-8"))
+    ext = Path(filename).suffix.lower()
+
+    if ext not in _ALLOWED_DOCUMENT_EXTENSIONS:
+        return {"type": "reject", "filename": filename, "size": size,
+                "reasons": [f"拡張子 {ext or '(なし)'} は許可されていません"
+                           f" (許可: {', '.join(sorted(_ALLOWED_DOCUMENT_EXTENSIONS))})"]}
+    if b"\x00" in content.encode("utf-8")[:8192]:
+        return {"type": "reject", "filename": filename, "size": size,
+                "reasons": ["先頭8KBにNULバイトを検出 (バイナリ混入の疑い)"]}
+    if size > _MAX_DOCUMENT_BYTES:
+        return {"type": "reject", "filename": filename, "size": size,
+                "reasons": [f"サイズ {size:,} バイトが上限 {_MAX_DOCUMENT_BYTES:,} を超過"]}
+
+    if "[LINE]" in content:
+        return {"type": "line", "filename": filename, "size": size,
+                "reasons": ['本文に "[LINE]" ヘッダを検出']}
+    if "BEGIN:VCALENDAR" in content:
+        return {"type": "ics", "filename": filename, "size": size,
+                "reasons": ['本文に "BEGIN:VCALENDAR" を検出']}
+    es_hits = sorted(set(_ES_SIGNAL_RE.findall(content)))
+    if es_hits:
+        return {"type": "es", "filename": filename, "size": size,
+                "reasons": [f"ES語彙を検出: {', '.join(es_hits)}"]}
+    return {"type": "knowledge", "filename": filename, "size": size,
+            "reasons": ["LINE/ICS/ESいずれの語彙にも一致せず (既定の受け皿)"]}
+
+
+def _sanitize_document_filename(filename: str) -> str:
+    name = Path(filename).name or "untitled.txt"  # パス成分除去 (トラバーサル対策)
+    name = re.sub(r"[^\w.\-ぁ-んァ-ヶ一-鿿]", "_", name)  # 危険文字除去
+    return name or "untitled.txt"
+
+
+def import_document(
+    content: str, filename: str, dest: str, *, status: StatusCallback | None = None,
+) -> dict:
+    """dest は "es"/"knowledge" の2値ホワイトリストのみ (§2.2.2 裁定1)。
+    UI の分類結果を信用せず拒絶ゲートをここで再検証する — バックエンドは
+    自分の推測でも UI の確認でも盲信せず、最終防衛はここに置く。
+    """
+    if dest not in _DOCUMENT_DEST_DIRS:
+        raise ValueError(f"不正な dest: {dest} (許可: es, knowledge)")
+
+    classification = classify_document(content, filename)
+    if classification["type"] == "reject":
+        raise ValueError(f"取込を拒否: {'; '.join(classification['reasons'])}")
+    if classification["type"] in ("line", "ics"):
+        raise ValueError(
+            f"{filename} は {classification['type']} 形式と判定されました — "
+            "専用の取込 (LINE/ICS) を使ってください。"
+        )
+
+    if status:
+        status(f"{filename} を検証中")
+
+    target_dir = _DOCUMENT_DEST_DIRS[dest]
+    target_dir.mkdir(parents=True, exist_ok=True)
+
+    # 冪等性 (T-20 の直接適用): 同一内容が既に存在すれば skip。
+    digest = hashlib.blake2b(content.encode("utf-8"), digest_size=16).hexdigest()
+    for existing in target_dir.iterdir():
+        if not existing.is_file():
+            continue
+        try:
+            existing_digest = hashlib.blake2b(existing.read_bytes(), digest_size=16).hexdigest()
+        except OSError:
+            continue
+        if existing_digest == digest:
+            if status:
+                status("完了 (同一内容が既に存在するためスキップ)")
+            return {
+                "imported": False, "skipped": True, "dest": dest,
+                "message": "同一内容が既に存在するためスキップしました",
+            }
+
+    # 名前衝突は上書きせずハッシュ接尾辞で別名保存する。
+    safe_name = _sanitize_document_filename(filename)
+    target_path = target_dir / safe_name
+    if target_path.exists():
+        target_path = target_dir / f"{target_path.stem}_{digest[:8]}{target_path.suffix}"
+    # write_bytes (write_text ではない): Windows の text モードは "\n"→"\r\n"
+    # 変換を行い、read_bytes() ベースの上記ハッシュ比較と食い違って冪等性
+    # 判定が壊れる (実測で踏んだ罠)。
+    target_path.write_bytes(content.encode("utf-8"))
+
+    if status:
+        status("追記完了")
+
+    result: dict = {"imported": True, "skipped": False, "dest": dest, "path": target_path.name}
+    if dest == "knowledge":
+        if status:
+            status("知識インデックス同期中")
+        result["index_rebuilt"] = get_engine().sync_knowledge_index(force=True)
+    if status:
+        status("完了")
+    result["message"] = f"{dest} へ取り込みました ({target_path.name})"
+    return result
+
+
 def sync_calendar_ics_batch(
     files: list[dict], mode: str = "append", *, status: StatusCallback | None = None,
 ) -> dict:
@@ -454,6 +573,7 @@ __all__ = [
     "PROCESSED",
     "USER_PROFILE",
     "calendar_event_dates",
+    "classify_document",
     "compile_narrative",
     "consult",
     "data_source_stats",
@@ -462,6 +582,7 @@ __all__ = [
     "format_user_profile_summary",
     "get_engine",
     "get_settings",
+    "import_document",
     "import_line_batch",
     "import_line_text",
     "oracle_payload",

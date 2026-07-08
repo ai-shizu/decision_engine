@@ -1,5 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
-import type { RecordData, SettingsData, SourceStat } from "./types";
+import { readTextLenient } from "./textDecode";
+import type { ClassifyResult, RecordData, SettingsData, SourceStat } from "./types";
 
 export async function pkbInvoke<T = unknown>(
   cmd: string,
@@ -66,11 +67,11 @@ export async function syncIcsFiles(
 ): Promise<{ message?: string }> {
   if (files.length === 0) return { message: "ファイルが選択されていません" };
   if (files.length === 1) {
-    const content = await files[0].text();
+    const content = await readTextLenient(files[0]);
     return syncIcsContent(content, mode);
   }
   const ics_files = await Promise.all(
-    files.map(async (file) => ({ content: await file.text(), filename: file.name })),
+    files.map(async (file) => ({ content: await readTextLenient(file), filename: file.name })),
   );
   return pkbInvoke("calendar.sync", { source: "ics", mode, ics_files });
 }
@@ -82,7 +83,7 @@ export async function syncAppleCalendar(
 }
 
 export async function importLineFile(file: File): Promise<{ message?: string; ok?: boolean }> {
-  const content = await file.text();
+  const content = await readTextLenient(file);
   return pkbInvoke("import.line", { content, filename: file.name });
 }
 
@@ -90,9 +91,35 @@ export async function importLineFiles(files: File[]): Promise<{ message?: string
   if (files.length === 0) return { message: "ファイルが選択されていません" };
   if (files.length === 1) return importLineFile(files[0]);
   const batch = await Promise.all(
-    files.map(async (file) => ({ content: await file.text(), filename: file.name })),
+    files.map(async (file) => ({ content: await readTextLenient(file), filename: file.name })),
   );
   return pkbInvoke("import.line", { files: batch });
+}
+
+/** F2-EXT (SPEC_FOXTROT_UI.md §2.2.2): 読み取り専用の分類。書き込みなし。 */
+export async function classifyDocument(file: File): Promise<ClassifyResult> {
+  const content = await readTextLenient(file);
+  const result = await pkbInvoke<ClassifyResult>("import.classify", {
+    content,
+    filename: file.name,
+  });
+  return { ...result, content };
+}
+
+/** F2-EXT: dest はユーザーが確定した "es" | "knowledge" のみ。 */
+export async function importDocument(
+  content: string,
+  filename: string,
+  dest: "es" | "knowledge",
+): Promise<{
+  imported: boolean;
+  skipped: boolean;
+  dest: string;
+  path?: string;
+  message?: string;
+  index_rebuilt?: boolean;
+}> {
+  return pkbInvoke("import.document", { content, filename, dest });
 }
 
 export async function loadSettings(): Promise<SettingsData> {

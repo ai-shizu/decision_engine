@@ -801,7 +801,7 @@ TOTAL:                                          ~1.6-2.2 秒 (< 3000ms ゲート
 
 ---
 
-## 13. Target Foxtrot — UI/UX 設計 (`docs/SPEC_FOXTROT_UI.md`。F0/F7/F1/F2 完遂・F3〜F6 未着手)
+## 13. Target Foxtrot — UI/UX 設計 (`docs/SPEC_FOXTROT_UI.md`。F0/F7/F1/F2/F2-EXT 完遂・F3〜F6 未着手)
 
 フロントエンド (Tauri + React) の設計仕様。**§3.4 (React UI 規約) が上位法** —
 SPEC はその適用解釈を確定させるもの。コードより先に存在する凍結事項:
@@ -935,6 +935,51 @@ ALL PASS** — バックエンドに触れた F2 で初めて Python 回帰が�
 エンジン ready まで到達。**SourceTable の数値表示・IMPORT_LOG の逐次追記・
 term- レイヤの見た目確認は、F1 と同じ理由でネイティブ GUI の対話的検証が
 自動化できず、指揮官の実施を要する。**
+
+### F2-EXT 完遂 (2026-07-08) — as-built (汎用インポート。指揮官要求への対応)
+
+指揮官要求 (「その他」入力欄 + 自動判別) を「判別は提案、書き込みは明示」の
+権限分離設計で満たした。
+
+- **バックエンド**: `facade.classify_document(content, filename)` — 拒絶
+  ゲート (拡張子ホワイトリスト `.txt/.md/.csv/.json/.ics`・先頭8KBのNUL
+  バイト検出・10MB上限) → `[LINE]`/`BEGIN:VCALENDAR`/ES語彙 (志望動機・
+  自己PR・ガクチカ等)の順で先勝ち判定 → 既定は knowledge。読み取り専用の
+  純関数で一切書き込まない。`facade.import_document(content, filename,
+  dest, *, status=None)` — `dest` は `"es"|"knowledge"` の2値ホワイトリスト
+  のみ (`ValueError` で拒否)。UI の分類結果を信用せず拒絶ゲートを内部で
+  再実行し、line/ics 判定分は例外で弾く (専用パイプラインへ回送させる)。
+  冪等性は blake2b ハッシュ比較 (同一内容は skip)、ファイル名は sanitize
+  し衝突時はハッシュ接尾辞で別名保存 (上書きは構造的に不可能)。knowledge
+  書き込み時のみ `sync_knowledge_index(force=True)` を実行。stdio
+  `import.classify`/`import.document` を consult と同型の emit 配線で新設。
+- **実装中に発見した罠 (T-21 系の新しい亜種として記録)**: 冪等性チェックが
+  最初 `Path.write_text()` で失敗した。**Windows の text モード書き込みは
+  `"\n"` を `"\r\n"` へ変換するが、`read_bytes()` は変換しない** ため、
+  「書いた内容」と「読み直した内容」のハッシュが一致しない。
+  `target_path.write_bytes(content.encode("utf-8"))` に変更して解決した —
+  **バイト単位の同一性を扱うコード (ハッシュ比較・冪等性判定) は
+  write_text ではなく write_bytes を使うこと。次の実装者はこれを踏むな。**
+- **フロント**: `ImportTab.tsx` に「その他 (自動判別)」ブロックを追加。
+  ファイル選択 → `classifyDocument()` (読み取りのみ) → `pending` state
+  (揮発でよい・recordDraft対象外) に判定結果+根拠(reasons)を表示 →
+  ユーザーが dest (es/knowledge/スキップ) を確認・変更 → 「取込を確定」で
+  一括実行。line/ics 判定分は `import.line`/`calendar.sync` へ直接回送。
+  **W-33**: 全ての `File.text()` 呼び出し (LINE/ICS 既存経路も含む) を
+  `lib/textDecode.ts::readTextLenient()` に置換 — `TextDecoder("utf-8",
+  {fatal:true})` を試し失敗したら `shift_jis` へフォールバックする
+  (`core/es_manager.py::_read_text_lenient` と同じ配慮をフロントにも導入。
+  既存の LINE/ICS 経路にも同じ潜在バグがあったため、新機能に留めず横断的に
+  修正した)。W-31 (D&D非実装) 遵守 — ファイルピッカーのみ。
+
+**仕様との差異 (申告)**: なし。テスト6本 (分類優先順位・拒絶ゲート3種・
+冪等スキップ・名前衝突での別名保存・dest ホワイトリスト・knowledge の
+index同期呼び出し) を `test_import_stats.py` に追加し全て ALL PASS。
+
+検証: `tsc`/`cargo check` エラーなし、Python 15スイート (新規6ケース含む)
+ALL PASS、`ui_smoke.py` ALL PASS、`cargo tauri dev` 実起動でエンジン ready
+まで到達。分類結果パネルの表示・dest選択・確定ボタンの実操作確認は
+指揮官の実施を要する。
 
 ---
 

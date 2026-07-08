@@ -1,15 +1,43 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import {
+  classifyDocument,
+  importDocument,
   importLineFiles,
   importStats,
   loadSettings,
+  pkbInvoke,
   syncAppleCalendar,
+  syncIcsContent,
   syncIcsFiles,
 } from "../lib/engine";
-import type { EngineEvent, SourceStat } from "../lib/types";
+import type { ClassifyResult, EngineEvent, SourceStat } from "../lib/types";
 
 const LOG_MAX = 50;
+
+// F2-EXT (SPEC_FOXTROT_UI.md §2.2.2 裁定3): 確定前の分類待ちリストは揮発で
+// よい (recordDraft 対象外 — 数秒で再選択できるファイル選択は「記録」では
+// ない)。ただの useState でよく、モジュールシングルトンにはしない。
+interface PendingItem {
+  file: File;
+  result: ClassifyResult;
+  dest: "es" | "knowledge" | "skip";
+}
+
+function classifyLabel(type: ClassifyResult["type"]): string {
+  switch (type) {
+    case "line":
+      return "LINE形式 — LINE取込へ回送";
+    case "ics":
+      return "ICS形式 — カレンダー同期へ回送";
+    case "es":
+      return "ES/企画書";
+    case "knowledge":
+      return "知識ベース";
+    case "reject":
+      return "拒否";
+  }
+}
 
 // F2 (SPEC_FOXTROT_UI.md §2.2.1 裁定2): recordDraft と同族のファイルローカル
 // シングルトン。タブをアンマウントして戻っても取込ログが消えない (アプリ
@@ -41,8 +69,10 @@ export function ImportTab() {
   const [appleAvailable, setAppleAvailable] = useState(false);
   const [sources, setSources] = useState<Record<string, SourceStat>>({});
   const [log, setLog] = useState<string[]>(importLog);
+  const [pending, setPending] = useState<PendingItem[]>([]);
   const lineRef = useRef<HTMLInputElement>(null);
   const icsRef = useRef<HTMLInputElement>(null);
+  const otherRef = useRef<HTMLInputElement>(null);
   // W-29: unmount 後の setState を防ぐガード。
   const mountedRef = useRef(true);
   // W-28: pkb-engine-event はコマンド非依存のグローバルバス。自分の import
@@ -153,6 +183,81 @@ export function ImportTab() {
     }
   }
 
+  // F2-EXT 裁定1: classify は読み取り専用。ここでは一切書き込まない。
+  async function handleOtherFiles(files: FileList | null) {
+    const list = files ? Array.from(files) : [];
+    if (!list.length) return;
+    const results = await Promise.all(
+      list.map(async (file) => {
+        const result = await classifyDocument(file);
+        const dest: PendingItem["dest"] =
+          result.type === "es" || result.type === "knowledge" ? result.type : "skip";
+        return { file, result, dest };
+      }),
+    );
+    setPending((prev) => [...prev, ...results]);
+    resetInput(otherRef);
+  }
+
+  function updatePendingDest(index: number, dest: PendingItem["dest"]) {
+    setPending((prev) => prev.map((p, i) => (i === index ? { ...p, dest } : p)));
+  }
+
+  // F2-EXT 裁定1: 書き込みは UI が確認した dest を明示的に渡した時のみ実行する。
+  // line/ics 判定分は専用パイプラインへ回送 (汎用口からは書かない)。
+  async function handleConfirmOther() {
+    const items = pending;
+    if (!items.length) return;
+    setBusy(true);
+    importingRef.current = true;
+    try {
+      for (const item of items) {
+        const { file, result, dest } = item;
+        const content = result.content ?? "";
+        try {
+          if (result.type === "reject") {
+            pushImportLog(`${file.name}: 拒否 — ${result.reasons.join("; ")}`);
+            continue;
+          }
+          if (result.type === "line") {
+            const res = await pkbInvoke<{ message?: string; ok?: boolean }>("import.line", {
+              content,
+              filename: file.name,
+            });
+            pushImportLog(res.message ?? `${file.name} を LINE として取り込みました`);
+            continue;
+          }
+          if (result.type === "ics") {
+            const res = await syncIcsContent(content, mode);
+            pushImportLog(
+              typeof res.message === "string"
+                ? res.message
+                : `${file.name} を ICS として同期しました`,
+            );
+            continue;
+          }
+          if (dest === "skip") {
+            pushImportLog(`${file.name}: スキップしました`);
+            continue;
+          }
+          const res = await importDocument(content, file.name, dest);
+          pushImportLog(res.message ?? `${file.name} を ${dest} へ取り込みました`);
+        } catch (err) {
+          pushImportLog(`${file.name}: ${String(err)}`);
+        }
+      }
+    } finally {
+      importingRef.current = false;
+      if (mountedRef.current) {
+        setBusy(false);
+        setLog([...importLog]);
+        setPending([]);
+        resetInput(otherRef);
+      }
+      void refreshStats();
+    }
+  }
+
   return (
     <section className="panel import-panel">
       <h2>データ取り込み</h2>
@@ -222,6 +327,62 @@ export function ImportTab() {
           Apple カレンダーを同期
         </button>
       </div>
+
+      <div className="import-block">
+        <h3>その他 (自動判別)</h3>
+        <p className="hint">
+          未対応形式のファイルを選択すると内容を読み取り専用で判定します。
+          書き込みは「取込を確定」を押すまで行われません。
+        </p>
+        <input
+          ref={otherRef}
+          type="file"
+          accept=".txt,.md,.csv,.json,.ics"
+          multiple
+          disabled={busy}
+          onChange={(e) => void handleOtherFiles(e.target.files)}
+        />
+      </div>
+
+      {pending.length > 0 && (
+        <div className="term-panel">
+          <p className="term-header">CLASSIFY_RESULT</p>
+          {pending.map((item, i) => (
+            <div key={i} className="term-row">
+              <span className={item.result.type === "reject" ? "term-glyph-err" : "term-glyph-ok"}>
+                {item.result.type === "reject" ? "▲" : "●"}
+              </span>
+              <span className="term-source-name">{item.file.name}</span>
+              <span className="term-value">{classifyLabel(item.result.type)}</span>
+              {(item.result.type === "es" || item.result.type === "knowledge") && (
+                <select
+                  value={item.dest}
+                  onChange={(e) => updatePendingDest(i, e.target.value as PendingItem["dest"])}
+                >
+                  <option value="es">ES</option>
+                  <option value="knowledge">知識ベース</option>
+                  <option value="skip">スキップ</option>
+                </select>
+              )}
+            </div>
+          ))}
+          {pending
+            .filter((p) => p.result.type === "reject")
+            .map((p, i) => (
+              <p key={i} className="hint">
+                {p.file.name}: {p.result.reasons.join("; ")}
+              </p>
+            ))}
+          <button
+            type="button"
+            className="primary"
+            disabled={busy}
+            onClick={() => void handleConfirmOther()}
+          >
+            取込を確定
+          </button>
+        </div>
+      )}
 
       <div className="term-panel">
         <p className="term-header">IMPORT_LOG</p>

@@ -134,6 +134,13 @@ def dispatch(cmd: str, params: dict[str, Any], emit: EventEmitter | None = None)
         )
     if cmd == "import.stats":
         return facade.data_source_stats()
+    if cmd == "import.classify":
+        return facade.classify_document(params["content"], params.get("filename", ""))
+    if cmd == "import.document":
+        status = (lambda msg: emit({"event": "status", "message": msg})) if emit else None
+        return facade.import_document(
+            params["content"], params.get("filename", ""), params["dest"], status=status,
+        )
     if cmd == "settings.run_profiler":
         return facade.run_profiler()
     if cmd == "narrative.compile":

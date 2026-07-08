@@ -16,6 +16,11 @@
 #   バス混線・unmount後setState・同一ファイル再選択・D&D 実装禁止・
 #   ファイル名プライバシー) を追加。バックエンド新設 (status callback 配線・
 #   import.stats) を初めて許可する — ロジック変更は禁止、配線のみ。
+# Rev.6 (2026-07-08): F2 完遂を受けた F2-EXT (汎用インポート) 裁定。§2.2.2 に
+#   「判別は提案、書き込みは明示」の権限分離設計 (import.classify 純関数 +
+#   import_document の dest ホワイトリスト・冪等性・sanitize) を追加。
+#   §6 に W-33 (フロント側の cp932 フォールバック) を追加。指揮官要求
+#   (「その他」入力口 + 自動判別) を決定論の枠内で満たす。
 
 > **読者への前提命令**: 本書を読む前に `docs/AI_SKILLS.md` §0 のルーティング表
 > に従い §1 + UI タスク該当節を読め (2026-07-08 改訂 — 全文読了の強制は撤回済み)。
@@ -329,6 +334,100 @@ ImportTab                          ← 状態: sources[] (name/status/count/mtim
 mtime — stdlib のみ、LLM/埋め込み不使用、遅延初期化を起こさないこと)。
 マウント時 + import 完了時に再取得する (§3.4-5)。
 
+### 2.2.2 F2-EXT 着工前裁定 (Rev.6) — 汎用インポートの決定論的拡張
+
+指揮官要求 (「その他」の入力欄 + 自動でファイル種別を判別して中身を読み込む
+機構) は正当だが、「自動判別して読み込む」を素朴に実装すると、システムの
+中で唯一「入力の型が保証されない箇所」が生まれる — IMP-2 の教訓 (取込 API
+は「同じものを2回入れたら」「変なものを入れたら」を最初に問え) をここで
+再適用する。
+
+**裁定1: 自動判別は認可する — ただし「判別は提案、書き込みは明示」**
+
+自動判別の認否を分ける本質はアルゴリズムではなく権限だ。判別器に書き込み
+先の決定権を与えた瞬間、誤判別=聖域汚染になる。よって:
+
+> 分類器 (`import.classify`) は読み取り専用の純関数とし、書き込み
+> (`import.document`) は UI がユーザー確認済みの `dest` を明示的に渡した
+> 時のみ実行する。バックエンドは自分の推測に基づいて書き込まない。
+
+決定論的分類アルゴリズム (stdlib のみ・順序固定・先勝ち):
+
+```
+0. 拒絶ゲート (順不同・1つでも該当なら reject):
+   - 拡張子ホワイトリスト外 (.txt / .md / .csv / .json / .ics のみ許可)
+   - 先頭 8KB に NUL バイト (バイナリ混入)
+   - サイズ > 10MB (データ爆弾トリップワイヤ — IMP の系譜。診断メッセージ付きで騒がしく拒否)
+1. 先頭テキストに "[LINE]" ヘッダ        → line     (既存 import.line へ回送)
+2. "BEGIN:VCALENDAR"                     → ics      (既存 calendar.sync へ回送)
+3. ES シグナル (明示フィールド "志望職種:"/"志望動機:"/"自己PR"/"ガクチカ" 等の
+   es_manager と同じ語彙)                 → es
+4. 上記いずれでもないテキスト             → knowledge (既定の受け皿)
+```
+
+戻り値は `{type, reasons[], size, filename}` — reasons (マッチした根拠
+シグナル) を必ず返す。UI が「なぜこの判定か」を表示できることが、
+ブラックボックス化の防止線だ。
+
+書き込み側の防衛 (多層防御):
+
+- `import_document(content, filename, dest)` の `dest` は
+  `"es" | "knowledge"` の2値ホワイトリスト。diary/finance/calendar への
+  汎用書き込みは永久に不許可 — diary は RECORD で著述するもの、
+  finance/calendar は専用フォーマット管理下にある。LINE/ICS と判定された
+  ファイルは専用パイプラインへ回送する (汎用口からは書かない)。
+- バックエンドは UI の確認を信用せず再検証する (拒絶ゲートを
+  import_document 内でも再実行)。
+- 冪等性 (T-20の直接適用): 書き込み前に内容の blake2b ハッシュを計算し、
+  dest ディレクトリ内に同一ハッシュのファイルが既にあれば skip
+  (「同一内容が既に存在」と報告)。ファイル名は sanitize (パス成分除去・
+  危険文字除去) し、名前衝突時はハッシュ接尾辞を付与 — 既存ファイルの
+  上書きは構造的に不可能にする。
+- knowledge へ書いた場合のみ `sync_knowledge_index(force=True)` を続けて
+  実行 (既存 knowledge_fetcher と同じ経路 — 専用機構を新設しない)。
+- W-32続き: ファイル名・本文を stderr へ出さない。
+
+**裁定2: 正規パイプライン仕様**
+
+```
+facade.classify_document(content: str, filename: str) -> dict     # 純関数・書き込みゼロ
+facade.import_document(content, filename, dest, *, status=None) -> dict
+stdio:  "import.classify" / "import.document"（status は emit 配線 — F2 と同型）
+engine.ts: classifyDocument() / importDocument()（正規3層経路）
+```
+
+必須テスト (`test_import_stats.py` へ追加 or 新設): (a) 分類優先順位 —
+`[LINE]`ヘッダを含む ES っぽい文書は line と判定される (先勝ちの証明)、
+(b) NUL バイト・サイズ超過・拡張子外の拒絶、(c) 同一内容2回取込→2回目
+skip (冪等)、(d) 名前衝突→上書きされず別名保存、(e) dest ホワイトリスト外
+("diary"等)→例外、(f) knowledge 取込後に index 同期が呼ばれる。
+
+**裁定3: UI統合 (term-調和・W-31遵守)**
+
+`ImportTab.tsx` の LINE/ICS ブロックの後に「その他 (自動判別)」ブロックを
+追加:
+
+```
+その他 (自動判別)
+  [ファイルピッカー: accept=".txt,.md,.csv,.json,.ics"]   ← W-31: D&D禁止のまま
+        │ 選択 → 各ファイルを classify (読み取りのみ)
+        ▼
+  ┌ term-panel: CLASSIFY_RESULT ─────────────────┐
+  │ ● report.md      → KNOWLEDGE   [dest select] │  ← 判定結果+根拠を1行ずつ
+  │ ● es_darft.txt   → ES          [dest select] │     dest は上書き可能
+  │ ▲ photo.png      → 拒絶 (拡張子外)            │     (es/knowledge/スキップ)
+  │ ● talk.txt       → LINE形式 — LINE取込へ回送  │
+  │                            [取込を確定]       │  ← 確定1クリックで一括実行
+  └──────────────────────────────────────────────┘
+        │ 確定 → import.document / 回送、status は IMPORT_LOG へ逐次追記
+```
+
+- 「選択→判定表示→確定」の2段構造そのものが裁定1の権限分離のUI表現だ。
+  判定根拠 (reasons) を `term-value` で右側に表示する — 透明性が統制感を
+  生む (F-14: 本物のデータ密度)。
+- 確定前のpendingリストは揮発でよい (recordDraft対象外 — 数秒で再選択
+  できるファイル選択は「記録」ではない。過剰保全はしない)。
+
 ## 2.3 CONSULT — 認知負荷: 会話のみ (チャットの既定形を裏切らない)
 
 ```
@@ -606,6 +705,7 @@ F7: Desktop Chrome (§2.7。カスタムタイトルバー・decorations:false)
     ゲート: tsc + cargo check + ui_smoke + tauri:dev 実起動でボタン動作確認
 F1: RECORD フリクション監査 (autofocus / Enter 追加 / Ctrl+1-3)
 F2: IMPORT 等幅ダッシュボード (term-レイヤ建設 + グリフバッジ + status 逐次表示)
+F2-EXT: 汎用インポート (classify/import_document。dest 明示・冪等性・拒絶ゲート)
 F3: CONSULT 可読測度 + スクロール追従規律
 F4: INTERVIEW SessionHUD (PreSessionBriefing は E4 完成後に接続)
 F5: SETTINGS iOS 化 (CSS Toggle + Advanced <details>)
@@ -615,7 +715,7 @@ F6: PROBE タブ (D2 + E4 完成が前提条件 — それまで着手禁止。�
 
 ---
 
-# §6【実装者への警告 (W-22〜W-32)】Rev.3/Rev.5 — React 再構築の死角
+# §6【実装者への警告 (W-22〜W-33)】Rev.3/Rev.5/Rev.6 — React 再構築の死角
 
 Foxtrot 本格実装 (F7・F1〜F6) で踏み抜きやすい罠。**新規タブ実装のたびに
 本リストと照合せよ。**
@@ -663,6 +763,14 @@ Foxtrot 本格実装 (F7・F1〜F6) で踏み抜きやすい罠。**新規タブ
   名は実名を含みうる (「[LINE] ○○とのトーク履歴.txt」)。UI の一時ログ表示
   は合法 (ユーザー自身が選んだファイル) だが、**stderr (engine.log) や
   いかなる永続化にもファイル名を書くな** (AI_SKILLS §1-2)。
+- **W-33 (Rev.6: フロント側の cp932 フォールバック)**: `File.text()` は
+  常に UTF-8 でデコードする。メモ帳の ANSI 保存 (cp932) の .txt を読むと
+  本文が文字化けしたまま聖域に書き込まれる — バックエンドの
+  `_read_text_lenient` と同じ配慮がフロントに必要だ。`ArrayBuffer` で読み、
+  `TextDecoder("utf-8", {fatal:true})` を試して失敗したら
+  `TextDecoder("shift_jis")` へフォールバックせよ (ブラウザ標準 API・
+  決定論的)。これを怠ると「取り込めたのに中身がゴミ」という静かな破損に
+  なる。
 
 ---
 *装飾は 1 ピクセルも要らない (AI_SKILLS §3.4)。ハッカーが信頼するのは、

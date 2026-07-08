@@ -73,3 +73,13 @@ export interface SourceStat {
   count: number;
   mtime: string | null;
 }
+
+/** F2-EXT (SPEC_FOXTROT_UI.md §2.2.2): import.classify の決定論的分類結果 */
+export interface ClassifyResult {
+  type: "line" | "ics" | "es" | "knowledge" | "reject";
+  reasons: string[];
+  size: number;
+  filename: string;
+  /** フロント側でのみ付与 (再読込を避けるため。バックエンド純関数の戻り値には無い) */
+  content?: string;
+}
