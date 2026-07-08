@@ -21,6 +21,11 @@
 #   import_document の dest ホワイトリスト・冪等性・sanitize) を追加。
 #   §6 に W-33 (フロント側の cp932 フォールバック) を追加。指揮官要求
 #   (「その他」入力口 + 自動判別) を決定論の枠内で満たす。
+# Rev.7 (2026-07-08): F2-EXT 完遂を受けた F3 着工前裁定。既存 ConsultTab.tsx
+#   の実測により未報告バグ W-34 (import の status イベントが consult の
+#   status 行に混線する) を発見。§2.3.1 に disposed フラグ標準形・
+#   stick-to-bottom ref 法・トークン再割当表・履歴クリアの F-7 化を追加。
+#   §6 に W-34 を追加。F3 は「作り直し」ではなく既存骨格の規律締め上げ。
 
 > **読者への前提命令**: 本書を読む前に `docs/AI_SKILLS.md` §0 のルーティング表
 > に従い §1 + UI タスク該当節を読め (2026-07-08 改訂 — 全文読了の強制は撤回済み)。
@@ -446,6 +451,73 @@ ConsultTab (既存を維持)            ← 状態: messages[], input, streaming
 - DeepSeek-R1 の `<think>` はバックエンドが除去済み (AI_SKILLS §5-4)。
   UI で再パースするコードを書くな。
 
+### 2.3.1 F3 着工前裁定 (Rev.7) — ストリーミング規律と美学
+
+**実測で発見した未報告バグ (W-34)**: 現行の status ハンドラは無条件。F2 で
+import がタブ離脱後もバックエンドで継続する設計になったため、IMPORT で
+取込開始 → CONSULT へ移動すると、import の status イベント
+(「profiler 再分析中」等) が consult の status 行に混線する。chunk 側は
+`last.streaming` ガードで守られているが status 側は裸だった。W-28 の
+鏡像であり、本裁定で塞ぐ。
+
+**裁定1 (disposed フラグ標準形 — W-22/W-23 の鉄壁パターン)**:
+
+```tsx
+useEffect(() => {
+  let disposed = false;
+  let unlistenFn: UnlistenFn | null = null;
+  void listen<EngineEvent>("pkb-engine-event", handler).then((fn) => {
+    if (disposed) { fn(); return; }  // cleanup が resolve より先に走った場合、即解除
+    unlistenFn = fn;
+  });
+  return () => { disposed = true; unlistenFn?.(); };
+}, []);
+```
+
+多層防御: ①上記パターンで購読の生存期間をマウントサイクルに厳密一致させる
+(StrictMode の二重実行では各サイクルが自分の購読を確実に葬る)。②ハンドラ
+自体も冪等の第二層を持つ — chunk は `last.streaming` ガード (既存・維持)、
+**status は新設の `busyRef` (自分の consult が in-flight の間のみ反映) で
+ゲートする** (W-34 の是正)。③ リスナー内の副作用は setState のみ (関数型
+更新)。ref 経由で他の状態機械を蹴るな。
+
+**裁定2 (stick-to-bottom ref 法 — スクロール規律)**: 状態ではなく ref で
+保持する (スクロールは毎フレーム発火し得るイベントであり、state にすると
+再レンダリングの嵐になる)。
+
+```tsx
+const stickRef = useRef(true);
+// chat-log の onScroll:
+//   stickRef.current = (scrollHeight - scrollTop - clientHeight) < 24;
+// chunk 追記後 / メッセージ追加後:
+//   if (stickRef.current) scrollToBottom(/*smooth=*/false);
+```
+
+規律: ①閾値は24px (--s5相当。「ぴったり0」はサブピクセルで永久に false に
+なる)。②ストリーミング中の追従は `behavior:"auto"` (毎トークンの smooth
+はジッタとスクロールアニメの積み重ねで酔う。smooth は送信時と完了時のみ)。
+③ユーザーが上へスクロールした瞬間、同じ onScroll が自然に追従を解除し、
+最下端へ戻せば自然に再開する — 専用ボタンや解除フラグ UI を追加するな
+(機構は1つ、状態は1bit)。④プログラム的スクロールも onScroll を発火させる
+が、その時は必ず最下端なので矛盾しない (フィードバックループは構造的に
+生じない)。
+
+**裁定3 (トークン再割当によるハッカーライクな締め — term- 不使用のまま)**:
+
+| 要素 | 指定 |
+|---|---|
+| chat-log 枠線 | `--accent` → `--border` へ変更 (常時 accent 枠は「注意の常時要求」— 静かな枠に落とし、フォーカスすべきは中身) |
+| ユーザーバブル | `--bg-selected`・右寄せ (現行の `--bg-hover` から修正) |
+| AIバブル | `--bg-raised`・左寄せ・本文 `max-width: 68ch` (可読測度) |
+| ロールラベル (`あなた`/`PKB`) | `--font-mono` 0.72rem `--text-muted` (機械が付けた出自表示 = データ値、F-10) |
+| status行 | `--font-mono` (検索中…等は機械の状態報告 = データ値) |
+| ストリーミング中バブル | 本文を `--text-muted` にし、確定置換で `--text` へ昇格。`<think>` の再パースは禁止のまま (AI_SKILLS §5-4) — 「思考過程が薄く流れ、確定と同時に濃い最終回答に置き換わる」視覚言語をパーサーゼロ・色1段で実現する |
+| キャレット `▌` | 既存 `chat-blink` keyframe を維持 (新設しない) |
+| 履歴クリア | F-7 のインライン2段クリック化 (「履歴クリア」→「本当にクリア」。セッション内会話は復元不能な破壊対象) |
+
+新 hex・新アニメ・偽のタイムスタンプは一切なし。変更は色トークンの再割当と
+1 ref (stickRef) + 1 ref (busyRef) の追加が本体。
+
 ## 2.4 INTERVIEW — 認知負荷: 意図的に高 (ただし全て正直な観測量で)
 
 ```
@@ -706,7 +778,7 @@ F7: Desktop Chrome (§2.7。カスタムタイトルバー・decorations:false)
 F1: RECORD フリクション監査 (autofocus / Enter 追加 / Ctrl+1-3)
 F2: IMPORT 等幅ダッシュボード (term-レイヤ建設 + グリフバッジ + status 逐次表示)
 F2-EXT: 汎用インポート (classify/import_document。dest 明示・冪等性・拒絶ゲート)
-F3: CONSULT 可読測度 + スクロール追従規律
+F3: CONSULT 可読測度 + スクロール追従規律 + status混線防止 (W-34)
 F4: INTERVIEW SessionHUD (PreSessionBriefing は E4 完成後に接続)
 F5: SETTINGS iOS 化 (CSS Toggle + Advanced <details>)
 F6: PROBE タブ (D2 + E4 完成が前提条件 — それまで着手禁止。様式は F-14 準拠)
@@ -715,7 +787,7 @@ F6: PROBE タブ (D2 + E4 完成が前提条件 — それまで着手禁止。�
 
 ---
 
-# §6【実装者への警告 (W-22〜W-33)】Rev.3/Rev.5/Rev.6 — React 再構築の死角
+# §6【実装者への警告 (W-22〜W-34)】Rev.3/Rev.5/Rev.6/Rev.7 — React 再構築の死角
 
 Foxtrot 本格実装 (F7・F1〜F6) で踏み抜きやすい罠。**新規タブ実装のたびに
 本リストと照合せよ。**
@@ -771,6 +843,13 @@ Foxtrot 本格実装 (F7・F1〜F6) で踏み抜きやすい罠。**新規タブ
   `TextDecoder("shift_jis")` へフォールバックせよ (ブラウザ標準 API・
   決定論的)。これを怠ると「取り込めたのに中身がゴミ」という静かな破損に
   なる。
+- **W-34 (Rev.7: pkb-engine-event の status 混線)**: `pkb-engine-event` は
+  全コマンド共有のグローバルバスであり (W-28 と同一の根本原因)、F2 で
+  import がタブ離脱後もバックエンドで継続する設計になったため、IMPORT で
+  取込開始 → 別タブへ移動すると、import の status イベントが**移動先タブ
+  の status 表示に混線しうる**。status ハンドラを無条件で反映させるな —
+  自分のコマンドが in-flight の間のみ処理する `busyRef`/`importingRef`
+  ゲートを必ず設けよ (chunk 側の `last.streaming` ガードと対の規律)。
 
 ---
 *装飾は 1 ピクセルも要らない (AI_SKILLS §3.4)。ハッカーが信頼するのは、

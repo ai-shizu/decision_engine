@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { listen } from "@tauri-apps/api/event";
+import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { consult } from "../lib/engine";
 import type { ChatMessage, EngineEvent } from "../lib/types";
 
@@ -8,7 +8,18 @@ export function ConsultTab() {
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
   const [status, setStatus] = useState("");
+  const [confirmingClear, setConfirmingClear] = useState(false);
   const logRef = useRef<HTMLDivElement>(null);
+  // F3 (SPEC_FOXTROT_UI.md §2.3.1 裁定1): pkb-engine-event はコマンド非依存の
+  // グローバルバス。自分の consult が in-flight の間だけ status を反映する
+  // (W-34 の是正 — import の status 混線を防ぐ)。
+  const busyRef = useRef(false);
+  // 裁定2: 最下端追従の可否は ref で持つ (state にすると再レンダリングの嵐)。
+  const stickRef = useRef(true);
+
+  useEffect(() => {
+    busyRef.current = busy;
+  }, [busy]);
 
   function scrollToBottom(smooth = false) {
     requestAnimationFrame(() => {
@@ -19,10 +30,22 @@ export function ConsultTab() {
     });
   }
 
-  // Python エンジンの中間イベント (進捗 status / 生成トークン chunk) を受信する
+  function handleLogScroll() {
+    const el = logRef.current;
+    if (!el) return;
+    stickRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 24;
+  }
+
+  // Python エンジンの中間イベント (進捗 status / 生成トークン chunk) を受信する。
+  // W-22/W-23 の disposed フラグ標準形: cleanup が listen() の resolve より
+  // 先に走っても (StrictMode の二重実行等)、購読は確実に解除される。
   useEffect(() => {
-    const unlisten = listen<EngineEvent>("pkb-engine-event", ({ payload }) => {
+    let disposed = false;
+    let unlistenFn: UnlistenFn | null = null;
+
+    const handler = ({ payload }: { payload: EngineEvent }) => {
       if (payload.event === "status" && payload.message) {
+        if (!busyRef.current) return; // W-34: 他コマンドの status を無視する
         setStatus(payload.message);
         return;
       }
@@ -32,11 +55,21 @@ export function ConsultTab() {
           if (!last || last.role !== "assistant" || !last.streaming) return prev;
           return [...prev.slice(0, -1), { ...last, text: last.text + payload.text }];
         });
-        scrollToBottom();
+        if (stickRef.current) scrollToBottom(false);
       }
+    };
+
+    void listen<EngineEvent>("pkb-engine-event", handler).then((fn) => {
+      if (disposed) {
+        fn();
+        return;
+      }
+      unlistenFn = fn;
     });
+
     return () => {
-      void unlisten.then((fn) => fn());
+      disposed = true;
+      unlistenFn?.();
     };
   }, []);
 
@@ -51,7 +84,10 @@ export function ConsultTab() {
       { role: "assistant", text: "", streaming: true },
     ]);
     setBusy(true);
+    busyRef.current = true;
     setStatus("考え中…");
+    stickRef.current = true;
+    scrollToBottom(true);
     try {
       const res = await consult(q);
       // ストリーミング中の一時テキストを最終回答で確定置換する
@@ -78,33 +114,46 @@ export function ConsultTab() {
       setStatus(String(err));
     } finally {
       setBusy(false);
-      scrollToBottom(true);
+      busyRef.current = false;
+      if (stickRef.current) scrollToBottom(true);
     }
   }
 
-  function clearChat() {
+  // F-7: セッション内会話は復元不能な破壊対象 — インライン2段クリックで確定する。
+  function handleClearClick() {
+    if (!confirmingClear) {
+      setConfirmingClear(true);
+      return;
+    }
     setMessages([]);
     setStatus("");
+    setConfirmingClear(false);
   }
 
   return (
     <section className="panel consult-panel">
       <div className="consult-header">
         <h2>AI 相談 (CONSULT)</h2>
-        <button type="button" className="ghost" onClick={clearChat} disabled={busy}>
-          履歴クリア
+        <button
+          type="button"
+          className="ghost"
+          onClick={handleClearClick}
+          onBlur={() => setConfirmingClear(false)}
+          disabled={busy}
+        >
+          {confirmingClear ? "本当にクリア" : "履歴クリア"}
         </button>
       </div>
       <p className="hint">記録・プロファイルに基づくオフライン相談。会話はこのセッション内のみ保持されます。</p>
 
-      <div className="chat-log" ref={logRef}>
+      <div className="chat-log" ref={logRef} onScroll={handleLogScroll}>
         {messages.length === 0 ? (
           <p className="hint chat-empty">質問を入力して送信してください。</p>
         ) : (
           messages.map((m, i) => (
             <div key={i} className={`chat-bubble ${m.role}`}>
               <span className="chat-role">{m.role === "user" ? "あなた" : "PKB"}</span>
-              <pre className="chat-text">
+              <pre className={`chat-text${m.streaming ? " streaming" : ""}`}>
                 {m.text}
                 {m.streaming && <span className="chat-cursor">▌</span>}
               </pre>

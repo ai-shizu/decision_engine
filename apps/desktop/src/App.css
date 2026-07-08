@@ -619,7 +619,7 @@ button:disabled {
 .chat-log {
   height: 360px;
   overflow-y: auto;
-  border: 1px solid var(--accent);
+  border: 1px solid var(--border);
   border-radius: 8px;
   padding: 12px;
   margin-bottom: 12px;
@@ -638,16 +638,19 @@ button:disabled {
 
 .chat-bubble.user {
   margin-left: 48px;
-  background: var(--bg-hover);
+  background: var(--bg-selected);
 }
 
 .chat-bubble.assistant {
   margin-right: 48px;
+  background: var(--bg-raised);
+  max-width: 68ch;
 }
 
 .chat-role {
   display: block;
-  font-size: 0.75rem;
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
   color: var(--text-muted);
   margin-bottom: 4px;
 }
@@ -658,6 +661,16 @@ button:disabled {
   word-break: break-word;
   font-family: inherit;
   font-size: 0.95rem;
+}
+
+/* F3 (SPEC_FOXTROT_UI.md §2.3.1): ストリーミング中は薄く、確定置換で --text へ昇格 */
+.chat-text.streaming {
+  color: var(--text-muted);
+}
+
+/* CONSULT 専用スコープ (他タブ共通の .status-line は変更しない) */
+.consult-panel .status-line {
+  font-family: var(--font-mono);
 }
 
 .chat-cursor {

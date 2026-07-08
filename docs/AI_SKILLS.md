@@ -801,7 +801,7 @@ TOTAL:                                          ~1.6-2.2 秒 (< 3000ms ゲート
 
 ---
 
-## 13. Target Foxtrot — UI/UX 設計 (`docs/SPEC_FOXTROT_UI.md`。F0/F7/F1/F2/F2-EXT 完遂・F3〜F6 未着手)
+## 13. Target Foxtrot — UI/UX 設計 (`docs/SPEC_FOXTROT_UI.md`。F0/F7/F1/F2/F2-EXT/F3 完遂・F4〜F6 未着手)
 
 フロントエンド (Tauri + React) の設計仕様。**§3.4 (React UI 規約) が上位法** —
 SPEC はその適用解釈を確定させるもの。コードより先に存在する凍結事項:
@@ -980,6 +980,52 @@ index同期呼び出し) を `test_import_stats.py` に追加し全て ALL PASS�
 ALL PASS、`ui_smoke.py` ALL PASS、`cargo tauri dev` 実起動でエンジン ready
 まで到達。分類結果パネルの表示・dest選択・確定ボタンの実操作確認は
 指揮官の実施を要する。
+
+### F3 完遂 (2026-07-08) — as-built (CONSULT。実測で未報告バグを1件発見)
+
+F3 は「作り直し」ではなく既存 `ConsultTab.tsx` の骨格 (リスナー・スクロール・
+確定置換) を維持したままの規律締め上げ。着工前の実測で **W-34 (未報告バグ)**
+を発見: F2 で import がタブ離脱後もバックエンドで継続する設計になったため、
+IMPORT で取込開始 → CONSULT へ移動すると import の status イベントが
+consult の status 行に混線していた (chunk 側は `last.streaming` ガードで
+守られていたが status 側は無条件だった)。
+
+- **W-22/W-23 の disposed フラグ標準形**: `listen()` の `.then()` 内で
+  `disposed` フラグを確認し、cleanup が resolve より先に走っていれば
+  即座に unlisten する。StrictMode の二重マウントでも購読が漏れない。
+- **W-34 の是正**: `busyRef` (自分の consult が in-flight の間のみ true)
+  で status ハンドラをゲート。chunk 側の `last.streaming` ガードと対に
+  なる第二の防衛線。
+- **stick-to-bottom (`stickRef`)**: state ではなく ref。`onScroll` で
+  `scrollHeight - scrollTop - clientHeight < 24` を判定し、ストリーミング
+  追記時はこの ref が true の時のみ `behavior:"auto"` でスクロール。
+  ユーザーが読み返し中に上へスクロールした瞬間に自動解除され、最下端へ
+  戻せば自然に再開する (専用ボタン・解除フラグ UI は追加していない)。
+- **トークン再割当 (term- 不使用のまま)**: chat-log の枠線を `--accent`→
+  `--border`、ユーザーバブルを `--bg-hover`→`--bg-selected`、AIバブルに
+  `--bg-raised`+`max-width:68ch` を付与、ロールラベルを `--font-mono`
+  0.72rem 化。ストリーミング中の本文は `--text-muted` (`.chat-text.streaming`
+  クラス) にし確定置換で通常色へ復帰。CONSULT の status 行のみ
+  `.consult-panel .status-line` のスコープ付きセレクタで mono 化 (RECORD
+  等、他タブ共通の `.status-line` には触れていない)。
+- **履歴クリアの F-7 化**: インライン2段クリック (「履歴クリア」→
+  「本当にクリア」、`onBlur` で確認状態を解除)。モーダル・ダイアログなし。
+
+**仕様との差異 (申告)**: なし。バックエンド不可触 (facade/engine_stdio に
+1行も触れていない) につき Python 全スイートは対象外 — `ui_smoke.py`
+(Textual TUI 側の回帰確認) のみ実施。
+
+**運用上の教訓 (次の実装者への申告)**: `cargo tauri dev` の再起動を素早く
+繰り返すと、前セッションの `pkb-desktop.exe`/vite (node.exe) の子プロセスが
+終了しきらずポート1420を握ったまま残ることがある (バックグラウンドタスクの
+「completed」通知は必ずしも子プロセス全滅を保証しない)。起動失敗時は
+`Get-Process pkb-desktop` / `Get-NetTCPConnection -LocalPort 1420` で残存
+プロセスを確認し、`Stop-Process -Force` で掃除してから再起動すること。
+
+検証: `tsc`/`cargo check` エラーなし、`ui_smoke.py` ALL PASS、`cargo tauri
+dev` 実起動でエンジン ready まで到達 (1回目はポート衝突で失敗、残存
+プロセスを掃除して2回目で成功)。ストリーミング挙動・スクロール追従・
+履歴クリアの2段確認は指揮官の実施を要する。
 
 ---
 
