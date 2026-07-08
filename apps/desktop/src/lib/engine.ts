@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import type { RecordData, SettingsData } from "./types";
+import type { RecordData, SettingsData, SourceStat } from "./types";
 
 export async function pkbInvoke<T = unknown>(
   cmd: string,
@@ -32,6 +32,11 @@ export async function saveRecord(
 export async function calendarEventDates(): Promise<string[]> {
   const res = await pkbInvoke<{ dates: string[] }>("calendar.event_dates");
   return res.dates;
+}
+
+/** F2 (SPEC_FOXTROT_UI.md §2.2.1 裁定4): IMPORT SourceTable 用の軽量 stat */
+export async function importStats(): Promise<Record<string, SourceStat>> {
+  return pkbInvoke("import.stats");
 }
 
 export interface ConsultOptions {

@@ -9,8 +9,10 @@ UI 依存は一切含まない。
 
 from __future__ import annotations
 
+import json
+import re
 import sys
-from datetime import date
+from datetime import date, datetime
 from pathlib import Path
 from typing import Callable
 
@@ -26,7 +28,16 @@ from .consultation_engine import (
     load_user_profile,
     save_fixed_attributes,
 )
-from .paths import DIARY_MD, LINE_HISTORY, PROJECT_ROOT, PROCESSED
+from .paths import (
+    CALENDAR_JSON,
+    DATA_KNOWLEDGE,
+    DIARY_MD,
+    ES_DIR,
+    FINANCE_JSON,
+    LINE_HISTORY,
+    PROJECT_ROOT,
+    PROCESSED,
+)
 
 StatusCallback = Callable[[str], None]
 
@@ -199,9 +210,12 @@ def sync_calendar(
     db_path: str | Path | None = None,
     days_back: int = 365,
     days_ahead: int = 365,
+    status: StatusCallback | None = None,
 ) -> dict:
     if mode not in ("append", "overwrite"):
         raise ValueError(f"不明なマージモード: {mode}")
+    if status:
+        status(f"{source} 同期中")
     if source == "ics":
         if not ics_path:
             raise ValueError("ICS 同期には ics_path が必要です")
@@ -213,7 +227,11 @@ def sync_calendar(
         )
     else:
         raise ValueError(f"不明な同期ソース: {source}")
+    if status:
+        status("DailyContext結晶化+ベクトル同期中")
     summary["index_rebuilt"] = get_engine().sync_diary_index(force=True)
+    if status:
+        status("完了")
     return summary
 
 
@@ -226,6 +244,64 @@ def calendar_event_dates() -> list[str]:
     dates |= {d for d, txs in fin.load_finance().items() if txs}
     dates |= {d for d, entries in load_consultations().items() if entries}
     return sorted(dates)
+
+
+def _mtime_iso(path: Path) -> str | None:
+    if not path.exists():
+        return None
+    return datetime.fromtimestamp(path.stat().st_mtime).isoformat()
+
+
+def _diary_entry_count(path: Path) -> int:
+    text = path.read_text(encoding="utf-8")
+    return len(re.findall(r"^##\s+\d{4}-\d{2}-\d{2}", text, re.MULTILINE))
+
+
+def _line_export_count(path: Path) -> int:
+    return path.read_text(encoding="utf-8").count("[LINE]")
+
+
+def _json_entry_count(path: Path) -> int:
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return 0
+    return sum(len(v) for v in data.values()) if isinstance(data, dict) else 0
+
+
+def _dir_file_count(path: Path) -> int:
+    if not path.is_dir():
+        return 0
+    return sum(1 for p in path.iterdir() if p.is_file())
+
+
+def data_source_stats() -> dict:
+    """F2 (SPEC_FOXTROT_UI.md §2.2.1 裁定4): IMPORT タブの SourceTable 用。
+    stdlib のみの軽量 stat ({exists, count, mtime})。LLM/埋め込みは一切
+    使わない (遅延初期化 (AI_SKILLS §1) を壊さないこと)。
+    """
+    sources = {
+        "diary": (DIARY_MD, _diary_entry_count),
+        "line": (LINE_HISTORY, _line_export_count),
+        "calendar": (CALENDAR_JSON, _json_entry_count),
+        "finance": (FINANCE_JSON, _json_entry_count),
+    }
+    result: dict[str, dict] = {}
+    for name, (path, count_fn) in sources.items():
+        exists = path.exists()
+        result[name] = {
+            "exists": exists,
+            "count": count_fn(path) if exists else 0,
+            "mtime": _mtime_iso(path),
+        }
+    for name, path in (("es", ES_DIR), ("knowledge", DATA_KNOWLEDGE)):
+        exists = path.is_dir()
+        result[name] = {
+            "exists": exists,
+            "count": _dir_file_count(path) if exists else 0,
+            "mtime": _mtime_iso(path),
+        }
+    return result
 
 
 def _run_profiler() -> dict:
@@ -270,27 +346,43 @@ def _append_line_text(text: str, filename: str = "") -> None:
         f.write("\n" + format_line_import(text, filename) + "\n")
 
 
-def import_line_text(text: str, filename: str = "") -> dict:
+def import_line_text(text: str, filename: str = "", *, status: StatusCallback | None = None) -> dict:
+    """F2 (SPEC_FOXTROT_UI.md §2.2.1): status は UI への逐次進捗通知のみに
+    使う任意コールバック。ロジックは無変更 (配線のみ)。W-32: ファイル名は
+    UI の一時イベントに含めてよいが、ログ・永続化には書かない。
+    """
+    label = filename or "line_history.txt"
+    if status:
+        status(f"{label} を受信")
     _append_line_text(text, filename)
+    if status:
+        status("追記完了 — profiler 再分析中 (テレメトリ/テンソル同期含む)")
     result = _run_profiler()
     msg = result["message"]
     if result["ok"]:
-        label = filename or "line_history.txt"
         msg = f"{label} を取り込み — {msg}"
-    return {"imported": True, "filename": filename or "line_history.txt", **result, "message": msg}
+    if status:
+        status("完了")
+    return {"imported": True, "filename": label, **result, "message": msg}
 
 
-def import_line_batch(files: list[dict]) -> dict:
+def import_line_batch(files: list[dict], *, status: StatusCallback | None = None) -> dict:
     names: list[str] = []
+    if status:
+        status(f"{len(files)} 件を受信")
     for item in files:
         content = str(item.get("content", ""))
         name = str(item.get("filename", ""))
         _append_line_text(content, name)
         names.append(name or f"file_{len(names) + 1}.txt")
+    if status:
+        status("追記完了 — profiler 再分析中 (テレメトリ/テンソル同期含む)")
     result = _run_profiler()
     msg = result["message"]
     if result["ok"]:
         msg = f"{len(names)} 件の LINE 履歴を取り込み — {msg}"
+    if status:
+        status("完了")
     return {
         "imported": True,
         "count": len(names),
@@ -300,15 +392,19 @@ def import_line_batch(files: list[dict]) -> dict:
     }
 
 
-def sync_calendar_ics_batch(files: list[dict], mode: str = "append") -> dict:
+def sync_calendar_ics_batch(
+    files: list[dict], mode: str = "append", *, status: StatusCallback | None = None,
+) -> dict:
     if mode not in ("append", "overwrite"):
         raise ValueError(f"不明なマージモード: {mode}")
     names: list[str] = []
     last_summary: dict = {}
+    if status:
+        status(f"{len(files)} 件を受信")
     for item in files:
         content = str(item.get("content", ""))
         name = str(item.get("filename", "calendar.ics"))
-        last_summary = sync_calendar_ics_content(content, mode)
+        last_summary = sync_calendar_ics_content(content, mode, status=status)
         names.append(name)
     message = f"{len(names)} 件の ICS を同期しました ({mode})"
     if last_summary.get("index_rebuilt"):
@@ -316,7 +412,9 @@ def sync_calendar_ics_batch(files: list[dict], mode: str = "append") -> dict:
     return {**last_summary, "count": len(names), "filenames": names, "message": message}
 
 
-def sync_calendar_ics_content(content: str, mode: str = "append") -> dict:
+def sync_calendar_ics_content(
+    content: str, mode: str = "append", *, status: StatusCallback | None = None,
+) -> dict:
     import tempfile
 
     with tempfile.NamedTemporaryFile(
@@ -325,7 +423,7 @@ def sync_calendar_ics_content(content: str, mode: str = "append") -> dict:
         tf.write(content)
         tmp_path = tf.name
     try:
-        summary = sync_calendar("ics", mode, ics_path=tmp_path)
+        summary = sync_calendar("ics", mode, ics_path=tmp_path, status=status)
     finally:
         Path(tmp_path).unlink(missing_ok=True)
     return summary
@@ -358,6 +456,7 @@ __all__ = [
     "calendar_event_dates",
     "compile_narrative",
     "consult",
+    "data_source_stats",
     "fetch_pending_knowledge",
     "format_line_import",
     "format_user_profile_summary",

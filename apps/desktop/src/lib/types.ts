@@ -66,3 +66,10 @@ export interface InterviewMessage {
 }
 
 export type RecordSubTab = "events" | "finance" | "diary";
+
+/** F2 (SPEC_FOXTROT_UI.md §2.2.1): IMPORT SourceTable 用の軽量 stat */
+export interface SourceStat {
+  exists: boolean;
+  count: number;
+  mtime: string | null;
+}

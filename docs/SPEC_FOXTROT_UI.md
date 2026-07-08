@@ -10,6 +10,12 @@
 # Rev.4 (2026-07-08): F7 完遂を受けた F1 着工前裁定。§2.1 に F1 専用の 3 裁定
 #   (recordDraft によるタブローカル state 隔離・isCommitEnter による IME
 #   ガード共通化・Alt/Ctrl キーボード配線レイヤ) を追加。
+# Rev.5 (2026-07-08): F1 完遂を受けた F2 着工前裁定。§1.5 に term- CSS レイヤ
+#   (F-14 の合法実装語彙。IMPORT で建設・INTERVIEW/PROBE が流用) を新設。
+#   §2.2 に非同期処理と importLog の裁定を追加。§6 に W-28〜W-32 (イベント
+#   バス混線・unmount後setState・同一ファイル再選択・D&D 実装禁止・
+#   ファイル名プライバシー) を追加。バックエンド新設 (status callback 配線・
+#   import.stats) を初めて許可する — ロジック変更は禁止、配線のみ。
 
 > **読者への前提命令**: 本書を読む前に `docs/AI_SKILLS.md` §0 のルーティング表
 > に従い §1 + UI タスク該当節を読め (2026-07-08 改訂 — 全文読了の強制は撤回済み)。
@@ -126,6 +132,59 @@ App.css の全リテラル hex (~80 箇所) を上記 var() へ機械置換す�
 **視覚的差分ゼロが F0 のゲート** — 置換前後のスクリーンショットを比較し、
 1px の差も出ないこと。`npx tsc --noEmit` + `python tests/ui_smoke.py` 必須。
 
+## 1.5 term- CSS レイヤ (Rev.5) — F-14 の合法実装語彙
+
+サイバーパンク演出 (F-14) を 15 トークン + 等幅書体 + 擬似要素のみで実現する
+共有基盤。**F2 (IMPORT) で建設し、INTERVIEW の SessionHUD・F6 (PROBE) が
+そのまま流用する** — 3 箇所で同じ語彙を使うことで様式の一貫性を保証する。
+
+```css
+/* ---- term- レイヤ: 端末美学の共有基盤 ---- */
+.term-panel {                          /* HUD フレームの土台 */
+  position: relative;
+  background: var(--bg-deep);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-s);
+  padding: var(--s4);
+}
+.term-panel::before,                   /* L字コーナーブラケット */
+.term-panel::after {
+  content: "";
+  position: absolute;
+  width: 8px; height: 8px;
+}
+.term-panel::before { top: -1px; left: -1px;
+  border-top: 2px solid var(--accent); border-left: 2px solid var(--accent); }
+.term-panel::after  { bottom: -1px; right: -1px;
+  border-bottom: 2px solid var(--accent); border-right: 2px solid var(--accent); }
+
+.term-header {                         /* ▍IMPORT // DATA_SOURCES 型見出し */
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+.term-header::before { content: "\258D"; color: var(--accent); margin-right: var(--s1); }
+
+.term-row {                            /* 等幅1行レイアウト (SourceRow/ログ行) */
+  display: flex; align-items: baseline; gap: var(--s2);
+  font-family: var(--font-mono); font-size: 0.85rem;
+}
+.term-value { font-family: var(--font-mono); text-align: right; }
+.term-glyph-ok    { color: var(--ok); }        /* ● Indexed */
+.term-glyph-muted { color: var(--text-muted); } /* ○ Missing */
+.term-glyph-err   { color: var(--err-soft); }   /* ▲ Error */
+.term-log-line::before { content: "> "; color: var(--accent); } /* プロンプト行 */
+```
+
+**適用ルール (法制化)**: ① 適用先は「統制感」を担うタブのみ (IMPORT /
+INTERVIEW HUD / PROBE)。RECORD・CONSULT・SETTINGS への適用は禁止 (§2 の
+既定形を裏切らない)。② `.term-panel` のブラケットは1階層のみ・ネスト禁止。
+③ box-shadow / gradient / filter / 新規 hex は引き続き禁止 — 「発光」は
+`--accent` と `--bg-deep` の彩度対比のみで表現する。④ 全グリフはテキスト
+(●○▲▍`>`)。絵文字は禁止 (F-9)。
+
 ---
 
 # §2【Tab Architecture Details】6 タブの認知負荷マッピング
@@ -233,6 +292,42 @@ ImportTab                          ← 状態: sources[] (name/status/count/mtim
   `▲` (--err-soft) = Error。件数と mtime は mono 右揃え。
 - 長時間処理 (import.line 等) は **status イベントを 1 行ずつ追記表示** (F-6。
   §3.4-7「busy フラグでボタンを殺すだけの UI は不合格」)。
+
+### 2.2.1 F2 着工前裁定 (Rev.5) — 非同期処理・importLog・バックエンド配線
+
+**実測に基づく前提**: `invoke_sync` (engine.rs) のイベント転送はコマンド
+非依存の汎用機構であり、`engine_stdio` には既に `emit` コールバックが
+存在する。つまり F-6 (status 逐次表示) はロジック変更なしの**配線のみ**
+で合法的に実現できる。
+
+**裁定 (1) 中断は永久禁止**: import は書き込み操作。タブアンマウント時に
+**キャンセルしない・させない** (途中中断はデータ破損の温床)。処理はバック
+エンドで自然に継続させる (stdio レーンは直列のため次コマンドは自然に
+待ち行列化する)。
+
+**裁定 (2) importLog によるログの不喪失**: `RecordTab.tsx` の `recordDraft`
+と同族の、ファイルローカル・シングルトン `importLog: string[]` (上限 50 行、
+アプリ終了で揮発) を認可する。status 行は「state に直接」ではなく
+「`importLog` へ push → state へ反映」の順で書き、unmount 中に届いた完了
+通知もログに残す。再マウント時は `importLog` から全行復元する — タブを
+往復しても取込の経過と結果が消えない (一覧性 = 統制感)。コンポーネント内は
+`mountedRef` ガードで unmount 後の setState を封じる (W-29)。
+
+**裁定 (3) バックエンド最小配線 (F-6 の実装、初めて許可)**: `engine_stdio`
+の `import.line` / `calendar.sync` ハンドラに consult と同型の `emit` を
+渡し、`facade.import_line_text`/`import_line_batch` へ optional
+`status=None` コールバックを追加する。発行するステージは「N件受信→追記
+完了→profiler再分析中→テレメトリ/テンソル更新→完了」の**実際の処理段の
+み** (F-14: 偽の進捗禁止。% 表示は計測できないので出さない — 段階名だけが
+本物)。**ロジック変更は一切禁止、配線のみ**。フロントは `pkb-engine-event`
+を購読する (W-22 の非同期 cleanup 厳守、W-28 のイベント混線ガード必須)。
+
+**裁定 (4) SourceTable のデータ源**: 新 API `import.stats` を認可する
+(`facade.data_source_stats()` → `engine_stdio` dispatch → `engine.ts`
+ラッパーの正規 3 層経路 — §3.1 の配線順序を厳守)。中身は 6 ソースの
+`{exists, count, mtime}` の軽量 stat (diary 行スキャン・json len・ファイル
+mtime — stdlib のみ、LLM/埋め込み不使用、遅延初期化を起こさないこと)。
+マウント時 + import 完了時に再取得する (§3.4-5)。
 
 ## 2.3 CONSULT — 認知負荷: 会話のみ (チャットの既定形を裏切らない)
 
@@ -510,7 +605,7 @@ F0: App.css トークン移行 (視覚差分ゼロ)          ゲート: スク�
 F7: Desktop Chrome (§2.7。カスタムタイトルバー・decorations:false)
     ゲート: tsc + cargo check + ui_smoke + tauri:dev 実起動でボタン動作確認
 F1: RECORD フリクション監査 (autofocus / Enter 追加 / Ctrl+1-3)
-F2: IMPORT 等幅ダッシュボード (グリフバッジ + status 逐次表示)
+F2: IMPORT 等幅ダッシュボード (term-レイヤ建設 + グリフバッジ + status 逐次表示)
 F3: CONSULT 可読測度 + スクロール追従規律
 F4: INTERVIEW SessionHUD (PreSessionBriefing は E4 完成後に接続)
 F5: SETTINGS iOS 化 (CSS Toggle + Advanced <details>)
@@ -520,7 +615,7 @@ F6: PROBE タブ (D2 + E4 完成が前提条件 — それまで着手禁止。�
 
 ---
 
-# §6【実装者への警告 (W-22〜W-27)】Rev.3 — React 再構築の死角
+# §6【実装者への警告 (W-22〜W-32)】Rev.3/Rev.5 — React 再構築の死角
 
 Foxtrot 本格実装 (F7・F1〜F6) で踏み抜きやすい罠。**新規タブ実装のたびに
 本リストと照合せよ。**
@@ -548,6 +643,26 @@ Foxtrot 本格実装 (F7・F1〜F6) で踏み抜きやすい罠。**新規タブ
 - **W-27 (ドラッグ領域によるクリック横取り)**: `data-tauri-drag-region`
   の**子要素に置いたボタンはクリックがドラッグ判定に食われる**。
   WindowControls (§2.7) はドラッグ領域の兄弟要素として配置せよ。
+- **W-28 (Rev.5: イベントバスの混線)**: `pkb-engine-event` は**全コマンド
+  共有のグローバルバス**である。IMPORT のリスナーは「自分の import が
+  in-flight の間だけ購読し、`event === "status"` のみ処理」せよ。無条件
+  購読すると consult の status/chunk イベントが取込ログに混入する。
+- **W-29 (Rev.5: unmount 後の setState)**: 完了ハンドラ・catch・finally の
+  全てで `mountedRef` を確認せよ。React は警告を出さずに黙って捨てる —
+  「動いているように見えて結果表示が消えた」という最悪の症状になる。
+  §2.2.1 裁定 (2) の `importLog` が結果の保険になる。
+- **W-30 (Rev.5: 同一ファイル再選択)**: `<input type="file">` は同じ
+  ファイルの再選択で `onChange` が発火しない。既存の `resetInput` パターン
+  (値を空文字へリセット) を維持せよ — 削るな。
+- **W-31 (Rev.5: ドラッグ&ドロップの実装禁止)**: Tauri の WebView は
+  HTML5 ファイルドロップを横取りし、Tauri 独自イベント (File オブジェクト
+  ではなく**パス文字列**が届く) に変換する。パス読取は fs パーミッション
+  拡張を要し、オフライン監査面積が広がる。**F2 で D&D を実装するな** —
+  ファイルピッカーのみ。「便利だから」の追加はレビュー落ち。
+- **W-32 (Rev.5: ファイル名のプライバシー)**: LINE エクスポートのファイル
+  名は実名を含みうる (「[LINE] ○○とのトーク履歴.txt」)。UI の一時ログ表示
+  は合法 (ユーザー自身が選んだファイル) だが、**stderr (engine.log) や
+  いかなる永続化にもファイル名を書くな** (AI_SKILLS §1-2)。
 
 ---
 *装飾は 1 ピクセルも要らない (AI_SKILLS §3.4)。ハッカーが信頼するのは、

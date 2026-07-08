@@ -106,10 +106,12 @@ def dispatch(cmd: str, params: dict[str, Any], emit: EventEmitter | None = None)
     if cmd == "calendar.sync":
         source = params["source"]
         mode = params.get("mode", "append")
+        # F2 (SPEC_FOXTROT_UI.md §2.2.1): consult と同型の status 逐次通知。
+        status = (lambda msg: emit({"event": "status", "message": msg})) if emit else None
         if source == "ics" and params.get("ics_files"):
-            return facade.sync_calendar_ics_batch(params["ics_files"], mode)
+            return facade.sync_calendar_ics_batch(params["ics_files"], mode, status=status)
         if source == "ics" and params.get("ics_content"):
-            return facade.sync_calendar_ics_content(params["ics_content"], mode)
+            return facade.sync_calendar_ics_content(params["ics_content"], mode, status=status)
         if source == "apple":
             return facade.sync_calendar(
                 "apple",
@@ -117,16 +119,21 @@ def dispatch(cmd: str, params: dict[str, Any], emit: EventEmitter | None = None)
                 db_path=params.get("db_path"),
                 days_back=int(params.get("days_back", 365)),
                 days_ahead=int(params.get("days_ahead", 365)),
+                status=status,
             )
-        return facade.sync_calendar(source, mode, ics_path=params.get("ics_path"))
+        return facade.sync_calendar(source, mode, ics_path=params.get("ics_path"), status=status)
     if cmd == "import.line":
+        status = (lambda msg: emit({"event": "status", "message": msg})) if emit else None
         files = params.get("files")
         if files:
-            return facade.import_line_batch(files)
+            return facade.import_line_batch(files, status=status)
         return facade.import_line_text(
             params["content"],
             params.get("filename", ""),
+            status=status,
         )
+    if cmd == "import.stats":
+        return facade.data_source_stats()
     if cmd == "settings.run_profiler":
         return facade.run_profiler()
     if cmd == "narrative.compile":

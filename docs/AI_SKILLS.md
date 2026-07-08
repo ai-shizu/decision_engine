@@ -801,7 +801,7 @@ TOTAL:                                          ~1.6-2.2 秒 (< 3000ms ゲート
 
 ---
 
-## 13. Target Foxtrot — UI/UX 設計 (`docs/SPEC_FOXTROT_UI.md`。F0/F7/F1 完遂・F2〜F6 未着手)
+## 13. Target Foxtrot — UI/UX 設計 (`docs/SPEC_FOXTROT_UI.md`。F0/F7/F1/F2 完遂・F3〜F6 未着手)
 
 フロントエンド (Tauri + React) の設計仕様。**§3.4 (React UI 規約) が上位法** —
 SPEC はその適用解釈を確定させるもの。コードより先に存在する凍結事項:
@@ -884,6 +884,57 @@ Ctrl+S リスナーへ相乗り、`Alt+1..5` は `App.tsx` にメインタブ切
 実機での対話的確認は、ネイティブ GUI 操作を自動化する手段がなくコード
 トレースによる論理検証に留まる** — `cargo tauri dev` を再起動しウィンドウは
 起動済みだが、実際のキー入力・タブ往復操作は指揮官の実施を要する。
+
+### F2 完遂 (2026-07-08) — as-built (IMPORT タブ・初のバックエンド配線)
+
+**実測が裁定を変えた点**: `invoke_sync` (engine.rs) のイベント転送は
+コマンド非依存の汎用機構であり、`engine_stdio` には既に `emit` コール
+バックが存在した。これにより F-6 (status 逐次表示) はロジック変更なしの
+配線のみで実現できた。
+
+- **バックエンド (ロジック変更なし・配線のみ)**: `facade.import_line_text`/
+  `import_line_batch`/`sync_calendar`/`sync_calendar_ics_batch`/
+  `sync_calendar_ics_content` に optional `status: StatusCallback | None`
+  を追加 (キーワード専用引数、既存の位置引数呼び出しは非破壊)。
+  `engine_stdio.dispatch` の `import.line`/`calendar.sync` から consult と
+  同型の `emit` ラムダを配線。新規 `facade.data_source_stats()` (stdlib の
+  み・LLM/埋め込み不使用) + stdio `import.stats` + `engine.ts::importStats()`
+  を正規 3 層経路で新設 (diary 行数・LINE エクスポート数・calendar/finance
+  の JSON エントリ数・es/knowledge のファイル数を `{exists, count, mtime}`
+  で返す)。
+- **フロント**: `ImportTab.tsx` にファイルローカル・シングルトン
+  `importLog` (上限 50 行、アプリ終了で揮発) を新設し、`RecordTab` の
+  `recordDraft` と同族の「タブ往復してもログが消えない」設計を適用。
+  `pkb-engine-event` の購読は `importingRef` で「自分の import が
+  in-flight の間だけ」処理するようガード (W-28)。`mountedRef` で unmount
+  後の setState を封じつつ (W-29)、`pushImportLog()` 自体は unmount 有無に
+  関わらず常に実行し、完了通知は失われない (§2.2.1 裁定2)。取込処理自体は
+  中断しない (アンマウントしても継続、finally のフロント反映のみガード)。
+  `resetInput` パターンは維持 (W-30)。
+- **term- CSS レイヤ (§1.5) を建設**: `.term-panel`/`.term-header`/
+  `.term-row`/`.term-value`/`.term-glyph-*`/`.term-log-line` を新設。
+  SourceTable (●○ グリフ + mono 右揃えの件数・mtime) と IMPORT_LOG の
+  両方に適用。INTERVIEW の SessionHUD・将来の PROBE がこの語彙を流用する。
+- **W-31 (D&D 非実装) を遵守**: ファイルドロップは実装していない (ファイル
+  ピッカーのみ)。**W-32 (ファイル名プライバシー) を遵守**: ファイル名は
+  UI の一時ログ (importLog) にのみ現れ、stderr/永続化には一切書いていない
+  (既存 `_run_profiler` の traceback もファイル名を含まない)。
+
+**仕様との差異 (申告)**: なし — §2.2.1 の 4 裁定・W-28〜W-32 を過不足なく
+実装した。ただし `sync_calendar` 系の status は 2 段階 ("同期中"→"完了")
+のみで、SPEC が例示した LINE import の 3 段階 ("受信"→"追記完了・profiler
+再分析中"→"完了") より粗い — カレンダー同期は profiler を起動しない軽量
+処理 (AI_SKILLS §1-4) であり、実際の処理段がそれだけしか存在しないため
+(偽の中間段階を作らない = F-14 の原則)。
+
+検証: `tsc`/`cargo check` エラーなし、**13 スイート (Python) + 新規
+`tests/test_import_stats.py` (4 ケース: 欠損ソースの exists=False・実データ
+での件数一致・ディレクトリ型ソース・status コールバックの発火順序) 全て
+ALL PASS** — バックエンドに触れた F2 で初めて Python 回帰が必須になった。
+`ui_smoke.py` ALL PASS (Textual TUI 側)。`cargo tauri dev` 実起動でビルド・
+エンジン ready まで到達。**SourceTable の数値表示・IMPORT_LOG の逐次追記・
+term- レイヤの見た目確認は、F1 と同じ理由でネイティブ GUI の対話的検証が
+自動化できず、指揮官の実施を要する。**
 
 ---
 

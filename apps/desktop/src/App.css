@@ -492,6 +492,98 @@ button:disabled {
   cursor: not-allowed;
 }
 
+/* term- レイヤ (SPEC_FOXTROT_UI.md §1.5): 端末美学の共有基盤。
+   IMPORT で建設、INTERVIEW/PROBE が流用する。適用先はこの3タブのみ (F-14)。 */
+.term-panel {
+  position: relative;
+  background: var(--bg-deep);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-s);
+  padding: var(--s4);
+  margin-bottom: var(--s4);
+}
+
+.term-panel::before,
+.term-panel::after {
+  content: "";
+  position: absolute;
+  width: 8px;
+  height: 8px;
+}
+
+.term-panel::before {
+  top: -1px;
+  left: -1px;
+  border-top: 2px solid var(--accent);
+  border-left: 2px solid var(--accent);
+}
+
+.term-panel::after {
+  bottom: -1px;
+  right: -1px;
+  border-bottom: 2px solid var(--accent);
+  border-right: 2px solid var(--accent);
+}
+
+.term-header {
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  margin: 0 0 var(--s2);
+}
+
+.term-header::before {
+  content: "\258D";
+  color: var(--accent);
+  margin-right: var(--s1);
+}
+
+.term-row {
+  display: flex;
+  align-items: baseline;
+  gap: var(--s2);
+  font-family: var(--font-mono);
+  font-size: 0.85rem;
+  padding: 3px 0;
+}
+
+.term-source-name {
+  flex: 1;
+}
+
+.term-value {
+  font-family: var(--font-mono);
+  text-align: right;
+  color: var(--text-muted);
+  flex-shrink: 0;
+}
+
+.term-glyph-ok    { color: var(--ok); }
+.term-glyph-muted { color: var(--text-muted); }
+.term-glyph-err   { color: var(--err-soft); }
+
+.term-log-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  max-height: 180px;
+  overflow-y: auto;
+}
+
+.term-log-line {
+  font-family: var(--font-mono);
+  font-size: 0.8rem;
+  color: var(--text-muted);
+  padding: 2px 0;
+}
+
+.term-log-line::before {
+  content: "> ";
+  color: var(--accent);
+}
+
 /* Import */
 .import-block {
   margin: 20px 0;
