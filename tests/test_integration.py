@@ -18,6 +18,7 @@ import os
 import shutil
 import sys
 import tempfile
+import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -824,7 +825,11 @@ def test_interview_records_isolated_from_profiler() -> None:
     """W-38 (壁A — `_assert_no_gap_leak` の鏡像): 面接成績表ディレクトリ
     (data/records/interviews/) を読み書きするコードは core/interview_report.py
     のみであることを静的に保証する。profiler/gap_analysis/tensor_store/oracle
-    がこのパスへ結合したら壁A違反として検出する。"""
+    がこのパスへ結合したら壁A違反として検出する。
+
+    F4c (e): compute_growth_context/load_recent_reports (成績表読み込みの
+    2関数) も同じ静的スキャン対象に加える — 壁Aは「パス定数を直接見るな」
+    だけでなく「成績表読み込み関数を profiler 側から呼ぶな」も含む。"""
     import core.digital_twin as digital_twin
     import core.gap_analysis as gap_analysis
     import core.oracle as oracle
@@ -838,7 +843,123 @@ def test_interview_records_isolated_from_profiler() -> None:
             f"{mod.__name__} が面接成績表ディレクトリを参照 (壁A違反)"
         assert "records/interviews" not in src.replace("\\", "/"), \
             f"{mod.__name__} が面接成績表パスを直接参照 (壁A違反)"
+        assert "compute_growth_context" not in src, \
+            f"{mod.__name__} が成長コンテキスト読み込みを直接呼んでいる (壁A違反)"
+        assert "load_recent_reports" not in src, \
+            f"{mod.__name__} が面接成績表の読み込みを直接呼んでいる (壁A違反)"
     print("  interview report sanctuary isolation (W-38) OK")
+
+
+# ---------------------------------------------------------------- F4c 継続学習ループ
+def _write_report_at(path: Path, scores: dict[str, int]) -> None:
+    """persist_report の実時計に依存せず、決定論的なファイル名で成績表を書く
+    (テスト内で複数レポートを同一秒内に書いても衝突しないようにするため)。"""
+    report = {
+        "schema": "interview_report.v1",
+        "date": "2026-01-01T00:00:00",
+        "config": {},
+        "metrics": [{"axis": a, "score": s, "evidence": "e"} for a, s in scores.items()],
+        "summary": "テスト用サマリー",
+        "latency": {"median_sec": 0.0, "max_sec": 0.0, "n": 0},
+        "simulated": True,
+    }
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(report, ensure_ascii=False), encoding="utf-8")
+
+
+def test_load_recent_reports_sorts_by_filename_not_mtime() -> None:
+    """W-40: ソートはファイル名の埋め込みタイムスタンプで行い、mtime には
+    依存しない (コピー/バックアップ/git checkout で mtime が乱れても
+    履歴順は保たれる)。"""
+    from core import interview_report
+
+    genre = "sorttest"
+    names = [
+        f"interview_2026010{i}T000000_{genre}.json" for i in (1, 2, 3)
+    ]
+    for i, name in zip((10, 20, 30), names):
+        _write_report_at(INTERVIEW_RECORDS_DIR / name, {"論理性": i})
+
+    # mtime をファイル名の時系列と逆順にする (実運用で起きる mtime 攪乱の模倣)
+    now = time.time()
+    for i, name in enumerate(names):
+        os.utime(INTERVIEW_RECORDS_DIR / name, (now - i * 1000, now - i * 1000))
+
+    reports = interview_report.load_recent_reports(genre, limit=2)
+    scores = [r["metrics"][0]["score"] for r in reports]
+    assert scores == [20, 30], \
+        f"mtime に引きずられてファイル名順が崩れた: {scores}"
+    print("  load_recent_reports sorts by filename, not mtime (W-40) OK")
+
+
+def test_compute_growth_context_fallbacks() -> None:
+    """W-41: 0件は完全沈黙 (空文字)。1件はデルタなしで焦点軸のみ。
+    2件目からデルタ ("旧→新 (符号付き差分)") が出る。"""
+    from core import interview_report
+
+    assert interview_report.compute_growth_context("no_such_genre_xyz") == ""
+
+    genre = "growthfallback"
+    _write_report_at(
+        INTERVIEW_RECORDS_DIR / f"interview_20260201T000000_{genre}.json",
+        {"論理性": 60, "技術力": 50, "構成力": 70, "具体性": 65},
+    )
+    ctx1 = interview_report.compute_growth_context(genre)
+    assert "→" not in ctx1, f"1件しかないのにデルタを出した: {ctx1}"
+    assert "最重点課題軸: 技術力 (50)" in ctx1, ctx1
+
+    _write_report_at(
+        INTERVIEW_RECORDS_DIR / f"interview_20260202T000000_{genre}.json",
+        {"論理性": 70, "技術力": 45, "構成力": 70, "具体性": 68},
+    )
+    ctx2 = interview_report.compute_growth_context(genre)
+    assert "論理性 60→70 (+10)" in ctx2, ctx2
+    assert "技術力 50→45 (-5)" in ctx2, ctx2
+    assert "最重点課題軸: 技術力 (45)" in ctx2, ctx2
+    print("  compute_growth_context 0/1/2-report fallbacks (W-41) OK")
+
+
+def test_growth_context_missing_axis_not_treated_as_zero() -> None:
+    """W-43: 退化レポート (軸欠測) が履歴に混じっても、欠測軸は 0 ではなく
+    「前回データ無」と注記される — 架空の大幅スコア低下を捏造しない。"""
+    from core import interview_report
+
+    genre = "missingaxis"
+    _write_report_at(
+        INTERVIEW_RECORDS_DIR / f"interview_20260301T000000_{genre}.json",
+        {"論理性": 60, "構成力": 70, "具体性": 65},  # 技術力が欠測 (退化レポート)
+    )
+    _write_report_at(
+        INTERVIEW_RECORDS_DIR / f"interview_20260302T000000_{genre}.json",
+        {"論理性": 62, "技術力": 55, "構成力": 68, "具体性": 66},
+    )
+    ctx = interview_report.compute_growth_context(genre)
+    assert "技術力 55 (前回データ無)" in ctx, ctx
+    assert "技術力 0→55" not in ctx, "欠測軸が0と誤読され架空の推移が捏造された"
+    print("  growth context treats missing axis as absent, not zero (W-43) OK")
+
+
+def test_growth_context_injected_without_gap_leak() -> None:
+    """壁B: 成長コンテキストは面接開始プロンプトへ注入されるが、
+    gap_insights/Echo 等の日常プロファイル由来マーカーは一切混入しない
+    (_assert_no_gap_leak を注入後の system にも適用)。"""
+    from core import interview_report
+
+    genre = "growthinject"
+    _write_report_at(
+        INTERVIEW_RECORDS_DIR / f"interview_20260401T000000_{genre}.json",
+        {"論理性": 40, "技術力": 55, "構成力": 60, "具体性": 50},
+    )
+    backend = ScriptedBackend(["出題1"])
+    eng = ConsultationEngine()
+    eng._backend = backend
+    eng.consult("開始", mode="interview_sim", config={"genre": genre})
+
+    system, user = backend.calls[0]
+    assert "訓練継続コンテキスト" in system, "成長コンテキストが注入されていない"
+    assert "最重点課題軸" in system
+    _assert_no_gap_leak(system, user)
+    print("  growth context injection carries no gap leak (wall B) OK")
 
 
 def test_simulated_persona_isolation() -> None:
@@ -915,6 +1036,11 @@ if __name__ == "__main__":
         test_interview_report_schema_and_latency()
         test_interview_report_axis_rejection()
         test_interview_records_isolated_from_profiler()
+        # ---- F4c (継続学習ループ) ----
+        test_load_recent_reports_sorts_by_filename_not_mtime()
+        test_compute_growth_context_fallbacks()
+        test_growth_context_missing_axis_not_treated_as_zero()
+        test_growth_context_injected_without_gap_leak()
         test_fetch_tag_hook_and_queue()
         test_offline_default_never_fetches()
         test_mock_fetch_ingestion_pipeline()

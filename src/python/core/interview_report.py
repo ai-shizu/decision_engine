@@ -140,13 +140,86 @@ def generate_report(engine, system: str, transcript_text: str, summary: str,
     }
 
 
+def _genre_slug(genre: str) -> str:
+    """persist_report / load_recent_reports で完全に同一の導出を使う
+    (W-42: 片方だけ変えると、あるセッションの成績表が次回セッションから
+    不可視になるサイレント履歴健忘が起きる)。"""
+    return re.sub(r"[^\w\-]+", "_", genre or "general").strip("_")[:30] or "general"
+
+
 def persist_report(report: dict, genre: str) -> str:
     """壁A: `data/records/interviews/` への永続化。専用インデックスは作らない
     (ファイル名 = 日時+ジャンルが台帳そのもの。IMP-1 の教訓 — 台帳の複雑化を
-    避ける)。W-32: 実名・ES本文はここへ複写しない (呼び出し側の責務)。"""
+    避ける)。W-32: 実名・ES本文はここへ複写しない (呼び出し側の責務)。
+
+    W-40: ファイル名の埋め込みタイムスタンプ (YYYYMMDDTHHMMSS、ISO basic)
+    は辞書順ソート = 時系列順が成立する。load_recent_reports 側は
+    `Path.stat().st_mtime` ではなくこのファイル名でソートすること —
+    mtime はコピー/バックアップ/git checkout/クラウド同期で書き換わり、
+    履歴順が非決定的に壊れる。"""
     INTERVIEW_RECORDS_DIR.mkdir(parents=True, exist_ok=True)
     ts = datetime.now().strftime("%Y%m%dT%H%M%S")
-    slug = re.sub(r"[^\w\-]+", "_", genre or "general").strip("_")[:30] or "general"
+    slug = _genre_slug(genre)
     path = INTERVIEW_RECORDS_DIR / f"interview_{ts}_{slug}.json"
     path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
     return str(path)
+
+
+def load_recent_reports(genre: str, limit: int = 2) -> list[dict]:
+    """W-40: ファイル名 (時系列順にソート可能) で古→新順に直近 limit 件を
+    返す。壊れた/スキーマ不一致の1件で全体を落とさない (W-41 の前提条件 —
+    読み込み自体が例外で死ぬと 0 件フォールバックへ正しく縮退できない)。"""
+    if not INTERVIEW_RECORDS_DIR.is_dir():
+        return []
+    slug = _genre_slug(genre)
+    paths = sorted(INTERVIEW_RECORDS_DIR.glob(f"interview_*_{slug}.json"))
+    out: list[dict] = []
+    for p in paths[-limit:]:
+        try:
+            r = json.loads(p.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            continue
+        if r.get("schema") == SCHEMA_VERSION:
+            out.append(r)
+    return out
+
+
+def compute_growth_context(genre: str) -> str:
+    """F4c (SPEC_FOXTROT_UI.md §8 裁定1): 直近2件から決定論的差分要約を
+    合成する。壁Bの構造的ガード — 戻り値は AXIS_WHITELIST の固定ラベルと
+    整数スコアのみで構成され、evidence/summary (LLM生成の自由テキスト、
+    幻覚すれば日常データを含みうる) を一切含まない。これにより注入文字列は
+    日常/gapリークを構造的に運べない。
+
+    W-41: 0件は完全沈黙 (空文字・注入なし)。1件はデルタを出さず最重点課題軸
+    のみ (1点に推移は無い — 「+0」の捏造は F-14 違反)。
+    W-43: 欠測軸は 0 ではなく「データ無」注記で扱う (score 0 は実測された
+    落第点、欠測は別物 — I-18 のマスク意味論の面接版)。
+    """
+    reports = load_recent_reports(genre, limit=2)
+    if not reports:
+        return ""
+
+    def axis_scores(r: dict) -> dict[str, int]:
+        return {m["axis"]: m["score"] for m in r.get("metrics", [])}
+
+    newest = axis_scores(reports[-1])
+    if not newest:
+        return ""  # 最新レポートが全軸欠測 (退化レポート) なら注入するものが無い
+    focus = min(newest, key=lambda a: newest[a])
+
+    lines: list[str] = []
+    if len(reports) >= 2:
+        older = axis_scores(reports[-2])
+        parts = []
+        for axis in AXIS_WHITELIST:
+            if axis in newest and axis in older:
+                d = newest[axis] - older[axis]
+                parts.append(f"{axis} {older[axis]}→{newest[axis]} ({d:+d})")
+            elif axis in newest:
+                parts.append(f"{axis} {newest[axis]} (前回データ無)")
+        lines.append(" / ".join(parts))
+    else:
+        lines.append(" / ".join(f"{a} {newest[a]}" for a in AXIS_WHITELIST if a in newest))
+    lines.append(f"最重点課題軸: {focus} ({newest[focus]})")
+    return "\n".join(lines)

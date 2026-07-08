@@ -801,7 +801,7 @@ TOTAL:                                          ~1.6-2.2 秒 (< 3000ms ゲート
 
 ---
 
-## 13. Target Foxtrot — UI/UX 設計 (`docs/SPEC_FOXTROT_UI.md`。F0/F7/F1/F2/F2-EXT/F3/F3.5/F4a/F4b 完遂・F4c/F5/F6 未着手)
+## 13. Target Foxtrot — UI/UX 設計 (`docs/SPEC_FOXTROT_UI.md`。F0/F7/F1/F2/F2-EXT/F3/F3.5/F4a/F4b/F4c 完遂・F5/F6 未着手)
 
 フロントエンド (Tauri + React) の設計仕様。**§3.4 (React UI 規約) が上位法** —
 SPEC はその適用解釈を確定させるもの。コードより先に存在する凍結事項:
@@ -1141,6 +1141,44 @@ difficulty}) はフロントの `SESSION_CONFIG` term-panel (`InterviewTab.tsx`)
 `test_apple_calendar_sync.py`/`test_gap_analysis.py`/`ui_smoke.py` (実データ)
 全て ALL PASS。SESSION_CONFIG/MISSION_RESULT の実描画・ES優先の実操作確認は
 指揮官の実施を要する。
+
+### F4c 完遂 (2026-07-08) — as-built (継続学習ループ。fable5 最終裁定の実装)
+
+`core/interview_report.py` に `_genre_slug()`(persist_report と共有導出)・
+`load_recent_reports(genre, limit=2)`・`compute_growth_context(genre)` を
+追加。`consultation_engine.py` に `_interview_genre(cfg, case)` (セッション
+開始時・講評時で同一の genre 導出。旧来の講評フェーズのインライン導出を
+これに統一) と `_GROWTH_CONTEXT_TEMPLATE` を新設し、セッション開始の3経路
+(ES駆動/config駆動/bankフォールバック) 全てが共通の1注入点 (ES駆動は専用
+分岐、config駆動とbank駆動は `case` 確定後の共有分岐) を通るよう配線した。
+成長コンテキストの読み込みは `_interview_state` 初期化時に1回だけ行われ
+(W-44)、以後のターンではセッション開始時に焼き込まれた `system` 文字列を
+再利用するだけなのでホットパスI/Oは発生しない。
+
+**壁Bのコード側ガード**: `compute_growth_context` の戻り値は
+`AXIS_WHITELIST` の固定ラベルと整数スコアのみから文字列結合され、
+`evidence`/`summary` (LLM生成の自由テキスト) を一切参照しない — 型として
+混入経路が存在しない。
+
+**W-40〜W-44 の実装**: ソートは `Path.stat().st_mtime` を一切使わず
+`sorted(glob(...))` のファイル名 (ISO basic タイムスタンプ) のみに依存
+(W-40)。0件は空文字・1件はデルタなし焦点軸のみ (W-41)。`_genre_slug` を
+persist/load 両方から呼ぶ一元化 (W-42)。欠測軸は「(前回データ無)」注記で
+0と区別 (W-43、`newest`/`older` 双方に軸が存在する場合のみデルタを出す)。
+
+**仕様との差異 (申告)**: なし。fable5 の§8裁定を実装レベルの差異なく実装
+した。唯一の実装判断: `compute_growth_context` は「最新レポートが全軸欠測
+(退化レポート)」の場合も空文字を返すよう追加した (SPEC には明記なし。
+`focus = min(newest, ...)` が空dictに対して`ValueError`を投げるのを防ぐ
+ための必須の防御的分岐であり、W-43の精神と矛盾しない)。
+
+検証: `npx tsc --noEmit`/`cargo check` エラーなし (フロント不可触)。
+`tests/test_integration.py` に4ケース追加 (ファイル名ソート決定性・
+0/1/2件フォールバック・欠測軸マスク意味論・壁B注入後gap-leakガード) +
+壁A鏡像テストへ`compute_growth_context`/`load_recent_reports`の静的スキャン
+を追加。Python 15スイート全て ALL PASS、`ui_smoke.py` ALL PASS。実機での
+面接複数回セッション (成長コンテキストが実際に出題へ反映される様子) の
+対話的確認は指揮官の実施を要する。
 
 ---
 

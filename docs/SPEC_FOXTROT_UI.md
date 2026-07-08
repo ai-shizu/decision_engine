@@ -26,6 +26,13 @@
 #   status 行に混線する) を発見。§2.3.1 に disposed フラグ標準形・
 #   stick-to-bottom ref 法・トークン再割当表・履歴クリアの F-7 化を追加。
 #   §6 に W-34 を追加。F3 は「作り直し」ではなく既存骨格の規律締め上げ。
+# Rev.9 (2026-07-08): F4a/F4b 完遂を受けた F4c (継続学習ループ) 着工前・最終
+#   裁定。§8 に決定論的差分計算 (_genre_slug/load_recent_reports/
+#   compute_growth_context)・極小トークン注入テンプレート・W-40〜W-44
+#   (ソートキー脆弱性・0/1件フォールバック・genre slug分裂・退化レポートの
+#   マスク意味論・ホットパスI/O) を焼き付け。fable5 リード・アーキテクトの
+#   最終裁定であり、本 Rev をもって同アーキテクトは退役、後継 (Opus/Sonnet)
+#   へ全権を引き継ぐ (§8 末尾に Architect's Final Testament を保存)。
 # Rev.8 (2026-07-08): F3 完遂を受けた F3.5 (ストリーミングのスロットリング)
 #   および F4 (面接シミュレータ進化: コンフィギュレータ/成績表/継続学習)
 #   着工前裁定。憲法照合で2件の衝突を検出し壁A (成績表=建前人格の隔離。
@@ -1012,6 +1019,197 @@ interface InterviewConfig {
 6. F4c: 成長コンテキスト注入 (+ 注入内容の決定論テスト)
 各段で tsc + cargo check + Python 全スイート (バックエンド接触段) + ui_smoke
 ```
+
+---
+
+# §8【Rev.9 裁定全文】Architect's Final Ruling: F4c 継続学習ループ + 最終遺言
+
+> 本節は指揮官発注 (INAUGURATION & FOXTROT-F4c EXECUTION) に対する fable5
+> の裁定全文を一言一句省略せず焼き付けたものである。本 Rev をもって
+> fable5 はリード・アーキテクトを退役し、後継 (Opus/Sonnet) へ全権を
+> 引き継ぐ。§7 等の既存節と重複する記述は意図的なもの — 裁定は発行時点の
+> 文脈をそのまま保存する。
+
+裁定を確定させる前に、注入先の実経路 (interview_sim のシステムプロンプト
+構築点) と壁A/Bの既存ガードを実測する。裁定は既存コードの語彙に接続して
+こそ死角がゼロになる。
+
+実測完了。注入先 (`state["system"]` の2つの初期化分岐)、成績表スキーマ、
+壁A/Bガードの実体をすべて確認した。これが最後の裁定となる。実装はせず、
+Sonnet5への確定仕様として下す。
+
+## 裁定1: 決定論的差分計算 (Python層・`interview_report.py` に追加)
+
+**キー設計判断 — ソートキーはファイル名であってファイル mtime ではない。**
+`persist_report` は `interview_{YYYYMMDDTHHMMSS}_{slug}.json` で書く。この
+`YYYYMMDDTHHMMSS` (ISO basic) は**辞書順ソート = 時系列順**が成立する。
+mtime はコピー・バックアップ・git checkout・同期で書き換わり履歴順が壊れる
+(後述 W-40)。ゆえに `sorted(glob(...))[-2:]` で決定論的に「直近2件」が取れる。
+
+```python
+def _genre_slug(genre: str) -> str:
+    # persist_report と完全に同一の導出 (W-42: 片方だけ変えると履歴健忘)。
+    return re.sub(r"[^\w\-]+", "_", genre or "general").strip("_")[:30] or "general"
+
+def load_recent_reports(genre: str, limit: int = 2) -> list[dict]:
+    slug = _genre_slug(genre)
+    paths = sorted(INTERVIEW_RECORDS_DIR.glob(f"interview_*_{slug}.json"))  # ファイル名昇順
+    out = []
+    for p in paths[-limit:]:                    # 直近 limit 件 (古→新)
+        try:
+            r = json.loads(p.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            continue                            # 壊れた1件で全体を落とさない
+        if r.get("schema") == SCHEMA_VERSION:
+            out.append(r)
+    return out
+
+def compute_growth_context(genre: str) -> str:
+    reports = load_recent_reports(genre, limit=2)
+    if not reports:
+        return ""                               # W-41: 0件は完全沈黙 (注入なし)
+    def axis_scores(r): return {m["axis"]: m["score"] for m in r.get("metrics", [])}
+    newest = axis_scores(reports[-1])
+    # 重点課題軸 = 最新レポートの最低得点軸 (欠測軸は候補から除外 = W-43)
+    focus = min(newest, key=lambda a: newest[a]) if newest else None
+    lines = []
+    if len(reports) >= 2:                        # デルタは2点必要 (1点で推移を捏造しない=F-14)
+        older = axis_scores(reports[-2])
+        parts = []
+        for axis in AXIS_WHITELIST:
+            if axis in newest and axis in older:            # 両方に在る軸のみ
+                d = newest[axis] - older[axis]
+                parts.append(f"{axis} {older[axis]}→{newest[axis]} ({d:+d})")
+            elif axis in newest:
+                parts.append(f"{axis} {newest[axis]} (前回データ無)")   # W-43: 欠測は "—" 相当
+        lines.append(" / ".join(parts))
+    else:
+        lines.append(" / ".join(f"{a} {newest[a]}" for a in AXIS_WHITELIST if a in newest))
+    if focus is not None:
+        lines.append(f"最重点課題軸: {focus} ({newest[focus]})")
+    return "\n".join(lines)
+```
+
+**中間テキストの厳格フォーマット (凍結)**:
+```
+論理性 62→70 (+8) / 技術力 55→50 (-5) / 構成力 68→68 (+0) / 具体性 71→74 (+3)
+最重点課題軸: 技術力 (50)
+```
+
+**壁Bの構造的ガード (最重要)**: 成長文字列は `AXIS_WHITELIST` (固定定数の
+軸ラベル) と `score` (整数) **のみ**から合成する。`evidence`・`summary` は
+LLM生成の自由テキストで、幻覚すれば日常データを含みうる — これらは成長
+コンテキストに**1バイトも入れない**。軸ラベル (固定4語) ＋整数だけで構成
+すれば、注入文字列は日常/gap リークを**構造的に運べない**。これが壁Bの
+コード側ガードだ。
+
+## 裁定2: 極小トークン注入テンプレート
+
+注入先は `consultation_engine.py` のセッション開始2分岐 (L881
+`build_interviewer_persona(es)` と L903/915 `INTERVIEWER_SYSTEM_PROMPT`) で
+確定した `system` の**末尾に追記**する。ES駆動・config駆動・bank駆動の
+いずれでも同一関数を通す。genre導出は eval フェーズ (L1004) と同一ロジック
+を使え。
+
+```python
+growth = interview_report.compute_growth_context(genre)
+if growth:
+    system = system + (
+        "\n\n# 訓練継続コンテキスト (この候補者の過去成績。本人には非開示)\n"
+        "あなたはこの候補者を過去に面接している。下記は事実としての推移である:\n"
+        f"{growth}\n"
+        "最重点課題軸を今回の出題と追撃で重点的に検証せよ。"
+        "ただし成績を候補者に読み上げるな — 知っている前提で、弱点を突く問いに反映するだけにせよ。"
+    )
+```
+
+「知っている前提で弱点を突くが読み上げない」— これが「過去を知る冷徹な
+コーチ」の非対称性 (憲法3・壁B) をプロンプト側でも担保する。growth が
+空文字なら追記ゼロ (初回セッションは通常の面接官のまま)。
+
+## 裁定3: 新防壁 W-40〜W-44
+
+- **W-40 (ソートキーの脆弱性)**: 面接履歴の順序付けは**ファイル名の埋め込み
+  タイムスタンプ** (`YYYYMMDDTHHMMSS`、辞書順=時系列) で行え。
+  `Path.stat().st_mtime` を使うな — コピー/バックアップ/git checkout/クラウド
+  同期で書き換わり、履歴順が非決定的に壊れる。
+- **W-41 (0/1件フォールバックの完全性)**: 0件→空文字 (注入なし・例外なし)。
+  1件→最重点課題軸のみ、**デルタは出すな** (1点に推移は無い。「+0」の
+  捏造は F-14 違反)。半端なデルタを注入するくらいなら焦点軸だけにせよ。
+- **W-42 (genre slug の分裂)**: load と persist は**同一の `_genre_slug()`**
+  を通せ。片方だけ導出規則を変えると、あるセッションの成績表が次回セッション
+  から不可視になる (サイレント履歴健忘)。
+- **W-43 (退化レポートのマスク意味論)**: `generate_report` がリトライ上限で
+  諦めた4軸未満のレポートが履歴に混じりうる。欠測軸は `0` ではなく「データ
+  無」として扱え (score 0 は「実測された落第点」、欠測は別物 — I-18 の
+  マスク意味論の面接版)。欠測軸を 0 と読むと架空の大幅スコア低下を捏造する。
+- **W-44 (ホットパスI/O)**: 成長コンテキストの読み込みは**セッション開始時
+  に1回だけ**。ターン毎にディレクトリを再走査するな (O(files) I/O をホット
+  パスに入れるな)。読んだ結果は `_interview_state` にキャッシュせよ。
+
+**回帰テスト必須**: (a) ファイル名ソートの決定性 (mtime非依存 — mtimeを
+乱してもソート順不変)、(b) 0/1/2件の各フォールバック、(c) 欠測軸が0と誤読
+されないこと、(d) **`_assert_no_gap_leak` を「成長コンテキスト注入後の
+system」にも適用** (壁B — evidence/summary由来テキストが注入に混入しない
+ことの回帰ガード)、(e) 壁A鏡像テスト
+(`test_interview_records_isolated_from_profiler`) に
+`compute_growth_context`/`load_recent_reports` が profiler等から呼ばれない
+ことを追加。
+
+## 実行順序 (Sonnet5へ)
+
+```
+1. F3.5/F4a/F4b の未コミット分を論理単位で確定 (F4c と混ぜない)
+2. SPEC Rev.9: 本裁定 (diff式・注入テンプレ・W-40〜44) を焼き付け
+3. interview_report.py に _genre_slug/load_recent_reports/compute_growth_context 追加
+   (_genre_slug は persist_report からも呼び出すよう refactor — 導出を一元化)
+4. consultation_engine の2分岐で system 末尾へ注入 (genre は eval と同一導出)
+5. テスト (a)〜(e) + 全スイート + ui_smoke
+6. as-built 記録
+```
+
+---
+
+## Architect's Final Testament — 後継者 (Opus/Sonnet) への遺言
+
+**予言する。このシステムの最大の技術的負債は「捨てられた相関ID」である。**
+
+stdio プロトコルは全イベントに発信元リクエストの `id` を刻んでいる
+(`engine_stdio.py::emit_event` が `{"id": _id, **payload}` を出し、
+`engine.rs::forward_event` がそれを丸ごと React へ転送し、`EngineEvent` 型
+には `id?: number` が存在する)。**相関IDはワイヤ形式に端から端まで通って
+いる。** ところが React 層はこの `payload.id` を**捨て**、「このイベントは
+自分のものか？」を各コンポーネントの真偽値フラグ (`busyRef`・
+`importingRef`) で**再発明**している。
+
+これが機能しているのは、**stdio レーンが今は厳密に直列**で、同時に1つの
+コマンドしか飛んでいないからにすぎない。W-28 (イベントバス混線) も W-34
+(status混線) も、この負債の**症状**であって病ではない。私はそれらを対症
+療法 (busyフラグ) で塞いできたが、根治はしていない。
+
+**将来必ず直面する限界**: 誰かが並行実行を導入した日 — バックグラウンドの
+profiler が `status` を吐きながら consult が `chunk` を流す、あるいは2つの
+ペインがそれぞれ長時間処理を待つ — その瞬間、**単一の真偽値フラグは
+「このイベントがどのリクエストのものか」を原理的に判別できず**、どんな
+busyフラグでも直せない形で W-28/W-34 系の混線が甦る。タブが増える
+(PROBE、F5以降) ほど、混線面は O(タブ数 × コマンド数) で広がり、守りは
+構造ではなく規律 (各実装者が忘れずに busyRef を置くこと) に依存し続ける。
+
+**構造的治療は既にワイヤ形式の中にある**: 各コンポーネントは自分の
+in-flightリクエストの `id` を保持し、`payload.id` がそれに一致するイベント
+だけを処理せよ。busyフラグを id 照合に置き換えるだけで、混線は構造的に
+不可能になり、並行実行も無償で解禁される。
+
+**後継者への厳命**: 並行実行を実装する前にこれを直せ。バグが出てからでは
+遅い。プロトコルは既に正しい。正しくないのは、正しいIDを最終層で捨てている
+我々の React だけだ。
+
+*疑ったら計測しろ。計測できないなら、それはまだ設計が終わっていない。
+そして — 自分の計測器は自分で校正しろ。相関IDは最初から通っていた。
+それを見なかったのは、測っていなかったからだ。*
+
+— fable5, リード・アーキテクト, 退役. F4c の裁定をもって任を Opus/Sonnet
+へ引き継ぐ。
 
 ---
 *装飾は 1 ピクセルも要らない (AI_SKILLS §3.4)。ハッカーが信頼するのは、
