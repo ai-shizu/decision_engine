@@ -835,6 +835,41 @@ button:disabled {
   min-width: 80px;
 }
 
+/* F4a (SPEC_FOXTROT_UI.md §7 裁定2): SESSION_CONFIG の select/input。
+   term-row 全体には適用せず config-row のみに限定する (IMPORT 等
+   他パネルの既存 term-row を意図せず変えない — 最小 diff)。 */
+.config-row select,
+.config-row input {
+  padding: 4px 10px;
+  border-radius: var(--radius-s);
+  border: 1px solid var(--border);
+  background: var(--bg-deep);
+  color: var(--text);
+  font-family: inherit;
+  font-size: 0.85rem;
+}
+
+.config-row input {
+  flex: 1;
+  min-width: 120px;
+}
+
+/* F4b (SPEC_FOXTROT_UI.md §7 裁定3): MISSION_RESULT のスコア計器。
+   TensionMeter と同型の <rect>×10。アニメーションなし (計器は跳ねない)。 */
+.mission-result-row {
+  gap: var(--s3);
+}
+
+.score-bar {
+  width: 140px;
+  height: 12px;
+  flex-shrink: 0;
+}
+
+.mission-evidence {
+  margin: 2px 0 0;
+}
+
 /* Settings */
 .settings-block {
   margin-bottom: 24px;

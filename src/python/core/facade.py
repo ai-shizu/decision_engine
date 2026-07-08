@@ -93,10 +93,19 @@ def consult(
     mode: str = "consult",
     personas: list[dict] | None = None,
     response_time_sec: float | None = None,
+    config: dict | None = None,
 ) -> str:
     return get_engine().consult(
         query, status=status, on_token=on_token, mode=mode,
-        personas=personas, response_time_sec=response_time_sec)
+        personas=personas, response_time_sec=response_time_sec, config=config)
+
+
+def last_interview_report() -> dict | None:
+    """F4b: 直前の consult() 呼び出しが面接講評 (interview_report.v1) を
+    生成していればそれを返す (それ以外は None)。stdio 層が応答へ検証済み
+    構造体 (`report`) を含めるかどうかを判定するための薄いアクセサ
+    (W-37: UI は JSON.parse を書かない — 構造体はここ経由でのみ渡る)。"""
+    return get_engine()._last_interview_report
 
 
 def compile_narrative(target_domain: str | None = None) -> dict:

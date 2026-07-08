@@ -125,13 +125,14 @@ def test_stdio_dispatch_ignores_unknown_params() -> None:
     captured: dict = {}
 
     def fake_consult(query, status=None, on_token=None, mode="consult",
-                     personas=None, response_time_sec=None):
+                     personas=None, response_time_sec=None, config=None):
         captured["kwargs"] = {"query": query, "mode": mode, "personas": personas,
-                              "response_time_sec": response_time_sec}
+                              "response_time_sec": response_time_sec, "config": config}
         return "FAKE ANSWER"
 
     class _FakeFacade:
         consult = staticmethod(fake_consult)
+        last_interview_report = staticmethod(lambda: None)
 
     original_import = engine_stdio._import_facade
     engine_stdio._import_facade = lambda: _FakeFacade

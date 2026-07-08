@@ -136,6 +136,32 @@ INTERVIEW_CASE_BANK: list[dict] = [
 INTERVIEW_END_COMMANDS = ("終了", "講評", "講評して", "review", "end")
 INTERVIEW_START_COMMANDS = ("開始", "start", "次の問題", "新しい問題")
 
+# ============================================================ F4a コンフィギュレータ
+# SPEC_FOXTROT_UI.md §7 裁定2: プリセットはバックエンドの静的バンクに置き、
+# UI は ID のみを送る。ID 未知/自由記述はそのまま表示ラベルとして使う
+# (es_manager のドメイン非依存原則と同居 — ハードコード if-elif を増やさない)。
+# 優先順位: ES があれば ES 駆動が常に優先 (config は無視)。ES が無い場合のみ
+# config (industry/genre/difficulty) がケースバンクの巡回に代わって出題を決める。
+INTERVIEW_INDUSTRY_BANK = {
+    "foreign_it": "外資系IT企業",
+    "foreign_finance": "外資系金融 (HFT/クオンツ)",
+    "consulting": "戦略コンサルティングファーム",
+    "startup": "急成長スタートアップ",
+}
+
+INTERVIEW_GENRE_BANK = {
+    "algorithm": "アルゴリズム・データ構造の技術面接",
+    "system_design": "システムデザイン面接",
+    "fermi": "フェルミ推定・ケース面接",
+    "behavioral": "行動面接 (コンピテンシー評価)",
+}
+
+INTERVIEW_DIFFICULTY_LABELS = {
+    "standard": "標準的な難易度",
+    "hard": "やや高難度 (深掘り質問を増やす)",
+    "extreme": "最難関 (トップティア基準の圧迫レベル)",
+}
+
 
 def _format_latency_section(latencies: list[dict]) -> str:
     """講評プロンプト用の応答時間セクション (記録なしなら空文字)。"""
@@ -468,6 +494,10 @@ class ConsultationEngine:
         self._interview_cursor = 0
         self._gd_state: dict | None = None
         self._gd_cursor = 0
+        # F4b: 直前の consult() 呼び出しが講評 (interview_report.v1) を生成
+        # していればそれを保持する。consult() の呼び出しごとに None へ戻される
+        # (per-call スナップショット — 古い成績表が別ターンへ漏れない)。
+        self._last_interview_report: dict | None = None
 
     # ---- 埋め込み (pipeline.py と同一空間) --------------------------------
     @property
@@ -818,7 +848,8 @@ class ConsultationEngine:
 
     # ---- 面接シミュレーション (mode="interview_sim") ----------------------
     def _consult_interview_sim(self, query: str, status=None, on_token=None,
-                               response_time_sec: float | None = None) -> str:
+                               response_time_sec: float | None = None,
+                               config: dict | None = None) -> str:
         """ES 駆動の敵対的 (Adversarial) 面接シミュレーション (状態保持型)。
 
         フロー: 出題 → 複数ターンの議論 → 「講評」で論理・防御の講評 +
@@ -830,7 +861,12 @@ class ConsultationEngine:
         日常プロファイルを知っている状況は本番に存在せず、漏らした瞬間に
         ストレステストとしての価値が消える。統合は講評フェーズのみ。
         data/es/ に ES が無い場合はケースバンクへフォールバックする。
-        ベクトル検索・インデックス同期は行わない。"""
+        ベクトル検索・インデックス同期は行わない。
+
+        config (F4a): {"industry", "genre", "difficulty"} (InterviewConfig)。
+        未知フィールドは .get() で無視する既存の境界防衛を踏襲。ES が存在
+        する場合は ES 駆動が常に優先 (config は記録用に保持されるのみで、
+        出題内容には影響しない)。"""
         from .es_manager import (
             build_interviewer_persona, es_body_for_prompt, select_es,
         )
@@ -838,13 +874,14 @@ class ConsultationEngine:
         q = query.strip()
 
         if self._interview_state is None or q in INTERVIEW_START_COMMANDS:
+            cfg = config if isinstance(config, dict) else {}
             es = select_es(None)
             if es is not None:
                 # ES 駆動: 面接官の専門性は ES のターゲットドメインに動的追従
                 system = build_interviewer_persona(es)
                 self._interview_state = {
                     "case": None, "es": es, "system": system,
-                    "transcript": [], "latencies": []}
+                    "transcript": [], "latencies": [], "config": cfg}
                 say(f"敵対的 ES 面接を開始: {es['target_domain']}")
                 prompt = (
                     f"# 候補者が提出した ES\n{es_body_for_prompt(es)}\n\n"
@@ -853,19 +890,39 @@ class ConsultationEngine:
                     "悪意を持った圧迫質問 (Adversarial Attack) を1つだけ投げること。"
                 )
             else:
-                case = INTERVIEW_CASE_BANK[self._interview_cursor % len(INTERVIEW_CASE_BANK)]
-                self._interview_cursor += 1
-                system = INTERVIEWER_SYSTEM_PROMPT
+                industry_id = str(cfg.get("industry") or "").strip()
+                genre_id = str(cfg.get("genre") or "").strip()
+                difficulty_id = str(cfg.get("difficulty") or "").strip()
+                if industry_id or genre_id:
+                    # config 駆動出題 (ES 不在時のみ有効な絞り込み)
+                    industry_label = INTERVIEW_INDUSTRY_BANK.get(industry_id, industry_id or "汎用")
+                    genre_label = INTERVIEW_GENRE_BANK.get(genre_id, genre_id or "ケース面接")
+                    difficulty_label = INTERVIEW_DIFFICULTY_LABELS.get(difficulty_id, "標準的な難易度")
+                    case = {"industry": industry_label, "format": genre_label,
+                           "theme": f"{genre_label} ({difficulty_label})"}
+                    system = INTERVIEWER_SYSTEM_PROMPT
+                    say(f"面接シミュレーション開始: {industry_label} / {genre_label}")
+                    prompt = (
+                        f"面接形式: {genre_label} ({industry_label})\n"
+                        f"難易度: {difficulty_label}\n\n"
+                        "上記の条件に沿った具体的な出題テーマを1つ自ら設定し、"
+                        "候補者への最初の出題を行え。テーマを提示し、"
+                        "最初に確認すべき前提を1つだけ問うこと。"
+                    )
+                else:
+                    case = INTERVIEW_CASE_BANK[self._interview_cursor % len(INTERVIEW_CASE_BANK)]
+                    self._interview_cursor += 1
+                    system = INTERVIEWER_SYSTEM_PROMPT
+                    say(f"面接シミュレーション開始: {case['industry']} / {case['format']}")
+                    prompt = (
+                        f"面接形式: {case['format']} ({case['industry']})\n"
+                        f"テーマ: {case['theme']}\n\n"
+                        "候補者への最初の出題を行え。テーマを提示し、"
+                        "最初に確認すべき前提を1つだけ問うこと。"
+                    )
                 self._interview_state = {
                     "case": case, "es": None, "system": system,
-                    "transcript": [], "latencies": []}
-                say(f"面接シミュレーション開始: {case['industry']} / {case['format']}")
-                prompt = (
-                    f"面接形式: {case['format']} ({case['industry']})\n"
-                    f"テーマ: {case['theme']}\n\n"
-                    "候補者への最初の出題を行え。テーマを提示し、"
-                    "最初に確認すべき前提を1つだけ問うこと。"
-                )
+                    "transcript": [], "latencies": [], "config": cfg}
             # Puppeteer (黒幕・Target Delta D3): tension の高い Bounty (矛盾) の
             # type に一致する QUESTION_BANK の質問を決定論的に選び、議論ターンへの
             # 注入キューに積む。ここで扱うのは Bounty の id/type/tension のみ —
@@ -938,6 +995,23 @@ class ConsultationEngine:
             from .line_telemetry import mark_bounty_status
             for bid in state.get("injected_bounty_ids", []):
                 mark_bounty_status(bid, "resolved")
+
+            # F4b: 成績表 (interview_report.v1)。LLM は4軸+evidence の定性評価
+            # のみを担い、latency (物理量) はコードが state["latencies"] から
+            # 合成する (憲法2)。永続化失敗は講評の提示自体をブロックしない。
+            from . import interview_report as _ireport
+            cfg = state.get("config") or {}
+            genre = str(cfg.get("genre") or "").strip() or (
+                case["format"] if case else "es_interview")
+            report = _ireport.generate_report(
+                self, state["system"], transcript_text, answer, cfg,
+                state.get("latencies", []))
+            try:
+                _ireport.persist_report(report, genre)
+            except OSError:
+                pass
+            self._last_interview_report = report
+
             self._interview_state = None
             say("面接シミュレーション終了 (講評を相談履歴に保存)")
             return answer
@@ -1145,7 +1219,8 @@ class ConsultationEngine:
     def consult(self, query: str, top_k: int = 3, status=None,
                 on_token=None, mode: str = "consult",
                 personas: list[dict] | None = None,
-                response_time_sec: float | None = None) -> str:
+                response_time_sec: float | None = None,
+                config: dict | None = None) -> str:
         """相談1件を処理して4セクションMarkdownを返す。
 
         status は進捗コールバック、on_token は生成トークンの逐次コールバック。
@@ -1153,11 +1228,15 @@ class ConsultationEngine:
               "es_review" (ES 添削・gap 非注入) / "gd_sim" (カオス GD)。
         personas: gd_sim 用の参加者配列 (最大9人)。
         response_time_sec: UI で計測した「AI 表示 → 送信」までの経過秒。
-        面接/GD の思考速度評価に使う (通常相談では無視)。"""
+        面接/GD の思考速度評価に使う (通常相談では無視)。
+        config: interview_sim 用の InterviewConfig ({industry, genre,
+        difficulty})。他モードでは無視する (未知フィールドを無視する境界防衛)。
+        呼び出しごとに直前の成績表をリセットする (per-call スナップショット)。"""
+        self._last_interview_report = None
         if mode == "interview_sim":
             return self._consult_interview_sim(
                 query, status=status, on_token=on_token,
-                response_time_sec=response_time_sec)
+                response_time_sec=response_time_sec, config=config)
         if mode == "es_review":
             return self._consult_es_review(query, status=status, on_token=on_token)
         if mode == "gd_sim":

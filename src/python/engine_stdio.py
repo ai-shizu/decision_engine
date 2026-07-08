@@ -92,6 +92,9 @@ def dispatch(cmd: str, params: dict[str, Any], emit: EventEmitter | None = None)
         personas = params.get("personas")
         if not isinstance(personas, list):
             personas = None
+        config = params.get("config")
+        if not isinstance(config, dict):
+            config = None
         rts = params.get("response_time_sec")
         response_time_sec = float(rts) if isinstance(rts, (int, float)) else None
         # emit があれば進捗 status と生成トークンをイベント行として逐次送出する
@@ -99,8 +102,14 @@ def dispatch(cmd: str, params: dict[str, Any], emit: EventEmitter | None = None)
         on_token = (lambda text: emit({"event": "chunk", "text": text})) if emit else None
         answer = facade.consult(
             query, status=status, on_token=on_token, mode=mode,
-            personas=personas, response_time_sec=response_time_sec)
-        return {"query": query, "mode": mode, "answer": answer}
+            personas=personas, response_time_sec=response_time_sec, config=config)
+        result: dict = {"query": query, "mode": mode, "answer": answer}
+        # F4b (W-37): 検証済みの interview_report.v1 のみを構造体として渡す。
+        # UI は JSON.parse(LLM出力) を絶対に書かない。
+        report = facade.last_interview_report()
+        if report is not None:
+            result["report"] = report
+        return result
     if cmd == "knowledge.fetch_pending":
         return facade.fetch_pending_knowledge()
     if cmd == "calendar.sync":

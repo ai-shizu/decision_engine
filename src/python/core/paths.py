@@ -15,6 +15,11 @@ DATA_RAW = PROJECT_ROOT / "data" / "raw"
 ES_DIR = PROJECT_ROOT / "data" / "es"
 DATA_PROCESSED = PROJECT_ROOT / "data" / "processed"
 DATA_KNOWLEDGE = PROJECT_ROOT / "data" / "knowledge"
+# F4b/F4c (SPEC_FOXTROT_UI.md §7 裁定3/4・壁A): 面接成績表 (interview_report.v1)
+# の聖域。読み手は面接シミュレータ経路 (core/interview_report.py) のみに限定
+# する — profiler/gap_analysis/tensor_store からの参照は W-38 の回帰テストで
+# 検出されるべき壁A違反。
+INTERVIEW_RECORDS_DIR = PROJECT_ROOT / "data" / "records" / "interviews"
 BUILD_DIR = PROJECT_ROOT / "build"
 PROCESSED = DATA_PROCESSED
 KNOWLEDGE_DIR = DATA_KNOWLEDGE

@@ -801,7 +801,7 @@ TOTAL:                                          ~1.6-2.2 秒 (< 3000ms ゲート
 
 ---
 
-## 13. Target Foxtrot — UI/UX 設計 (`docs/SPEC_FOXTROT_UI.md`。F0/F7/F1/F2/F2-EXT/F3 完遂・F4〜F6 未着手)
+## 13. Target Foxtrot — UI/UX 設計 (`docs/SPEC_FOXTROT_UI.md`。F0/F7/F1/F2/F2-EXT/F3/F3.5/F4a/F4b 完遂・F4c/F5/F6 未着手)
 
 フロントエンド (Tauri + React) の設計仕様。**§3.4 (React UI 規約) が上位法** —
 SPEC はその適用解釈を確定させるもの。コードより先に存在する凍結事項:
@@ -1026,6 +1026,121 @@ consult の status 行に混線していた (chunk 側は `last.streaming` ガ�
 dev` 実起動でエンジン ready まで到達 (1回目はポート衝突で失敗、残存
 プロセスを掃除して2回目で成功)。ストリーミング挙動・スクロール追従・
 履歴クリアの2段確認は指揮官の実施を要する。
+
+### F3.5 完遂 (2026-07-08) — as-built (CONSULT ストリーミングの一定速スロットリング)
+
+**アーキテクチャの不変条件**: `lib/useThrottledStream.ts` はコンポーネントごとに
+「文字キュー (`queueRef`) + interval タイマー1個 (`timerRef`)」のみを持つ。
+chunk 受信は `push()` でキューへ追記するだけで、放出は `setInterval` の
+tick (30ms × 2文字。**乱数ジッタ禁止 — F-14**) が単独で担う。この分離により
+chunk ハンドラ自体は「キュー投入」に縮退し、放出側 (`stickRef`/`disposed`
+規律) は F3 の実装に一切手を触れていない。
+
+- **W-35 (キューと確定置換のレース) の実装形**: 最終応答が到着した瞬間に
+  `flushAndStop()` を **`setMessages` による確定置換の直前** に呼ぶ。順序が
+  逆 (置換→flush) だと、置換後のメッセージにタイマーの残り tick が数文字
+  追記される競合が発生する。`ConsultTab.tsx` の `handleSubmit` は初回送信時・
+  成功パス・エラーパスの **3箇所すべて**で `flushChunkQueue()` を呼ぶ
+  (新しい相談の開始時に前回の残留キューを持ち越さないため初回送信時にも
+  必要 — 見落としやすい)。
+- **W-36 (タイマー多重化) の実装形**: `ensureTimer()` は `timerRef.current
+  !== null` なら即 return するガードのみで多重起動を防ぐ。React
+  StrictMode の二重マウントでも `useEffect(() => stopTimer, [stopTimer])`
+  の cleanup が確実に走るため、2個目の interval が生き残ることはない
+  (disposed フラグと同型の「フラグ1つで多重防止」パターン)。
+- **W-39 (計測の錨)**: `response_time_sec` の起点は確定置換の `setMessages`
+  呼び出し (`aiShownAtRef.current = Date.now()`) のまま — スロットル導入
+  前後で1行も変更していない。スロットルは chunk の見せ方のみを変え、
+  測定コードには一切触れない設計にすることで「1msも歪めない」を構造的に
+  保証した。
+- **共用の教訓**: `useThrottledStream` は CONSULT で先行検証したのみで、
+  INTERVIEW (`InterviewTab.tsx`) へはまだ未適用 (F4c 以降の対象)。将来
+  INTERVIEW にも適用する際は、chunk ハンドラを `pushChunk` に置き換え、
+  確定置換の直前に `flushChunkQueue()` を呼ぶ、という同一の2手順を踏むこと。
+
+**仕様との差異 (申告)**: なし。バックエンド不可触につき Python スイートは
+対象外。検証: `tsc --noEmit` エラーなし、`python tests/ui_smoke.py` ALL PASS。
+
+### F4a/F4b 完遂 (2026-07-08) — as-built (面接コンフィギュレータ + 成績表評価エンジン)
+
+**F4a (コンフィギュレータ)**: `InterviewConfig` ({industry, genre,
+difficulty}) はフロントの `SESSION_CONFIG` term-panel (`InterviewTab.tsx`)
+で組み立て、`consult(q, {mode:"interview_sim", config})` として「開始」
+ターンのみに送る (persona と同じ「開始時にのみ送る」規約 — 継続ターンでは
+バックエンドが `self._interview_state["config"]` を保持しているため不要)。
+バックエンドは `INTERVIEW_INDUSTRY_BANK`/`INTERVIEW_GENRE_BANK`/
+`INTERVIEW_DIFFICULTY_LABELS` (`core/consultation_engine.py`) で ID→表示
+ラベルを解決し、プリセット外の自由記述はそのままラベルとして使う
+(es_manager のドメイン非依存原則と同居)。**優先順位は固定**: ES が
+`data/es/` に存在すれば ES 駆動が常に勝ち、config は無視される
+(記録用に `state["config"]` へは保持されるが出題内容には影響しない)。
+未知フィールドは `.get()` で個別に読むだけなので自動的に無視される
+(専用のバリデーション層は追加していない — 既存の境界防衛パターンを踏襲)。
+
+**F4b (成績表): `core/interview_report.py` を新設**。narrative_compiler と
+同型の「スキーマ検証→リトライ→上限で summary のみ返す」パターンを流用した。
+
+- **軸ホワイトリスト + evidence 必須の実装**: `_parse_metrics()` は
+  `AXIS_WHITELIST` (論理性/技術力/構成力/具体性) に無い軸・evidence が
+  空文字の軸・**重複軸** (同じ axis が2回来たら2個目を無視) を無条件で
+  削る。score は `int(round(float(...)))` 後に `max(0, min(100, ...))` で
+  clamp — LLM が小数や範囲外を返しても構造体は必ず健全になる。
+- **latency はコードのみが書く (憲法2)**: `synthesize_latency()` は
+  `state["latencies"]` (UI が計測し `response_time_sec` として送ってきた
+  実測値の履歴) から中央値・最大値・件数を算出する。この関数は LLM の
+  `generate()` を一切呼ばない — `interview_report.v1` の `latency` ブロックは
+  常にこの関数の戻り値そのもの。
+- **リトライループの停止条件**: `len(metrics) < len(AXIS_WHITELIST)` の間
+  最大 `MAX_RETRIES+1` 回 (既定3回) 生成をやり直す。**リトライを使い切っても
+  `summary`/`latency`/`config` は必ず埋まった report を返す** (`metrics`
+  だけが空配列になり得る) — narrative_compiler の「no_valid_claims で
+  `es_text` を空にする」設計と同じ「講評本文は決して失われない」思想。
+  UI (`InterviewTab.tsx` MISSION_RESULT) は `metrics.length === 0` を
+  表示分岐で吸収する。
+- **永続化 (壁A)**: `persist_report()` が `data/records/interviews/
+  interview_{ISO風タイムスタンプ}_{genreスラグ}.json` へ書く。genre は
+  `state["config"].get("genre")` を最優先し、config が無い場合は
+  `case["format"]` (ケースバンク/config駆動時) または `"es_interview"`
+  (ES駆動時) にフォールバックする。**このディレクトリの読み書きは
+  `core/interview_report.py` のみに限定** — `profiler.py`/`gap_analysis.py`/
+  `tensor_store.py`/`oracle.py`/`digital_twin.py` がこのパスへ結合したら
+  壁A違反であり、`tests/test_integration.py::
+  test_interview_records_isolated_from_profiler` (静的ソーススキャンで
+  `INTERVIEW_RECORDS_DIR`/`records/interviews` 文字列の混入を検出する
+  `_assert_no_gap_leak` の鏡像) がこれを検出する。
+- **W-37 (UI は JSON.parse を書かない) の配線**: `ConsultationEngine
+  .consult()` は呼び出しごとに `self._last_interview_report = None` へ
+  リセットしてから各モードへディスパッチする (per-call スナップショット
+  — 古いターンの成績表が別ターンの応答に紛れ込まない)。`interview_sim`
+  の講評ターンのみがこれを実体化する。`facade.last_interview_report()`
+  → `engine_stdio.py` の `consult` コマンドが `report` キーとして応答へ
+  同梱し、UI (`InterviewTab.tsx`) は `res.report` をそのまま `setReport()`
+  するだけ — JSON.parse は一度も書いていない。
+- **UI**: `ScoreBar` (`<rect>`×10、TensionMeter と同型) を新設。点灯数は
+  `Math.round(score/10)`、色は `score>=70 → --ok / >=40 → --accent / それ
+  未満 → --err` (TensionMeter のセグメント色分けを踏襲した独自の閾値 —
+  「スコアは高いほど良い」なので TensionMeter の危険増加方向とは逆順)。
+  MISSION_RESULT はアニメーションなし (`transition` 未使用)。
+
+**次の実装者への申告 (テストのハマりどころ)**: `FakeBackend`/
+`ScriptedBackend` を使うテストで interview_sim の「講評」ターンの**直後**に
+同じ `fake.calls` リストへ別の呼び出しを追加する場合、**インデックスを
+固定値で書くな**。F4b の report 生成が講評テキスト生成の直後に
+`engine.backend.generate()` を最大 `MAX_RETRIES+1` 回追加で呼ぶため、
+講評より後の呼び出しの位置が呼び出し履歴内でずれる (`test_interview_sim_flow`
+の再開始ターン検証がこれで実際に壊れ、`fake.calls[3]` → `fake.calls[-1]`
+に修正した)。新しいテストを書くときは相対インデックス (`fake.calls[-1]`)
+かフィルタ (`fake.calls[len_before:]`) を使うこと。
+
+**仕様との差異 (申告)**: F4c (成長コンテキスト注入・過去2件の差分要約) は
+本ミッションのスコープ外のため未着手 (次回ミッション)。
+
+検証: `npx tsc --noEmit` / `cargo check` エラーなし。`tests/test_integration.py`
+に4ケース追加 (config駆動出題・スキーマ+latency合成・軸ホワイトリスト拒否・
+壁A静的分離ガード) して19ケース全て ALL PASS。`test_calendar_sync.py`/
+`test_apple_calendar_sync.py`/`test_gap_analysis.py`/`ui_smoke.py` (実データ)
+全て ALL PASS。SESSION_CONFIG/MISSION_RESULT の実描画・ES優先の実操作確認は
+指揮官の実施を要する。
 
 ---
 

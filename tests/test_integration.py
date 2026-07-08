@@ -44,6 +44,7 @@ from core.paths import (  # noqa: E402
     AI_CONSULTATIONS_JSON,
     DEEP_PROFILE,
     ES_DIR,
+    INTERVIEW_RECORDS_DIR,
     KNOWLEDGE_DIR,
 )
 
@@ -81,6 +82,28 @@ class FakeBackend:
     def generate(self, system: str, user: str, max_tokens=None, on_token=None):
         self.calls.append((system, user))
         answer = self.canned or f"FAKE応答{len(self.calls)}"
+        if on_token:
+            on_token(answer)
+        return answer
+
+    def stop(self):
+        pass
+
+
+class ScriptedBackend:
+    """呼び出しごとに指定した応答を順番に返す決定論バックエンド (F4b テスト専用)。
+    script を使い切ったら最後の要素を繰り返す (リトライループの検証用)。"""
+
+    name = "scripted-backend"
+
+    def __init__(self, script: list[str]):
+        self.calls: list[tuple[str, str]] = []
+        self.script = script
+
+    def generate(self, system: str, user: str, max_tokens=None, on_token=None):
+        self.calls.append((system, user))
+        idx = min(len(self.calls) - 1, len(self.script) - 1)
+        answer = self.script[idx]
         if on_token:
             on_token(answer)
         return answer
@@ -186,8 +209,10 @@ def test_interview_sim_flow() -> None:
     assert any("[interview_sim]" in e["query"] for e in entries)
 
     # (4) 再開始でケースバンクが決定論的に巡回する
+    # (F4b: 直前の講評で成績表生成の追加呼び出しが挟まるため、直後の呼び出し
+    # である fake.calls[-1] で判定する — 固定インデックスへの依存をやめる)
     eng.consult("開始", mode="interview_sim")
-    _, user4 = fake.calls[3]
+    _, user4 = fake.calls[-1]
     assert INTERVIEW_CASE_BANK[1]["theme"] in user4
     print("  interview_sim flow OK")
 
@@ -693,6 +718,129 @@ def test_dynamic_gd_personas() -> None:
     print("  dynamic GD personas OK")
 
 
+# ============================================================ F4a/F4b: コンフィギュレータ・成績表
+def test_interview_configurator_no_es() -> None:
+    """F4a: ES 不在時、config (industry/genre/difficulty) がケースバンクの
+    巡回に代わって出題を決める。未知フィールドは無視する境界防衛も検証する。"""
+    fake = FakeBackend()
+    eng = ConsultationEngine()
+    eng._backend = fake
+
+    config = {
+        "industry": "foreign_finance", "genre": "algorithm", "difficulty": "extreme",
+        "unknown_field": "無視されるべき",
+    }
+    eng.consult("開始", mode="interview_sim", config=config)
+    sys1, user1 = fake.calls[0]
+    assert sys1 == INTERVIEWER_SYSTEM_PROMPT
+    assert "外資系金融 (HFT/クオンツ)" in user1
+    assert "アルゴリズム・データ構造の技術面接" in user1
+    assert "最難関" in user1
+    assert eng._interview_state["config"] == config, "config が state に保持されていない"
+
+    # プリセット外の自由記述 industry/genre はそのまま表示ラベルとして使われる
+    eng2 = ConsultationEngine()
+    fake2 = FakeBackend()
+    eng2._backend = fake2
+    eng2.consult("開始", mode="interview_sim",
+                config={"industry": "国内メガベンチャー", "genre": "", "difficulty": "hard"})
+    _, user2 = fake2.calls[0]
+    assert "国内メガベンチャー" in user2
+    print("  F4a configurator (no ES, whitelist bypass) OK")
+
+
+def test_interview_report_schema_and_latency() -> None:
+    """F4b: interview_report.v1 のスキーマ・軸ホワイトリスト・evidence必須・
+    latency のコード合成 (LLMには一切書かせない) を検証する。"""
+    valid_json = json.dumps({"metrics": [
+        {"axis": "論理性", "score": 82.6, "evidence": "MECEな分解を提示した"},
+        {"axis": "技術力", "score": 55, "evidence": "実装の詳細に踏み込めなかった"},
+        {"axis": "構成力", "score": 90, "evidence": "結論から述べる構成だった"},
+        {"axis": "具体性", "score": 40, "evidence": "定量的根拠が薄かった"},
+    ]}, ensure_ascii=False)
+    backend = ScriptedBackend(["出題", "面接官応答1", "面接官応答2", "講評本文です", valid_json])
+    eng = ConsultationEngine()
+    eng._backend = backend
+
+    eng.consult("開始", mode="interview_sim",
+                config={"industry": "foreign_it", "genre": "fermi", "difficulty": "hard"})
+    eng.consult("推定の前提は3つあります", mode="interview_sim", response_time_sec=12.0)
+    eng.consult("もう少し粘って考えます", mode="interview_sim", response_time_sec=30.0)
+    eng.consult("講評", mode="interview_sim")
+
+    report = eng._last_interview_report
+    assert report is not None, "interview_report.v1 が生成されていない"
+    assert report["schema"] == "interview_report.v1"
+    assert report["simulated"] is True
+    assert report["config"]["genre"] == "fermi"
+    axes = {m["axis"] for m in report["metrics"]}
+    assert axes == {"論理性", "技術力", "構成力", "具体性"}, axes
+    for m in report["metrics"]:
+        assert 0 <= m["score"] <= 100
+        assert m["evidence"]
+    scores = {m["axis"]: m["score"] for m in report["metrics"]}
+    assert scores["論理性"] == 83, "82.6 が四捨五入で int へ clamp されていない"
+    # latency はコードが state["latencies"] から合成する (LLM の JSON には無い)
+    assert report["latency"] == {"median_sec": 21.0, "max_sec": 30.0, "n": 2}
+    assert report["summary"] == "講評本文です"
+
+    # 永続化: data/records/interviews/ に書かれ、genre がファイル名に反映される
+    files = list(INTERVIEW_RECORDS_DIR.glob("interview_*_fermi.json"))
+    assert files, "成績表が data/records/interviews/ へ永続化されていない"
+    on_disk = json.loads(files[0].read_text(encoding="utf-8"))
+    assert on_disk["schema"] == "interview_report.v1"
+    print("  F4b interview report schema + latency synthesis OK")
+
+
+def test_interview_report_axis_rejection() -> None:
+    """F4b: ホワイトリスト外の軸・evidence欠如の採点はパース時に削られ、
+    スコアは0-100へclampされる。軸を1つも復元できなくても summary/latency
+    は必ず返る (退化フォールバック)。"""
+    invalid_json = json.dumps({"metrics": [
+        {"axis": "コミュニケーション力", "score": 90, "evidence": "笑顔が良かった"},
+        {"axis": "論理性", "score": 200, "evidence": ""},
+        {"axis": "技術力", "score": -10, "evidence": "妥当な深掘りができた"},
+    ]}, ensure_ascii=False)
+    backend = ScriptedBackend(["出題", "講評本文", invalid_json, invalid_json, invalid_json])
+    eng = ConsultationEngine()
+    eng._backend = backend
+
+    eng.consult("開始", mode="interview_sim")
+    eng.consult("講評", mode="interview_sim")
+
+    report = eng._last_interview_report
+    assert report is not None
+    axes = [m["axis"] for m in report["metrics"]]
+    assert "コミュニケーション力" not in axes, "ホワイトリスト外の軸が混入した"
+    assert "論理性" not in axes, "evidence欠如の採点が混入した"
+    assert axes == ["技術力"], axes
+    assert report["metrics"][0]["score"] == 0, "負のスコアが0へclampされていない"
+    assert report["summary"] == "講評本文"
+    assert report["latency"] == {"median_sec": 0.0, "max_sec": 0.0, "n": 0}
+    print("  F4b interview report axis whitelist rejection OK")
+
+
+def test_interview_records_isolated_from_profiler() -> None:
+    """W-38 (壁A — `_assert_no_gap_leak` の鏡像): 面接成績表ディレクトリ
+    (data/records/interviews/) を読み書きするコードは core/interview_report.py
+    のみであることを静的に保証する。profiler/gap_analysis/tensor_store/oracle
+    がこのパスへ結合したら壁A違反として検出する。"""
+    import core.digital_twin as digital_twin
+    import core.gap_analysis as gap_analysis
+    import core.oracle as oracle
+    import core.profiler as profiler
+    import core.tensor_store as tensor_store
+
+    guarded = (gap_analysis, profiler, tensor_store, oracle, digital_twin)
+    for mod in guarded:
+        src = Path(mod.__file__).read_text(encoding="utf-8")
+        assert "INTERVIEW_RECORDS_DIR" not in src, \
+            f"{mod.__name__} が面接成績表ディレクトリを参照 (壁A違反)"
+        assert "records/interviews" not in src.replace("\\", "/"), \
+            f"{mod.__name__} が面接成績表パスを直接参照 (壁A違反)"
+    print("  interview report sanctuary isolation (W-38) OK")
+
+
 def test_simulated_persona_isolation() -> None:
     """建前人格フラグの永続化と、Gap 主観スコアの 0.1 ウェイト化。"""
     from core.consultation_log import (
@@ -762,6 +910,11 @@ if __name__ == "__main__":
     try:
         test_life_balance_stabilizer()
         test_interview_sim_flow()  # ES 不在時のケースバンク・フォールバック
+        # ---- F4a/F4b (ES 不在前提。ES駆動時の優先順位は既存テストで別途保証) ----
+        test_interview_configurator_no_es()
+        test_interview_report_schema_and_latency()
+        test_interview_report_axis_rejection()
+        test_interview_records_isolated_from_profiler()
         test_fetch_tag_hook_and_queue()
         test_offline_default_never_fetches()
         test_mock_fetch_ingestion_pipeline()

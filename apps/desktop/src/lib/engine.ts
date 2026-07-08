@@ -1,6 +1,13 @@
 import { invoke } from "@tauri-apps/api/core";
 import { readTextLenient } from "./textDecode";
-import type { ClassifyResult, RecordData, SettingsData, SourceStat } from "./types";
+import type {
+  ClassifyResult,
+  InterviewConfig,
+  InterviewReport,
+  RecordData,
+  SettingsData,
+  SourceStat,
+} from "./types";
 
 export async function pkbInvoke<T = unknown>(
   cmd: string,
@@ -45,12 +52,14 @@ export interface ConsultOptions {
   personas?: { name: string; trait: string }[];
   /** AI 表示 → ユーザー送信までの経過秒 (面接/GD の思考速度評価用) */
   response_time_sec?: number;
+  /** F4a: interview_sim のセッション設定 (開始ターンのみ送信すれば十分) */
+  config?: InterviewConfig;
 }
 
 export async function consult(
   query: string,
   opts: ConsultOptions = {},
-): Promise<{ query: string; mode?: string; answer: string }> {
+): Promise<{ query: string; mode?: string; answer: string; report?: InterviewReport }> {
   return pkbInvoke("consult", { query, ...opts });
 }
 

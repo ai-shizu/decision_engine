@@ -54,6 +54,47 @@ export interface GdPersona {
   trait: string;
 }
 
+/**
+ * F4a (SPEC_FOXTROT_UI.md §7 裁定2): interview_sim コンフィギュレータ。
+ * F-13: スプレッド禁止、この3フィールドの明示列挙のみバックエンドへ送る。
+ * industry/genre はプリセットID (バックエンドの静的バンクで解決) または
+ * 自由記述文字列。ES が存在する場合はバックエンド側で ES 駆動が優先される。
+ */
+export interface InterviewConfig {
+  industry: string;
+  genre: string;
+  difficulty: "standard" | "hard" | "extreme";
+}
+
+/** F4b: 成績表の1軸分の評価 (バックエンドで軸ホワイトリスト・evidence必須を検証済み) */
+export interface InterviewReportMetric {
+  axis: string;
+  score: number;
+  evidence: string;
+}
+
+/** F4b: 実測レイテンシ (バックエンドが物理量として合成。LLM は書かない) */
+export interface InterviewReportLatency {
+  median_sec: number;
+  max_sec: number;
+  n: number;
+}
+
+/**
+ * F4b (SPEC_FOXTROT_UI.md §7 裁定3): interview_report.v1。
+ * W-37: UI はこの構造体を stdio 応答からそのまま受け取るのみで、
+ * LLM 出力の JSON.parse を絶対に書かない。
+ */
+export interface InterviewReport {
+  schema: "interview_report.v1";
+  date: string;
+  config: Partial<InterviewConfig>;
+  metrics: InterviewReportMetric[];
+  summary: string;
+  latency: InterviewReportLatency;
+  simulated: true;
+}
+
 /** INTERVIEW タブのチャットメッセージ */
 export interface InterviewMessage {
   role: "user" | "ai" | "feedback";
