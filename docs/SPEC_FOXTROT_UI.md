@@ -26,6 +26,16 @@
 #   status 行に混線する) を発見。§2.3.1 に disposed フラグ標準形・
 #   stick-to-bottom ref 法・トークン再割当表・履歴クリアの F-7 化を追加。
 #   §6 に W-34 を追加。F3 は「作り直し」ではなく既存骨格の規律締め上げ。
+# Rev.8 (2026-07-08): F3 完遂を受けた F3.5 (ストリーミングのスロットリング)
+#   および F4 (面接シミュレータ進化: コンフィギュレータ/成績表/継続学習)
+#   着工前裁定。憲法照合で2件の衝突を検出し壁A (成績表=建前人格の隔離。
+#   profiler/gap_analysis/tensor_store からの読み取り永久禁止) と壁B
+#   (成績表→出題は可・日常→出題は不可・成績→日常分析も不可の一方通行) を
+#   新設。§7 に裁定全文 (useThrottledStream 仕様、InterviewConfig 型、
+#   interview_report.v1 スキーマ、W-35〜W-39) を焼き付け。実行順序:
+#   F3.5 (CONSULT で先行検証) → F4a (コンフィギュレータ) → F4b (成績表) →
+#   F4c (継続学習ループ)。本ミッションのスコープは F3.5 まで — F4a〜c は
+#   次ミッションで着手する。
 
 > **読者への前提命令**: 本書を読む前に `docs/AI_SKILLS.md` §0 のルーティング表
 > に従い §1 + UI タスク該当節を読め (2026-07-08 改訂 — 全文読了の強制は撤回済み)。
@@ -779,10 +789,14 @@ F1: RECORD フリクション監査 (autofocus / Enter 追加 / Ctrl+1-3)
 F2: IMPORT 等幅ダッシュボード (term-レイヤ建設 + グリフバッジ + status 逐次表示)
 F2-EXT: 汎用インポート (classify/import_document。dest 明示・冪等性・拒絶ゲート)
 F3: CONSULT 可読測度 + スクロール追従規律 + status混線防止 (W-34)
-F4: INTERVIEW SessionHUD (PreSessionBriefing は E4 完成後に接続)
+F3.5: useThrottledStream (一定速スロットリング。CONSULT で先行検証 — §7 裁定1)
+F4a: INTERVIEW コンフィギュレータ (InterviewConfig 型・SESSION_CONFIG term-panel)
+F4b: INTERVIEW 成績表 (interview_report.v1 スキーマ検証・latency合成・term-描画)
+F4c: INTERVIEW 継続学習ループ (直近2件の決定論的差分要約をシステムプロンプトへ注入)
 F5: SETTINGS iOS 化 (CSS Toggle + Advanced <details>)
 F6: PROBE タブ (D2 + E4 完成が前提条件 — それまで着手禁止。様式は F-14 準拠)
-各段: npx tsc --noEmit + ui_smoke ALL PASS。コミットは指揮官の指示時のみ。
+各段: npx tsc --noEmit + ui_smoke ALL PASS。F4a〜c はバックエンド接触段のため
+Python 全スイート必須。コミットは指揮官の指示時のみ。
 ```
 
 ---
@@ -850,6 +864,154 @@ Foxtrot 本格実装 (F7・F1〜F6) で踏み抜きやすい罠。**新規タブ
   の status 表示に混線しうる**。status ハンドラを無条件で反映させるな —
   自分のコマンドが in-flight の間のみ処理する `busyRef`/`importingRef`
   ゲートを必ず設けよ (chunk 側の `last.streaming` ガードと対の規律)。
+
+---
+
+# §7【Rev.8 裁定全文】Architect's Ruling: F4 面接シミュレータ進化 + F3.5 スロットリング
+
+> 本節は指揮官発注 (F3 COMMIT & MISSION FOXTROT-F3.5) に対する fable5 の
+> 裁定全文を一言一句省略せず焼き付けたものである。実行スコープは F3.5 まで
+> (F4a〜c は次ミッションで着手)。§2.3.1 (F3) 等の既存節と重複する記述は
+> 意図的なもの — 裁定は発行時点の文脈をそのまま保存する。
+
+指揮官の4特命を受理する。ただし着工前に**憲法照合で2件の衝突を検出した** —
+どちらも解決可能だが、解決の形を法として先に固定する。裁定を下す。
+
+## 0. 憲法照合 — 2つの壁を先に建てる
+
+**衝突1 (憲法5・建前人格の隔離)**: 面接の成績表はシミュレーター由来データ =
+**建前人格の産物**だ。これが deep_profile / gap分析 / tensor へ流れた瞬間、
+「面接で演じた自分」が「日常の自分」の分析を汚染する — T-8系の自己欺瞞増幅器
+になる。
+**壁A**: `data/records/interviews/` は**シミュレータ内で閉じた学習ループ**と
+する。読み手は面接シミュレータのみ。profiler・gap_analysis・tensor_store・
+consult(通常モード) からの読み取りを永久禁止。
+
+**衝突2 (憲法3・情報の非対称性)**: 「過去の成績を出題プロンプトへ注入」は
+合法か？ — 合法だ。**成績表は日常データではなく、この訓練装置自身の履歴**
+であり、コーチが訓練生の過去成績を知っているのは本番面接の非対称性と矛盾
+しない。ただし:
+**壁B**: 出題プロンプトへ注入してよいのは**成績表由来の成長コンテキストの
+み**。gap_insights/テレメトリ/Echo の隔離 (`_assert_no_gap_leak`) は
+configurator 経路にも不変で適用。二枚の一方通行壁 — 「成績→出題は可、
+日常→出題は不可、成績→日常分析も不可」。
+
+## 裁定1: F3.5 スロットリング — 「一定速の帳」
+
+- **アーキテクチャ**: 文字キュー (ref) + **単一の interval タイマー**
+  (コンポーネントごとに1個。chunk毎のsetTimeout乱立は禁止)。chunk受信 →
+  キューへpush、タイマーが毎tick一定文字数を`setMessages`へ放出。
+  `stickRef`/`disposed`規律は放出側に既存のまま適用される (chunkハンドラが
+  キュー投入に変わるだけ)。
+- **F-14適用 — ランダムジッタ禁止**: 「人間らしさ」のための揺らぎは**偽の
+  ランダム性**であり違法。放出レートは定数 (例: 30ms tick × 2文字 ≒ 実測的
+  な発話速度。値はSPECに定数として凍結し、UIから変更させない)。
+- **確定置換は即時**: 最終応答 (`<think>`除去済み) が到着したら**キューを
+  破棄して即時置換**。スロットルはchunkストリームのみに適用。理由: ストリ
+  ーム中の思考テキストをゆっくりタイプし続けた後に短い清書へ差し替わると
+  視覚が破綻する。F3の「薄い思考が流れ、確定で濃い回答が着地する」言語を
+  そのまま保つ。
+- **計測の錨 (W-39)**: `response_time_sec` の起点は従来通り**確定置換の
+  レンダー時点**。バックエンド応答到着時刻やキュー枯渇時刻に錨を移すな —
+  スロットルが計測を1msも歪めない構造をこれで保証する。
+- **実装形態**: `useThrottledStream` フックを1個新設し、CONSULT と
+  INTERVIEW で共用する (keyUtils と同じ「1関数を全員が通る」規律)。
+
+## 裁定2: F4a コンフィギュレータ — 型の凍結
+
+```ts
+// types.ts — F-13: スプレッド禁止、この3フィールドの明示列挙のみ送信
+interface InterviewConfig {
+  industry: string;    // プリセットIDまたは自由記述
+  genre: string;       // "algorithm" | "system_design" | "fermi" | "behavioral" | 自由記述
+  difficulty: "standard" | "hard" | "extreme";
+}
+```
+
+- プリセット (外資IT/外資金融・クオンツ等) は**バックエンドの静的バンク**
+  (`INTERVIEW_INDUSTRY_BANK`等) に置き、UIはIDで参照。es_manager のドメイン
+  非依存原則と同居: **ES があれば ES 駆動が優先、config はその上の絞り込み**
+  (優先順位をSPECに明記)。
+- UI: `term-panel` "SESSION_CONFIG"。選択は `term-row` + 既存selectとghost
+  ボタンのみ。開始前のみ表示、セッション中は変更不可 (unmountで消える —
+  F-11がそのまま状態消去を担保)。
+- 配線: `consult(q, {mode:"interview_sim", config})` → stdio params →
+  `consultation_engine` の状態機械へ。**バックエンドは未知フィールドを
+  無視する既存の境界防衛** (test_oracleで確立済みのパターン) を踏襲。
+
+## 裁定3: F4b 成績表 — 「LLMは定性、コードは物理量」の分離
+
+**スキーマ `interview_report.v1`(両側で凍結)**:
+
+```json
+{
+  "schema": "interview_report.v1",
+  "date": "ISO", "config": {InterviewConfig},
+  "metrics": [{"axis": "<軸ID>", "score": 0-100整数, "evidence": "<transcript引用>"}],
+  "summary": "<LLM講評テキスト>",
+  "latency": {"median_sec": 実測, "max_sec": 実測, "n": 件数},
+  "simulated": true
+}
+```
+
+- **軸はホワイトリスト固定** (論理性/技術力/構成力/具体性の4軸。LLMが軸を
+  発明したらパース拒否)。score は int へ clamp。**evidence必須** — 証拠の
+  ない採点は削る (§6.2-3の反証可能性倫理の面接版)。
+- **`latency` ブロックはLLMに書かせない** — UIが計測した実測値をコードが
+  集計して合成する。憲法2の直接適用: 物理量はコード、言語化のみLLM。UIは
+  「AI評価」(metrics)と「実測」(latency)をラベルで峻別して描画。
+- LLM JSON の信頼性: **narrative_compiler の確立パターンを流用** (スキーマ
+  検証→リトライ→上限で諦めて講評テキストのみ返す。専用機構を新設しない)。
+- UI: `term-panel` "MISSION_RESULT"。スコアは `term-value` 右揃え + 10セグ
+  メントバー (`<rect>`×10、TensionMeterと同型)。アニメ禁止 — 計器は跳ねない。
+
+## 裁定4: F4c 継続学習ループ
+
+- **永続化**: 講評生成と同時にバックエンドが
+  `data/records/interviews/interview_{ISO日時}_{genre}.json` へ書く
+  (gitignore圏内・W-32適用: 実名/ES本文を成績表へ複写しない)。専用index
+  ファイルは**作らない** — ファイル名がインデックスだ (日時+ジャンルで
+  十分。台帳の複雑化はIMP-1の教訓に反する)。
+- **成長コンテキスト注入**: セッション開始時にバックエンドが同一 genre の
+  **直近2件**を読み、**コードが決定論的に差分要約** (軸ごとのスコア推移・
+  前回の最低軸) してシステムプロンプトへ1段落注入。LLMに過去レポート全文を
+  再読・再解釈させるな — 注入は「前回: 論理性62→今回重点」級の圧縮された
+  事実のみ。
+- 講評フェーズにも同じ成長コンテキストを渡し「前回からの改善/停滞」を
+  言及させる。
+
+## W-35〜W-39 (SPECへ法制化せよ)
+
+- **W-35 (キューと確定置換のレース)**: 最終応答到着時にキューを破棄せず
+  放出し続けると、置換後のメッセージに古いキューが追記される。確定置換
+  ハンドラは必ず「キュー破棄→置換」の順で原子的に行え。
+- **W-36 (タイマーの多重化)**: スロットルはコンポーネントインスタンスあた
+  り**interval 1個**。cleanup必須・StrictMode二重実行で2個回らないこと
+  (disposedフラグと同族の規律)。
+- **W-37 (LLM JSONの盲信禁止)**: UIで `JSON.parse(LLM出力)` を書くな。検証
+  (軸ホワイトリスト・clamp・evidence必須) は**バックエンドの責務**で、UI
+  には検証済み構造体のみが届く。
+- **W-38 (成績表の聖域規律)**: 壁A/壁Bの実装ガード。
+  `data/records/interviews/` を読むコードは面接シミュレータ経路のみ。
+  profiler/gap/tensor からの参照を検出する回帰テスト
+  (`_assert_no_gap_leak` の鏡像) を必ず置け。
+- **W-39 (計測の錨)**: response_time_sec の起点は確定置換レンダー時点から
+  動かすな。スロットルの導入・調整で錨がずれたら、それはUIによる測定汚染
+  (F-5系) である。
+
+## 実行順序
+
+```
+1. F3 の未コミット分を確定
+2. SPEC Rev.8: 本裁定全文 (壁A/B・スロットル定数・InterviewConfig・
+   interview_report.v1・W-35〜39) を焼き付け
+3. F3.5: useThrottledStream (CONSULT で先行検証 — 面接より失敗コストが低い)
+4. F4a: コンフィギュレータ (フロント+バックエンドの config 受理)
+5. F4b: 成績表 (スキーマ検証 + 永続化 + term- 描画。Python テスト必須:
+   スキーマ検証・axis拒否・latency合成・壁A/Bの隔離ガード)
+6. F4c: 成長コンテキスト注入 (+ 注入内容の決定論テスト)
+各段で tsc + cargo check + Python 全スイート (バックエンド接触段) + ui_smoke
+```
 
 ---
 *装飾は 1 ピクセルも要らない (AI_SKILLS §3.4)。ハッカーが信頼するのは、

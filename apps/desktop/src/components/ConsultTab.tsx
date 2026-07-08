@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { consult } from "../lib/engine";
 import type { ChatMessage, EngineEvent } from "../lib/types";
+import { useThrottledStream } from "../lib/useThrottledStream";
 
 export function ConsultTab() {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -36,6 +37,20 @@ export function ConsultTab() {
     stickRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 24;
   }
 
+  // F3.5 (SPEC_FOXTROT_UI.md §7 裁定1): chunk は一定速でキューから放出する。
+  // 確定置換 (handleSubmit 側) は必ず flushAndStop() でキューを破棄してから
+  // 行う (W-35)。放出コールバック自体は既存の stickRef 追従規律をそのまま踏襲。
+  const { push: pushChunk, flushAndStop: flushChunkQueue } = useThrottledStream(
+    (piece) => {
+      setMessages((prev) => {
+        const last = prev[prev.length - 1];
+        if (!last || last.role !== "assistant" || !last.streaming) return prev;
+        return [...prev.slice(0, -1), { ...last, text: last.text + piece }];
+      });
+      if (stickRef.current) scrollToBottom(false);
+    },
+  );
+
   // Python エンジンの中間イベント (進捗 status / 生成トークン chunk) を受信する。
   // W-22/W-23 の disposed フラグ標準形: cleanup が listen() の resolve より
   // 先に走っても (StrictMode の二重実行等)、購読は確実に解除される。
@@ -50,12 +65,7 @@ export function ConsultTab() {
         return;
       }
       if (payload.event === "chunk" && payload.text) {
-        setMessages((prev) => {
-          const last = prev[prev.length - 1];
-          if (!last || last.role !== "assistant" || !last.streaming) return prev;
-          return [...prev.slice(0, -1), { ...last, text: last.text + payload.text }];
-        });
-        if (stickRef.current) scrollToBottom(false);
+        pushChunk(payload.text); // スロットルキューへ積むだけ (放出はタイマー駆動)
       }
     };
 
@@ -78,6 +88,7 @@ export function ConsultTab() {
     const q = input.trim();
     if (!q || busy) return;
     setInput("");
+    flushChunkQueue(); // 新規送信時に前回セッションの残留キューを破棄する
     setMessages((prev) => [
       ...prev,
       { role: "user", text: q },
@@ -90,7 +101,10 @@ export function ConsultTab() {
     scrollToBottom(true);
     try {
       const res = await consult(q);
-      // ストリーミング中の一時テキストを最終回答で確定置換する
+      // W-35: 確定置換は必ず「キュー破棄 → 置換」の順で原子的に行う。
+      // 順序が逆だと、破棄前に残っていたキューが置換後のメッセージへ
+      // 追記され続けてしまう。
+      flushChunkQueue();
       setMessages((prev) => {
         const last = prev[prev.length - 1];
         if (last?.role === "assistant" && last.streaming) {
@@ -100,6 +114,7 @@ export function ConsultTab() {
       });
       setStatus("");
     } catch (err) {
+      flushChunkQueue(); // W-35: エラー経路でも確定 (削除/凍結) 前にキューを破棄する
       // 空のプレースホルダーは取り除き、エラーは status 行に出す
       setMessages((prev) => {
         const last = prev[prev.length - 1];
