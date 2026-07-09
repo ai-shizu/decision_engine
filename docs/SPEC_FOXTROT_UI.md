@@ -1499,6 +1499,8 @@ W-50 (実行順依存の汚染禁止):
        全ファイルを mtime 降順で読み、select_es(None) が最新を返す。
 
 F-16 (単一ES不変条件): システムが保持する ES は常に active_es.md ただ1件。
+  これを【読み手側の単一化】で達成する — ディスク上の既存レガシーESファイルは
+  削除しない (破壊操作を行わない。情報ロスゼロ)。
 
 施工:
  (1) paths.py: ACTIVE_ES = ES_DIR / "active_es.md" を追加。
@@ -1506,8 +1508,8 @@ F-16 (単一ES不変条件): システムが保持する ES は常に active_es.
        ・拒絶ゲート/line・ics弾きは現行踏襲。
        ・冪等性: ACTIVE_ES が同一内容なら skip (現行の blake2b 比較を単一
          ファイル比較へ縮約)。
-       ・書き込み前に ES_DIR 内の他の *.md/*.txt を全削除 (「1件のみ」の
-         構造的保証。累積レガシーもここで一掃)。
+       ・【削除しない】ES_DIR 内の他ファイルには一切触れない (レガシーは
+         読み手側単一化で構造的に不可視。破壊操作をしない — 情報ロスゼロ)。
        ・ACTIVE_ES へ write_bytes(utf-8) で上書き (write_text は \n→\r\n で
          ハッシュ比較を壊す — 既知の罠、踏むな)。
        ・戻り値 path は "active_es.md" 固定。
@@ -1518,11 +1520,14 @@ F-16 (単一ES不変条件): システムが保持する ES は常に active_es.
          意味を失う。互換のため引数は残すが常に active を返す)。
        ・新設 get_active_es() -> dict|None: View用。
          {exists, title, target_domain, keywords, body, char_count, mtime}
+       ・∴ レガシーは物理的に残っても面接/添削/Viewには一切現れない
+         (構造的不可視化)。
  (4) facade.active_es() -> dict: get_active_es() を UI 形へ整形して返す
        (未登録なら {"exists": False})。W-32: filename はログ/永続化に
        書かない (UIの一時表示のみ。本文は本人の書類なので本人UIへの表示可)。
  (5) engine_stdio dispatch: cmd "es.view" → facade.active_es()。
- (6) data_source_stats の "es" は count 0/1 に収束 (dir_file_count のまま可)。
+ (6) data_source_stats の "es" は ACTIVE_ES 基準 (exists/count 0-1/mtime)。
+     dir_file_count は使わない (レガシーを数えない・読み手側整合)。
 
 UI (ImportTab):
   - engine.ts: esView(): Promise<EsView> (cmd "es.view")。
@@ -1537,6 +1542,9 @@ UI (ImportTab):
       畳まず常時見せる)。絵文字禁止(F-9)・mono整列(F-10)遵守。
   - ES import 成功後に esView() を再取得して panel を更新 (importLog
     singleton と同じ非同期規律。unmount後 setState は disposed flag で防ぐ)。
+
+W-53: active_es.md 以外の ES_DIR ファイルを「隠れ入力」として
+  読む経路を新設するな。単一ESの真実の源は ACTIVE_ES ただ一つ。
 
 --------------------------------------------------------------------------------
 §10.3  課題3 — es_review の無latency性を「固定」  【F-17】
@@ -1770,42 +1778,6 @@ W-52 (感想戦の聖域漏れ禁止): _debrief_turn に gap/oracle を注入し
   新paths:  ACTIVE_ES
   新型:     InterviewConfig.stance / EsView
 ================================================================================
-```
-
-## §10.2 改定 (指揮官裁定: レガシーESは「読み手側で不可視化のみ」)
-
-指揮官裁定により、§10.2 の施工 (2)(6) を以下へ改定する（削除操作を撤回し、
-読み手側単一化に一本化）。この改定ブロックが §10.2 の原文施工 (2)(6) に優先する。
-
-```
-────────────────────────────────────────────────────────────────
- §10.2 改定 (指揮官裁定: レガシーESは「読み手側で不可視化のみ」)
-────────────────────────────────────────────────────────────────
-F-16 (改定): 「保持は active_es.md ただ1件」を【読み手側の単一化】で
-  達成する。ディスク上の既存レガシーESファイルは削除しない (破壊操作を
-  行わない — 情報ロスゼロ原則 & F-7 は本Revで発火させない)。
-
-施工 (2) 改定 — import_document(dest="es"):
-  ・拒絶ゲート/line・ics弾きは現行踏襲。
-  ・冪等性: ACTIVE_ES と同一内容なら skip。
-  ・ACTIVE_ES へ write_bytes(utf-8) で上書き。
-  ・【削除しない】ES_DIR 内の他ファイルには一切触れない (裁定変更点)。
-  ・戻り値 path = "active_es.md" 固定。
-
-施工 (3)(4) 不変: load_es_documents/select_es/get_active_es は ACTIVE_ES
-  のみを読む。∴ レガシーは物理的に残っても面接/添削/Viewには一切
-  現れない (構造的不可視化)。
-
-施工 (6) 改定 — data_source_stats の "es":
-  dir_file_count をやめ、ACTIVE_ES 基準に切替える (読み手側整合):
-    exists = ACTIVE_ES.exists(); count = 1 if exists else 0;
-    mtime  = ACTIVE_ES の mtime。
-  → UIカウントとレビュー実態の乖離を読み手方向で解消 (削除せず整合)。
-  (レガシー *.md/*.txt がディスクに残っていてもカウントに数えない。)
-
-W-53 (新設): active_es.md 以外の ES_DIR ファイルを「隠れ入力」として
-  読む経路を新設するな。単一ESの真実の源は ACTIVE_ES ただ一つ。
-────────────────────────────────────────────────────────────────
 ```
 
 ---
