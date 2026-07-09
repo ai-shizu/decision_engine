@@ -14,6 +14,10 @@
 #   陳腐化 (Charlie/Delta-LINE/D3 を「未実装」と誤記) を現況へ更新。§3 冒頭に
 #   D1 の5軸データソース監査 (どの軸が既存算出の包み込みで済み、どの軸が新規
 #   上流計算を要するか) を追記。設計本文 (§3.0-3.8) は不変 — 照合と現況注記のみ。
+# Rev.6 (2026-07-09): D1 詳細設計を §3.2.1 として統合 (§3.2 骨格疑似コードの実装
+#   確定版)。5軸データフロー・共通 Axis コントラクト・新規2軸 (locus_of_control
+#   の ATTRIBUTION_LEXICON+否定ガード / unlearning_rate の突合窓 W_MAX+逆数式)
+#   の決定論アルゴリズムを確定。憲法ガード test_source_code.py の RED 項目に直結。
 
 > **読者への前提命令**: 本書を読む前に `docs/AI_SKILLS.md` を全文読め (第0原則)。
 > 本書と AI_SKILLS.md が矛盾した場合、**不変条件については AI_SKILLS.md が正**、
@@ -518,6 +522,125 @@ def compute_source_code(daily, probe_store, prev: HumanSourceCode) -> HumanSourc
 
 語彙表 (`ATTRIBUTION_LEXICON`, `FRICTION_MARKERS`) は gap_analysis の
 `GUILT_MARKERS`/`PRODUCTIVITY_MARKERS` と同じ形式・同じファイル配置規約で定義する。
+
+> **実装確定版は §3.2.1。** 上記 §3.2 の疑似コードは骨格 (illustrative)。
+> 実装は下記 §3.2.1 (実データの `analyze_procrastination`/`line_telemetry`
+> 出力へ結線した確定式) に従う。式が食い違う箇所 (例: decision_threshold) は
+> §3.2.1 を正とする。
+
+## 3.2.1 D1 実装詳細設計 (Rev.6 — §3.2 骨格の実装確定版)
+
+設計典拠: §3.1 データモデル / 憲法 §3.0 (決定論・証拠必須・感情推定排除・建前隔離)。
+Phase 0 照合 (§3.0-Rec) の実測に基づき、各軸を実在の上流関数へ結線する。
+
+### A. 全軸共通コントラクト (`Axis`)
+- `Axis = {score: float|None, confidence: 0.0-1.0, evidence: [EvidenceRef]≤5, updated: ISO}`。
+- **score ∈ [0,1]**、意味は §3.1 定義。**データ不足なら score=None** (line_telemetry/gap
+  の「断定を避ける」規約。捏造の 0 を出さない)。
+- **confidence = min(1.0, n_obs / SAT)** (観測イベント数の飽和。SAT は軸別)。
+- **evidence 必須**: score≠None の軸は EvidenceRef を最低1件。quote は **120字上限** (§3.1)。
+- **建前隔離**: 主観テキスト源は `build_subjective_corpus` の
+  **weight ≥ GENUINE_DOC_MIN_WEIGHT(0.5)** のみ (面接 simulated の重み0.1 は除外)。
+- **決定論**: 全軸 stdlib のパターンマッチ・算術のみ。**LLM 呼び出しゼロ** (感情推定排除の
+  構造的担保 → guard `test_no_emotion_inference`)。`clamp01(x)=max(0,min(1,x))`。
+
+### B. 5軸データフロー (軸1・2・5・interpersonal)
+
+- **軸1 decision_threshold** (0=即断 / 1=証拠を無限要求):
+  - 源: `analyze_procrastination()` の per-task `avoidance_index` (=1−平均双曲割引値) +
+    `consultation_log` の実行前・同テーマ相談件数 `preconsult`。
+  - score = `clamp01(0.6·mean(avoidance_index) + 0.4·min(1, mean_preconsult/5))`。
+  - confidence = `min(1, declarations/8)`。evidence = 宣言 quote + 遅延 records。
+- **軸2 reward_bias** (0=遅延報酬 / 1=即時報酬):
+  - 源: finance 支出分類 + 実行双曲割引値中央値 `V̄`。
+  - 支出分類 lexicon (新設・辞書式): `SPEND_IMMEDIATE`={外食,娯楽,課金,衝動,コンビニ…} /
+    `SPEND_INVEST`={書籍,受講,資格,貯蓄,投資…} を finance カテゴリ名にマッチ。
+    `imm = 短期支出/(短期+長期)`。
+  - score = `clamp01(0.5·imm + 0.5·(1−V̄))`。confidence = `min(1, n_tx/20)`。
+- **軸5 friction_energy_ledger** (0=摩擦で消耗 / 1=摩擦を糧に):
+  - 源: `FRICTION_MARKERS`(衝突・言い争い・気まずい…) を含む日の事後±2日窓へ
+    `analyze_life_balance` の `_productivity_hits` 差分 `Δp = after − before` を適用。
+  - score = `clamp01(0.5 + 0.5·tanh(Δp/2))` (Δp>0 = 摩擦を糧に = 1寄り)。
+  - confidence = `min(1, n_friction_events/5)`。
+- **6群 interpersonal** (friction_response / latency_asymmetry / protocol_plasticity):
+  - 源: `line_telemetry` DL2 が **既に score/confidence 付き Axis 形で算出済み**。
+    D1 は **そのまま採用** (EvidenceRef 化 = contact_alias 経由のみ、実名なし I-15)。
+
+### C. 【新規】軸3 locus_of_control — 帰属語彙 (0=外的 / 1=内的)
+
+分類辞書 (`TASK_LEXICON` idiom を踏襲。`dict[str, list[str]]`・stdlib のみ):
+```python
+ATTRIBUTION_LEXICON = {
+  "internal": ["自分のせい","自分が悪","努力不足","準備不足","甘かった","力不足",
+               "反省","次はこうする","やるべきだった","改善する","詰めが甘"],
+  "external": ["のせい","せいで","環境が","会社が","周りが","上司が","理不尽",
+               "仕方ない","どうしようもない","巻き込まれ"],
+  "chance":   ["運が悪","運次第","たまたま","偶然","ツイてな","巡り合わせ","不運"],
+}
+NEGATORS = ["ない","じゃない","ではない","わけがない","とは思わない"]  # 否定ガード
+```
+算出 (genuine-weight 日記/相談テキストのみ):
+1. 各群 kw を `re.finditer` で走査。ヒットごと前後30字の snippet を取り、**snippet 内に
+   NEGATOR が近接する打消しは除外** (「自分のせいじゃない」を internal に誤計上しない
+   — procrastination の DONE_MARKER 近接判定と同 idiom)。
+2. `n_int, n_ext, n_chance` を集計。`N = n_int + n_ext + n_chance`。
+3. **score = n_int / N** (N>0)。外的+運は分母のみ (0側へ引く)、内的が 1側。`N==0 → None`。
+4. confidence = `min(1, N/15)`。evidence = internal/external 各最頻 snippet を
+   EvidenceRef(kind="diary", quote≤120字) で最大5件。
+- 憲法適合: 純パターンマッチ = 言語的物理量のカウント。**感情の「推定」ではない**
+  (本人が書いた帰属語の実測頻度)。LLM 不使用。simulated 除外で建前隔離。
+
+### D. 【新規】軸4 unlearning_rate — 語彙変化速度 (矛盾提示後の変化の速さ / 高=速い)
+
+矛盾提示イベント源 (決定論・日付付き):
+- (a) `analyze_procrastination()` の **flagged task** (type=task_avoidance) の宣言日 `T`。
+- (b) `line_telemetry` の **Bounty status ∈ {"probed","confirmed"}** の付与日。
+  (初版は (a) のみで着工可。(b) は confidence 増強として後付け可 — 下記オープン項目2)
+
+時系列突合ウィンドウ & 計算:
+```
+W_MAX = 8 週 (56日)                       # 追跡窓。超える変化は「学習し直さなかった」
+event ごとに:
+  first_change = T 以降 W_MAX 以内で、そのテーマの「行動語彙変化」が初出した日
+    行動語彙変化 = DONE_MARKERS / calendar 実行の初出 (procrastination の executions を再利用)
+  weeks = (first_change - T).days / 7      # 変化あり
+  weeks = W_MAX (=8)                        # 窓内に変化なし (減衰の底)
+  rate_event = 1 / (1 + weeks)              # 即週=1.0、8週=0.111、単調減少
+axis_score = mean(rate_event)               # 全 event 平均
+confidence = min(1, n_events / 5)
+```
+- evidence: EvidenceRef ペア (矛盾提示 quote → 変化(実行)証跡 quote) を最大5件。
+- 憲法適合: 日付差と DONE_MARKER 初出 = 完全に決定論。LLM 不使用。「感じ方」でなく
+  「行動語彙が変わるまでの週数」という物理量。
+
+### E. `get_source_code()` 出力 (`profile.source_code` API / §3.8)
+```
+{ "schema":"human_source_code.v1", "updated": ISO,
+  "axes": { decision_threshold, reward_bias, locus_of_control, unlearning_rate,
+            friction_energy_ledger, friction_response, latency_asymmetry, protocol_plasticity },
+  "mbti_projection": "EsTj",     # ※下記
+  "progress": mean(confidence) 全軸 }
+```
+- 永続化: `deep_profile.json` の `"source_code"` セクション (ディスク=ホワイトボックス
+  §3.0-3。全計算根拠 = evidence/生カウントを JSON に残す)。§3.1 の永続化規約に合流。
+- **MBTI 投影**: 5軸→MBTI 4文字の決定論的符号写像。**confidence<0.5 の文字は小文字**で
+  「未確定の揺らぎ」を表現 (§2.5 "EsTj")。正確な軸→文字マッピング表はガード RED 後の
+  実装で確定 (本節は「決定論・小文字=低confidence」の規約のみ固定 — オープン項目1)。
+
+### F. 憲法適合チェックリスト (→ `test_source_code.py` の RED 項目に1対1対応)
+| 憲法 | 構造的担保 | ガードテスト |
+|---|---|---|
+| 決定論 | 全軸 stdlib・LLM 無 | `test_source_code_deterministic` / `test_no_emotion_inference` |
+| 証拠必須 | score≠None ⇒ evidence≥1 | `test_every_axis_has_evidence` |
+| 感情推定排除 | D1 はカウント/日付差のみ (EMOTION 段は D2) | `test_no_emotion_inference` (backend.generate 未呼) |
+| 第三者秘匿 | interpersonal は contact_alias 経由のみ | `test_no_third_party_realname` |
+| 個人データ規律 | quote 120字上限 | `test_quote_length_cap` |
+| 建前隔離 | weight≥0.5 のみ採用 | (corpus weight フィルタ) |
+
+### G. オープン項目 (ガード RED の妨げにはならない・実装時に確定)
+1. 軸→MBTI 文字マッピング表 (本節は規約のみ固定)。
+2. 軸4 の矛盾提示イベント源: 初版 (a) flagged task のみ / (b) Bounty は後付け増強。
+3. 軸5 の `tanh(Δp/2)` 除数 (2) は暫定。実 `_productivity_hits` スケールで調整。
 
 ## 3.3 クロス・バリデーションと「共倒れ減衰」(疑似コード)
 
