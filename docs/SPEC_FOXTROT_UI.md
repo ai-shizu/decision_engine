@@ -1422,5 +1422,390 @@ pub async fn pkb_invoke(manager: State<'_, Arc<EngineManager>>,
 RED → 実装の順（Legacies 着手規律に準ずる）。
 
 ---
+
+# §10 — Target Sandbox & ES-Refine (Rev.11)
+
+```
+================================================================================
+ SPEC_FOXTROT_UI.md  §10 — Target Sandbox & ES-Refine (Rev.11)
+ 裁定者: Opus (Chief Architect) / 施工: Sonnet / 監督: 指揮官
+ 前提: Rev.10 (相関ID) 施工完了・コミット abd01f4 済み。本Revはそれに積む。
+================================================================================
+
+■ 総則
+  本Revは6課題を「1コミット＝1論理」で施工する。Phase順は依存関係で固定
+  (Sandboxが最初 — 以降の全テストがSandbox上で走る前提になるため)。
+  新不変条件 F-15〜F-20、新警告 W-50〜W-55 を導入する。
+  Rev.10で確立した cid 規律・disposed flag・term-CSSレイヤ規律は全て不変。
+
+--------------------------------------------------------------------------------
+§10.1  課題1 — Target Sandbox: テスト隔離防壁  【F-15】
+--------------------------------------------------------------------------------
+[実測] paths.py:12 は既に PROJECT_ROOT = Path(os.environ.get(
+       "PKB_PROJECT_ROOT", _PROJECT_ROOT)) を持つ。プリミティブは存在する。
+[急所] ES_DIR 等の全定数は import 時に確定する (束縛済み Path)。env を後から
+       立てても既 import の定数は動かない。∴ conftest がその env を立てる
+       タイミングは「あらゆる core import より前」でなければならない。
+
+F-15 (Sandbox不変条件):
+  a. tests/conftest.py の【モジュール最上部】(いかなる from core... より前) で
+     一時ディレクトリを作り os.environ["PKB_PROJECT_ROOT"] を上書きする。
+     pytest は conftest.py をテスト収集より前に import するため、これで
+     paths.py は最初の import から Sandbox を指す。
+  b. 本番 data/ には1バイトも書かせない。PKB_DATA_DIR は新設しない
+     (PKB_PROJECT_ROOT が唯一の真実の源)。
+
+施工構造 (tests/conftest.py — 新設):
+  ┌─ モジュール最上部 (import core の前) ─────────────────────────┐
+  │ import os, tempfile, pathlib, shutil, atexit                    │
+  │ _SANDBOX = pathlib.Path(tempfile.mkdtemp(prefix="pkb_test_")).  │
+  │ os.environ["PKB_PROJECT_ROOT"] = str(_SANDBOX)                  │
+  │ _SKELETON = ("data/raw","data/es","data/knowledge",            │
+  │   "data/processed","data/records/interviews","build","models") │
+  │ for s in _SKELETON: (_SANDBOX/s).mkdir(parents=True, exist_ok=1)│
+  │ atexit.register(lambda: shutil.rmtree(_SANDBOX, ignore_errors=1))│
+  └────────────────────────────────────────────────────────────────┘
+  + autouse function-scoped fixture `_isolate_data`:
+      各テストの前後で _SANDBOX/data/{es,knowledge,records/interviews,
+      processed} を rmtree→再作成し、テスト間の相互汚染を断つ。
+      (※ 現状の「HEADで11失敗・単体で3失敗」= 実行順依存の汚染。この
+       fixtureで消える。W-50参照)
+
+F-15 派生効果 (副作用の明示・許容):
+  MODELS_DIR/LLAMA_DIR/BUILD_DIR/SEARCH_EXE も Sandbox 配下へ落ちる
+  → GGUF/exe 不在 → RuleBasedBackend / NumPy フォールバックで走る。
+  これは I-5 (exe必須テストはゲート付きSKIP) と整合。実LLM/実exeを要する
+  テストは各自 skipif で門番すること (常設REDを作らない)。
+
+W-50 (実行順依存の汚染禁止):
+  テストは data/ をグローバル状態として共有してはならない。書き込む
+  テストは _isolate_data 後の空 Sandbox を前提に自分の入力を seed する。
+  リポジトリ実 data/ を read するテストも禁止 (Sandboxへ seed してから読む)。
+
+回帰ガード (tests/test_sandbox.py — 新設):
+  - test_sandbox_active:
+      import core.paths as P;
+      assert str(P.PROJECT_ROOT) == os.environ["PKB_PROJECT_ROOT"]
+      assert P.PROJECT_ROOT != <リポジトリ実ルート>   # 二重の証明
+  - test_no_literal_data_writes (grep式ガード):
+      src/python/core 配下に open("data/...) / Path("data/...) の
+      リテラル書き込みが無いことを静的検査 (paths.py 経由を強制)。
+
+--------------------------------------------------------------------------------
+§10.2  課題2 — ESの単一保持と可視化  【F-16】
+--------------------------------------------------------------------------------
+[実測] import_document(dest="es") は ES_DIR に sanitize 名で書き、衝突時は
+       ハッシュ接尾辞で【別名保存】→ ES が累積する。load_es_documents は
+       全ファイルを mtime 降順で読み、select_es(None) が最新を返す。
+
+F-16 (単一ES不変条件): システムが保持する ES は常に active_es.md ただ1件。
+
+施工:
+ (1) paths.py: ACTIVE_ES = ES_DIR / "active_es.md" を追加。
+ (2) facade.import_document: dest=="es" の分岐を専用パスへ差し替える —
+       ・拒絶ゲート/line・ics弾きは現行踏襲。
+       ・冪等性: ACTIVE_ES が同一内容なら skip (現行の blake2b 比較を単一
+         ファイル比較へ縮約)。
+       ・書き込み前に ES_DIR 内の他の *.md/*.txt を全削除 (「1件のみ」の
+         構造的保証。累積レガシーもここで一掃)。
+       ・ACTIVE_ES へ write_bytes(utf-8) で上書き (write_text は \n→\r\n で
+         ハッシュ比較を壊す — 既知の罠、踏むな)。
+       ・戻り値 path は "active_es.md" 固定。
+ (3) es_manager: 読み手を単一化。
+       ・load_es_documents(): ACTIVE_ES が在れば [_parse_es(ACTIVE_ES)]、
+         無ければ []。
+       ・select_es(name): name を無視し active を返す (単一化で name は
+         意味を失う。互換のため引数は残すが常に active を返す)。
+       ・新設 get_active_es() -> dict|None: View用。
+         {exists, title, target_domain, keywords, body, char_count, mtime}
+ (4) facade.active_es() -> dict: get_active_es() を UI 形へ整形して返す
+       (未登録なら {"exists": False})。W-32: filename はログ/永続化に
+       書かない (UIの一時表示のみ。本文は本人の書類なので本人UIへの表示可)。
+ (5) engine_stdio dispatch: cmd "es.view" → facade.active_es()。
+ (6) data_source_stats の "es" は count 0/1 に収束 (dir_file_count のまま可)。
+
+UI (ImportTab):
+  - engine.ts: esView(): Promise<EsView> (cmd "es.view")。
+  - types.ts: EsView { exists:boolean; title?:string; target_domain?:string;
+    body?:string; char_count?:number; mtime?:string|null }。
+  - ImportTab に term-panel "ES_ACTIVE" を追加 (SourceTable 近傍):
+      未登録 → "登録済み ES なし" のhint。
+      登録済み → title / target_domain / char_count を term-row で、本文は
+      <details> (F-9: details限定使用は合法) 内の overflow-y スクロール
+      <pre> で全文 View。絵文字禁止(F-10)・mono整列(F-12)遵守。
+  - ES import 成功後に esView() を再取得して panel を更新 (importLog
+    singleton と同じ非同期規律。unmount後 setState は disposed flag で防ぐ)。
+
+--------------------------------------------------------------------------------
+§10.3  課題3 — es_review の無latency性を「固定」  【F-17】
+--------------------------------------------------------------------------------
+[訂正済] es_review 計算経路は既に latency 皆無。切除対象の実体は無く、
+         「偽装UI hint」と「将来の退行」だけが敵。∴ 除去ではなく封印。
+
+F-17 (es_review 無latency不変条件):
+  mode=="es_review" の経路は response_time_sec を一切受け取らず、講評
+  プロンプトに応答時間セクションを合成しない。_format_latency_section /
+  synthesize_latency を es_review から呼ばない。
+  【厳守・非対象】interview_sim / gd_sim の latency (F4b: synthesize_latency
+  による物理量合成・成績表JSONへの median/max/n・講評での思考速度評価) は
+  一切変更しない。憲法2の防壁として維持。
+
+施工:
+ (1) UI hint 是正 (InterviewTab.tsx:319): 全モード共通の
+     「回答時間は計測され…」を撤去し、モード別 hint に差し替える。
+       interview_sim/gd_sim → "回答時間を計測し思考速度も講評対象になります"
+       es_review           → "書類単体の論理的強度のみを評価します
+                              (思考速度は評価しません)"
+     (MODES 配列の hint を使うか、mode で分岐。二重定義を避け一箇所に。)
+ (2) 送信経路のガード: es_review は response_time_sec を送らない現行動作を
+     維持 (handleSend の es_review 分岐)。将来 send() を触っても混ざらぬよう
+     「es_review では responseTime を組み立てない」不変を明示。
+ (3) dispatch/facade で es_review へ response_time_sec を透過させない
+     (現状 _consult_es_review は引数を持たない — シグネチャを保つことで
+      構造的に不可能を維持)。
+
+回帰ガード (test_integration or test_es_review):
+  - test_es_review_ignores_latency:
+      consult(mode="es_review", response_time_sec=42.0) が例外なく通り、
+      reviewer へ渡る user プロンプトに「秒」「応答時間」「latency」の
+      いずれも含まないことを ScriptedBackend で assert。
+  - test_interview_latency_preserved (退行検出):
+      interview_sim 講評に latency セクションが依然出ることを assert
+      (F4b が誤って巻き添えにされていないことの証明)。
+
+--------------------------------------------------------------------------------
+§10.4  課題4 — 面接スタンス選択式化  【F-18】
+--------------------------------------------------------------------------------
+[実測] ES在→build_interviewer_persona がハードコードで "Adversarial" 固定
+       (es_manager.py:132)。config に stance フィールド無し。
+
+F-18 (スタンス不変条件):
+  InterviewConfig に stance: "adversarial"|"standard" を追加。
+  既定は "adversarial" (指揮官裁定: 既存のストレステスト契約を無断で
+  弱めない。標準は opt-in)。ES駆動/config駆動/bank駆動の全 interview_sim
+  経路に反映する。
+  【学習ループ不変】stance は genre slug に影響させない (_interview_genre
+  は industry/format 由来のまま)。でないと敵対セッションと標準セッションが
+  別ジャンル扱いになり成長ループが分断される (W-42 の系)。
+
+施工:
+ (1) types.ts InterviewConfig に stance を追加。
+ (2) es_manager.build_interviewer_persona(es, stance="adversarial"):
+       "面接スタイル" ブロックを stance で分岐。
+       adversarial = 現行の圧迫 (矛盾/誇張を悪意で突く・助け舟なし)。
+       standard    = 穏和・建設的 (深掘りはするが圧迫しない・前提の
+                     明確化を促し、必要なら足場を与える。人格攻撃なしは両者共通)。
+ (3) 共通スタンス節 STANCE_CLAUSES: dict を consultation_engine に定義し、
+     config駆動/bank駆動 (INTERVIEWER_SYSTEM_PROMPT) 側にも stance 節を
+     append (ES無し経路もスタンスが効くように)。
+ (4) _consult_interview_sim: cfg.get("stance") を読み、
+       ES経路 → build_interviewer_persona(es, stance)
+       非ES経路 → system += STANCE_CLAUSES[stance]
+     stance を state["config"] に保持 (講評・感想戦・成績表 config へ継承)。
+ (5) UI (InterviewTab SESSION_CONFIG term-panel): 「面接スタンス」select 行を
+     追加 (敵対的・圧迫 / 標準・穏和)。DEFAULT_CONFIG.stance="adversarial"。
+     showConfig は interview_sim のみ (現行踏襲、F-11: unmount規律)。
+
+回帰ガード:
+  - test_stance_switches_persona: stance="standard" で persona に圧迫語が
+    無く、"adversarial" で在ることを assert。
+  - test_stance_does_not_split_genre: 同一 industry/genre で stance だけ
+    変えても _interview_genre が同一 slug を返すことを assert。
+
+--------------------------------------------------------------------------------
+§10.5  課題5 — 全面接の普遍的・継続学習  【F-19】
+--------------------------------------------------------------------------------
+[監査結果]
+   interview_sim 講評END: generate_report+persist_report+_last_interview_report
+                          + セッション開始時に成長コンテキスト注入 …… ✅完備。
+   gd_sim        講評END: append_consultation のみ。report生成・永続化・
+                          _last_interview_report・成長注入 …… ❌全欠落。
+   es_review            : 単発の書類添削でありトランスクリプト無し=「面接」
+                          ではない。学習ループ対象外を【裁定として明示】
+                          (穴ではなく設計上の除外)。
+
+F-19 (普遍学習不変条件):
+  「模擬面接」モード (interview_sim, gd_sim) は必ず次の両輪を持つ:
+    (開始) compute_growth_context(genre) を1回だけ読み system へ注入 (W-44)。
+    (講評) generate_report → persist_report → _last_interview_report 設定。
+  片輪でも欠ければ学習ループの退行 (W-51)。es_review はこの対象外
+  (書類レビューであり面接ではない — 本文に明記された除外)。
+
+施工 (_consult_gd_sim を interview_sim と対称化):
+ (1) GD開始時: genre = "group_discussion" (安定slug。全GDが相互学習する)。
+       growth = compute_growth_context(genre); 在れば system に
+       _GROWTH_CONTEXT_TEMPLATE で注入 (interview_sim と同一の一発注入・W-44)。
+       state に "config"={"genre":"group_discussion"} を保持。
+ (2) GD講評END: interview_sim と同じ後処理を追加 —
+       report = generate_report(self, state["system"], transcript_text,
+                                answer, state["config"], state.get("latencies",[]))
+       try: persist_report(report, "group_discussion") except OSError: pass
+       self._last_interview_report = report
+     (append_consultation は現行どおり並存。GDの latency は F4b 対象として
+      維持 — 課題3の非対象。)
+ (3) 結果として MISSION_RESULT パネルは GD でも自動表示される
+     (engine_stdio が last_interview_report を result.report に載せ、
+      InterviewTab の `if (res.report) setReport()` が拾う。UI変更不要)。
+
+W-51 (学習ループ半欠落の禁止):
+  新たな面接系モードを足すとき、開始注入と講評永続化の【両輪】を配線せぬ
+  まま「面接」と呼ぶな。片輪はサイレント健忘 (書くが読まない/読むが書かない)。
+
+回帰ガード:
+  - test_all_interview_modes_persist (parametrize [interview_sim, gd_sim]):
+      START→数ターン→"講評" の後、persist_report が呼ばれ (Sandbox の
+      records/interviews に .json が1件増える)、result.report が返ることを assert。
+  - test_gd_growth_injected: 事前に group_discussion の過去成績を seed し、
+      GD START の system に成長コンテキスト行が入ることを assert。
+
+--------------------------------------------------------------------------------
+§10.6  課題6 — 感想戦 (Debrief) 対話フェーズ  【F-20】
+--------------------------------------------------------------------------------
+[実測] 講評END で _interview_state=None / _gd_state=None にリセットされ
+       セッションは死ぬ。フロントも setSessionActive(false)。継続不能。
+
+状態遷移設計 (バックエンド — 状態オブジェクトに phase を導入):
+   phase: "active" ──[講評コマンド]──▶ "debrief"
+   ・講評END は state を null にせず phase="debrief" へ遷移させる。
+     state に summary(=講評本文), report, mentor_system, transcript を保持。
+   ・以後 START/END 以外の入力は _debrief_turn(state, q) へ routing。
+   ・"開始"(START) → 新セッション (旧 debrief state を破棄)。
+   ・debrief中の "終了"(END) → 別れの一言を返し state を null (感想戦終了)。
+   ・mode 文字列は不変 (interview_sim/gd_sim のまま)。phase が routing を
+     決める。∴ 新 mode 追加は不要、フロントは同一 mode を送り続ける。
+
+F-20 (感想戦の壁B不変条件):
+  build_mentor_persona / _debrief_turn は【既に公開された成果物のみ】
+  (transcript / summary(講評) / report metrics) を材料にする。
+  raw _gap_section() / _oracle_section() (聖域) を感想戦へ再注入することを
+  禁止する。講評は既に無菌合成済みの安全版を含む。対話中に生の gap/oracle を
+  流すのは新たな暴露面 (情報の非対称性・壁B違反)。
+
+施工:
+ (1) build_mentor_persona(context) — 新設 (consultation_engine):
+     "あなたは先刻この候補者を面接した評価者だが、今は面接を離れ、候補者の
+      成長を支援する建設的なメンターである。面接のやり取りと自分が下した
+      評価をすべて記憶している。候補者の問いに、どう答えれば良かったか・
+      改善の方向を具体的に示せ。新しい事実を捏造しない。圧迫はしない。"
+     (面接官と違い、メンターは講評/スコアを候補者に開示してよい。)
+ (2) 講評END (interview_sim & gd_sim 両方):
+       report/summary 確定後、self._interview_state (or _gd_state) を
+       null にせず:
+         state["phase"] = "debrief"
+         state["summary"] = answer
+         state["report"]  = report
+         state["mentor_system"] = build_mentor_persona(state)
+       講評本文はこれまで通り return。
+ (3) _debrief_turn(state, q, on_token, status):
+       system = state["mentor_system"]
+       metrics_line = report metrics を "軸:score" のcompact行へ (在れば)
+       user = f"# 面接トランスクリプト\n{transcript}\n\n"
+              f"# あなたが出した講評\n{state['summary']}\n\n"
+              f"# 評価スコア\n{metrics_line}\n\n"
+              f"# 候補者の質問\n{q}\n\n"
+              "上記の面接文脈と講評・評価に基づき、建設的なメンターとして
+               具体的に答えよ。"
+       answer = backend.generate(system, user, on_token=on_token)
+       <think>除去。append_consultation はしない (感想戦は保存不要=
+       成績表は既に確定済み。会話ログの二重記録を避ける)。return answer。
+ (4) _consult_interview_sim / _consult_gd_sim の冒頭分岐に追加:
+       if state is not None and state.get("phase")=="debrief"
+          and q not in START and q not in END: return _debrief_turn(...)
+       if state debrief and q in END: farewell + state=None。
+
+UI (InterviewTab — tri-state 化):
+  - phase state: "idle" | "active" | "debrief" (sessionActive を置換 or 併存)。
+  - handleFeedback 成功後: setSessionActive(false) の代わりに
+    setPhase("debrief")。report は保持 (res.report が無い debrief ターンでは
+    `if(res.report)` が偽なので既存 report が残る — 現行ロジックで自動)。
+  - debrief UI:
+      入力欄は活性 (placeholder "感想戦: 質問を入力…")。
+      送信は send(q, {userEcho:true}) で同一 mode を送る (responseTime は
+      送らない — 感想戦に思考速度評価は無い)。
+      AI返信は role="ai" speaker="メンター" (専用アバター色)。
+      「講評(Feedback)」ボタンは非表示。代わりに「感想戦を終了 / 新しい面接」
+      ボタン: send("終了") で state を閉じ setPhase("idle")、または switchMode
+      相当のリセット。
+  - cid 規律・disposed flag・throttle 等 Rev.10/F3.5 規律は不変。
+
+W-52 (感想戦の聖域漏れ禁止): _debrief_turn に gap/oracle を注入しない
+      (F-20)。将来「メンターに日常データも見せたい」誘惑が来ても、それは
+      別裁定を要する壁B改変であり本Revのスコープ外。
+
+回帰ガード:
+  - test_debrief_transition: 講評後に非END入力を送ると _debrief_turn が
+    走り (mentor_system 使用)、state が生存し続けることを assert。
+  - test_debrief_no_sanctuary_leak: _debrief_turn の user プロンプトに
+    _gap_section/_oracle_section 由来のマーカー文字列が現れないことを assert
+    (壁Bの構造的証明)。
+  - test_debrief_end_closes: debrief中 "終了" で state=None に戻ることを assert。
+
+--------------------------------------------------------------------------------
+§10.7  施工Phase順序 (依存で固定) と検収
+--------------------------------------------------------------------------------
+  Phase A: §10.1 Sandbox (最優先 — 以降の全テストがこの上で走る)。
+  Phase B: §10.2 単一ES + View。
+  Phase C: §10.3 hint是正 + 無latency固定。
+  Phase D: §10.4 スタンス。
+  Phase E: §10.5 GD学習ループ配線。
+  Phase F: §10.6 感想戦。
+  各Phase: SPEC (本§) → 実装 → 回帰テスト GREEN → as-built (AI_SKILLS §15) の
+  SOP厳守。コミットは Phase 単位 (1コミット=1論理)。
+
+  検収 (DoD):
+   - Sandbox 導入後、フル pytest が【安定して】GREEN (実行順非依存)。
+     ※ Rev.11 前に観測された「HEADで11失敗/単体で3失敗」は汚染由来。
+       Phase A 完了時点でこれが消えることが F-15 の合否ライン。
+   - tsc --noEmit / cargo check クリーン。
+   - grep: 本番 data/es・data/knowledge にテスト実行後の新規ファイル増分 0。
+   - ui_smoke パス。
+
+■ 新規識別子まとめ
+  不変条件: F-15(Sandbox) F-16(単一ES) F-17(es_review無latency)
+            F-18(スタンス) F-19(普遍学習) F-20(感想戦壁B)
+  警告:     W-50(実行順汚染) W-51(学習ループ半欠落) W-52(感想戦聖域漏れ)
+  新cmd:    es.view
+  新paths:  ACTIVE_ES
+  新型:     InterviewConfig.stance / EsView
+================================================================================
+```
+
+## §10.2 改定 (指揮官裁定: レガシーESは「読み手側で不可視化のみ」)
+
+指揮官裁定により、§10.2 の施工 (2)(6) を以下へ改定する（削除操作を撤回し、
+読み手側単一化に一本化）。この改定ブロックが §10.2 の原文施工 (2)(6) に優先する。
+
+```
+────────────────────────────────────────────────────────────────
+ §10.2 改定 (指揮官裁定: レガシーESは「読み手側で不可視化のみ」)
+────────────────────────────────────────────────────────────────
+F-16 (改定): 「保持は active_es.md ただ1件」を【読み手側の単一化】で
+  達成する。ディスク上の既存レガシーESファイルは削除しない (破壊操作を
+  行わない — 情報ロスゼロ原則 & F-7 は本Revで発火させない)。
+
+施工 (2) 改定 — import_document(dest="es"):
+  ・拒絶ゲート/line・ics弾きは現行踏襲。
+  ・冪等性: ACTIVE_ES と同一内容なら skip。
+  ・ACTIVE_ES へ write_bytes(utf-8) で上書き。
+  ・【削除しない】ES_DIR 内の他ファイルには一切触れない (裁定変更点)。
+  ・戻り値 path = "active_es.md" 固定。
+
+施工 (3)(4) 不変: load_es_documents/select_es/get_active_es は ACTIVE_ES
+  のみを読む。∴ レガシーは物理的に残っても面接/添削/Viewには一切
+  現れない (構造的不可視化)。
+
+施工 (6) 改定 — data_source_stats の "es":
+  dir_file_count をやめ、ACTIVE_ES 基準に切替える (読み手側整合):
+    exists = ACTIVE_ES.exists(); count = 1 if exists else 0;
+    mtime  = ACTIVE_ES の mtime。
+  → UIカウントとレビュー実態の乖離を読み手方向で解消 (削除せず整合)。
+  (レガシー *.md/*.txt がディスクに残っていてもカウントに数えない。)
+
+W-53 (新設): active_es.md 以外の ES_DIR ファイルを「隠れ入力」として
+  読む経路を新設するな。単一ESの真実の源は ACTIVE_ES ただ一つ。
+────────────────────────────────────────────────────────────────
+```
+
+---
 *装飾は 1 ピクセルも要らない (AI_SKILLS §3.4)。ハッカーが信頼するのは、
 等幅で揃った本物の数値と、押した瞬間に応答する機械だけだ。*
