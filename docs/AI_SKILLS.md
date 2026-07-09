@@ -801,7 +801,7 @@ TOTAL:                                          ~1.6-2.2 秒 (< 3000ms ゲート
 
 ---
 
-## 13. Target Foxtrot — UI/UX 設計 (`docs/SPEC_FOXTROT_UI.md`。F0/F7/F1/F2/F2-EXT/F3/F3.5/F4a/F4b/F4c/Rev.10相関ID復元/Rev.11 Phase A(Sandbox)・Phase B(単一ES/F-16)・Phase C(es_review無latency/F-17) 完遂・§10.4〜§10.6/エンジン多重化 未着手)
+## 13. Target Foxtrot — UI/UX 設計 (`docs/SPEC_FOXTROT_UI.md`。F0/F7/F1/F2/F2-EXT/F3/F3.5/F4a/F4b/F4c/Rev.10相関ID復元/Rev.11 Phase A(Sandbox)・Phase B(単一ES/F-16)・Phase C(es_review無latency/F-17)・Phase D(面接スタンス/F-18) 完遂・§10.5〜§10.6/エンジン多重化 未着手)
 
 フロントエンド (Tauri + React) の設計仕様。**§3.4 (React UI 規約) が上位法** —
 SPEC はその適用解釈を確定させるもの。コードより先に存在する凍結事項:
@@ -1585,6 +1585,65 @@ GREEN、`data/` 汚染ゼロ — 以上を全て満たしている。
 モード別に正確化)。interview_sim/gd_sim の latency (F4b) は無傷
 (`test_interview_latency_preserved` で直接証明)。フル pytest は実行順
 非依存で GREEN (152 passed)。
+
+---
+
+### Rev.11 Phase D 完遂 (2026-07-09) — as-built (面接スタンス選択式化 / F-18)
+
+**方針**: 面接スタンス (敵対的/標準) を UI で選択可能にし、全 `interview_sim`
+経路 (ES駆動/config駆動/bank駆動) のプロンプトへ反映。既定は `"adversarial"`
+(指揮官裁定: 既存のストレステスト契約を無断で弱めない)。`stance` は
+`_interview_genre` に混ぜない (W-42: genre slug 分裂 = 成長ループ分断)。
+`gd_sim`/`es_review`/`build_reviewer_persona` (ES添削)/latency 系は無変更。
+
+**実変更点 (バックエンド)**:
+- `es_manager.build_interviewer_persona(es, stance="adversarial")`:
+  共通ヘッダ (ドメイン専門家設定) + stance 別スタイル節。
+  `adversarial` = 現行の圧迫スタイル維持、`standard` = 穏和・建設的スタイル。
+  両 stance 共通で「人格攻撃はしない。攻撃対象は常に論理と事実」を維持。
+  未知 stance は adversarial にフォールバック。
+- `consultation_engine.py`:
+  - モジュール定数 `STANCE_CLAUSES` (非ES経路用) と `_stance_clause(cfg)` 新設。
+  - `_consult_interview_sim`: ES経路 → `build_interviewer_persona(es, stance=cfg...)`
+    、非ES経路 (config/bank) → `INTERVIEWER_SYSTEM_PROMPT + _stance_clause(cfg)`。
+    成長コンテキスト (`_GROWTH_CONTEXT_TEMPLATE`) の付加順序は現行維持
+    (stance 節は growth より前 = persona 定義の一部)。`stance` は既存の
+    `state["config"]=cfg` に自然継承 (追加保存配線不要)。
+
+**実変更点 (フロントエンド)**:
+- `types.ts`: `InterviewConfig` に `stance: "adversarial" | "standard"` 追加。
+- `InterviewTab.tsx`: `STANCE_OPTIONS` 定義、`DEFAULT_CONFIG.stance="adversarial"`、
+  SESSION_CONFIG term-panel に「面接スタンス」select 追加 (難易度 select と同型)。
+  F-13 (明示フィールドのみ送信) 遵守 — 既存 `withConfig: true` 経路で
+  `config` 全体が送られるため追加配線不要。
+
+**回帰テスト (`tests/test_integration.py` に追加/更新)**:
+- `test_stance_switches_persona`: ES seed 後、`build_interviewer_persona` の
+  adversarial/standard で圧迫語/建設語が切り替わることを assert。
+- `test_stance_does_not_split_genre`: 同一 industry/genre で stance を変えても
+  `_interview_genre` が同一 slug を返すことを assert (W-42)。
+- `test_nonES_stance_clause_applied`: ES 不在 config 駆動で system に
+  standard stance 節が付くことを assert。
+- 既存 `test_interview_sim_flow` / `test_interview_configurator_no_es` を
+  `INTERVIEWER_SYSTEM_PROMPT + _stance_clause(...)` 期待値へ更新 (bank/config
+  駆動の既定 adversarial stance 節付加に追随)。
+
+**検証結果 (DoD)**:
+- `python -m pytest tests/ -q` (通常順): **155 passed, 0 failed**
+  (Phase C の152 + Phase D新設3 = 155。退行ゼロ)。
+- 同コマンドをファイル逆順で実行: **155 passed, 0 failed** (実行順非依存)。
+- `npx tsc --noEmit`: エラーなし。Rust 変更なし。
+- `git status --short data/`: 差分ゼロ。
+- 変更ファイル: `es_manager.py` / `consultation_engine.py` / `types.ts` /
+  `InterviewTab.tsx` / `test_integration.py` の5ファイルのみ。
+  `build_reviewer_persona` (ES添削)/`_interview_genre`/latency 系/gd_sim/
+  es_review の実装本体は無変更 (`git diff --name-only` で証明)。
+
+**仕様との差異 (申告)**: なし。
+
+**誓約の充足確認**: stance は UI で選択でき既定は adversarial、全 interview_sim
+経路に反映され、genre slug は stance で分裂しない (成長ループ不変)。フル
+pytest は実行順非依存で GREEN (155 passed)。
 
 ---
 

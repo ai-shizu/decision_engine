@@ -162,6 +162,25 @@ INTERVIEW_DIFFICULTY_LABELS = {
     "extreme": "最難関 (トップティア基準の圧迫レベル)",
 }
 
+# F-18 (SPEC_FOXTROT_UI.md §10.4): 非ES経路 (config駆動/bank駆動) 用の
+# 面接スタンス節。ES経路は build_interviewer_persona(stance=...) が担当。
+STANCE_CLAUSES = {
+    "adversarial": (
+        "\n\n面接スタンス: 圧迫的・敵対的に。候補者の回答の"
+        "甘い前提・数字の根拠欠如を執拗に突き、防御の甘さを露呈させよ。"
+    ),
+    "standard": (
+        "\n\n面接スタンス: 標準的・穏和に。深掘りはするが圧迫は"
+        "せず、候補者が力を出せるよう建設的に進めよ。"
+    ),
+}
+
+
+def _stance_clause(cfg: dict) -> str:
+    """F-18: cfg.stance から非ES経路用のスタンス節を返す。未知値は adversarial。"""
+    key = str(cfg.get("stance") or "adversarial")
+    return STANCE_CLAUSES.get(key, STANCE_CLAUSES["adversarial"])
+
 
 def _format_latency_section(latencies: list[dict]) -> str:
     """講評プロンプト用の応答時間セクション (記録なしなら空文字)。"""
@@ -901,7 +920,9 @@ class ConsultationEngine:
             es = select_es(None)
             if es is not None:
                 # ES 駆動: 面接官の専門性は ES のターゲットドメインに動的追従
-                system = build_interviewer_persona(es)
+                # F-18: stance は config から読む (既定 adversarial)。
+                system = build_interviewer_persona(
+                    es, stance=str(cfg.get("stance") or "adversarial"))
                 # F4c: 成長コンテキストはセッション開始時に1回だけ読む (W-44
                 # — ターン毎の再走査禁止。以後は _interview_state["system"]
                 # に焼き込まれた文字列がそのまま使い回される)。
@@ -930,7 +951,7 @@ class ConsultationEngine:
                     difficulty_label = INTERVIEW_DIFFICULTY_LABELS.get(difficulty_id, "標準的な難易度")
                     case = {"industry": industry_label, "format": genre_label,
                            "theme": f"{genre_label} ({difficulty_label})"}
-                    system = INTERVIEWER_SYSTEM_PROMPT
+                    system = INTERVIEWER_SYSTEM_PROMPT + _stance_clause(cfg)
                     say(f"面接シミュレーション開始: {industry_label} / {genre_label}")
                     prompt = (
                         f"面接形式: {genre_label} ({industry_label})\n"
@@ -942,7 +963,7 @@ class ConsultationEngine:
                 else:
                     case = INTERVIEW_CASE_BANK[self._interview_cursor % len(INTERVIEW_CASE_BANK)]
                     self._interview_cursor += 1
-                    system = INTERVIEWER_SYSTEM_PROMPT
+                    system = INTERVIEWER_SYSTEM_PROMPT + _stance_clause(cfg)
                     say(f"面接シミュレーション開始: {case['industry']} / {case['format']}")
                     prompt = (
                         f"面接形式: {case['format']} ({case['industry']})\n"

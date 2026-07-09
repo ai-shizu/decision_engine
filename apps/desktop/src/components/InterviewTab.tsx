@@ -69,8 +69,17 @@ const DIFFICULTY_OPTIONS: { id: InterviewConfig["difficulty"]; label: string }[]
   { id: "hard", label: "高難度" },
   { id: "extreme", label: "最難関" },
 ];
+const STANCE_OPTIONS: { id: InterviewConfig["stance"]; label: string }[] = [
+  { id: "adversarial", label: "敵対的・圧迫" },
+  { id: "standard", label: "標準・穏和" },
+];
 const CUSTOM_CONFIG = "__custom__";
-const DEFAULT_CONFIG: InterviewConfig = { industry: "foreign_it", genre: "fermi", difficulty: "standard" };
+const DEFAULT_CONFIG: InterviewConfig = {
+  industry: "foreign_it",
+  genre: "fermi",
+  difficulty: "standard",
+  stance: "adversarial",
+};
 
 // F4b (SPEC_FOXTROT_UI.md §7 裁定3): スコア 0-100 を TensionMeter と同型の
 // <rect>×10 計器で表示する。アニメーションなし (計器は跳ねない)。
@@ -407,7 +416,22 @@ export function InterviewTab() {
               ))}
             </select>
           </div>
-          <p className="hint">ES (data/es/) があれば ES 駆動の敵対的面接が優先され、この設定は記録用に保持されます。</p>
+          <div className="term-row config-row">
+            <span className="term-source-name">面接スタンス</span>
+            <select
+              value={config.stance}
+              onChange={(e) =>
+                setConfig((c) => ({ ...c, stance: e.target.value as InterviewConfig["stance"] }))
+              }
+            >
+              {STANCE_OPTIONS.map((s) => (
+                <option key={s.id} value={s.id}>
+                  {s.label}
+                </option>
+              ))}
+            </select>
+          </div>
+          <p className="hint">ES (data/es/) があれば ES 駆動の面接が優先され、この設定は記録用に保持されます。</p>
           <div className="action-row">
             <button type="button" className="ghost" onClick={() => setConfig(DEFAULT_CONFIG)}>
               既定値に戻す

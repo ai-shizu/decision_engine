@@ -42,6 +42,9 @@ from core.consultation_engine import (  # noqa: E402
     GD_SYSTEM_PROMPT,
     INTERVIEW_CASE_BANK,
     INTERVIEWER_SYSTEM_PROMPT,
+    STANCE_CLAUSES,
+    _interview_genre,
+    _stance_clause,
     build_gd_system_prompt,
 )
 from core.paths import (  # noqa: E402
@@ -189,7 +192,7 @@ def test_interview_sim_flow() -> None:
     a1 = eng.consult("開始", mode="interview_sim")
     assert a1 == "FAKE応答1"
     sys1, user1 = fake.calls[0]
-    assert sys1 == INTERVIEWER_SYSTEM_PROMPT
+    assert sys1 == INTERVIEWER_SYSTEM_PROMPT + _stance_clause({})
     assert INTERVIEW_CASE_BANK[0]["theme"] in user1
     assert eng._interview_state is not None
 
@@ -801,7 +804,7 @@ def test_interview_configurator_no_es() -> None:
     }
     eng.consult("開始", mode="interview_sim", config=config)
     sys1, user1 = fake.calls[0]
-    assert sys1 == INTERVIEWER_SYSTEM_PROMPT
+    assert sys1 == INTERVIEWER_SYSTEM_PROMPT + _stance_clause(config)
     assert "外資系金融 (HFT/クオンツ)" in user1
     assert "アルゴリズム・データ構造の技術面接" in user1
     assert "最難関" in user1
@@ -816,6 +819,54 @@ def test_interview_configurator_no_es() -> None:
     _, user2 = fake2.calls[0]
     assert "国内メガベンチャー" in user2
     print("  F4a configurator (no ES, whitelist bypass) OK")
+
+
+# ============================================================ F-18: 面接スタンス選択式化
+def test_stance_switches_persona() -> None:
+    """F-18 (SPEC_FOXTROT_UI.md §10.4): build_interviewer_persona が stance で
+    圧迫/建設スタイルを切り替える (ES 駆動経路)。"""
+    _write_phase3_assets()
+    es = es_manager.select_es()
+    assert es is not None
+
+    adv = es_manager.build_interviewer_persona(es, "adversarial")
+    std = es_manager.build_interviewer_persona(es, "standard")
+
+    assert es["target_domain"] in adv and es["target_domain"] in std
+    assert "Adversarial" in adv
+    assert "圧迫" in adv or "悪意" in adv
+    assert "Standard" in std
+    assert "建設" in std
+    for forbidden in ("圧迫質問", "悪意"):
+        assert forbidden not in std, f"{forbidden!r} が standard persona に漏洩"
+    assert "人格攻撃はしない" in adv and "人格攻撃はしない" in std
+    print("  stance switches ES-driven interviewer persona OK")
+
+
+def test_stance_does_not_split_genre() -> None:
+    """F-18 / W-42: stance は genre slug に影響させない (成長ループ分断防止)。"""
+    cfg_base = {"industry": "foreign_finance", "genre": "algorithm", "difficulty": "standard"}
+    case = {"industry": "外資系金融", "format": "アルゴリズム", "theme": "test"}
+    slug_adv = _interview_genre({**cfg_base, "stance": "adversarial"}, case)
+    slug_std = _interview_genre({**cfg_base, "stance": "standard"}, case)
+    assert slug_adv == slug_std == "algorithm"
+    print("  stance does not split interview genre slug (W-42) OK")
+
+
+def test_nonES_stance_clause_applied() -> None:
+    """F-18: ES 不在の config 駆動経路に stance 節が system へ付く。"""
+    fake = FakeBackend()
+    eng = ConsultationEngine()
+    eng._backend = fake
+    config = {
+        "industry": "foreign_finance", "genre": "algorithm",
+        "difficulty": "standard", "stance": "standard",
+    }
+    eng.consult("開始", mode="interview_sim", config=config)
+    sys1, _ = fake.calls[0]
+    assert sys1 == INTERVIEWER_SYSTEM_PROMPT + STANCE_CLAUSES["standard"]
+    assert "面接スタンス: 標準的・穏和" in sys1
+    print("  non-ES config-driven stance clause applied OK")
 
 
 def test_interview_report_schema_and_latency() -> None:
@@ -1101,6 +1152,9 @@ if __name__ == "__main__":
         test_interview_sim_flow()  # ES 不在時のケースバンク・フォールバック
         # ---- F4a/F4b (ES 不在前提。ES駆動時の優先順位は既存テストで別途保証) ----
         test_interview_configurator_no_es()
+        test_stance_switches_persona()
+        test_stance_does_not_split_genre()
+        test_nonES_stance_clause_applied()
         test_interview_report_schema_and_latency()
         test_interview_report_axis_rejection()
         test_interview_records_isolated_from_profiler()

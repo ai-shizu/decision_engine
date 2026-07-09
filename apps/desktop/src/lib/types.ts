@@ -63,7 +63,8 @@ export interface GdPersona {
 
 /**
  * F4a (SPEC_FOXTROT_UI.md §7 裁定2): interview_sim コンフィギュレータ。
- * F-13: スプレッド禁止、この3フィールドの明示列挙のみバックエンドへ送る。
+ * F-13: スプレッド禁止、明示列挙フィールドのみバックエンドへ送る。
+ * F-18: stance は面接スタンス (既定 adversarial)。
  * industry/genre はプリセットID (バックエンドの静的バンクで解決) または
  * 自由記述文字列。ES が存在する場合はバックエンド側で ES 駆動が優先される。
  */
@@ -71,6 +72,7 @@ export interface InterviewConfig {
   industry: string;
   genre: string;
   difficulty: "standard" | "hard" | "extreme";
+  stance: "adversarial" | "standard";
 }
 
 /** F4b: 成績表の1軸分の評価 (バックエンドで軸ホワイトリスト・evidence必須を検証済み) */
