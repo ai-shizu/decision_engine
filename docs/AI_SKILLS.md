@@ -1647,6 +1647,69 @@ pytest は実行順非依存で GREEN (155 passed)。
 
 ---
 
+### Rev.11 Phase E 完遂 (2026-07-09) — as-built (GD学習ループ配線 / F-19)
+
+**監査結果 (着工前提)**: `interview_sim` は「開始で成長注入 / 講評で成績表
+永続化」の両輪を持つが、`_consult_gd_sim` は `append_consultation` のみで
+`generate_report`/`persist_report`/`_last_interview_report`/成長注入の
+**全てを欠いていた**。GD は学習ループから完全に脱落していた。本Phaseは
+`_consult_gd_sim` を `_consult_interview_sim` と対称化してこれを塞ぐ。
+`es_review` は対象外 (書類レビューであり面接ではない — 設計上の除外、穴ではない)。
+
+**実変更点 (`src/python/core/consultation_engine.py` — 純追加、既存行の書き換えゼロ)**:
+- モジュール定数 `GD_GENRE = "group_discussion"` を新設 (`_interview_genre`
+  相当。GD には config 由来の可変 genre が無いため全セッション共通の固定
+  slug とする — W-42 の鏡像)。
+- `_consult_gd_sim` の START ブロック: `build_gd_system_prompt` 直後に
+  `compute_growth_context(GD_GENRE)` を呼び、在れば
+  `_GROWTH_CONTEXT_TEMPLATE` で system へ1回だけ注入 (W-44)。`_gd_state` に
+  `"config": {"genre": GD_GENRE}` を追加保持。
+- `_consult_gd_sim` の 講評END ブロック: `append_consultation` の直後に
+  `generate_report` → `persist_report(report, GD_GENRE)` (OSError は握り
+  つぶし講評提示をブロックしない) → `self._last_interview_report = report`
+  を追加。`self._gd_state = None` (Phase F で phase 遷移に置き換わる箇所)
+  は現状のまま — Phase E ではスコープ外として触っていない。
+- UI 変更なし: `engine_stdio` の `last_interview_report → result.report`
+  配線と `InterviewTab` の `if (res.report) setReport()` が既存のまま GD の
+  MISSION_RESULT パネルを自動表示する (確認のみ、コード変更不要)。
+
+**回帰テスト (`tests/test_integration.py` に追加)**:
+- `test_all_interview_modes_persist`: `interview_sim`/`gd_sim` を
+  `ScriptedBackend` で START→継続→講評まで回し、両モードで
+  `_last_interview_report` が設定され `INTERVIEW_RECORDS_DIR` へ新規 `.json`
+  が増えることを対称に assert (pytest.mark.parametrize は本ファイルの
+  規約 — 単独実行可能な平関数群 — に合わせずループで代替)。
+- `test_gd_growth_injected`: `group_discussion` genre で過去成績2件を
+  `_write_report_at` で seed → GD 開始の system に「訓練継続コンテキスト」
+  「最重点課題軸」が含まれ、`GAP_LEAK_MARKERS` (壁B) が一切混入しない
+  ことを assert。
+
+**検証結果 (DoD)**:
+- `python -m pytest tests/ -q` (通常順): **157 passed, 0 failed**
+  (Phase D の155 + Phase E新設2 = 157。退行ゼロ)。
+- 同コマンドをファイル逆順で実行: **157 passed, 0 failed** (実行順非依存)。
+- `npx tsc --noEmit`: エラーなし。Rust 変更なし。
+- `git status --short data/`: 差分ゼロ。
+- `git diff --stat src/python/core/`: `consultation_engine.py` のみ
+  **+28/-0 (純追加、削除ゼロ)** — 既存の `_consult_interview_sim`/
+  `_interview_genre`/`interview_report.py` (diff空)/latency 系の実装本体は
+  一切書き換えていないことを構造的に証明。
+
+**申告 (Phase Eのスコープ外・既存事象)**: `python tests/test_integration.py`
+(standalone 直接実行) が `test_nonES_stance_clause_applied` で
+`AssertionError` を出す。`git stash` で Phase D 時点 (コミット `cf70c46`)
+まで遡って再現することを確認済み — **Phase D 由来・Phase E とは無関係の
+既存不良**。pytest 経由 (本プロジェクトの正式 DoD 基準) は正順・逆順とも
+157/157 GREEN であり影響なし。standalone runner の `conftest.py` 非経由
+実行順依存の問題 (Phase A 完了報告で申告された `test_offline_default_
+never_fetches` と同種) として別途追跡が必要。
+
+**誓約の充足確認**: GD は開始で成長を読み、講評で成績表を永続化する。全
+模擬面接 (interview_sim/gd_sim) が等しく学習ループに乗る。壁B (生gap非注入)
+は GD でも不変。フル pytest は実行順非依存で GREEN (157 passed)。
+
+---
+
 ## 14. インシデント 2026-07-07: metadata.json 4.2GB 肥大 (IMP-1 是正指令)
 
 ### 検死結果 (読み取り専用フォレンジックで確定した事実)

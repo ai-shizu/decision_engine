@@ -39,6 +39,7 @@ from core import knowledge_fetcher as kf  # noqa: E402
 from core.gap_analysis import analyze_gaps  # noqa: E402
 from core.consultation_engine import (  # noqa: E402
     ConsultationEngine,
+    GD_GENRE,
     GD_SYSTEM_PROMPT,
     INTERVIEW_CASE_BANK,
     INTERVIEWER_SYSTEM_PROMPT,
@@ -604,6 +605,64 @@ def test_gd_sim_chaos() -> None:
     entries = [e for day in log.values() for e in day]
     assert any("[gd_sim]" in e["query"] for e in entries)
     print("  chaos GD sim OK")
+
+
+def test_all_interview_modes_persist() -> None:
+    """F-19 (SPEC_FOXTROT_UI.md §10.5): interview_sim と gd_sim は等しく学習
+    ループの両輪 (成績表の永続化 + _last_interview_report) を持つ。
+    es_review は対象外 (書類レビューであり面接ではない — 設計上の除外)。
+    parametrize は本ファイルの規約 (単独実行可能な平関数群) に合わせず、
+    ループで両モードを対称に検証する。"""
+    valid_json = json.dumps({"metrics": [
+        {"axis": "論理性", "score": 70, "evidence": "根拠を示せていた"},
+        {"axis": "技術力", "score": 60, "evidence": "妥当な深掘りだった"},
+        {"axis": "構成力", "score": 65, "evidence": "整理された発言だった"},
+        {"axis": "具体性", "score": 55, "evidence": "定量的根拠がやや薄い"},
+    ]}, ensure_ascii=False)
+    scripts = {
+        "interview_sim": ["出題", "面接官応答", "講評本文です", valid_json],
+        "gd_sim": ["GD開始発言", "GD応答", "GD講評本文です", valid_json],
+    }
+    for mode, script in scripts.items():
+        before = set(INTERVIEW_RECORDS_DIR.glob("*.json")) if INTERVIEW_RECORDS_DIR.is_dir() else set()
+        backend = ScriptedBackend(script)
+        eng = ConsultationEngine()
+        eng._backend = backend
+        eng.consult("開始", mode=mode)
+        eng.consult("継続の一言です", mode=mode)
+        eng.consult("講評", mode=mode)
+
+        report = eng._last_interview_report
+        assert report is not None, f"{mode}: _last_interview_report が未設定 (学習ループ脱落)"
+        assert report["schema"] == "interview_report.v1"
+
+        after = set(INTERVIEW_RECORDS_DIR.glob("*.json"))
+        assert after - before, f"{mode}: 成績表が persist_report で永続化されていない"
+    print("  interview_sim / gd_sim symmetric learning-loop persistence (F-19) OK")
+
+
+def test_gd_growth_injected() -> None:
+    """F-19: 過去の GD 成績 (group_discussion genre) が永続化されていれば、
+    次回 GD 開始時に成長コンテキストが system へ注入される (interview_sim と
+    対称の W-44 一発注入)。壁B: growth 文字列は AXIS ラベル+数値のみで、
+    gap_insights 由来の自由テキストは一切混入しない。"""
+    _write_report_at(
+        INTERVIEW_RECORDS_DIR / f"interview_20260501T000000_{GD_GENRE}.json",
+        {"論理性": 40, "技術力": 45, "構成力": 50, "具体性": 35})
+    _write_report_at(
+        INTERVIEW_RECORDS_DIR / f"interview_20260502T000000_{GD_GENRE}.json",
+        {"論理性": 60, "技術力": 55, "構成力": 58, "具体性": 50})
+
+    fake = FakeBackend()
+    eng = ConsultationEngine()
+    eng._backend = fake
+    eng.consult("開始", mode="gd_sim")
+
+    sys1, user1 = fake.calls[0]
+    assert "訓練継続コンテキスト" in sys1, "GD 開始に成長コンテキストが注入されていない"
+    assert "最重点課題軸" in sys1
+    _assert_no_gap_leak(sys1, user1)
+    print("  GD growth context injected without wall-B leak (F-19) OK")
 
 
 # ============================================================ Target Delta D3: Puppeteer
@@ -1175,6 +1234,8 @@ if __name__ == "__main__":
         test_adversarial_interview_with_es()
         test_oracle_payload_isolated_to_review_phase()
         test_gd_sim_chaos()
+        test_all_interview_modes_persist()
+        test_gd_growth_injected()
         # ---- Target Delta D3 (Puppeteer) ----
         test_puppeteer_injects_whitelisted_text_only()
         # ---- フェーズ4 (レイテンシ / 動的ペルソナ / 建前隔離) ----

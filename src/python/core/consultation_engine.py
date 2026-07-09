@@ -227,6 +227,11 @@ GD_SYSTEM_PROMPT = (
     "- 3人合わせて簡潔に。ユーザーが介入できる余白を必ず残す。"
 )
 
+# F-19 (SPEC_FOXTROT_UI.md §10.5): GD の成長コンテキスト読み書きは全セッション
+# 共通のこの genre 固定値を使う (W-42 の鏡像 — interview_sim の _interview_genre
+# に相当。GD には config 由来の可変 genre が無いため定数で固定する)。
+GD_GENRE = "group_discussion"
+
 # ES が無い場合のドメイン非依存 GD テーマ (決定論的巡回)
 GD_THEME_BANK = [
     "新しい事業を1つ立ち上げるなら何をすべきか、チームとして結論を出せ",
@@ -1163,6 +1168,7 @@ class ConsultationEngine:
         放置・クラッシャーへの敗北等) を日常の「人間関係の摩擦 (Friction)
         回避」構造と接続する。"""
         from .es_manager import select_es
+        from . import interview_report as _ireport
         say = status or (lambda msg: None)
         q = query.strip()
 
@@ -1176,10 +1182,18 @@ class ConsultationEngine:
                 self._gd_cursor += 1
                 topic_hint = f"GD テーマ: {theme}"
             system = build_gd_system_prompt(personas)
+            # F-19 (SPEC_FOXTROT_UI.md §10.5): interview_sim と対称の成長注入。
+            # セッション開始時に1回だけ読む (W-44 — ターン毎の再走査禁止)。
+            # 壁B: growth は AXIS_WHITELIST ラベル+整数のみで合成済み
+            # (evidence/summary 由来の自由テキストを含まない構造的ガード)。
+            growth = _ireport.compute_growth_context(GD_GENRE)
+            if growth:
+                system = system + _GROWTH_CONTEXT_TEMPLATE.format(growth=growth)
             self._gd_state = {
                 "topic_hint": topic_hint, "system": system,
                 "personas": list(personas or [])[:MAX_GD_PERSONAS],
                 "transcript": [], "latencies": [],
+                "config": {"genre": GD_GENRE},
             }
             n = len(self._gd_state["personas"]) or 3
             say(f"カオス GD を開始 (参加者 {n} 人)")
@@ -1243,6 +1257,20 @@ class ConsultationEngine:
             from .consultation_log import append_consultation
             append_consultation(f"[gd_sim] {state['topic_hint'][:60]}", answer,
                                 simulated=True)
+
+            # F-19 (SPEC_FOXTROT_UI.md §10.5): interview_sim と対称の成績表
+            # (interview_report.v1) 永続化。append_consultation (ログ) とは
+            # 別物であり二重記録ではない。永続化失敗は講評提示をブロックしない。
+            report = _ireport.generate_report(
+                self, state["system"], transcript_text, answer,
+                state.get("config") or {"genre": GD_GENRE},
+                state.get("latencies", []))
+            try:
+                _ireport.persist_report(report, GD_GENRE)
+            except OSError:
+                pass
+            self._last_interview_report = report
+
             self._gd_state = None
             say("GD シミュレーション終了 (講評を相談履歴に保存)")
             return answer
