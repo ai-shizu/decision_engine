@@ -122,6 +122,18 @@ export interface SourceStat {
   mtime: string | null;
 }
 
+/** F-16 (SPEC_FOXTROT_UI.md §10.2): es.view の戻り値。保持ESは
+ * active_es.md ただ1件 (単一化)。未登録なら exists=false のみで他は省略。 */
+export interface EsView {
+  exists: boolean;
+  title?: string;
+  target_domain?: string;
+  keywords?: string[];
+  body?: string;
+  char_count?: number;
+  mtime?: string | null;
+}
+
 /** F2-EXT (SPEC_FOXTROT_UI.md §2.2.2): import.classify の決定論的分類結果 */
 export interface ClassifyResult {
   type: "line" | "ics" | "es" | "knowledge" | "reject";

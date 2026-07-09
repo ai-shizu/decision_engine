@@ -1531,8 +1531,10 @@ UI (ImportTab):
   - ImportTab に term-panel "ES_ACTIVE" を追加 (SourceTable 近傍):
       未登録 → "登録済み ES なし" のhint。
       登録済み → title / target_domain / char_count を term-row で、本文は
-      <details> (F-9: details限定使用は合法) 内の overflow-y スクロール
-      <pre> で全文 View。絵文字禁止(F-10)・mono整列(F-12)遵守。
+      【常時可視】の overflow-y スクロール <pre> (term-es-body, max-height)
+      で全文 View。<details> は使わない — F-8 を SETTINGS Advanced の1箇所に
+      保ち、§3.4-3 (情報を隠すな) を遵守する (Rev.11 施工時裁定: ES 本文は
+      畳まず常時見せる)。絵文字禁止(F-9)・mono整列(F-10)遵守。
   - ES import 成功後に esView() を再取得して panel を更新 (importLog
     singleton と同じ非同期規律。unmount後 setState は disposed flag で防ぐ)。
 

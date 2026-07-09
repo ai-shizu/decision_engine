@@ -30,6 +30,7 @@ from .consultation_engine import (
     save_fixed_attributes,
 )
 from .paths import (
+    ACTIVE_ES,
     CALENDAR_JSON,
     DATA_KNOWLEDGE,
     DIARY_MD,
@@ -304,13 +305,21 @@ def data_source_stats() -> dict:
             "count": count_fn(path) if exists else 0,
             "mtime": _mtime_iso(path),
         }
-    for name, path in (("es", ES_DIR), ("knowledge", DATA_KNOWLEDGE)):
-        exists = path.is_dir()
-        result[name] = {
-            "exists": exists,
-            "count": _dir_file_count(path) if exists else 0,
-            "mtime": _mtime_iso(path),
-        }
+    # F-16 (SPEC_FOXTROT_UI.md §10.2改定): 保持ESは active_es.md ただ1件。
+    # レガシーが ES_DIR に物理的に残っていてもカウントには数えない
+    # (読み手側整合 — es_manager と同じ「真実の源は ACTIVE_ES のみ」)。
+    es_exists = ACTIVE_ES.exists()
+    result["es"] = {
+        "exists": es_exists,
+        "count": 1 if es_exists else 0,
+        "mtime": _mtime_iso(ACTIVE_ES),
+    }
+    knowledge_exists = DATA_KNOWLEDGE.is_dir()
+    result["knowledge"] = {
+        "exists": knowledge_exists,
+        "count": _dir_file_count(DATA_KNOWLEDGE) if knowledge_exists else 0,
+        "mtime": _mtime_iso(DATA_KNOWLEDGE),
+    }
     return result
 
 
@@ -454,6 +463,64 @@ def _sanitize_document_filename(filename: str) -> str:
     return name or "untitled.txt"
 
 
+def _import_es_document(content: str, *, status: StatusCallback | None = None) -> dict:
+    """F-16 (SPEC_FOXTROT_UI.md §10.2改定・指揮官裁定): 保持ESは
+    active_es.md ただ1件に収束させる。ES_DIR 内の他ファイル (レガシー) は
+    削除しない (破壊操作は禁止 — 読み手側の不可視化 (es_manager) のみで
+    単一性を保証する)。
+    """
+    ES_DIR.mkdir(parents=True, exist_ok=True)
+    digest = hashlib.blake2b(content.encode("utf-8"), digest_size=16).hexdigest()
+    if ACTIVE_ES.exists():
+        try:
+            existing_digest = hashlib.blake2b(
+                ACTIVE_ES.read_bytes(), digest_size=16).hexdigest()
+        except OSError:
+            existing_digest = None
+        if existing_digest == digest:
+            if status:
+                status("完了 (同一内容が既に存在するためスキップ)")
+            return {
+                "imported": False, "skipped": True, "dest": "es",
+                "message": "同一内容が既に存在するためスキップしました",
+            }
+
+    # write_bytes (write_text ではない): Windows の text モードは "\n"→"\r\n"
+    # 変換を行い、read_bytes() ベースの上記ハッシュ比較と食い違って冪等性
+    # 判定が壊れる (既知の罠 — import_document 本流と同じ理由)。
+    ACTIVE_ES.write_bytes(content.encode("utf-8"))
+
+    if status:
+        status("追記完了")
+        status("完了")
+
+    return {
+        "imported": True, "skipped": False, "dest": "es", "path": ACTIVE_ES.name,
+        "message": f"active_es.md へ取り込みました ({ACTIVE_ES.name})",
+    }
+
+
+def active_es() -> dict:
+    """F-16 (SPEC_FOXTROT_UI.md §10.2): ImportTab の ES_ACTIVE パネル用View。
+    未登録なら {"exists": False}。W-32: filename はログ/永続化に書かない
+    (本文は本人の書類なので本人UIへの一時表示は可)。
+    """
+    from . import es_manager
+
+    doc = es_manager.get_active_es()
+    if doc is None:
+        return {"exists": False}
+    return {
+        "exists": True,
+        "title": doc["title"],
+        "target_domain": doc["target_domain"],
+        "keywords": doc["keywords"],
+        "body": doc["body"],
+        "char_count": doc["char_count"],
+        "mtime": _mtime_iso(ACTIVE_ES),
+    }
+
+
 def import_document(
     content: str, filename: str, dest: str, *, status: StatusCallback | None = None,
 ) -> dict:
@@ -475,6 +542,9 @@ def import_document(
 
     if status:
         status(f"{filename} を検証中")
+
+    if dest == "es":
+        return _import_es_document(content, status=status)
 
     target_dir = _DOCUMENT_DEST_DIRS[dest]
     target_dir.mkdir(parents=True, exist_ok=True)
@@ -581,6 +651,7 @@ __all__ = [
     "PROJECT_ROOT",
     "PROCESSED",
     "USER_PROFILE",
+    "active_es",
     "calendar_event_dates",
     "classify_document",
     "compile_narrative",

@@ -45,6 +45,7 @@ from core.consultation_engine import (  # noqa: E402
     build_gd_system_prompt,
 )
 from core.paths import (  # noqa: E402
+    ACTIVE_ES,
     AI_CONSULTATIONS_JSON,
     DEEP_PROFILE,
     ES_DIR,
@@ -313,21 +314,12 @@ C++ で OpenGL を用いた可視化エンジンを個人開発した。描画�
 def _write_phase3_assets() -> None:
     """モックシナリオ: ES では OpenGL 可視化エンジンを強みと主張するが、
     日常ログでは躰道部の新歓・合宿マネジメントの摩擦から逃避し、
-    パートナーとの時間と一人で完結するコーディングに閉じこもるユーザー。"""
-    ES_DIR.mkdir(parents=True, exist_ok=True)
-    es_path = ES_DIR / "opengl_engine.md"
-    es_path.write_text(ES_BODY, encoding="utf-8")
+    パートナーとの時間と一人で完結するコーディングに閉じこもるユーザー。
 
-    # 明示フィールドなしのクリエイティブ領域 ES (ドメイン非依存の証明用)
-    film = ES_DIR / "film_planning.md"
-    film.write_text(
-        "# 企画書\n映像制作の企画。映像制作のワークフローを再設計し、"
-        "コンポジットとカラーグレーディングを内製化する。映像制作の"
-        "コンポジット工程を自動化した実績を持つ。\n",
-        encoding="utf-8",
-    )
-    older = es_path.stat().st_mtime - 100
-    os.utime(film, (older, older))  # select_es(None) は opengl を最新として選ぶ
+    F-16 (SPEC Rev.11 §10.2): 保持ESは常に active_es.md ただ1件。
+    """
+    ACTIVE_ES.parent.mkdir(parents=True, exist_ok=True)
+    ACTIVE_ES.write_text(ES_BODY, encoding="utf-8")
 
     DEEP_PROFILE.parent.mkdir(parents=True, exist_ok=True)
     DEEP_PROFILE.write_text(json.dumps({
@@ -385,25 +377,39 @@ def _assert_no_gap_leak(*prompt_parts: str) -> None:
 
 
 def test_es_manager_dynamic_domain() -> None:
+    """F-16 (SPEC Rev.11 §10.2): 保持ESは active_es.md ただ1件。name 引数は
+    単一化により無意味 (W-53) — 何を渡しても同じ active_es.md が返る。"""
     _write_phase3_assets()
     docs = es_manager.load_es_documents()
-    assert len(docs) == 2 and docs[0]["name"] == "opengl_engine", \
+    assert len(docs) == 1 and docs[0]["name"] == "active_es", \
         [d["name"] for d in docs]
 
-    es = es_manager.select_es("opengl")
+    es = es_manager.select_es("opengl")  # name は無視される (単一化)
     assert es["target_domain"] == "リアルタイムグラフィックスエンジニア"
     assert es["explicit_domain"] is True
     assert "OpenGL" in es["keywords"], es["keywords"]
 
-    # 明示フィールドなし → 本文語彙からドメイン導出 (業界ハードコードなしの証明)
-    film = es_manager.select_es("film_planning")
-    assert film["explicit_domain"] is False
-    assert "映像制作" in film["target_domain"], film["target_domain"]
-
     persona = es_manager.build_interviewer_persona(es)
     assert "リアルタイムグラフィックスエンジニア" in persona
     assert "攻撃" in persona and "Adversarial" in persona
-    print("  es_manager dynamic domain OK")
+    print("  es_manager dynamic domain (single active_es.md) OK")
+
+
+def test_es_manager_implicit_domain_from_text() -> None:
+    """明示フィールドなし ES でも本文語彙からドメインを導出する
+    (ドメイン非依存の原則・業界ハードコードなしの証明)。F-16 の単一化後は
+    同時に2件保持できないため、_write_phase3_assets とは独立に単独 seed する。"""
+    ACTIVE_ES.parent.mkdir(parents=True, exist_ok=True)
+    ACTIVE_ES.write_text(
+        "# 企画書\n映像制作の企画。映像制作のワークフローを再設計し、"
+        "コンポジットとカラーグレーディングを内製化する。映像制作の"
+        "コンポジット工程を自動化した実績を持つ。\n",
+        encoding="utf-8",
+    )
+    film = es_manager.select_es()
+    assert film["explicit_domain"] is False
+    assert "映像制作" in film["target_domain"], film["target_domain"]
+    print("  es_manager implicit domain derivation (no industry hardcoding) OK")
 
 
 def test_es_review_isolation() -> None:
@@ -421,7 +427,9 @@ def test_es_review_isolation() -> None:
 
     log = json.loads(AI_CONSULTATIONS_JSON.read_text(encoding="utf-8"))
     entries = [e for day in log.values() for e in day]
-    assert any("[es_review] opengl_engine" in e["query"] for e in entries)
+    # F-16: ES の記録名は常に active_es.md の stem ("active_es") になる
+    # (単一化により ES 固有の意味を持つファイル名は消える)。
+    assert any("[es_review] active_es" in e["query"] for e in entries)
     print("  es_review isolation OK")
 
 
@@ -459,7 +467,8 @@ def test_adversarial_interview_with_es() -> None:
 
     log = json.loads(AI_CONSULTATIONS_JSON.read_text(encoding="utf-8"))
     entries = [e for day in log.values() for e in day]
-    assert any("[interview_sim] ES面接: opengl_engine" in e["query"]
+    # F-16: ES の記録名は常に active_es.md の stem ("active_es") になる。
+    assert any("[interview_sim] ES面接: active_es" in e["query"]
                for e in entries)
     print("  adversarial interview (ES-driven) OK")
 
@@ -1063,6 +1072,7 @@ if __name__ == "__main__":
         test_mock_fetch_ingestion_pipeline()
         # ---- フェーズ3 (ES 駆動) — 以降は data/es/ が存在する状態 ----
         test_es_manager_dynamic_domain()
+        test_es_manager_implicit_domain_from_text()
         test_es_review_isolation()
         test_adversarial_interview_with_es()
         test_oracle_payload_isolated_to_review_phase()

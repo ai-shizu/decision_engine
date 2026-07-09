@@ -143,6 +143,8 @@ def dispatch(cmd: str, params: dict[str, Any], emit: EventEmitter | None = None)
         )
     if cmd == "import.stats":
         return facade.data_source_stats()
+    if cmd == "es.view":
+        return facade.active_es()
     if cmd == "import.classify":
         return facade.classify_document(params["content"], params.get("filename", ""))
     if cmd == "import.document":

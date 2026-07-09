@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import {
   classifyDocument,
+  esView,
   importDocument,
   importLineFiles,
   importStats,
@@ -11,7 +12,7 @@ import {
   syncIcsContent,
   syncIcsFiles,
 } from "../lib/engine";
-import type { ClassifyResult, EngineEvent, SourceStat } from "../lib/types";
+import type { ClassifyResult, EngineEvent, EsView, SourceStat } from "../lib/types";
 import { useCorrelationId } from "../lib/useCorrelationId";
 
 const LOG_MAX = 50;
@@ -69,6 +70,7 @@ export function ImportTab() {
   const [busy, setBusy] = useState(false);
   const [appleAvailable, setAppleAvailable] = useState(false);
   const [sources, setSources] = useState<Record<string, SourceStat>>({});
+  const [esActive, setEsActive] = useState<EsView | null>(null);
   const [log, setLog] = useState<string[]>(importLog);
   const [pending, setPending] = useState<PendingItem[]>([]);
   const lineRef = useRef<HTMLInputElement>(null);
@@ -99,12 +101,24 @@ export function ImportTab() {
     }
   }, []);
 
+  // F-16 (SPEC_FOXTROT_UI.md §10.2): 保持ES (active_es.md) の View 専用
+  // 取得。状態取得の純クエリなので cid は不要。
+  const refreshEsActive = useCallback(async () => {
+    try {
+      const v = await esView();
+      if (mountedRef.current) setEsActive(v);
+    } catch {
+      /* ignore */
+    }
+  }, []);
+
   useEffect(() => {
     void loadSettings().then((s) => {
       if (mountedRef.current) setAppleAvailable(s.apple_calendar_available);
     });
     void refreshStats();
-  }, [refreshStats]);
+    void refreshEsActive();
+  }, [refreshStats, refreshEsActive]);
 
   // W-22: 解除関数を確実に return する。W-28/W-45〜W-49: 自分の in-flight
   // cid のイベントのみ処理する。
@@ -250,6 +264,7 @@ export function ImportTab() {
           }
           const res = await importDocument(content, file.name, dest, myCid);
           pushImportLog(res.message ?? `${file.name} を ${dest} へ取り込みました`);
+          if (dest === "es") void refreshEsActive();
         } catch (err) {
           pushImportLog(`${file.name}: ${String(err)}`);
         }
@@ -288,6 +303,22 @@ export function ImportTab() {
             </div>
           );
         })}
+      </div>
+
+      <div className="term-panel">
+        <p className="term-header">ES_ACTIVE</p>
+        {esActive?.exists ? (
+          <>
+            <div className="term-row">
+              <span className="term-source-name">{esActive.title || "(無題)"}</span>
+              <span className="term-value">{esActive.target_domain ?? "—"}</span>
+              <span className="term-value">{(esActive.char_count ?? 0).toLocaleString()}文字</span>
+            </div>
+            <pre className="term-es-body">{esActive.body}</pre>
+          </>
+        ) : (
+          <p className="hint">登録済み ES なし</p>
+        )}
       </div>
 
       <div className="mode-row">

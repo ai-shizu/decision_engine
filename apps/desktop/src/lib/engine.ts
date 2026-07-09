@@ -2,6 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { readTextLenient } from "./textDecode";
 import type {
   ClassifyResult,
+  EsView,
   InterviewConfig,
   InterviewReport,
   RecordData,
@@ -51,6 +52,12 @@ export async function calendarEventDates(): Promise<string[]> {
 /** F2 (SPEC_FOXTROT_UI.md §2.2.1 裁定4): IMPORT SourceTable 用の軽量 stat */
 export async function importStats(): Promise<Record<string, SourceStat>> {
   return pkbInvoke("import.stats");
+}
+
+/** F-16 (SPEC_FOXTROT_UI.md §10.2): 保持ES (active_es.md) の View。
+ * 状態取得の純クエリのため cid は不要。 */
+export async function esView(): Promise<EsView> {
+  return pkbInvoke("es.view");
 }
 
 export interface ConsultOptions {

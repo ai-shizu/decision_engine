@@ -20,7 +20,7 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-from .paths import ES_DIR
+from .paths import ACTIVE_ES
 
 _EXPLICIT_DOMAIN_RE = re.compile(
     r"^(?:志望業界|志望職種|応募職種|応募先|ターゲット(?:ドメイン)?)\s*[:：]\s*(.+)$",
@@ -98,28 +98,38 @@ def _parse_es(path: Path) -> dict:
 
 
 def load_es_documents() -> list[dict]:
-    """data/es/ 配下の ES を更新日時降順で返す (無ければ空)。"""
-    ES_DIR.mkdir(parents=True, exist_ok=True)
-    docs = []
-    for f in ES_DIR.iterdir():
-        if f.is_file() and f.suffix.lower() in (".md", ".txt"):
-            docs.append(_parse_es(f))
-    docs.sort(key=lambda d: -d["mtime"])
-    return docs
+    """保持する ES は常に active_es.md ただ1件 (F-16)。
+
+    W-53: 真実の源は ACTIVE_ES ただ一つ。ES_DIR 内の他ファイル (レガシー) は
+    削除されず物理的に残りうるが、この読み手からは構造的に不可視 —
+    active_es.md 以外を読む経路をここに新設しないこと。
+    """
+    if not ACTIVE_ES.exists():
+        return []
+    return [_parse_es(ACTIVE_ES)]
 
 
 def select_es(name: str | None = None) -> dict | None:
-    """名前 (ファイル名 stem) 一致の ES、無指定なら最新の ES を返す。"""
+    """常に active_es.md を返す (無ければ None)。
+
+    F-16 による単一化で `name` は意味を失った。呼び出し側の互換のため
+    引数は残すが、無視する (W-53)。
+    """
     docs = load_es_documents()
-    if not docs:
+    return docs[0] if docs else None
+
+
+def get_active_es() -> dict | None:
+    """ImportTab の ES_ACTIVE パネル (View 専用) 向け。
+
+    ACTIVE_ES が無ければ None。在れば `_parse_es` の全フィールドに加え
+    `char_count` (本文の View 表示用) を持つ dict を返す。
+    """
+    if not ACTIVE_ES.exists():
         return None
-    if name:
-        needle = name.strip().lower()
-        for d in docs:
-            if needle and (needle == d["name"].lower()
-                           or needle in d["name"].lower()):
-                return d
-    return docs[0]
+    doc = _parse_es(ACTIVE_ES)
+    doc["char_count"] = len(doc["body"])
+    return doc
 
 
 def es_body_for_prompt(es: dict) -> str:

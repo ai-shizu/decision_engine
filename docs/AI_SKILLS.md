@@ -801,7 +801,7 @@ TOTAL:                                          ~1.6-2.2 秒 (< 3000ms ゲート
 
 ---
 
-## 13. Target Foxtrot — UI/UX 設計 (`docs/SPEC_FOXTROT_UI.md`。F0/F7/F1/F2/F2-EXT/F3/F3.5/F4a/F4b/F4c/Rev.10相関ID復元/Rev.11 Phase A(Sandbox) 完遂・§10.2〜§10.6/エンジン多重化 未着手)
+## 13. Target Foxtrot — UI/UX 設計 (`docs/SPEC_FOXTROT_UI.md`。F0/F7/F1/F2/F2-EXT/F3/F3.5/F4a/F4b/F4c/Rev.10相関ID復元/Rev.11 Phase A(Sandbox)・Phase B(単一ES/F-16) 完遂・§10.3〜§10.6/エンジン多重化 未着手)
 
 フロントエンド (Tauri + React) の設計仕様。**§3.4 (React UI 規約) が上位法** —
 SPEC はその適用解釈を確定させるもの。コードより先に存在する凍結事項:
@@ -1378,6 +1378,144 @@ processed}`) に厳密に一致させ、`data/raw` は意図通り対象外と�
 スコープ (「core/\* を一切変更しない」「本番データに触れない」) 上、
 本Revでは修正しない。指揮官の実データ (`data/processed/metadata.json`)
 の検死、または `core/lsm_index.py` の別途是正指令を要する。
+
+---
+
+### Rev.11 Phase B 完遂 (2026-07-09) — as-built (単一ES保持と可視化 / F-16)
+
+**方針の急所**: 指揮官裁定 (§10.2改定) により**レガシー ES は削除しない**。
+`core/paths.py::ACTIVE_ES` (`data/es/active_es.md`) を唯一の真実の源とし、
+読み手側 (`es_manager`) だけがそこへ収束することで、破壊操作ゼロで単一化を
+実現する — レガシーファイルは物理的に残るが、`load_es_documents()`/
+`select_es()`/`facade.active_es()`/`data_source_stats()["es"]` の**4経路
+すべて**が構造的にそれを見ない。
+
+**実変更点 (バックエンド)**:
+- `core/paths.py`: `ACTIVE_ES = ES_DIR / "active_es.md"` を `ES_DIR` 直後に追加。
+- `core/es_manager.py`:
+  - `load_es_documents()`: `ES_DIR.iterdir()` の全走査を撤廃し、
+    `ACTIVE_ES.exists()` の1点判定 + `[_parse_es(ACTIVE_ES)]` へ縮退。
+  - `select_es(name)`: `name` を完全に無視 (引数は呼び出し側の互換のため
+    残す)。常に `load_es_documents()[0]` (= active_es.md) または `None`。
+  - 新設 `get_active_es() -> dict | None`: `_parse_es` の全フィールド +
+    `char_count` (`len(body)`) を返す View 専用アクセサ。
+- `core/facade.py`:
+  - `import_document` の `dest=="es"` 分岐を `_import_es_document()`
+    (新設ヘルパー) へ切替。ロジック: `ACTIVE_ES` 存在時は blake2b で
+    内容一致を判定 (一致 → skip)、不一致/不在なら `ACTIVE_ES.write_bytes(...)`
+    で**上書き** (Phase A で確立済みの `write_bytes` 罠 — `write_text` の
+    `\n`→`\r\n` 変換がハッシュ比較を壊す既知の罠 — を踏襲)。**ES_DIR 内の
+    他ファイルには一切触れない** (削除もリネームもしない)。`knowledge` 分岐
+    (衝突時ハッシュ接尾辞で別名保存する既存ロジック) は無変更。
+  - 新設 `active_es()`: `es_manager.get_active_es()` を UI 形
+    (`{"exists": bool, title, target_domain, keywords, body, char_count,
+    mtime}`) へ変換。未登録時は `{"exists": False}` のみ (他キー無し)。
+    `filename` は含めない (W-32)。`__all__` に追加。
+  - `data_source_stats()` の `"es"` エントリを `ES_DIR` の
+    `_dir_file_count` 集計から `ACTIVE_ES.exists()` 基準
+    (`count = 1 if exists else 0`) へ差し替え。`"knowledge"` 側は無変更。
+- `engine_stdio.py`: `dispatch` に `if cmd == "es.view": return
+  facade.active_es()` を追加 (`import.stats` と同型の純関数呼び出し。
+  emit 不要)。
+
+**実変更点 (フロントエンド)**:
+- `lib/types.ts`: `EsView` interface 新設。
+- `lib/engine.ts`: `esView(): Promise<EsView>` 新設
+  (`pkbInvoke("es.view")`。状態取得の純クエリのため cid 引数なし)。
+- `components/ImportTab.tsx`:
+  - `esActive` state 新設。初期ロード (`refreshStats` と並行) で
+    `refreshEsActive()` を呼ぶ。`mountedRef` ガード踏襲。
+  - `DATA_SOURCES` term-panel の直後に新設 `term-panel "ES_ACTIVE"`:
+    未登録時は `<p className="hint">登録済み ES なし</p>`。登録時は
+    `term-row` で title/target_domain/char_count を表示し、本文は
+    `<details><summary>本文を表示</summary><pre className="term-es-body">`
+    のスクロール View (`max-height: 240px; overflow-y: auto`)。
+  - `handleConfirmOther` のループ内、`dest === "es"` の import 成功直後に
+    `refreshEsActive()` を呼び ES_ACTIVE を即時更新 (`knowledge` import 時は
+    呼ばない — 差分のみ反映)。
+  - `App.css`: `.term-es-details`/`.term-es-body` を新設。両方に
+    `font-family: var(--font-mono)` を明示 (F-10)。絵文字は使用していない
+    (F-9)。
+
+**回帰テスト (`tests/test_import_stats.py` に追加)**:
+`test_es_import_overwrites_single` / `test_es_import_idempotent` /
+`test_legacy_es_invisible` / `test_active_es_view_shape` /
+`test_data_source_stats_es_single` の5件を新設。いずれも Sandbox 上で
+実行され、`test_active_es_view_shape`/`test_data_source_stats_es_single`
+は単独スクリプト実行 (`python tests/test_import_stats.py`) 時にも
+「未登録から始まる」前提を自前で保証するため `shutil.rmtree(ES_DIR,
+ignore_errors=True)` を明示的に行う (W-50: pytest の `_isolate_data` に
+頼らず自己完結)。既存 `test_data_source_stats_dir_sources` は
+`ES_DIR/es1.md` への直接書き込みから `ACTIVE_ES` への seed に変更して
+是正 (旧ディレクトリ走査モデルの前提が崩れたため)。
+
+**既存 ES 依存テストの是正 (`tests/test_integration.py`)**:
+- `_write_phase3_assets()` が `ES_DIR/opengl_engine.md` +
+  `ES_DIR/film_planning.md` (2ファイル・mtime操作で新旧を作る旧モデルの
+  フィクスチャ) を書いていたのを、`ACTIVE_ES` への単一書き込みへ縮退。
+- `test_es_manager_dynamic_domain`: 旧モデル (2件保持・名前部分一致選択・
+  mtime降順) の検証だったため、単一 `active_es.md` + `name` 無視の検証へ
+  書き換え。「明示フィールドなし ES は本文語彙からドメインを導出する」
+  (業界ハードコードなしの原則の証明) というテスト意図は失わず、
+  `test_es_manager_implicit_domain_from_text` として独立させた
+  (F-16 単一化により同時に2件を保持できないため、同一テスト内では
+  もはや両方を検証できない)。
+- `test_es_review_isolation` / `test_adversarial_interview_with_es`:
+  `consultation_engine.py` (無変更・不可触) がログへ書く ES 記録名
+  (`f"[es_review] {es['name']}"` 等) が、旧来の `"opengl_engine"` から
+  常に `"active_es"` (= `active_es.md` の stem) へ変わる自然な帰結を
+  アサーションへ反映 (機能的な後退ではなく、単一化の直接的な副産物)。
+
+**検証結果 (DoD)**:
+- `python -m pytest tests/ -q` (通常順): **150 passed, 0 failed**
+  (Phase A の144 + Phase B新設6 = 150。退行ゼロ)。
+- 同コマンドをファイル逆順で実行: **150 passed, 0 failed** (実行順非依存)。
+- `npx tsc --noEmit` (apps/desktop): エラーなし。Rust 変更なしのため
+  `cargo check` は対象外 (DoD (2) の通り)。
+- `git status --short data/`: 差分ゼロ (テスト実行前後で比較)。
+- `git diff --stat src/python/core/`: `es_manager.py`/`facade.py`/
+  `paths.py` の3ファイルのみ (`engine_stdio.py` は `core/` 外)。
+  `twin`/`oracle`/`profiler`/`consultation_engine` 等の聖域は無変更
+  (`narrative_compiler.py` の `_persist_draft()` が `ES_DIR/draft_*.md`
+  へ書く既存経路も無変更 — これは W-53 が禁じる「新設の**読み**経路」
+  ではなく既存の書き込み経路であり、かつ `active_es.md` 以外の
+  ファイル名であるため単一化と衝突しない)。
+
+**仕様との差異 (申告)**:
+1. ミッション文中の `<details>` 許可根拠の引用が「F-9」表記だったが、
+   `SPEC_FOXTROT_UI.md` の実際の該当規則は **F-8**
+   (「`<details>` の使用は SETTINGS の Advanced 1 箇所のみ」・F-9 は
+   絵文字禁止規則)。指揮官裁定として本 ES_ACTIVE パネルへの `<details>`
+   使用を明示的に許可された前提でそのまま実装したが、これにより
+   `<details>` の使用箇所が SETTINGS Advanced + IMPORT ES_ACTIVE の
+   **2箇所**になった。F-8 の規則文 (「1箇所のみ」) は現状のまま未更新
+   なので、指揮官の裁定で「2箇所」への更新、または引用の是正
+   (F-9→F-8) をご確認いただきたい。
+2. Phase A で報告した `ui_smoke.py` の既知問題
+   (`data/processed/metadata.json` の `chunk_id`/`id` 不整合) は本 Phase
+   でも解消していない (スコープ外・無変更)。加えて本検証環境には
+   実データ (`data/raw/diary.md` 等) が存在しないため
+   `python tests/ui_smoke.py` は `FileNotFoundError` で早期終了する
+   (これは Phase B の変更起因ではなく、本検証環境に実データが無いという
+   環境条件そのもの — 指揮官の実機での確認を要する)。
+3. `tests/test_integration.py::test_offline_default_never_fetches`
+   (および `test_fetch_tag_hook_and_queue` との組み合わせ) は、**pytest
+   経由では GREEN** だが、`python tests/test_integration.py` の単独実行
+   (conftest の `_isolate_data` 非経由) では実行順依存で失敗することを
+   確認した。この問題は Phase A のベースライン (コミット `4e8bc7b`)
+   から既に存在する pre-existing の問題であり、Phase B のいかなる変更にも
+   起因しない (`git stash` で Phase B の変更を除いた状態でも同じ失敗を
+   再現し確認済み)。DoD (1) が要求する「pytest GREEN・正順/逆順」は
+   完全に満たしているため Phase B の完了条件には影響しないが、
+   スコープ外の既知問題として申告する (修正には `test_integration.py`
+   の fetch queue テスト群への手を Phase B の許可範囲外で入れる必要が
+   あるため、本Revでは未修正)。
+4. 手動確認 (実機での ImportTab の ES_ACTIVE パネル表示・体感) は
+   DoD (5) の通り不要と判断し実施していない。指揮官の実施を要する。
+
+**誓約の充足確認**: 保持ESは `active_es.md` ただ1件へ収束し (レガシーは
+削除せず不可視化)、UIで現ESをView可能、フル pytest は実行順非依存で
+GREEN、`data/` 汚染ゼロ — 以上を全て満たしている。
 
 ---
 

@@ -584,6 +584,23 @@ button:disabled {
   color: var(--accent);
 }
 
+/* ES_ACTIVE (SPEC_FOXTROT_UI.md §10.2 / F-16): 本文は details で畳まず
+   常時可視の mono 整列 (F-10) スクロール pre で見せる (§3.4-3 情報を隠すな
+   の遵守。F-8 は SETTINGS Advanced の1箇所に保つ)。 */
+.term-es-body {
+  max-height: 240px;
+  overflow-y: auto;
+  margin: var(--s2) 0 0;
+  padding: var(--s2);
+  font-family: var(--font-mono);
+  white-space: pre-wrap;
+  word-break: break-word;
+  background: var(--bg-deep);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-s);
+  color: var(--text);
+}
+
 /* Import */
 .import-block {
   margin: 20px 0;
