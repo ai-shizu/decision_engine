@@ -609,6 +609,11 @@ SettingsTab (既存 149 行を再構成)
   同期状態) を畳んだらレビュー落ち。実装は native `<details>` — JS 状態を
   持たない。
 
+**F5 (Rev.11 後施工 / Option 3)**: iOS Toggle 部品 + Advanced `<details>`
+骨格 + 視覚 refresh を実装。Advanced の中身 (LLM params / port / KV) の露出は
+settings-backend 配線を要する将来フェーズへ繰り延べ。現状 Advanced は
+profiler 再分析 + `apple_calendar_available` 状態 (読取専用 Toggle) を収容。
+
 ## 2.7 DESKTOP CHROME (F7) — OS ネイティブウィンドウ枠の排除
 
 **「ブラウザで動く画面」ではなく「インストール版デスクトップアプリ」の

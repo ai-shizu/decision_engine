@@ -1836,6 +1836,37 @@ TUI スモークも Sandbox 上で自己完結させ、実 `data/` への書込�
 
 ---
 
+### Rev.11 Foxtrot F5 完遂 (2026-07-09) — as-built (SETTINGS iOS 化 / Option 3)
+
+**方針 (指揮官裁定 Option 3)**: 再利用可能な iOS Toggle 部品 + Advanced
+`<details>` 骨格 + SETTINGS 視覚 refresh のみ。新規 boolean 設定・バックエンド
+settings 拡張・localStorage/Tauri store は**一切しない** (settings-backend フェーズへ
+繰り延べ)。
+
+**実変更点 (フロントのみ — `src/python/**` 無変更)**:
+- `apps/desktop/src/components/Toggle.tsx` (新設): 制御コンポーネント。
+  `<input type="checkbox">` + `<label>` の CSS-only iOS スイッチ。
+  `onChange` 未指定 or `disabled` 時は読取専用。データ値ラベルは `--font-mono`
+  (F-10)。
+- `apps/desktop/src/App.css`: `.toggle*` トークン (--accent / --border / --t-fast
+  のみ。F-1)。`.settings-list` / `.settings-row` (iOS 角丸グループ +
+  SettingRow)。`.settings-advanced` (`<details>` 1 箇所のみ — F-8)。
+- `apps/desktop/src/components/SettingsTab.tsx`: 基本情報を SettingRow レイアウトへ
+  refresh (保存ロジック無変更)。Advanced に Apple カレンダー連携
+  (`apple_calendar_available` を disabled Toggle で表示 — F-14) と
+  「再分析 (profiler)」ボタンを移設。`<details>` は SETTINGS Advanced のみ。
+- `docs/SPEC_FOXTROT_UI.md` §2.6: F5 Option 3 as-built を 1 段落追記。
+
+**検証結果 (DoD)**:
+- `npx tsc --noEmit`: エラーなし。
+- `python -m pytest tests/ -q`: **161 passed** (退行なし)。
+- `git diff --stat src/python/`: 空 (バックエンド無変更)。
+
+**仕様との差異**: Advanced 内の LLM params / port / KV 露出は意図的に未実装
+(将来 settings-backend 配線待ち)。F-8/F-14 は本施工で充足。
+
+---
+
 ## 14. インシデント 2026-07-07: metadata.json 4.2GB 肥大 (IMP-1 是正指令)
 
 ### 検死結果 (読み取り専用フォレンジックで確定した事実)
