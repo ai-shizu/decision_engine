@@ -7,7 +7,11 @@ import type {
   InterviewReport,
   RecordData,
   SettingsData,
+  SourceCodeView,
   SourceStat,
+  ProbeAnswerResult,
+  ProbeQuestionView,
+  ProbeStatus,
 } from "./types";
 
 /**
@@ -263,4 +267,30 @@ export async function twinForecast(
 
 export async function tensorRebuild(): Promise<{ rebuilt: boolean; rows: number }> {
   return pkbInvoke("tensor.rebuild");
+}
+
+export async function sourceCode(): Promise<SourceCodeView> {
+  return pkbInvoke("profile.source_code");
+}
+
+export async function probeStatus(today: string): Promise<ProbeStatus> {
+  return pkbInvoke("probe.status", { today });
+}
+
+export async function probeNext(today: string): Promise<ProbeQuestionView> {
+  return pkbInvoke("probe.next", { today });
+}
+
+export async function probeAnswer(
+  sessionId: string,
+  questionId: string,
+  answer: string,
+  today: string,
+): Promise<ProbeAnswerResult> {
+  return pkbInvoke("probe.answer", {
+    session_id: sessionId,
+    question_id: questionId,
+    answer,
+    today,
+  });
 }

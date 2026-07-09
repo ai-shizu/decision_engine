@@ -627,6 +627,183 @@ def sync_calendar_ics_content(
     return summary
 
 
+def _validate_iso_date(date_str: str | None, *, field: str = "today") -> str:
+    if not date_str or not isinstance(date_str, str):
+        raise ValueError(f"{field} is required")
+    try:
+        date.fromisoformat(date_str)
+    except ValueError as exc:
+        raise ValueError(f"invalid {field}: {date_str}") from exc
+    return date_str
+
+
+def _load_probe_sc(*, backend: object | None = None):
+    from .data_merger import load_daily_contexts
+    from .line_telemetry import load_line_telemetry
+    from .probe_funnel import load_probe_store
+    from .source_code import compute_source_code
+
+    daily = load_daily_contexts()
+    telemetry = load_line_telemetry()
+    store = load_probe_store()
+    sc = compute_source_code(
+        daily,
+        probe_store=store.to_dict(),
+        line_telemetry=telemetry,
+        backend=backend,
+    )
+    return sc, store, telemetry
+
+
+def _third_party_aliases(line_telemetry: dict) -> dict[str, str]:
+    aliases: dict[str, str] = {}
+    if not isinstance(line_telemetry, dict):
+        return aliases
+    for dyad in line_telemetry.get("dyads", []) or []:
+        name = str(dyad.get("contact_name", "") or "")
+        alias = str(dyad.get("contact_alias", "") or "")
+        if name and alias:
+            aliases[name] = alias
+    return aliases
+
+
+def _probe_progress(store) -> dict:
+    from .probe_funnel import PROBE_AXIS_ORDER, STAGE_ORDER, _completed_stages
+
+    completed = sum(len(_completed_stages(store, axis)) for axis in PROBE_AXIS_ORDER)
+    total = len(PROBE_AXIS_ORDER) * len(STAGE_ORDER)
+    percent = round(100 * completed / total) if total else 0
+    return {"completed_stages": completed, "total_stages": total, "percent": percent}
+
+
+def _build_probe_status(sc, store, today: str) -> dict:
+    from .probe_funnel import (
+        PROBE_AXIS_ORDER,
+        derive_probe_candidates,
+        derive_probe_insights,
+        find_active_session,
+    )
+    from .text_utils import sanitize_obj
+
+    candidates = derive_probe_candidates(sc, store)
+    by_axis = {c.axis: c for c in candidates}
+    axes = []
+    for axis in PROBE_AXIS_ORDER:
+        c = by_axis[axis]
+        axes.append({
+            "axis": c.axis,
+            "score": c.score,
+            "confidence": c.confidence,
+            "priority": c.priority,
+            "stage": c.stage,
+            "node_count": c.node_count,
+            "open_session_id": c.open_session_id,
+        })
+
+    active_session = None
+    for axis in PROBE_AXIS_ORDER:
+        sess = find_active_session(store, axis)
+        if sess is not None:
+            active_session = {
+                "id": sess.id,
+                "axis": sess.target_axis,
+                "stage": sess.stage,
+                "status": sess.status,
+            }
+            break
+
+    insights = [
+        {
+            "kind": ins.kind,
+            "axis": ins.axis,
+            "stage": ins.stage,
+            "priority": ins.priority,
+            "message_code": ins.message_code,
+        }
+        for ins in derive_probe_insights(sc, store)
+    ]
+    return sanitize_obj({
+        "schema": "probe_status.v1",
+        "today": today,
+        "axes": axes,
+        "active_session": active_session,
+        "insights": insights,
+        "progress": _probe_progress(store),
+    })
+
+
+def get_source_code(*, backend: object | None = None) -> dict:
+    """Return source_code.to_dict() for UI display. LLM-free."""
+    from .text_utils import sanitize_obj
+
+    sc, _, _ = _load_probe_sc(backend=backend)
+    return sanitize_obj(sc.to_dict())
+
+
+def probe_status(today: str | None = None, *, backend: object | None = None) -> dict:
+    """Return current store/candidate/session summary without starting a session."""
+    today_s = _validate_iso_date(today)
+    sc, store, _ = _load_probe_sc(backend=backend)
+    return _build_probe_status(sc, store, today_s)
+
+
+def probe_next(today: str, *, backend: object | None = None) -> dict:
+    """Start or continue the deterministic next session and return the next question."""
+    from .probe_funnel import probe_next_question, save_probe_store
+    from .text_utils import sanitize_obj
+
+    today_s = _validate_iso_date(today)
+    sc, store, telemetry = _load_probe_sc(backend=backend)
+    aliases = _third_party_aliases(telemetry)
+    result = probe_next_question(sc, store, today_s, third_party_aliases=aliases, backend=backend)
+    save_probe_store(store)
+    return sanitize_obj(result)
+
+
+def probe_answer(
+    session_id: str,
+    question_id: str,
+    answer: str,
+    today: str,
+    *,
+    backend: object | None = None,
+) -> dict:
+    """Record one answer, persist store, and return updated status plus next question if any."""
+    from .probe_funnel import probe_next_question, record_probe_answer, save_probe_store
+    from .text_utils import sanitize_obj
+
+    today_s = _validate_iso_date(today)
+    sc, store, telemetry = _load_probe_sc(backend=backend)
+    aliases = _third_party_aliases(telemetry)
+    record_probe_answer(
+        store,
+        str(session_id),
+        str(question_id),
+        str(answer),
+        today_s,
+        third_party_aliases=aliases,
+        backend=backend,
+    )
+    session = next(s for s in store.sessions if s.id == session_id)
+    node_id = store.answers[-1].node_id
+    session_status = session.status
+    save_probe_store(store)
+    status = _build_probe_status(sc, store, today_s)
+    next_question = None
+    if session.status == "active":
+        next_question = probe_next_question(
+            sc, store, today_s, third_party_aliases=aliases, backend=backend,
+        )
+    return sanitize_obj({
+        "schema": "probe_answer_result.v1",
+        "saved": True,
+        "node_id": node_id,
+        "session_status": session_status,
+        "next_question": next_question,
+        "status": status,
+    })
+
+
 def get_settings() -> dict:
     from .settings_api import get_settings as _get_settings
 
@@ -667,6 +844,10 @@ __all__ = [
     "import_line_text",
     "oracle_payload",
     "oracle_report",
+    "probe_answer",
+    "probe_next",
+    "probe_status",
+    "get_source_code",
     "run_profiler",
     "tensor_rebuild",
     "twin_forecast",

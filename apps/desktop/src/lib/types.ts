@@ -50,7 +50,85 @@ export interface EngineEvent {
   text?: string;
 }
 
-export type MainTab = "record" | "import" | "consult" | "interview" | "settings";
+export type MainTab = "record" | "import" | "consult" | "interview" | "probe" | "settings";
+
+export type ProbeAxis =
+  | "decision_threshold"
+  | "reward_bias"
+  | "locus_of_control"
+  | "unlearning_rate"
+  | "friction_energy_ledger";
+
+export type ProbeStage = "FACT" | "CONTEXT" | "EMOTION" | "MEANING";
+
+export interface ProbeAxisStatus {
+  axis: ProbeAxis;
+  score: number | null;
+  confidence: number;
+  priority: number;
+  stage: ProbeStage;
+  node_count: number;
+  open_session_id: string | null;
+}
+
+export interface ProbeInsightView {
+  kind: "low_confidence" | "under_probed" | "stage_complete";
+  axis: ProbeAxis;
+  stage: ProbeStage;
+  priority: number;
+  message_code: "probe.low_confidence" | "probe.under_probed" | "probe.stage_complete";
+}
+
+export interface ProbeProgress {
+  completed_stages: number;
+  total_stages: number;
+  percent: number;
+}
+
+export interface ProbeStatus {
+  schema: "probe_status.v1";
+  today: string;
+  axes: ProbeAxisStatus[];
+  active_session: {
+    id: string;
+    axis: ProbeAxis;
+    stage: ProbeStage;
+    status: "active" | "closed";
+  } | null;
+  insights: ProbeInsightView[];
+  progress: ProbeProgress;
+}
+
+export interface ProbeQuestionView {
+  schema: "probe_question.v1";
+  session_id: string;
+  question_id: string;
+  axis: ProbeAxis;
+  stage: ProbeStage;
+  question: string;
+  priority: number;
+}
+
+export interface ProbeAnswerResult {
+  schema: "probe_answer_result.v1";
+  saved: boolean;
+  node_id: string;
+  session_status: "active" | "closed";
+  next_question: ProbeQuestionView | null;
+  status: ProbeStatus;
+}
+
+export interface SourceCodeView {
+  schema: string;
+  axes: Record<string, {
+    score: number | null;
+    confidence: number;
+    evidence: unknown[];
+    updated: string;
+  }>;
+  progress?: number;
+  updated?: string;
+}
 
 /** INTERVIEW タブのモード (バックエンド consult の mode と一致させる) */
 export type InterviewMode = "interview_sim" | "es_review" | "gd_sim";

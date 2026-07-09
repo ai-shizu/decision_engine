@@ -168,6 +168,19 @@ def dispatch(cmd: str, params: dict[str, Any], emit: EventEmitter | None = None)
             alias=params.get("alias"))
     if cmd == "tensor.rebuild":
         return facade.tensor_rebuild()
+    if cmd == "profile.source_code":
+        return facade.get_source_code()
+    if cmd == "probe.status":
+        return facade.probe_status(params.get("today"))
+    if cmd == "probe.next":
+        return facade.probe_next(params["today"])
+    if cmd == "probe.answer":
+        return facade.probe_answer(
+            params["session_id"],
+            params["question_id"],
+            params["answer"],
+            params["today"],
+        )
     if cmd == "shutdown":
         facade.shutdown_engine()
         return {"status": "stopped"}

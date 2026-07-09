@@ -1867,6 +1867,72 @@ settings 拡張・localStorage/Tauri store は**一切しない** (settings-back
 
 ---
 
+### Phase F6 完遂 (2026-07-10) — as-built (PROBE タブ UI)
+
+**方針**: D1 (`core.source_code` / `core.probe_engine`) と D2
+(`core.probe_funnel`) の GREEN 実装を、Tauri + React UI へ薄く接続した。
+UI 層は外部 API・localStorage・乱数・LLM 呼び出しを持たず、PROBE の質問選択
+と保存は backend の決定論的ファネルに委譲する。表示は `message_code` と
+`contact_alias` 済みデータのみを扱い、Evidence quote / `fact_text` / 実名は UI
+に出さない。
+
+**実変更点**:
+- `src/python/core/facade.py`: `get_source_code` / `probe_status` /
+  `probe_next` / `probe_answer` を追加。`load_daily_contexts` /
+  `load_line_telemetry` / `load_probe_store` / `compute_source_code` /
+  `probe_funnel` を組み合わせる薄い orchestration のみ。`today` は UI から
+  ISO date として受け取り、PROBE store は `save_probe_store` で保存。
+- `src/python/engine_stdio.py`: `profile.source_code` / `probe.status` /
+  `probe.next` / `probe.answer` の dispatch を追加。
+- `apps/desktop/src/lib/types.ts`: PROBE 用型 (`ProbeAxis` /
+  `ProbeStage` / `ProbeStatus` / `ProbeQuestionView` /
+  `ProbeAnswerResult` / `SourceCodeView`) と `MainTab = ... | "probe"` を追加。
+- `apps/desktop/src/lib/engine.ts`: `sourceCode` / `probeStatus` /
+  `probeNext` / `probeAnswer` wrapper を追加。`probe.answer` は snake_case
+  (`session_id`, `question_id`, `answer`, `today`) で IPC へ渡す。
+- `apps/desktop/src/App.tsx`: PROBE タブを INTERVIEW と SETTINGS の間に登録。
+  Alt ショートカットは `Alt+1..6` へ拡張。
+- `apps/desktop/src/components/ProbeTab.tsx` (新設): 5軸レール、FACT →
+  CONTEXT → EMOTION → MEANING stepper、静的質問パネル、120字 `maxLength`
+  入力、文字数カウンタ、Ctrl/Meta+Enter 送信、決定論的 insight 表示を実装。
+- `apps/desktop/src/App.css`: `.probe-*` class を追加。既存 design token
+  (`--accent` / `--border` / `--bg-*` / `--text-*`) のみを使用し、新規 hex 色は
+  追加しない。
+- `tests/test_probe_ui_ipc.py` (新設): stdio IPC 契約と LLM 不使用を検証。
+- `tests/test_probe_ui_contract.py` (新設): React 側のタブ登録、engine wrapper、
+  120字制限、禁止 API (`fetch` / `localStorage` / `Math.random` 等) 不在を静的検証。
+- `docs/SPEC_PHASE_F6_PROBE_UI.md` (新設): F6 PROBE UI の実装仕様書。
+
+**不変条件**:
+- F6 から `src/python/core/probe_funnel.py` / `source_code.py` /
+  `probe_engine.py` / `tests/test_source_code.py` / `tests/test_probe_funnel.py`
+  へは触れない。検収時 diff は空。
+- PROBE UI は `backend.generate` を呼ばない。感情推定・曖昧スコアリング・
+  実行時刻依存の優先度計算を持ち込まない。
+- 表示される第三者情報は D1/D2 側で alias 化された値のみ。PROBE v1 UI は
+  answer history の `text_quote` や HistoricalNode の `fact_text` を表示しない。
+- 回答入力は UI `maxLength={120}` と D2 `sanitize_probe_text` の二重防壁。
+
+**検証結果 (DoD)**:
+- `python -m py_compile src\python\core\facade.py src\python\engine_stdio.py`: OK。
+- `python -m pytest tests/test_probe_ui_ipc.py -q`: **2 passed**。
+- `python -m pytest tests/test_probe_ui_contract.py -q`: **3 passed**。
+- `python -m pytest tests/test_source_code.py tests/test_probe_funnel.py -q`:
+  **12 passed** (D1/D2 回帰)。
+- `python -m pytest tests/test_ui_smoke.py -q`: **1 passed**。
+- `cd apps\desktop; npx.cmd tsc --noEmit`: OK。
+- `cd apps\desktop; npm.cmd run build`: Vite production build OK
+  (`56 modules transformed`, built in 870ms)。
+- `git diff --check`: OK。
+- `git status --short data/`: 差分ゼロ。
+- `package.json` / lockfile 差分なし。npm 依存追加なし。
+
+**仕様との差異 / 残作業**: `tauri:dev` での目視スモーク
+(Alt+5=PROBE、次の質問 → 回答 → 段階進行) は検収時点で未実施。静的型検査、
+IPC/契約テスト、D1/D2 回帰、既存 UI smoke、production build は GREEN。
+
+---
+
 ## 14. インシデント 2026-07-07: metadata.json 4.2GB 肥大 (IMP-1 是正指令)
 
 ### 検死結果 (読み取り専用フォレンジックで確定した事実)

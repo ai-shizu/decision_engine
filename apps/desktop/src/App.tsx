@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { ConsultTab } from "./components/ConsultTab";
 import { ImportTab } from "./components/ImportTab";
 import { InterviewTab } from "./components/InterviewTab";
+import { ProbeTab } from "./components/ProbeTab";
 import { RecordTab } from "./components/RecordTab";
 import { SettingsTab } from "./components/SettingsTab";
 import { TitleBar } from "./components/TitleBar";
@@ -27,6 +28,7 @@ const TABS: { id: MainTab; label: string }[] = [
   { id: "import", label: "IMPORT" },
   { id: "consult", label: "CONSULT" },
   { id: "interview", label: "INTERVIEW" },
+  { id: "probe", label: "PROBE" },
   { id: "settings", label: "SETTINGS" },
 ];
 
@@ -64,13 +66,11 @@ export default function App() {
     };
   }, []);
 
-  // SPEC_FOXTROT_UI.md §3.6 (キーボード予約表): Alt+1..5 でメインタブ切替。
-  // ready 後のみ登録 (裁定3)。Ctrl 系 (RECORD サブタブ) とは修飾キーで直交
-  // するため stopPropagation は不要。
+  // SPEC_FOXTROT_UI.md §3.6: Alt+1..6 でメインタブ切替。
   useEffect(() => {
     if (!ready) return;
     const onKey = (e: KeyboardEvent) => {
-      if (e.altKey && !e.ctrlKey && /^[1-5]$/.test(e.key)) {
+      if (e.altKey && !e.ctrlKey && /^[1-6]$/.test(e.key)) {
         const idx = Number(e.key) - 1;
         const target = TABS[idx];
         if (target) {
@@ -113,6 +113,7 @@ export default function App() {
         {tab === "import" && <ImportTab />}
         {tab === "consult" && <ConsultTab />}
         {tab === "interview" && <InterviewTab />}
+        {tab === "probe" && <ProbeTab />}
         {tab === "settings" && <SettingsTab />}
       </main>
     </div>
