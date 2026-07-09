@@ -433,6 +433,48 @@ def test_es_review_isolation() -> None:
     print("  es_review isolation OK")
 
 
+def test_es_review_ignores_latency() -> None:
+    """F-17 (SPEC_FOXTROT_UI.md §10.3): es_review は思考速度を計測も評価も
+    しない。計算経路には既に latency が皆無 (敵は「偽装UI hint」と
+    「将来の退行」のみ) — response_time_sec を渡しても構造的に無視される
+    ことをここで固定する。"""
+    _write_phase3_assets()
+    scripted = ScriptedBackend(["添削結果です。論理破綻はありません。"])
+    eng = ConsultationEngine()
+    eng._backend = scripted
+
+    answer = eng.consult("opengl_engine", mode="es_review", response_time_sec=42.0)
+    assert answer == "添削結果です。論理破綻はありません。"
+
+    system, user = scripted.calls[0]
+    for forbidden in ("秒", "応答時間", "latency", "response_time"):
+        assert forbidden not in system, f"{forbidden!r} が es_review システムプロンプトに漏洩"
+        assert forbidden not in user, f"{forbidden!r} が es_review プロンプトに漏洩"
+    print("  es_review ignores response_time_sec (F-17) OK")
+
+
+def test_interview_latency_preserved() -> None:
+    """退行検出の鏡: F-17 (es_review の latency 隔離固定) が interview_sim の
+    latency (F4b) を巻き添えで壊していないことを検証する。"""
+    fake = FakeBackend()
+    eng = ConsultationEngine()
+    eng._backend = fake
+
+    eng.consult("開始", mode="interview_sim")
+    eng.consult("推定の前提は3つあります", mode="interview_sim",
+                response_time_sec=15.5)
+    _, user2 = fake.calls[1]
+    assert "15.5 秒" in user2, "interview_sim のターンプロンプトに応答時間が未注入 (F4b 退行)"
+
+    eng.consult("講評", mode="interview_sim")
+    _, user3 = fake.calls[2]
+    assert "応答時間 (Response Latency)" in user3, \
+        "interview_sim の講評に latency セクションが未統合 (F4b 退行)"
+    assert "15.5 秒" in user3
+    assert "思考速度" in user3
+    print("  interview_sim latency preserved after Phase C (F4b 無傷) OK")
+
+
 def test_adversarial_interview_with_es() -> None:
     _write_phase3_assets()  # F-15 (Sandbox): ES + gap_insights を自前で seed する
     fake = FakeBackend()
@@ -1074,6 +1116,8 @@ if __name__ == "__main__":
         test_es_manager_dynamic_domain()
         test_es_manager_implicit_domain_from_text()
         test_es_review_isolation()
+        test_es_review_ignores_latency()
+        test_interview_latency_preserved()
         test_adversarial_interview_with_es()
         test_oracle_payload_isolated_to_review_phase()
         test_gd_sim_chaos()

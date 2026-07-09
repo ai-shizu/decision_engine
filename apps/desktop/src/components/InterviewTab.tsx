@@ -11,10 +11,25 @@ import type {
 } from "../lib/types";
 import { useCorrelationId } from "../lib/useCorrelationId";
 
+// F-17 (SPEC_FOXTROT_UI.md §10.3): es_review は思考速度を計測も評価もしない
+// (latency 構造的皆無)。hint はモード別に単一定義し、二重定義を作らない
+// (line ~319 は currentMode.hint をそのまま描画するのみ)。
 const MODES: { id: InterviewMode; label: string; hint: string }[] = [
-  { id: "interview_sim", label: "ケース/ES面接", hint: "ES があれば敵対的 ES 面接、無ければケース面接" },
-  { id: "es_review", label: "ES添削", hint: "data/es/ の ES を採用責任者ペルソナで容赦なく添削" },
-  { id: "gd_sim", label: "グループディスカッション", hint: "厄介な参加者たちとのカオス GD" },
+  {
+    id: "interview_sim", label: "ケース/ES面接",
+    hint: "ES があれば敵対的 ES 面接、無ければケース面接。"
+      + "回答時間を計測し、思考速度も講評対象になります。",
+  },
+  {
+    id: "es_review", label: "ES添削",
+    hint: "data/es/ の ES を採用責任者ペルソナで容赦なく添削。"
+      + "書類単体の論理的強度のみを評価します (思考速度は評価しません)。",
+  },
+  {
+    id: "gd_sim", label: "グループディスカッション",
+    hint: "厄介な参加者たちとのカオス GD。"
+      + "回答時間を計測し、思考速度も講評対象になります。",
+  },
 ];
 
 const TRAIT_PRESETS = [
@@ -247,6 +262,10 @@ export function InterviewTab() {
   }
 
   async function handleEsReview() {
+    // F-17 (SPEC_FOXTROT_UI.md §10.3): es_review は思考速度を計測も評価も
+    // しない。opts.responseTime を意図的に渡さない (send() は
+    // opts.responseTime === undefined の時 response_time_sec を組み立てない
+    // — 将来の混入防止のため、この不在は事故ではなく設計であることを明示する)。
     const name = input.trim();
     setInput("");
     await send(name || "添削", { userEcho: false });
@@ -316,7 +335,7 @@ export function InterviewTab() {
           </button>
         ))}
       </div>
-      <p className="hint">{currentMode.hint}。回答時間は計測され、思考速度も講評対象になります。</p>
+      <p className="hint">{currentMode.hint}</p>
 
       {showConfig && (
         <div className="term-panel">

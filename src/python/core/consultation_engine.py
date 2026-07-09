@@ -1097,7 +1097,12 @@ class ConsultationEngine:
         【隔離原則 — 変更禁止】このモードは gap_insights (_gap_section) を
         絶対に注入しない。ドキュメント単体の論理的強度のみをテストする。
         日常プロファイルを混ぜると「書類が弱いのか、人が弱いのか」の
-        切り分けができなくなる。"""
+        切り分けができなくなる。
+
+        F-17 (SPEC_FOXTROT_UI.md §10.3): このメソッドは response_time_sec を
+        引数に取らない (意図的)。es_review は「書類単体の論理的強度」のみを
+        評価するモードであり、思考速度の計測・評価対象ではない。将来この
+        シグネチャへ response_time_sec を追加してはならない。"""
         from .es_manager import build_reviewer_persona, es_body_for_prompt, select_es
         say = status or (lambda msg: None)
         name_hint = query.strip()
@@ -1275,6 +1280,11 @@ class ConsultationEngine:
                 query, status=status, on_token=on_token,
                 response_time_sec=response_time_sec, config=config)
         if mode == "es_review":
+            # F-17 (SPEC_FOXTROT_UI.md §10.3): es_review は思考速度を計測も
+            # 評価もしない。_consult_es_review のシグネチャに
+            # response_time_sec を意図的に足さない — 呼び出し側が何を渡して
+            # きても構造的に latency を受け取れない (現状維持の明文化。
+            # interview_sim/gd_sim の latency (F4b) には無関係)。
             return self._consult_es_review(query, status=status, on_token=on_token)
         if mode == "gd_sim":
             return self._consult_gd_sim(

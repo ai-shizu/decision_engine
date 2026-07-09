@@ -801,7 +801,7 @@ TOTAL:                                          ~1.6-2.2 秒 (< 3000ms ゲート
 
 ---
 
-## 13. Target Foxtrot — UI/UX 設計 (`docs/SPEC_FOXTROT_UI.md`。F0/F7/F1/F2/F2-EXT/F3/F3.5/F4a/F4b/F4c/Rev.10相関ID復元/Rev.11 Phase A(Sandbox)・Phase B(単一ES/F-16) 完遂・§10.3〜§10.6/エンジン多重化 未着手)
+## 13. Target Foxtrot — UI/UX 設計 (`docs/SPEC_FOXTROT_UI.md`。F0/F7/F1/F2/F2-EXT/F3/F3.5/F4a/F4b/F4c/Rev.10相関ID復元/Rev.11 Phase A(Sandbox)・Phase B(単一ES/F-16)・Phase C(es_review無latency/F-17) 完遂・§10.4〜§10.6/エンジン多重化 未着手)
 
 フロントエンド (Tauri + React) の設計仕様。**§3.4 (React UI 規約) が上位法** —
 SPEC はその適用解釈を確定させるもの。コードより先に存在する凍結事項:
@@ -1516,6 +1516,75 @@ ignore_errors=True)` を明示的に行う (W-50: pytest の `_isolate_data` に
 **誓約の充足確認**: 保持ESは `active_es.md` ただ1件へ収束し (レガシーは
 削除せず不可視化)、UIで現ESをView可能、フル pytest は実行順非依存で
 GREEN、`data/` 汚染ゼロ — 以上を全て満たしている。
+
+---
+
+### Rev.11 Phase C 完遂 (2026-07-09) — as-built (es_review 無latency性の固定 / F-17)
+
+**前提の確認**: 着工前に `_consult_es_review()` (計算経路) と
+`consult()` のモード分岐を実測した結果、**除去すべき latency 注入の実体は
+元々存在しなかった** — `_consult_es_review` のシグネチャに
+`response_time_sec` が無く、`consult()` の `es_review` 分岐もそれを
+`_consult_es_review` へ渡していない。敵は「UIの偽装 hint (全モード共通で
+『回答時間は計測され…』を表示していた)」と「将来この構造が壊れて latency
+が紛れ込むこと」の2つだけ。本Phaseは**封印 (現状の構造的不可能性を
+コメント・テスト・UI表示の3点で固定)**であり、ロジック変更はゼロ。
+
+**実変更点 (フロントエンド)**:
+- `InterviewTab.tsx`: `MODES` 配列の `hint` フィールドをモード別の完全な
+  文言へ拡張 (`interview_sim`/`gd_sim` → 「回答時間を計測し、思考速度も
+  講評対象になります。」、`es_review` → 「書類単体の論理的強度のみを
+  評価します (思考速度は評価しません)。」)。表示側 (`{currentMode.hint}`)
+  は単一箇所のみで、以前あった「全モード共通の latency 文言をハード
+  コードで連結」する二重定義を撤廃 (`currentMode.hint` を単一の真実の源
+  にする — MODES 配列がモードごとの文言を完全に持つ)。
+- `handleEsReview()`: `send()` への呼び出しが `opts.responseTime` を渡さない
+  ことに「意図的な設計であり事故ではない」旨のコメントを追加
+  (`send()` は `opts.responseTime === undefined` の時
+  `response_time_sec` を組み立てない既存ロジックは無変更)。
+
+**実変更点 (バックエンド — コメントのみ・ロジック変更ゼロ)**:
+- `consultation_engine.py::consult()` の `mode == "es_review"` 分岐、
+  および `_consult_es_review()` のdocstringに、F-17 を根拠として
+  「このシグネチャに `response_time_sec` を追加してはならない」という
+  明文化コメントを追加。`git diff --stat` は本ファイルのみ・
+  変更は「コメント追加+docstring追記」の11行 (ロジック行の変更ゼロ)。
+
+**回帰テスト (`tests/test_integration.py` に追加)**:
+- `test_es_review_ignores_latency`: `ScriptedBackend` で
+  `consult(mode="es_review", response_time_sec=42.0)` を呼び、(a) 例外なく
+  完走し正常応答を返すこと、(b) reviewer へ渡る system/user プロンプトの
+  いずれにも「秒」「応答時間」「latency」「response_time」のいずれの
+  文字列も含まれないことを assert。
+- `test_interview_latency_preserved` (退行検出の鏡): `interview_sim` で
+  `response_time_sec=15.5` 付きターン→「講評」を回し、ターンプロンプトに
+  「15.5 秒」が注入され、講評プロンプトに「応答時間 (Response Latency)」
+  セクションと「思考速度」が依然含まれることを assert。F4b の latency 評価
+  (`synthesize_latency`・成績表 median/max/n) が Phase C で巻き添えに
+  壊れていないことの直接証明。
+
+**検証結果 (DoD)**:
+- `python -m pytest tests/ -q` (通常順): **152 passed, 0 failed**
+  (Phase B の150 + Phase C新設2 = 152。退行ゼロ)。
+- 同コマンドをファイル逆順で実行: **152 passed, 0 failed** (実行順非依存)。
+- `npx tsc --noEmit` (apps/desktop): エラーなし。Rust 変更なしのため
+  `cargo check` は対象外。
+- `git status --short data/`: 差分ゼロ。
+- `git diff --stat src/python/core/consultation_engine.py`:
+  11行 (コメント/docstring追記のみ・ロジック変更ゼロ)。
+  `synthesize_latency`/`_format_latency_section`/`_consult_interview_sim`/
+  `_consult_gd_sim` の実装本体には**1行も触れていない**
+  (`git diff` で証明済み — 変更箇所は `_consult_es_review` の docstring と
+  `consult()` の `es_review` 分岐のコメントのみ)。
+
+**仕様との差異 (申告)**: なし。ミッション文の前提通り、除去すべき latency
+注入の実体は最初から存在せず、本Phaseは「封印 (コメント + hint是正 + 回帰
+テスト)」のみで完結した。
+
+**誓約の充足確認**: es_review は思考速度を計測も評価もしない (UI hint も
+モード別に正確化)。interview_sim/gd_sim の latency (F4b) は無傷
+(`test_interview_latency_preserved` で直接証明)。フル pytest は実行順
+非依存で GREEN (152 passed)。
 
 ---
 
