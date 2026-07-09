@@ -182,6 +182,21 @@ def _stance_clause(cfg: dict) -> str:
     return STANCE_CLAUSES.get(key, STANCE_CLAUSES["adversarial"])
 
 
+# F-20 (SPEC_FOXTROT_UI.md §10.6): 感想戦 (Debrief) のメンター人格。
+# 面接官/選考官の仮面を外し、講評・スコアの開示を許す唯一のペルソナ。
+# 引数を取らない定数ペルソナ (面接官と異なりドメイン追従の必要が無い —
+# 材料は既に確定済みの transcript/summary/metrics のみ)。
+def build_mentor_persona() -> str:
+    return (
+        "あなたは先刻この候補者を面接した評価者だが、今は面接を離れ、候補者の"
+        "成長を支援する建設的なメンターである。面接のやり取りと自分が下した"
+        "評価をすべて記憶している。候補者の問いに対し、どう答えれば良かったか・"
+        "次にどう改善すべきかを、面接の文脈と講評・評価に基づいて具体的に示せ。"
+        "新しい事実を捏造しない。圧迫はしない。面接官の仮面はもう外してよい"
+        "(スコアや講評の内容に踏み込んで説明してよい)。"
+    )
+
+
 def _format_latency_section(latencies: list[dict]) -> str:
     """講評プロンプト用の応答時間セクション (記録なしなら空文字)。"""
     if not latencies:
@@ -892,6 +907,34 @@ class ConsultationEngine:
                 self._backend = RuleBasedBackend()
         return self._backend
 
+    # ---- 感想戦 (Debrief — 講評後の対話フェーズ) ---------------------------
+    def _debrief_turn(self, state: dict, q: str, status=None, on_token=None) -> str:
+        """F-20 (SPEC_FOXTROT_UI.md §10.6): interview_sim/gd_sim 共通の
+        感想戦ターン。メンターが読む材料は【既に公開された成果物のみ】
+        (transcript/summary(講評本文)/report metrics) — raw _gap_section()/
+        _oracle_section() (聖域) は絶対に注入しない (壁B・W-52)。講評は
+        既に無菌合成済みの安全版であり、対話中に生の gap/oracle を流すのは
+        新たな暴露面になる。"""
+        say = status or (lambda msg: None)
+        say("メンターが応答中…")
+        transcript_text = "\n".join(
+            f"[{role}] {text}" for role, text in state["transcript"])
+        metrics = (state.get("report") or {}).get("metrics", [])
+        metrics_line = "、".join(
+            f"{m['axis']}:{m['score']}" for m in metrics) or "(スコアなし)"
+        prompt = (
+            f"# 面接トランスクリプト\n{transcript_text}\n\n"
+            f"# あなたが出した講評\n{state.get('summary', '')}\n\n"
+            f"# 評価スコア\n{metrics_line}\n\n"
+            f"# 候補者の質問\n{q}\n\n"
+            "上記の面接文脈と講評・評価に基づき、建設的なメンターとして具体的に"
+            "答えよ。新しい事実を捏造しない。"
+        )
+        answer = self.backend.generate(state["mentor_system"], prompt, on_token=on_token)
+        answer = re.sub(r"<think>.*?</think>\s*", "", answer, flags=re.DOTALL).strip()
+        state["transcript"].append(("メンター", answer))
+        return answer
+
     # ---- 面接シミュレーション (mode="interview_sim") ----------------------
     def _consult_interview_sim(self, query: str, status=None, on_token=None,
                                response_time_sec: float | None = None,
@@ -1007,6 +1050,15 @@ class ConsultationEngine:
         transcript_text = "\n".join(
             f"[{role}] {text}" for role, text in state["transcript"])
 
+        # F-20: 講評後は phase=="debrief" へ遷移済み (null 化しない)。
+        # START は上の分岐で既に捕捉済みなのでここに来るのは非START入力のみ。
+        if state.get("phase") == "debrief":
+            if q in INTERVIEW_END_COMMANDS:
+                self._interview_state = None
+                say("感想戦を終了しました")
+                return "感想戦を終了しました。お疲れ様でした。"
+            return self._debrief_turn(state, q, status=status, on_token=on_token)
+
         if q in INTERVIEW_END_COMMANDS:
             say("講評を生成中… (ES・会話録・日常行動ギャップ分析を統合)")
             from .es_manager import es_body_for_prompt as _es_body
@@ -1075,8 +1127,13 @@ class ConsultationEngine:
                 pass
             self._last_interview_report = report
 
-            self._interview_state = None
-            say("面接シミュレーション終了 (講評を相談履歴に保存)")
+            # F-20: null 化せず感想戦 (debrief) へ遷移する。メンターは講評
+            # 本文とスコアのみを材料に持つ (壁B — 生の gap/oracle は含めない)。
+            state["phase"] = "debrief"
+            state["summary"] = answer
+            state["report"] = report
+            state["mentor_system"] = build_mentor_persona()
+            say("面接シミュレーション終了 (講評を相談履歴に保存・感想戦へ移行)")
             return answer
 
         # 議論の継続ターン — gap_insights は隔離 (ES とトランスクリプトのみ)
@@ -1220,6 +1277,14 @@ class ConsultationEngine:
         transcript_text = "\n".join(
             f"[{role}] {text}" for role, text in state["transcript"])
 
+        # F-20: 講評後は phase=="debrief" へ遷移済み (null 化しない)。
+        if state.get("phase") == "debrief":
+            if q in INTERVIEW_END_COMMANDS:
+                self._gd_state = None
+                say("感想戦を終了しました")
+                return "感想戦を終了しました。お疲れ様でした。"
+            return self._debrief_turn(state, q, status=status, on_token=on_token)
+
         if q in INTERVIEW_END_COMMANDS:
             say("GD 講評を生成中… (日常の摩擦回避構造と接続)")
             eval_prompt = f"""以下のグループディスカッションを選考官として講評せよ。
@@ -1271,8 +1336,12 @@ class ConsultationEngine:
                 pass
             self._last_interview_report = report
 
-            self._gd_state = None
-            say("GD シミュレーション終了 (講評を相談履歴に保存)")
+            # F-20: null 化せず感想戦 (debrief) へ遷移する (interview_sim と対称)。
+            state["phase"] = "debrief"
+            state["summary"] = answer
+            state["report"] = report
+            state["mentor_system"] = build_mentor_persona()
+            say("GD シミュレーション終了 (講評を相談履歴に保存・感想戦へ移行)")
             return answer
 
         # 議論の継続ターン — gap_insights は隔離

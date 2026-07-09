@@ -210,7 +210,9 @@ def test_interview_sim_flow() -> None:
     assert "日常行動のギャップ分析" in user3
     assert "躰道部の新歓マネジメント" in user3, "gap_insights が講評プロンプトに未注入"
     assert "改善アクション" in user3
-    assert eng._interview_state is None, "講評後にセッションが未リセット"
+    # F-20: 講評後は null 化ではなく感想戦 (debrief) へ遷移する。
+    assert eng._interview_state is not None, "講評後に感想戦へ遷移していない"
+    assert eng._interview_state.get("phase") == "debrief"
 
     # 講評は相談履歴に [interview_sim] として保存される
     log = json.loads(AI_CONSULTATIONS_JSON.read_text(encoding="utf-8"))
@@ -509,7 +511,9 @@ def test_adversarial_interview_with_es() -> None:
     assert "既読スルー" in user3, "講評に Delta-LINE 対人ギャップが未統合 (DL2)"
     assert "認知リソース" in user3, "講評に Target Echo oracle_payload が未統合 (E0 ガード)"
     assert "防御" in user3 and "改善アクション" in user3
-    assert eng._interview_state is None
+    # F-20: 講評後は null 化ではなく感想戦 (debrief) へ遷移する。
+    assert eng._interview_state is not None
+    assert eng._interview_state.get("phase") == "debrief"
 
     log = json.loads(AI_CONSULTATIONS_JSON.read_text(encoding="utf-8"))
     entries = [e for day in log.values() for e in day]
@@ -599,7 +603,9 @@ def test_gd_sim_chaos() -> None:
     assert "認知リソース" in user3, "GD 講評に Target Echo oracle_payload が未統合 (E0 ガード)"
     assert "摩擦" in user3 and "Friction" in user3
     assert "フリーライダー" in user3 and "クラッシャー" in user3
-    assert eng._gd_state is None
+    # F-20: 講評後は null 化ではなく感想戦 (debrief) へ遷移する。
+    assert eng._gd_state is not None
+    assert eng._gd_state.get("phase") == "debrief"
 
     log = json.loads(AI_CONSULTATIONS_JSON.read_text(encoding="utf-8"))
     entries = [e for day in log.values() for e in day]
@@ -663,6 +669,85 @@ def test_gd_growth_injected() -> None:
     assert "最重点課題軸" in sys1
     _assert_no_gap_leak(sys1, user1)
     print("  GD growth context injected without wall-B leak (F-19) OK")
+
+
+# ---------------------------------------------------------------- F-20 感想戦 (Debrief)
+_DEBRIEF_VALID_JSON = json.dumps({"metrics": [
+    {"axis": "論理性", "score": 70, "evidence": "根拠を示せていた"},
+    {"axis": "技術力", "score": 60, "evidence": "妥当な深掘りだった"},
+    {"axis": "構成力", "score": 65, "evidence": "整理された発言だった"},
+    {"axis": "具体性", "score": 55, "evidence": "定量的根拠がやや薄い"},
+]}, ensure_ascii=False)
+
+
+def test_debrief_transition_and_turn() -> None:
+    """F-20 (SPEC_FOXTROT_UI.md §10.6): 講評後、interview_sim/gd_sim 双方で
+    state は null 化されず phase=="debrief" へ遷移する。続けて非END入力を
+    送るとメンター人格 (build_mentor_persona) で応答し、transcript に
+    ("メンター", ...) が積まれる (両モード対称)。"""
+    scripts = {
+        "interview_sim": (["出題", "面接官応答", "講評本文です", _DEBRIEF_VALID_JSON],
+                          "_interview_state"),
+        "gd_sim": (["GD開始発言", "GD応答", "GD講評本文です", _DEBRIEF_VALID_JSON],
+                  "_gd_state"),
+    }
+    for mode, (script, state_attr) in scripts.items():
+        backend = ScriptedBackend(script + ["メンター応答です"])
+        eng = ConsultationEngine()
+        eng._backend = backend
+        eng.consult("開始", mode=mode)
+        eng.consult("継続の一言です", mode=mode)
+        eng.consult("講評", mode=mode)
+
+        state = getattr(eng, state_attr)
+        assert state is not None, f"{mode}: 講評後に state が null化された (debrief 遷移が起きていない)"
+        assert state.get("phase") == "debrief", f"{mode}: phase が debrief になっていない"
+
+        answer = eng.consult("どう答えればもっと良かったですか？", mode=mode)
+        assert answer == "メンター応答です"
+        mentor_call_system = backend.calls[-1][0]
+        assert "建設的なメンター" in mentor_call_system, f"{mode}: メンター人格が使われていない"
+
+        state = getattr(eng, state_attr)
+        assert state is not None, f"{mode}: 感想戦ターンで state が消えた"
+        assert state["transcript"][-1] == ("メンター", "メンター応答です")
+    print("  debrief transition + mentor turn symmetric (interview_sim/gd_sim) (F-20) OK")
+
+
+def test_debrief_no_sanctuary_leak() -> None:
+    """F-20 / W-52 (壁B): 感想戦のメンターへ渡るプロンプトに、gap_insights/
+    Echo (聖域) 由来のマーカーが一切混入しない。講評フェーズ自体は仕様通り
+    gap/oracle を統合するが、その後の感想戦ターンでは既に公開された
+    transcript/summary/metrics のみを材料とする。"""
+    _write_phase3_assets()  # gap_insights + oracle_payload を自前で seed する
+    backend = ScriptedBackend(
+        ["出題", "面接官応答", "講評本文です", _DEBRIEF_VALID_JSON, "メンター応答です"])
+    eng = ConsultationEngine()
+    eng._backend = backend
+    eng.consult("開始", mode="interview_sim")
+    eng.consult("継続の一言です", mode="interview_sim")
+    eng.consult("講評", mode="interview_sim")  # 講評フェーズは gap/oracle を統合する (仕様通り)
+    eng.consult("あのアピールはどう聞こえましたか？", mode="interview_sim")
+
+    mentor_system, mentor_user = backend.calls[-1]
+    _assert_no_gap_leak(mentor_system, mentor_user)
+    print("  debrief carries no gap/oracle sanctuary leak (wall B / W-52) OK")
+
+
+def test_debrief_end_closes() -> None:
+    """F-20: 感想戦中に「終了」を送ると state は None に戻り、別れの文言が返る。"""
+    backend = ScriptedBackend(["GD開始発言", "GD応答", "GD講評本文です", _DEBRIEF_VALID_JSON])
+    eng = ConsultationEngine()
+    eng._backend = backend
+    eng.consult("開始", mode="gd_sim")
+    eng.consult("継続の一言です", mode="gd_sim")
+    eng.consult("講評", mode="gd_sim")
+    assert eng._gd_state is not None and eng._gd_state.get("phase") == "debrief"
+
+    answer = eng.consult("終了", mode="gd_sim")
+    assert eng._gd_state is None, "感想戦終了後も state が生存している"
+    assert "終了" in answer or "お疲れ様" in answer
+    print("  debrief end closes state (F-20) OK")
 
 
 # ============================================================ Target Delta D3: Puppeteer
@@ -838,7 +923,9 @@ def test_dynamic_gd_personas() -> None:
     _, user3 = fake.calls[2]
     assert "応答時間 (Response Latency)" in user3
     assert "躰道部" in user3  # 講評では gap 統合
-    assert eng._gd_state is None
+    # F-20: 講評後は null 化ではなく感想戦 (debrief) へ遷移する。
+    assert eng._gd_state is not None
+    assert eng._gd_state.get("phase") == "debrief"
 
     # 9 人上限 (10 人渡しても 9 人に切り詰め)
     many = [{"name": f"P{i}", "trait": "協調型"} for i in range(10)]
@@ -1236,6 +1323,9 @@ if __name__ == "__main__":
         test_gd_sim_chaos()
         test_all_interview_modes_persist()
         test_gd_growth_injected()
+        test_debrief_transition_and_turn()
+        test_debrief_no_sanctuary_leak()
+        test_debrief_end_closes()
         # ---- Target Delta D3 (Puppeteer) ----
         test_puppeteer_injects_whitelisted_text_only()
         # ---- フェーズ4 (レイテンシ / 動的ペルソナ / 建前隔離) ----

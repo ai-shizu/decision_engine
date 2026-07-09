@@ -1710,6 +1710,97 @@ never_fetches` と同種) として別途追跡が必要。
 
 ---
 
+### Rev.11 Phase F 完遂 (2026-07-09) — as-built (感想戦 / Debrief 対話フェーズ / F-20)
+
+**Rev.11 最終Phase。** 講評出力後もセッションを継続でき、AIが「面接の文脈と
+評価をすべて記憶した建設的メンター」として改善を議論できる感想戦フェーズを
+導入。状態を「面接中(active)」→「感想戦(debrief)」へ遷移させる。
+interview_sim/gd_sim の両方に対称に実装した。
+
+**実変更点 (`src/python/core/consultation_engine.py` のみ、+73/-4)**:
+- `build_mentor_persona()` 新設: 引数不要の定数ペルソナ。面接官/選考官と
+  違い講評・スコアの開示を許す唯一の人格 (「面接官の仮面はもう外してよい」)。
+- `_debrief_turn(state, q, status, on_token)` 新設 (interview_sim/gd_sim
+  共通メソッド)。材料は【既に公開された成果物のみ】= transcript / summary
+  (講評本文) / report metrics。生の `_gap_section()`/`_oracle_section()`
+  (聖域) は一切参照しない (壁B・W-52 の構造的遵守 — このメソッドはそもそも
+  gap/oracle にアクセスするコードパスを持たない)。`append_consultation` は
+  呼ばない (成績表は確定済み。感想戦はセッション内のみ・永続化しない)。
+- 講評END ブロック (interview_sim/gd_sim 両方): `self._interview_state =
+  None` / `self._gd_state = None` の null 化を削除し、`state["phase"] =
+  "debrief"` + `state["summary"]`/`state["report"]`/`state["mentor_system"]
+  = build_mentor_persona()` への遷移へ差し替え (削除4行のうち2行はこの
+  null化行、残り2行は say() 文言の更新)。
+- 冒頭ディスパッチ (両モード): `state = self._..._state` 取得直後・
+  `INTERVIEW_END_COMMANDS` 判定より前に `if state.get("phase") ==
+  "debrief":` 分岐を追加。debrief 中の END コマンドは state を None へ戻し
+  別れの文言を返す。それ以外は `_debrief_turn` へ routing。START コマンドは
+  冒頭の `if self._..._state is None or q in START:` が先に捕捉するため、
+  debrief 中の「開始」は新セッションとして正しくリセットされる (優先順位は
+  無改変で健全)。
+
+**実変更点 (フロントエンド `apps/desktop/src/components/InterviewTab.tsx`)**:
+- `sessionActive: boolean` を `phase: "idle" | "active" | "debrief"` へ
+  完全置換 (残存参照ゼロを `grep` で確認済み)。
+- `send()` の speaker 決定に `phase === "debrief"` 分岐を追加: mode に
+  依らず speaker="メンター" (GD の `splitSpeakers` 複数話者分解は適用しない
+  — メンターは単一の統合された声)。
+- `handleStart` → `setPhase("active")`。`handleFeedback` → 成功後
+  `setPhase("debrief")` (report はクリアしない — 感想戦中も MISSION_RESULT
+  を見せ続ける)。新設 `handleDebriefEnd()`: `send("終了")` 後
+  `setPhase("idle")` + メッセージ/report リセット (switchMode 相当の後始末)。
+- `handleSend`: `phase === "debrief"` のとき `responseTime` を組み立てない
+  (感想戦に思考速度評価は無い)。
+- `showLobby`/`showConfig`: `!sessionActive` → `phase === "idle"`。
+- ヘッダー: 「講評 (Feedback)」ボタンは `phase === "active"` のみ表示、
+  `phase === "debrief"` で「感想戦を終了」ボタンに切り替え。
+- フォーム表示条件: `phase === "idle" && mode !== "es_review"` で Start
+  ボタン、それ以外 (active/debrief/es_review) で textarea
+  (debrief 中は placeholder が「感想戦: 質問を入力…」)。
+
+**回帰テスト (`tests/test_integration.py` に追加)**:
+- `test_debrief_transition_and_turn`: interview_sim/gd_sim 両方で講評後に
+  state が null化されず `phase=="debrief"` になること、続く非END入力が
+  `build_mentor_persona` 由来の system で応答し `transcript` に
+  `("メンター", ...)` が積まれることを対称に assert。
+- `test_debrief_no_sanctuary_leak` (壁B構造証明): `_write_phase3_assets()`
+  で gap/oracle を seed した状態で debrief ターンを回し、メンターへ渡る
+  system/user プロンプトに `GAP_LEAK_MARKERS` が一切含まれないことを assert
+  (講評フェーズ自体は仕様通り gap/oracle を統合するが、その後の感想戦
+  ターンには漏れないことを検証)。
+- `test_debrief_end_closes`: debrief 中に「終了」を送ると state が None に
+  戻り、別れの文言が返ることを assert。
+- **既存4テストの終端条件を是正** (講評 answer 自体の内容 assert は不変、
+  state の終端条件のみ調整): `test_interview_sim_flow` /
+  `test_adversarial_interview_with_es` / `test_gd_sim_chaos` /
+  `test_dynamic_gd_personas` が「講評後に `_interview_state`/`_gd_state`
+  が `None`」を前提にしていたため、「`None` ではなく
+  `phase=="debrief"`」への期待値更新 (Phase F 着工直後の pytest 実行で
+  4件が想定通り RED になり、この是正で GREEN に復帰したことを確認済み)。
+
+**検証結果 (DoD)**:
+- `python -m pytest tests/ -q` (通常順): **160 passed, 0 failed**
+  (Phase E の157 + Phase F新設3 = 160。既存4テストの終端条件是正を含めて
+  退行ゼロ)。
+- 同コマンドをファイル逆順で実行: **160 passed, 0 failed** (実行順非依存)。
+- `npx tsc --noEmit`: エラーなし。Rust 変更なし。
+- `git status --short data/`: 差分ゼロ。
+- `git diff --stat src/python/core/`: `consultation_engine.py` のみ
+  **+73/-4**。削除4行は `git diff` で確認済み — `_interview_state = None`/
+  `_gd_state = None` の null化行2行と、say() 文言更新2行のみ。
+  `_interview_genre`/`_consult_es_review`/`synthesize_latency`/
+  `_format_latency_section` への変更なし (grep で確認)。
+  `interview_report.py` は diff 空 (完全無変更)。
+
+**仕様との差異**: なし。
+
+**誓約の充足確認**: 講評後に state は debrief へ遷移し感想戦を継続できる。
+メンターは講評・スコアを開示してよいが、生の gap/oracle (聖域) は感想戦へ
+一切注入しない (壁B不変・構造的に注入経路自体が存在しない)。フル pytest は
+実行順非依存で GREEN (160 passed)。
+
+---
+
 ## 14. インシデント 2026-07-07: metadata.json 4.2GB 肥大 (IMP-1 是正指令)
 
 ### 検死結果 (読み取り専用フォレンジックで確定した事実)

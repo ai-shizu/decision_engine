@@ -132,9 +132,13 @@ function splitSpeakers(text: string): { speaker: string; text: string }[] {
   return out.length ? out : [{ speaker: "", text: text.trim() }];
 }
 
+// F-20 (SPEC_FOXTROT_UI.md §10.6): セッションの三状態。"debrief" は講評後の
+// 対話継続フェーズ (感想戦) — バックエンドの state["phase"]=="debrief" と対応。
+type SessionPhase = "idle" | "active" | "debrief";
+
 export function InterviewTab() {
   const [mode, setMode] = useState<InterviewMode>("interview_sim");
-  const [sessionActive, setSessionActive] = useState(false);
+  const [phase, setPhase] = useState<SessionPhase>("idle");
   const [messages, setMessages] = useState<InterviewMessage[]>([]);
   const [personas, setPersonas] = useState<GdPersona[]>(DEFAULT_PERSONAS);
   const [config, setConfig] = useState<InterviewConfig>(DEFAULT_CONFIG);
@@ -182,7 +186,7 @@ export function InterviewTab() {
     if (busy || next === mode) return;
     // モード切替 = 新しいセッション。バックエンドの状態は「開始」で上書きされる
     setMode(next);
-    setSessionActive(false);
+    setPhase("idle");
     setMessages([]);
     setStatus("");
     setReport(null);
@@ -233,6 +237,12 @@ export function InterviewTab() {
         if (role === "feedback") {
           return [...withoutPlaceholder, { role: "feedback", speaker: "講評", text: res.answer }];
         }
+        // F-20: 感想戦フェーズの AI 返信は mode に依らず「メンター」。
+        // splitSpeakers (GD の複数話者分解) は適用しない — メンターは
+        // 単一の統合された声で応答する。
+        if (phase === "debrief") {
+          return [...withoutPlaceholder, { role: "ai", speaker: "メンター", text: res.answer }];
+        }
         if (mode === "gd_sim") {
           return [
             ...withoutPlaceholder,
@@ -267,7 +277,7 @@ export function InterviewTab() {
       withPersonas: mode === "gd_sim",
       withConfig: mode === "interview_sim",
     });
-    if (ok) setSessionActive(true);
+    if (ok) setPhase("active");
   }
 
   async function handleEsReview() {
@@ -289,18 +299,33 @@ export function InterviewTab() {
       return;
     }
     setInput("");
+    // F-20: 感想戦フェーズでは思考速度評価が存在しない — responseTime を送らない。
     const responseTime =
-      aiShownAtRef.current !== null
-        ? Math.round(((Date.now() - aiShownAtRef.current) / 1000) * 10) / 10
-        : undefined;
+      phase === "debrief"
+        ? undefined
+        : aiShownAtRef.current !== null
+          ? Math.round(((Date.now() - aiShownAtRef.current) / 1000) * 10) / 10
+          : undefined;
     await send(q, { responseTime, userEcho: true });
   }
 
   async function handleFeedback() {
-    if (busy || !sessionActive) return;
+    if (busy || phase !== "active") return;
     const ok = await send("講評", { placeholderRole: "feedback" });
     if (ok) {
-      setSessionActive(false);
+      setPhase("debrief");
+      aiShownAtRef.current = null;
+    }
+  }
+
+  /** F-20: 感想戦を閉じる (バックエンドへ「終了」を送り、state=None へ戻す) */
+  async function handleDebriefEnd() {
+    if (busy || phase !== "debrief") return;
+    const ok = await send("終了", { userEcho: false });
+    if (ok) {
+      setPhase("idle");
+      setMessages([]);
+      setReport(null);
       aiShownAtRef.current = null;
     }
   }
@@ -309,17 +334,17 @@ export function InterviewTab() {
     setPersonas((prev) => prev.map((p, j) => (j === i ? { ...p, ...patch } : p)));
   }
 
-  const showLobby = mode === "gd_sim" && !sessionActive;
+  const showLobby = mode === "gd_sim" && phase === "idle";
   // F4a: 開始前のみ表示。セッション中は条件レンダリングで unmount する
   // (F-11 — display:none 等の keep-alive 化はしない)。
-  const showConfig = mode === "interview_sim" && !sessionActive;
+  const showConfig = mode === "interview_sim" && phase === "idle";
   const currentMode = MODES.find((m) => m.id === mode)!;
 
   return (
     <section className="panel interview-panel">
       <div className="consult-header">
         <h2>面接・GD シミュレーター (INTERVIEW)</h2>
-        {sessionActive && (
+        {phase === "active" && (
           <button
             type="button"
             className="feedback-btn"
@@ -327,6 +352,16 @@ export function InterviewTab() {
             disabled={busy}
           >
             講評 (Feedback)
+          </button>
+        )}
+        {phase === "debrief" && (
+          <button
+            type="button"
+            className="feedback-btn"
+            onClick={() => void handleDebriefEnd()}
+            disabled={busy}
+          >
+            感想戦を終了
           </button>
         )}
       </div>
@@ -588,7 +623,7 @@ export function InterviewTab() {
       )}
 
       <form className="consult-form" onSubmit={(e) => void handleSend(e)}>
-        {!sessionActive && mode !== "es_review" ? (
+        {phase === "idle" && mode !== "es_review" ? (
           <div className="action-row">
             <button type="button" className="primary" onClick={() => void handleStart()} disabled={busy}>
               {busy ? "準備中…" : mode === "gd_sim" ? "この参加者で GD を開始" : "面接を開始"}
@@ -599,7 +634,13 @@ export function InterviewTab() {
             <textarea
               value={input}
               onChange={(e) => setInput(e.target.value)}
-              placeholder={mode === "es_review" ? "ES 名 (空欄で最新)" : "発言を入力…"}
+              placeholder={
+                mode === "es_review"
+                  ? "ES 名 (空欄で最新)"
+                  : phase === "debrief"
+                    ? "感想戦: 質問を入力…"
+                    : "発言を入力…"
+              }
               rows={2}
               disabled={busy}
               onKeyDown={(e) => {
