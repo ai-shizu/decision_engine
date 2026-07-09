@@ -10,17 +10,24 @@
 #   (D1/D2 未着手) の代わりに deep_profile.gap_analysis.gaps のみを素材にする
 #   スコープ限定版 — Target Charlie / Delta (DL1/DL2/D3) はこれで完遂、
 #   残るは Delta の D1/D2 サブトラック (5軸・PROBE・HistoricalNode) のみ。
+# Rev.5 (2026-07-09): D1/D2 着工前 Phase 0 (SPEC照合)。下記「実装状態の宣言」の
+#   陳腐化 (Charlie/Delta-LINE/D3 を「未実装」と誤記) を現況へ更新。§3 冒頭に
+#   D1 の5軸データソース監査 (どの軸が既存算出の包み込みで済み、どの軸が新規
+#   上流計算を要するか) を追記。設計本文 (§3.0-3.8) は不変 — 照合と現況注記のみ。
 
 > **読者への前提命令**: 本書を読む前に `docs/AI_SKILLS.md` を全文読め (第0原則)。
 > 本書と AI_SKILLS.md が矛盾した場合、**不変条件については AI_SKILLS.md が正**、
 > 未実装機能の設計については本書が正。
 >
-> **実装状態の宣言 (再実装禁止リスト)**:
+> **実装状態の宣言 (再実装禁止リスト・Rev.5 2026-07-09 更新)**:
 > - Target Alpha (KVプレフィックス・ピニング) — **実装済み** (`core/kv_cache.py`, AI_SKILLS §8)
 > - Target Bravo Step 1/2 (mmapゼロコピーIPC + 本体配線) — **実装済み** (commit `ffb1fbd`, AI_SKILLS §9)
-> - Target Charlie (LSM化 + llama-server資産活用) — **本書 §2 が設計。未実装**
-> - Target Delta (PROBE / PUPPETEER / NARRATIVE COMPILER) — **本書 §3 が設計。未実装**
-> - Target Delta-LINE (対人プロトコル・テレメトリ) — **本書 §3.9 が設計。未実装**
+> - Target Charlie (LSM化 + llama-server資産活用) — **実装済み** (`core/lsm_index.py`, AI_SKILLS §10)
+> - Target Delta-LINE (対人プロトコル・テレメトリ DL1/DL2) — **実装済み** (`core/line_telemetry.py`, AI_SKILLS §11)
+> - Target Delta D3 (PUPPETEER + NARRATIVE COMPILER) — **実装済み** (`core/question_bank.py` / `core/narrative_compiler.py`, AI_SKILLS §11.4/§11.5)
+> - Target Delta **D1/D2** (5軸 HumanSourceCode / PROBE ファネル / HistoricalNode) — **本書 §3.1-3.8 が設計。未実装** (次の着工対象)
+> - Target Echo (oracle / tensor / digital_twin = E4 profile/oracle API) — **実装済み** (`core/oracle.py` 他, SPEC_ECHO_GENESIS)
+> - Foxtrot (UI Rev.11 まで) — **実装済み** (SPEC_FOXTROT_UI, F6 PROBE タブのみ D2 待ちで未着手)
 >
 > §1 は as-built リファレンスである。§1 のコードを書き直すな。§2, §3 を実装するとき
 > §1 のインターフェースを「呼ぶ」ことだけが許される。
@@ -329,6 +336,33 @@ Target Alpha として `core/kv_cache.py` に実装済み (AI_SKILLS §8)。本�
 ---
 
 # §3【Target Delta】次世代自己分析エンジン — PROBE / PUPPETEER / NARRATIVE COMPILER
+
+## 3.0-Rec Phase 0 照合ノート (Rev.5 2026-07-09 — D1 着工前の現況固め)
+
+D1/D2 着工前に §3.1 の 5軸 (HumanSourceCode) を現行コードへ突合した実測結果。
+D1 は「純粋に既存算出を包む」のではなく、【軸により実装コストが大きく異なる】。
+D1 詳細設計はこの監査を前提にスコープを引く:
+
+- **即包み込み可 (既存算出が score/confidence 付きで存在)**:
+  - `interpersonal` 3軸 (friction_response / latency_asymmetry / protocol_plasticity)
+    — `line_telemetry.py` (DL2) が既に軸形で算出済み。D1 は EvidenceRef 化して
+    HumanSourceCode.interpersonal へ載せるだけ。
+- **材料あり (下地関数は在るが 5軸形への合成は新規)**:
+  - `decision_threshold` — `gap_analysis.analyze_procrastination()` の declarations /
+    宣言→実行遅延 + 相談回数から合成。
+  - `reward_bias` — `gap_analysis.hyperbolic_discount()` + finance の短期/長期支出比。
+  - `friction_energy_ledger` — `gap_analysis.analyze_life_balance()` (stabilizer) の
+    対人摩擦後の生産性シグナル増減を軸化。
+- **【新規上流計算が必要 — D1 の隠れ工数・要注意】**:
+  - `locus_of_control` — 日記の帰属語彙 (自責/他責/運) 頻度比。**現状この語彙分類器は
+    未実装** (profiler は value_hierarchy 止まり)。D1 で決定論的な帰属語彙カウンタを
+    新設する必要がある。
+  - `unlearning_rate` — 矛盾提示後の行動語彙変化週数の逆数。**追跡計算は未実装**。
+    consultation_log / gap 矛盾イベントと行動語彙の時系列突合を新設する必要がある。
+
+依存充足 (D1/D2 が「呼ぶ」下部): `gap_analysis` / `line_telemetry` (Bounty/DyadStats) /
+`narrative_compiler` / `oracle`(E4) はすべて実装済み。テストは Rev.11 P2 で確立した
+conftest Sandbox 上で走る (§3 の旧テストノートはこれに従って更新すること)。
 
 ## 3.0 統治原則 (gap_analysis から継承する憲法)
 
