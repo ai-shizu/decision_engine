@@ -801,7 +801,7 @@ TOTAL:                                          ~1.6-2.2 秒 (< 3000ms ゲート
 
 ---
 
-## 13. Target Foxtrot — UI/UX 設計 (`docs/SPEC_FOXTROT_UI.md`。F0/F7/F1/F2/F2-EXT/F3/F3.5/F4a/F4b/F4c 完遂・F5/F6 未着手)
+## 13. Target Foxtrot — UI/UX 設計 (`docs/SPEC_FOXTROT_UI.md`。F0/F7/F1/F2/F2-EXT/F3/F3.5/F4a/F4b/F4c/Rev.10相関ID復元 完遂・F5/F6/エンジン多重化 未着手)
 
 フロントエンド (Tauri + React) の設計仕様。**§3.4 (React UI 規約) が上位法** —
 SPEC はその適用解釈を確定させるもの。コードより先に存在する凍結事項:
@@ -1179,6 +1179,101 @@ persist/load 両方から呼ぶ一元化 (W-42)。欠測軸は「(前回デー�
 を追加。Python 15スイート全て ALL PASS、`ui_smoke.py` ALL PASS。実機での
 面接複数回セッション (成長コンテキストが実際に出題へ反映される様子) の
 対話的確認は指揮官の実施を要する。
+
+### Rev.10 完遂 (2026-07-08) — as-built (相関ID復元。fable5 遺言への後継 Opus 訂正の実装)
+
+**3層の実変更点**:
+- `apps/desktop/src-tauri/src/commands.rs`: `pkb_invoke` に `cid: Option<u64>`
+  引数を追加し `manager.invoke(&cmd, params, cid)` へ透過。
+- `apps/desktop/src-tauri/src/engine.rs`: `invoke(cmd, params, cid)` /
+  `invoke_sync(cmd, params, cid, _allow_restart)` へ拡張し、リクエストJSON
+  最上位へ `"cid": cid` を追加 (`REQ_COUNTER`/`id`/`forward_event` は完全に
+  無改造 — ロジック変更ゼロの配線のみを厳守)。呼び出し2箇所 (`shutdown` の
+  `None` 直渡し、`invoke` の正常/再起動後リトライ経路) 両方を更新。
+- `src/python/engine_stdio.py`: `main()` で `cid = req.get("cid")` を読み、
+  `emit_event` クロージャのデフォルト引数 `_cid=cid` へ束縛。刻印は
+  この1箇所のみ (`dispatch` 内の各コマンドは `emit(...)` を呼ぶだけで
+  cid の存在を意識しない — W-48)。**最終応答 (`{"id","ok","result"}`) は
+  cid を運ばない** — `event` キーを持たないため `engine.rs::invoke_sync` の
+  `forward_event` 対象外であり (同期RPCの戻り値そのもの)、cid 照合が必要な
+  のは中間イベント行のみという設計 (§9.1 の3層図の「全イベント」は
+  intermediate な status/chunk 行を指す)。
+- `apps/desktop/src/lib/useCorrelationId.ts` (新設): SPEC §9.1 のフックを
+  そのまま実装。`_cidSeq` は単一モジュール変数、`begin`/`end`/`accepts`/
+  `disposedRef` の構成。
+- `ConsultTab.tsx`: `busyRef` を完全撤廃し `cid.accepts(payload)` ガードへ。
+  `handleSubmit` は `cid.begin()` → `consult(q, {}, myCid)` → `finally` で
+  `cid.end(myCid)`。`disposed`/`stickRef`/`flushChunkQueue` (F3/F3.5 の資産)
+  は無改造で温存。
+- `ImportTab.tsx`: `importingRef` を完全撤廃。`handleLine`/`handleIcs`/
+  `handleApple`/`handleConfirmOther` の各ハンドラが `cid.begin()`/
+  `cid.end()` を持つ。`handleConfirmOther` はループ内の複数 `pkbInvoke` を
+  **1つの `myCid`** で束ねた (「取込確定」1クリック = 1論理リクエストという
+  設計判断。SPEC に明記はないが §9.3 の「1コンポーネント=1論理リクエスト」
+  の精神と整合)。`mountedRef` は W-46 と役割が重なるが、unmount後も
+  `importLog` への push を続ける F2 の設計 (W-29) を壊さないため意図的に
+  温存 (SPEC の指示通り)。
+- `InterviewTab.tsx`: **これは撤廃ではなく新設**。実装調査の結果、
+  `pkb-engine-event` ハンドラに元々 busy 系ガードが一切無く (W-28/W-34 系の
+  潜在バグ — F4a/F4bの実装時に見落とされていた)、`cid.accepts(payload)` を
+  新規追加することで初めて他タブとの混線防御が入った。`send()` の
+  `consult()` 呼び出しへ `cid.begin()`/`cid.end()` を配線。F4a/F4b の
+  config/report ロジックは無改造。
+
+**fable5 の遺言への訂正2点 (後継者が同じ誤解をしないための記録)**:
+1. 「React層のみに限定せよ」という遺言の処方は**物理的に不可能**だった。
+   相関ID (`id`) は `REQ_COUNTER` により Rust の `invoke_sync` 内部で採番
+   され (`engine.rs:150` 相当)、`pkb_invoke` コマンドは `result` のみを
+   返すため id はフロントへ一切 surface していなかった。フロントは
+   「自分がどの id を割り当てられたか」を知る手段が構造的に無く、
+   「`payload.id` と自分の in-flight id を照合する」処方は実装不能だった。
+2. 直列性は「規約 (busyフラグを置く習慣)」ではなく**構造 (プロセスロック)**
+   だった。`invoke_sync` は `self.process.lock()` をリクエスト全体の期間
+   ロックし続け、イベント転送はこのロック下の読み取りループ内からのみ
+   発生する。したがって2つの `pkb_invoke` はロックで構造的に直列化され、
+   相関IDの導入だけでは並行実行は一切解禁されない。
+
+**並行実行は本Revでは未達 (意図的なスコープ限定)**: 今回実装したのは
+「イベントを正しい宛先へ配る」ための cid 基盤のみ。「2つのリクエストを
+同時に飛ばす」ための構造 (`invoke_sync` のプロセスロック撤廃 + 単一
+リーダースレッドによる id→チャネル demux) は §9.4 に **Target Golf**
+として青写真のみ残し、本Revでは着手していない (YAGNI — 現行の直列
+エンジンは正しく動作しており、まだ要求されていない並行実行のために
+多重化を今建てるのはスコープクリープ)。cid 基盤は多重化の前提を無償で
+用意するが、多重化そのものは独立ターゲットである。
+
+**検証手段の限界の申告 (省略ではなく申告)**: `apps/desktop/package.json`
+を確認した結果、フロントに vitest 等のテストランナーは存在しない。
+そのため (b) 異cidイベントの相互非干渉 と (c) 超過リクエストの旧cidイベント
+破棄 (W-45) は、フロント側の `accepts()` を直接ユニットテストする代わりに
+**Python側のプロトコルテスト** (`tests/test_oracle.py` に3ケース追加:
+`test_cid_stamped_on_all_events_single_path` (W-48)・
+`test_cid_distinguishes_sequential_requests` (W-45 の前提となる
+バックエンド側の cid 分離)・`test_cid_absent_request_emits_null_cid`
+(cid 未指定リクエストの null 伝播)) に寄せ、`useCorrelationId.ts` の
+コメントで `accepts()`/`begin()` の不変条件を明記する形で妥協した。
+フロント `accepts()` 自体の純関数テストは持たない。
+
+**検証コマンド (全て ALL PASS)**: `cargo check` / `python -m py_compile
+src/python/engine_stdio.py` / `npx tsc --noEmit` / `rg
+"busyRef|importingRef" apps/desktop/src` (ヒット0。コメント文言も含めて
+リテラル一致を排除済み) / `tests/test_oracle.py` (新規3ケース含む) /
+`tests/test_integration.py` (F4a/F4b/F4c の既存23ケース無退行) / Python
+バックエンド15スイート全て ALL PASS / `ui_smoke.py` ALL PASS /
+`npm run tauri:dev` 実起動で `[PKB] エンジン ready (stdio IPC,
+完全オフライン)` をログ確認 (起動時に旧セッションの残留
+`pkb-desktop.exe` がポート1420とビルドディレクトリを占有していたため
+停止してから再起動 — 実機起動時の既知の運用上の注意点として記録)。
+
+**実機での対話確認は指揮官の実施を要する**: 複数タブ (CONSULT/IMPORT/
+INTERVIEW) を同時に操作した際のイベント混線ゼロの体感確認は、自動テストの
+範囲外 (プロセスロックにより実際には直列実行されるため、真の同時発火では
+なく「タブAの処理中にタブBへ切り替えて別処理を投げる」形の手動シナリオに
+なる)。`tauri:dev` は起動済みのまま残してあるので、指揮官はそのウィンドウで
+直接検証できる。
+
+**仕様との差異 (申告)**: なし。SPEC Rev.10 §9〜§9.4 を実装レベルの差異なく
+実装した。
 
 ---
 

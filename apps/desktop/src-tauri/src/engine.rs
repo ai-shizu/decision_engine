@@ -49,7 +49,7 @@ impl EngineManager {
 
     pub fn shutdown(self: &Arc<Self>) {
         if self.is_ready() {
-            let _ = self.invoke_sync("shutdown", json!({}), false);
+            let _ = self.invoke_sync("shutdown", json!({}), None, false);
         }
         let mut guard = self.process.lock().unwrap();
         if let Some(mut proc) = guard.take() {
@@ -130,25 +130,32 @@ impl EngineManager {
         self: &Arc<Self>,
         cmd: &str,
         params: Value,
+        cid: Option<u64>,
     ) -> Result<Value, String> {
-        match self.invoke_sync(cmd, params.clone(), true) {
+        match self.invoke_sync(cmd, params.clone(), cid, true) {
             Ok(v) => Ok(v),
             Err(err) if Self::is_pipe_error(&err) => {
                 Self::log(&format!("IPC 失敗、エンジン再起動: {err}"));
                 self.restart().await?;
-                self.invoke_sync(cmd, params, false)
+                self.invoke_sync(cmd, params, cid, false)
             }
             Err(err) => Err(err),
         }
     }
 
-    fn invoke_sync(self: &Arc<Self>, cmd: &str, params: Value, _allow_restart: bool) -> Result<Value, String> {
+    fn invoke_sync(
+        self: &Arc<Self>,
+        cmd: &str,
+        params: Value,
+        cid: Option<u64>,
+        _allow_restart: bool,
+    ) -> Result<Value, String> {
         if !self.is_ready() {
             return Err("PKB エンジンが ready ではありません".to_string());
         }
 
         let id = REQ_COUNTER.fetch_add(1, Ordering::Relaxed);
-        let request = json!({ "id": id, "cmd": cmd, "params": params });
+        let request = json!({ "id": id, "cid": cid, "cmd": cmd, "params": params });
 
         let mut guard = self.process.lock().unwrap();
         let proc = guard

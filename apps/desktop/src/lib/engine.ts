@@ -9,11 +9,17 @@ import type {
   SourceStat,
 } from "./types";
 
+/**
+ * SPEC_FOXTROT_UI.md §9 (Rev.10): cid はリクエストエンベロープの独立引数
+ * として渡す (params には混ぜない = F-13 準拠)。省略時は Rust 側で
+ * null (cid 不要なコマンド、例: health) として扱われる。
+ */
 export async function pkbInvoke<T = unknown>(
   cmd: string,
   params?: Record<string, unknown>,
+  cid?: number,
 ): Promise<T> {
-  return invoke<T>("pkb_invoke", { cmd, params: params ?? null });
+  return invoke<T>("pkb_invoke", { cmd, params: params ?? null, cid: cid ?? null });
 }
 
 export async function engineReady(): Promise<boolean> {
@@ -59,50 +65,60 @@ export interface ConsultOptions {
 export async function consult(
   query: string,
   opts: ConsultOptions = {},
+  cid?: number,
 ): Promise<{ query: string; mode?: string; answer: string; report?: InterviewReport }> {
-  return pkbInvoke("consult", { query, ...opts });
+  return pkbInvoke("consult", { query, ...opts }, cid);
 }
 
 export async function syncIcsContent(
   content: string,
   mode: "append" | "overwrite",
+  cid?: number,
 ): Promise<Record<string, unknown>> {
-  return pkbInvoke("calendar.sync", { source: "ics", mode, ics_content: content });
+  return pkbInvoke("calendar.sync", { source: "ics", mode, ics_content: content }, cid);
 }
 
 export async function syncIcsFiles(
   files: File[],
   mode: "append" | "overwrite",
+  cid?: number,
 ): Promise<{ message?: string }> {
   if (files.length === 0) return { message: "ファイルが選択されていません" };
   if (files.length === 1) {
     const content = await readTextLenient(files[0]);
-    return syncIcsContent(content, mode);
+    return syncIcsContent(content, mode, cid);
   }
   const ics_files = await Promise.all(
     files.map(async (file) => ({ content: await readTextLenient(file), filename: file.name })),
   );
-  return pkbInvoke("calendar.sync", { source: "ics", mode, ics_files });
+  return pkbInvoke("calendar.sync", { source: "ics", mode, ics_files }, cid);
 }
 
 export async function syncAppleCalendar(
   mode: "append" | "overwrite",
+  cid?: number,
 ): Promise<Record<string, unknown>> {
-  return pkbInvoke("calendar.sync", { source: "apple", mode });
+  return pkbInvoke("calendar.sync", { source: "apple", mode }, cid);
 }
 
-export async function importLineFile(file: File): Promise<{ message?: string; ok?: boolean }> {
+export async function importLineFile(
+  file: File,
+  cid?: number,
+): Promise<{ message?: string; ok?: boolean }> {
   const content = await readTextLenient(file);
-  return pkbInvoke("import.line", { content, filename: file.name });
+  return pkbInvoke("import.line", { content, filename: file.name }, cid);
 }
 
-export async function importLineFiles(files: File[]): Promise<{ message?: string; ok?: boolean }> {
+export async function importLineFiles(
+  files: File[],
+  cid?: number,
+): Promise<{ message?: string; ok?: boolean }> {
   if (files.length === 0) return { message: "ファイルが選択されていません" };
-  if (files.length === 1) return importLineFile(files[0]);
+  if (files.length === 1) return importLineFile(files[0], cid);
   const batch = await Promise.all(
     files.map(async (file) => ({ content: await readTextLenient(file), filename: file.name })),
   );
-  return pkbInvoke("import.line", { files: batch });
+  return pkbInvoke("import.line", { files: batch }, cid);
 }
 
 /** F2-EXT (SPEC_FOXTROT_UI.md §2.2.2): 読み取り専用の分類。書き込みなし。 */
@@ -120,6 +136,7 @@ export async function importDocument(
   content: string,
   filename: string,
   dest: "es" | "knowledge",
+  cid?: number,
 ): Promise<{
   imported: boolean;
   skipped: boolean;
@@ -128,7 +145,7 @@ export async function importDocument(
   message?: string;
   index_rebuilt?: boolean;
 }> {
-  return pkbInvoke("import.document", { content, filename, dest });
+  return pkbInvoke("import.document", { content, filename, dest }, cid);
 }
 
 export async function loadSettings(): Promise<SettingsData> {

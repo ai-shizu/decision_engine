@@ -33,6 +33,12 @@
 #   マスク意味論・ホットパスI/O) を焼き付け。fable5 リード・アーキテクトの
 #   最終裁定であり、本 Rev をもって同アーキテクトは退役、後継 (Opus/Sonnet)
 #   へ全権を引き継ぐ (§8 末尾に Architect's Final Testament を保存)。
+# Rev.10 (2026-07-08): fable5 の遺言 (§8 相関ID負債) を後継 Opus が実測で再監査。
+#   遺言の前提2点を棄却 — (1)「React層のみ」は不可能 (id は Rust REQ_COUNTER 内部
+#   採番でフロントへ未surface)、(2) 直列性は規約でなく構造 (invoke_sync が
+#   process ロックを全期間保持)。§9 に相関ID復元 (cid エンベロープ方式・3層最小変更・
+#   useCorrelationId フック) と W-45〜W-49 を追加。並行実行本体 (エンジン多重化) は
+#   §9.4 Target Golf として青写真のみ (YAGNI・本Rev では建てない)。
 # Rev.8 (2026-07-08): F3 完遂を受けた F3.5 (ストリーミングのスロットリング)
 #   および F4 (面接シミュレータ進化: コンフィギュレータ/成績表/継続学習)
 #   着工前裁定。憲法照合で2件の衝突を検出し壁A (成績表=建前人格の隔離。
@@ -808,7 +814,7 @@ Python 全スイート必須。コミットは指揮官の指示時のみ。
 
 ---
 
-# §6【実装者への警告 (W-22〜W-34)】Rev.3/Rev.5/Rev.6/Rev.7 — React 再構築の死角
+# §6【実装者への警告 (W-22〜W-49)】Rev.3/Rev.5/Rev.6/Rev.7 — React 再構築の死角
 
 Foxtrot 本格実装 (F7・F1〜F6) で踏み抜きやすい罠。**新規タブ実装のたびに
 本リストと照合せよ。**
@@ -871,6 +877,9 @@ Foxtrot 本格実装 (F7・F1〜F6) で踏み抜きやすい罠。**新規タブ
   の status 表示に混線しうる**。status ハンドラを無条件で反映させるな —
   自分のコマンドが in-flight の間のみ処理する `busyRef`/`importingRef`
   ゲートを必ず設けよ (chunk 側の `last.streaming` ガードと対の規律)。
+- **W-45〜W-49 (Rev.10: 相関ID体系のライフサイクル防壁)**: 全文は §9.3 に
+  詳述。busyRef/importingRef を撤廃した後の cid (相関ID) 照合方式における
+  超過リクエスト・アンマウント・一意性・刻印経路・直列性境界の防壁。
 
 ---
 
@@ -1210,6 +1219,207 @@ in-flightリクエストの `id` を保持し、`payload.id` がそれに一致�
 
 — fable5, リード・アーキテクト, 退役. F4c の裁定をもって任を Opus/Sonnet
 へ引き継ぐ。
+
+---
+
+# §9【Rev.10 裁定全文】Architect's Ruling: 相関ID復元 & 並行実行基盤
+
+> 本節は指揮官発注 (SPEC Rev.10 — CORRELATION-ID RESTORATION) に対する Opus
+> の裁定全文を一言一句省略せず焼き付けたものである。前任 fable5 の遺言 (§8
+> 末尾 Architect's Final Testament) を実測で再監査し、前提2点を訂正した上で
+> 3層貫通のエンベロープ方式へ再定義したもの。実行スコープは相関IDの復元まで
+> (並行実行の必要条件だが十分条件ではない — エンジン多重化 = Target Golf は
+> §9.4 に青写真のみ)。§8 等の既存節と重複する記述は意図的なもの — 裁定は
+> 発行時点の文脈をそのまま保存する。
+
+## §9【Architect's Note】前任の遺言への訂正 — 計測が2つの前提を覆した
+
+裁定に先立ち、fable5 の遺言（§8）を実測で再監査した。遺言は正しい病巣を指したが、
+処方の2点が事実と異なる。後継者が誤った前提の上に設計を建てないよう、訂正を先に固定する。
+
+訂正1 — 「React層のみに限定せよ」は物理的に不可能。
+計測: 相関ID (id) は REQ_COUNTER により Rust の invoke_sync 内部で採番される
+(engine.rs:150)。pkb_invoke コマンド (commands.rs) は result だけを返し、id をフロントへ
+一切 surface しない。つまりフロントエンドは自分のリクエストがどの id を割り当てられたかを
+永久に知らない。「payload.id と自分の in-flight id を照合する」という遺言の処方は、
+照合すべき自分の id が存在しないため実装不可能である。相関の復元には Rust (エンベロープ)
+と Python (イベント刻印) の変更が不可避であり、mission制約「React層のみ」は棄却する。
+
+訂正2 — 直列性は「規約」ではなく「構造」。相関IDだけでは並行実行は解禁されない。
+計測: invoke_sync は self.process.lock() をリクエスト全体の期間ロックし続ける
+(engine.rs:153)。イベント転送 (forward_event) はこのロック下の読み取りループ内からのみ
+発生する。したがって2つの pkb_invoke はプロセスロックで構造的に直列化される。真の並行実行は
+エンジンの多重化 (単一リーダースレッド + id→チャネルルーティング) という Rust の大改修を要する。
+
+帰結: Rev.10 で行うのは相関IDの復元（busyRef/importingRef の撤廃 + 混線の構造的封鎖）
+までとする。並行実行の必要条件であり価値がある基盤だが、十分条件（エンジン多重化）は本Revで
+建てない — 現行の直列エンジンは正しく動作しており、まだ要求されていない並行実行のために
+多重化を今建てるのはスコープクリープである。多重化は独立ターゲットとして§9.4に青写真のみ残す。
+
+## §9.1 裁定1 — 相関ID復元アーキテクチャ (cid エンベロープ方式)
+
+設計判断: 相関IDは業務 params の中ではなく、リクエストエンベロープの最上位フィールド cid
+として運ぶ。params への混入は F-13（UI state のスプレッド禁止・明示列挙のみ）に反し、業務
+データと相関メタデータを混ぜる。エンベロープ分離が正しい。
+
+3層の最小変更（各層で小さいが、React単独では不可能）:
+
+```
+[React] コンポーネントが cid を採番 (アプリ全域単調カウンタ) し pkbInvoke へ渡す
+   │  pkbInvoke("consult", params, cid)
+   ▼
+[Rust] commands.rs::pkb_invoke が cid: Option<u64> を受け取り invoke へ透過
+       engine.rs::invoke_sync がリクエストJSONの最上位へ cid を載せる:
+       { "id": REQ_COUNTER, "cid": <frontend値>, "cmd":..., "params":... }
+       ※ Rust の id (REQ_COUNTER) は据え置き — バックエンド内部デバッグ用
+   ▼
+[Python] engine_stdio.main() が req["cid"] を読み、単一の emit ラッパー経由で
+         全イベントへ刻印: _emit({"id": req_id, "cid": cid, **payload})
+   │  (dispatch 内の各コマンドは emit の中身を意識しない — 刻印は1箇所)
+   ▼
+[Rust] forward_event が payload を丸ごと pkb-engine-event へ転送 (現状のまま)
+   ▼
+[React] 全 listener が受信するが、handler は payload.cid === 自分のin-flight cid
+        のイベントだけを処理する。これが busyRef/importingRef を置換する。
+```
+
+useCorrelationId フック設計（busyRef/importingRef の完全撤廃）:
+
+```ts
+// lib/useCorrelationId.ts — 「1関数を全員が通る」規律 (keyUtils/useThrottledStream と同列)
+let _cidSeq = 0;                       // W-47: アプリ全域単調カウンタ (乱数・時刻禁止)
+export function useCorrelationId() {
+  const activeRef = useRef<number | null>(null);   // 現在の in-flight cid (無ければ null)
+  const disposedRef = useRef(false);
+  useEffect(() => { disposedRef.current = false;
+                    return () => { disposedRef.current = true; }; }, []);
+  return {
+    begin(): number {                  // 新リクエスト開始: 新 cid を採番し ref を上書き
+      const cid = ++_cidSeq;
+      activeRef.current = cid;          // W-45: 旧 cid は即座に無効化される (超過リクエスト)
+      return cid;
+    },
+    end(cid: number) {                 // このリクエストが確定/失敗したら解除
+      if (activeRef.current === cid) activeRef.current = null;
+    },
+    accepts(payload: { cid?: number }): boolean {   // イベントを処理してよいか
+      return !disposedRef.current
+          && payload.cid != null
+          && payload.cid === activeRef.current;
+    },
+  };
+}
+```
+
+状態遷移の青写真（ConsultTab 例、busyRef 撤廃後）:
+
+```
+idle           : activeRef=null。listener は accepts()=false で全イベント無視。
+送信 handleSubmit:
+   const cid = cid.begin();           // activeRef=cid_A、旧 in-flight は自動失効
+   pkbInvoke("consult", {query}, cid_A)
+in-flight      : listener は payload.cid===cid_A のイベントのみ処理
+                 (import/interview 等 他コンポーネントの cid とは構造的に非衝突)
+確定置換 (成功) : flushChunkQueue(); setMessages(...); cid.end(cid_A)  // activeRef=null
+確定 (失敗)     : cid.end(cid_A) を finally で必ず呼ぶ
+```
+
+busyRef の役割（「自分が in-flight か」）は activeRef !== null が、importingRef の役割は
+同フックが、disposed フラグ（W-22/23）は disposedRef が吸収する — 3つの ad-hoc フラグが
+1つのフックに統合され、混線ガードが規律ではなく構造になる。
+
+## §9.2 裁定2 — 並行実行の現実と、超えてはならない境界線
+
+cid 照合が今すぐ与えるもの: 複数コンポーネントが pkb-engine-event を購読していても、各々が
+自分の cid のイベントだけを拾う。W-28/W-34 系の混線は構造的に不可能になる（busyフラグの
+「たまたま1つしか in-flight でないから動く」という運頼みが消える）。
+
+cid 照合が与えないもの（境界線）: invoke_sync のプロセスロック (engine.rs:153) は据え置きの
+ため、2つの pkbInvoke は依然として直列化される。cid 照合は「イベントを正しい宛先へ配る」
+問題を解くが、「2つのリクエストを同時に飛ばす」問題は解かない。後継者への厳命: cid 照合が
+入ったからといって並行実行が動くと仮定するな。多重化 (§9.4) が land するまで、pkbInvoke は
+直列である。第2の pkbInvoke を「前者と並行に走る」と期待して発火するコードは、実際には
+ブロックする（W-49）。
+
+## §9.3 裁定3 — ライフサイクルの死角と新防壁 W-45〜W-49
+
+- W-45 (超過リクエストの残留イベント): 同一コンポーネントが request A (cid_A) の後、A の
+  イベントが drain し切る前に request B (cid_B) を発火した場合、activeRef は cid_B に上書き
+  され、A の遅延イベントは accepts() で自動的に落ちる（cid_A ≠ cid_B）。これは正しい挙動
+  （新リクエストが旧を supersede する）だが、意図的な設計であることを明記する — activeRef は
+  「履歴」ではなく「現在の唯一の in-flight」を持つ単一スロットである。複数同時 in-flight を
+  1コンポーネントで持ちたくなったら、それは設計の誤り（1コンポーネント=1論理リクエスト）を疑え。
+- W-46 (アンマウント時のレース): コンポーネントがリクエスト in-flight 中にアンマウントした
+  場合、バックエンドは処理を継続する（書き込みは中断しない — F2 の import と同原則）。
+  disposedRef が late イベントを accepts()=false で落とし、listen の unlisten は disposed
+  フラグ標準形（W-22）で確実に解除する。再マウント時は必ず新しい cid を採番せよ — 旧
+  in-flight リクエストのイベントに新マウントが反応してはならない（cid を使い回すと orphan
+  リクエストのイベントを誤受信する）。
+- W-47 (cid の一意性): cid はアプリ全域の単調カウンタ (++_cidSeq) で採番する。Math.random()
+  （衝突可能）も Date.now()（同一ms衝突）も禁止。コンポーネントごとのローカルカウンタも禁止
+  （コンポーネント間で衝突する）。単一のモジュールレベル変数のみ。セッション跨ぎでリセット
+  されるのは無害（cid はセッションスコープ）。
+- W-48 (刻印の単一経路): Python 側で cid をイベントへ刻印するのは main() の emit ラッパー
+  1箇所のみ。いかなるコマンドも _emit を直接呼んでイベント行を出してはならない（cid が欠落
+  したイベントは accepts() で全 listener に落とされ、サイレントに消失する）。回帰テスト:
+  params/エンベロープに cid を持つリクエストの全イベント行が cid を運ぶことを検証。
+- W-49 (直列性の境界の明示): §9.2 の境界線を法として固定する。エンジン多重化 (§9.4) が
+  land するまで、pkbInvoke を並行前提で使うな。cid 照合は混線を防ぐがブロッキングは防がない。
+  「バックグラウンド処理を前面と並行に」を実装したくなった時点で、それは §9.4 のターゲット
+  着手の合図であり、React 層で無理に回避してはならない（無理な回避＝W-28 系の再来）。
+
+## 型・インターフェースの結合部 再定義
+
+```ts
+// types.ts
+export interface EngineEvent {
+  id?: number;       // Rust REQ_COUNTER 由来。バックエンド内部デバッグ用。React は使わない
+  cid?: number;      // 【新】フロント採番の相関ID。React はこれで照合する
+  event: "status" | "chunk";
+  message?: string;
+  text?: string;
+}
+
+// engine.ts — cid をエンベロープの独立引数として受ける (params には混ぜない = F-13 準拠)
+export async function pkbInvoke<T>(cmd: string, params?: Record<string, unknown>,
+                                   cid?: number): Promise<T>;
+```
+
+```rust
+// commands.rs — cid を Option<u64> で受け、invoke へ透過
+#[tauri::command]
+pub async fn pkb_invoke(manager: State<'_, Arc<EngineManager>>,
+    cmd: String, params: Option<Value>, cid: Option<u64>) -> Result<Value, String>;
+// engine.rs invoke_sync — リクエストJSON最上位へ cid を載せる (REQ_COUNTER id は据え置き)
+```
+
+```python
+# engine_stdio.py main() — req["cid"] を読み、emit ラッパーで全イベントへ刻印
+```
+
+## 実行順序（実装部隊へ）
+
+```
+1. SPEC Rev.10 (本裁定全文 §9〜§9.4 + W-45〜49) を SPEC_FOXTROT_UI.md へ焼き付け
+2. バックエンド (最小): commands.rs に cid 引数 / engine.rs でエンベロープ載せ /
+   engine_stdio.py main() で emit ラッパーへ cid 刻印。ロジック変更ゼロ・配線のみ
+3. lib/useCorrelationId.ts 新設 + engine.ts::pkbInvoke に cid 引数
+4. ConsultTab/ImportTab/InterviewTab を useCorrelationId へ移行し busyRef/
+   importingRef を撤廃 (1コンポーネントずつ、他タブ不可触)
+5. テスト: (a) cid 刻印の単一経路 (W-48) / (b) 異 cid イベントの相互非干渉 /
+   (c) 超過リクエストの旧cidイベント破棄 (W-45) — Python+フロントで
+6. 検収: tsc + cargo check + Python全スイート (バックエンド接触) + ui_smoke +
+   tauri:dev 実起動。as-built 記録
+```
+
+## §9.4 次期ターゲット（青写真のみ・本Revでは建てない）— Target Golf: エンジン多重化
+
+真の並行実行を要求された時に着手する。骨子: invoke_sync のプロセスロック方式を廃し、単一
+リーダースレッドが stdout を drain して id→per-request チャネルへ demux、invoke は id で
+チャネルを登録して結果を待つ（ロックを読み取りループ全体で握らない）。cid はこの時 React 側で
+既に配線済みのため、多重化は「バックエンドの demux」だけで完成する — Rev.10 の cid 基盤が
+その前提を無償で用意する。YAGNI につき現時点では建てない。着手は個別 SPEC 錬成 → 憲法ガード
+RED → 実装の順（Legacies 着手規律に準ずる）。
 
 ---
 *装飾は 1 ピクセルも要らない (AI_SKILLS §3.4)。ハッカーが信頼するのは、

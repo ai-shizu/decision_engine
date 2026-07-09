@@ -12,6 +12,7 @@ import {
   syncIcsFiles,
 } from "../lib/engine";
 import type { ClassifyResult, EngineEvent, SourceStat } from "../lib/types";
+import { useCorrelationId } from "../lib/useCorrelationId";
 
 const LOG_MAX = 50;
 
@@ -73,11 +74,14 @@ export function ImportTab() {
   const lineRef = useRef<HTMLInputElement>(null);
   const icsRef = useRef<HTMLInputElement>(null);
   const otherRef = useRef<HTMLInputElement>(null);
-  // W-29: unmount 後の setState を防ぐガード。
+  // W-29: unmount 後の setState を防ぐガード (import は unmount 後も
+  // バックエンドで継続するため、importLog への push は残す — W-46)。
   const mountedRef = useRef(true);
-  // W-28: pkb-engine-event はコマンド非依存のグローバルバス。自分の import
-  // が in-flight の間だけイベントを取込ログへ反映する。
-  const importingRef = useRef(false);
+  // SPEC_FOXTROT_UI.md §9 (Rev.10): 旧来の真偽値フラグ (W-28 裁定時導入) を
+  // 撤廃し、相関ID (cid) 照合へ移行した。pkb-engine-event はコマンド非依存
+  // のグローバルバスだが、自分の import が in-flight の間だけイベントを
+  // 取込ログへ反映するのは cid.accepts() が構造的に保証する。
+  const cid = useCorrelationId();
 
   useEffect(() => {
     mountedRef.current = true;
@@ -102,10 +106,11 @@ export function ImportTab() {
     void refreshStats();
   }, [refreshStats]);
 
-  // W-22: 解除関数を確実に return する。W-28: in-flight 中のみ処理する。
+  // W-22: 解除関数を確実に return する。W-28/W-45〜W-49: 自分の in-flight
+  // cid のイベントのみ処理する。
   useEffect(() => {
     const unlisten = listen<EngineEvent>("pkb-engine-event", ({ payload }) => {
-      if (!importingRef.current) return;
+      if (!cid.accepts(payload)) return;
       if (payload.event === "status" && payload.message) {
         pushImportLog(payload.message);
         if (mountedRef.current) setLog([...importLog]);
@@ -124,16 +129,16 @@ export function ImportTab() {
     const list = files ? Array.from(files) : [];
     if (!list.length) return;
     setBusy(true);
-    importingRef.current = true;
+    const myCid = cid.begin();
     try {
-      const res = await importLineFiles(list);
+      const res = await importLineFiles(list, myCid);
       const msg = res.message ?? `${list.length} 件の LINE 履歴を取り込みました`;
       pushImportLog(res.ok === false ? `取り込み失敗: ${msg}` : msg);
     } catch (err) {
       pushImportLog(String(err));
     } finally {
-      importingRef.current = false;
-      // W-29: 中断はしない (取込は継続済み) — フロント側の反映のみガードする。
+      cid.end(myCid);
+      // W-29/W-46: 中断はしない (取込は継続済み) — フロント側の反映のみガードする。
       if (mountedRef.current) {
         setBusy(false);
         setLog([...importLog]);
@@ -147,9 +152,9 @@ export function ImportTab() {
     const list = files ? Array.from(files) : [];
     if (!list.length) return;
     setBusy(true);
-    importingRef.current = true;
+    const myCid = cid.begin();
     try {
-      const res = await syncIcsFiles(list, mode);
+      const res = await syncIcsFiles(list, mode, myCid);
       pushImportLog(
         typeof res.message === "string"
           ? res.message
@@ -158,7 +163,7 @@ export function ImportTab() {
     } catch (err) {
       pushImportLog(String(err));
     } finally {
-      importingRef.current = false;
+      cid.end(myCid);
       if (mountedRef.current) {
         setBusy(false);
         setLog([...importLog]);
@@ -170,14 +175,14 @@ export function ImportTab() {
 
   async function handleApple() {
     setBusy(true);
-    importingRef.current = true;
+    const myCid = cid.begin();
     try {
-      const res = await syncAppleCalendar(mode);
+      const res = await syncAppleCalendar(mode, myCid);
       pushImportLog(typeof res.message === "string" ? res.message : "Appleカレンダーを同期しました");
     } catch (err) {
       pushImportLog(String(err));
     } finally {
-      importingRef.current = false;
+      cid.end(myCid);
       if (mountedRef.current) setBusy(false);
       void refreshStats();
     }
@@ -209,7 +214,9 @@ export function ImportTab() {
     const items = pending;
     if (!items.length) return;
     setBusy(true);
-    importingRef.current = true;
+    // バッチ全体を1論理リクエストとして扱う (§9.3: 1コンポーネント=1論理
+    // リクエスト)。ループ内の各 pkbInvoke は同一 myCid を運ぶ。
+    const myCid = cid.begin();
     try {
       for (const item of items) {
         const { file, result, dest } = item;
@@ -220,15 +227,16 @@ export function ImportTab() {
             continue;
           }
           if (result.type === "line") {
-            const res = await pkbInvoke<{ message?: string; ok?: boolean }>("import.line", {
-              content,
-              filename: file.name,
-            });
+            const res = await pkbInvoke<{ message?: string; ok?: boolean }>(
+              "import.line",
+              { content, filename: file.name },
+              myCid,
+            );
             pushImportLog(res.message ?? `${file.name} を LINE として取り込みました`);
             continue;
           }
           if (result.type === "ics") {
-            const res = await syncIcsContent(content, mode);
+            const res = await syncIcsContent(content, mode, myCid);
             pushImportLog(
               typeof res.message === "string"
                 ? res.message
@@ -240,14 +248,14 @@ export function ImportTab() {
             pushImportLog(`${file.name}: スキップしました`);
             continue;
           }
-          const res = await importDocument(content, file.name, dest);
+          const res = await importDocument(content, file.name, dest, myCid);
           pushImportLog(res.message ?? `${file.name} を ${dest} へ取り込みました`);
         } catch (err) {
           pushImportLog(`${file.name}: ${String(err)}`);
         }
       }
     } finally {
-      importingRef.current = false;
+      cid.end(myCid);
       if (mountedRef.current) {
         setBusy(false);
         setLog([...importLog]);

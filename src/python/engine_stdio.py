@@ -183,9 +183,13 @@ def main() -> None:
         try:
             req = json.loads(line)
             req_id = req.get("id")
+            cid = req.get("cid")
 
-            def emit_event(payload: dict[str, Any], _id=req_id) -> None:
-                _emit({"id": _id, **payload})
+            # W-48 (SPEC_FOXTROT_UI.md §9.3): cid の刻印はこの emit_event
+            # ラッパー1箇所のみ。dispatch 内の各コマンドはこの emit の中身を
+            # 意識しない (status/on_token ラムダが emit(...) を呼ぶだけ)。
+            def emit_event(payload: dict[str, Any], _id=req_id, _cid=cid) -> None:
+                _emit({"id": _id, "cid": _cid, **payload})
 
             result = dispatch(req["cmd"], req.get("params") or {}, emit=emit_event)
             out: dict[str, Any] = {"id": req_id, "ok": True, "result": result}

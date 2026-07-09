@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { consult } from "../lib/engine";
 import type { ChatMessage, EngineEvent } from "../lib/types";
+import { useCorrelationId } from "../lib/useCorrelationId";
 import { useThrottledStream } from "../lib/useThrottledStream";
 
 export function ConsultTab() {
@@ -11,16 +12,12 @@ export function ConsultTab() {
   const [status, setStatus] = useState("");
   const [confirmingClear, setConfirmingClear] = useState(false);
   const logRef = useRef<HTMLDivElement>(null);
-  // F3 (SPEC_FOXTROT_UI.md §2.3.1 裁定1): pkb-engine-event はコマンド非依存の
-  // グローバルバス。自分の consult が in-flight の間だけ status を反映する
-  // (W-34 の是正 — import の status 混線を防ぐ)。
-  const busyRef = useRef(false);
+  // SPEC_FOXTROT_UI.md §9 (Rev.10): 旧来の真偽値フラグ (F3 裁定1) を撤廃し、
+  // 相関ID (cid) 照合へ移行した。自分の consult が in-flight の間だけ
+  // status/chunk を反映する (W-34 の是正) のは cid.accepts() が構造的に保証する。
+  const cid = useCorrelationId();
   // 裁定2: 最下端追従の可否は ref で持つ (state にすると再レンダリングの嵐)。
   const stickRef = useRef(true);
-
-  useEffect(() => {
-    busyRef.current = busy;
-  }, [busy]);
 
   function scrollToBottom(smooth = false) {
     requestAnimationFrame(() => {
@@ -59,8 +56,9 @@ export function ConsultTab() {
     let unlistenFn: UnlistenFn | null = null;
 
     const handler = ({ payload }: { payload: EngineEvent }) => {
+      // W-34/W-45〜W-49: 自分の in-flight cid のイベントだけを処理する。
+      if (!cid.accepts(payload)) return;
       if (payload.event === "status" && payload.message) {
-        if (!busyRef.current) return; // W-34: 他コマンドの status を無視する
         setStatus(payload.message);
         return;
       }
@@ -95,12 +93,12 @@ export function ConsultTab() {
       { role: "assistant", text: "", streaming: true },
     ]);
     setBusy(true);
-    busyRef.current = true;
+    const myCid = cid.begin();
     setStatus("考え中…");
     stickRef.current = true;
     scrollToBottom(true);
     try {
-      const res = await consult(q);
+      const res = await consult(q, {}, myCid);
       // W-35: 確定置換は必ず「キュー破棄 → 置換」の順で原子的に行う。
       // 順序が逆だと、破棄前に残っていたキューが置換後のメッセージへ
       // 追記され続けてしまう。
@@ -129,7 +127,7 @@ export function ConsultTab() {
       setStatus(String(err));
     } finally {
       setBusy(false);
-      busyRef.current = false;
+      cid.end(myCid);
       if (stickRef.current) scrollToBottom(true);
     }
   }

@@ -10,9 +10,10 @@ pub async fn pkb_invoke(
     manager: State<'_, Arc<EngineManager>>,
     cmd: String,
     params: Option<Value>,
+    cid: Option<u64>,
 ) -> Result<Value, String> {
     manager
-        .invoke(&cmd, params.unwrap_or(Value::Object(Default::default())))
+        .invoke(&cmd, params.unwrap_or(Value::Object(Default::default())), cid)
         .await
 }
 

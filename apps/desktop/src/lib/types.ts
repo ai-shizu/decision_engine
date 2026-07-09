@@ -35,9 +35,16 @@ export interface ChatMessage {
   streaming?: boolean;
 }
 
-/** Python エンジンからの中間イベント (Tauri "pkb-engine-event" 経由) */
+/**
+ * Python エンジンからの中間イベント (Tauri "pkb-engine-event" 経由)。
+ * SPEC_FOXTROT_UI.md §9 (Rev.10): id は Rust REQ_COUNTER 由来のバックエンド
+ * 内部デバッグ用フィールド (React は使わない)。cid はフロント採番の相関ID
+ * であり、React はこれで「自分のリクエストのイベントか」を照合する
+ * (useCorrelationId 経由。各タブの旧来の真偽値フラグ群の後継)。
+ */
 export interface EngineEvent {
   id?: number;
+  cid?: number;
   event: "status" | "chunk";
   message?: string;
   text?: string;

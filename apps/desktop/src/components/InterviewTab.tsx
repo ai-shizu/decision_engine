@@ -9,6 +9,7 @@ import type {
   InterviewMode,
   InterviewReport,
 } from "../lib/types";
+import { useCorrelationId } from "../lib/useCorrelationId";
 
 const MODES: { id: InterviewMode; label: string; hint: string }[] = [
   { id: "interview_sim", label: "ケース/ES面接", hint: "ES があれば敵対的 ES 面接、無ければケース面接" },
@@ -120,6 +121,11 @@ export function InterviewTab() {
   const logRef = useRef<HTMLDivElement>(null);
   // AI メッセージ表示完了時刻 — 次のユーザー送信までの経過が response_time_sec
   const aiShownAtRef = useRef<number | null>(null);
+  // SPEC_FOXTROT_UI.md §9 (Rev.10): pkb-engine-event はコマンド非依存の
+  // グローバルバス (W-28)。以前は busy 系ガードが無く、他タブの status/
+  // chunk が混線し得た。相関ID (cid) 照合で自分の in-flight リクエストの
+  // イベントのみ処理する (F4a/F4b の config/report ロジックには無変更)。
+  const cid = useCorrelationId();
 
   function scrollToBottom() {
     requestAnimationFrame(() => {
@@ -129,6 +135,7 @@ export function InterviewTab() {
 
   useEffect(() => {
     const unlisten = listen<EngineEvent>("pkb-engine-event", ({ payload }) => {
+      if (!cid.accepts(payload)) return;
       if (payload.event === "status" && payload.message) {
         setStatus(payload.message);
         return;
@@ -180,13 +187,18 @@ export function InterviewTab() {
       { role, speaker: role === "feedback" ? "講評" : undefined, text: "", streaming: true },
     ]);
     scrollToBottom();
+    const myCid = cid.begin();
     try {
-      const res = await consult(query, {
-        mode,
-        ...(opts.withPersonas ? { personas } : {}),
-        ...(opts.withConfig ? { config } : {}),
-        ...(opts.responseTime !== undefined ? { response_time_sec: opts.responseTime } : {}),
-      });
+      const res = await consult(
+        query,
+        {
+          mode,
+          ...(opts.withPersonas ? { personas } : {}),
+          ...(opts.withConfig ? { config } : {}),
+          ...(opts.responseTime !== undefined ? { response_time_sec: opts.responseTime } : {}),
+        },
+        myCid,
+      );
       // F4b (W-37): バックエンドが検証済みの構造体をそのまま受け取る。
       // UI 側で JSON.parse(LLM出力) は絶対に書かない。
       if (res.report) setReport(res.report);
@@ -218,6 +230,7 @@ export function InterviewTab() {
       return false;
     } finally {
       setBusy(false);
+      cid.end(myCid);
       scrollToBottom();
     }
   }
