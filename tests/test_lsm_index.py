@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import struct
 import sys
 import tempfile
@@ -27,8 +28,12 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src" / "python"))
 
+# SPEC_FOXTROT_UI.md §10.1 (F-15): pytest 経由では tests/conftest.py がテスト
+# 収集より前に PKB_PROJECT_ROOT を Sandbox へ設定済み。setdefault により
+# それを尊重しつつ、本ファイルを単独実行 (`python tests/test_lsm_index.py`)
+# した場合の後方互換 (自前の一時ルート) も両立する (W-50: 上書きしない)。
 _TMP = tempfile.mkdtemp(prefix="pkb_lsm_")
-os.environ["PKB_PROJECT_ROOT"] = _TMP
+os.environ.setdefault("PKB_PROJECT_ROOT", _TMP)
 os.environ.setdefault("HF_HUB_OFFLINE", "1")
 os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
 
@@ -68,7 +73,14 @@ class StubDaemon:
 
 
 def _reset_project(diary_text: str, line_text: str = "") -> None:
-    """diary.md/line_history.txt を上書きし、processed 配下の LSM 成果物を掃除する。"""
+    """diary.md/line_history.txt を上書きし、processed 配下の LSM 成果物を掃除する。
+
+    F-15 (Sandbox): data/raw は _isolate_data の対象外 (テスト間で共有される
+    可変領域) のため、他ファイルが残した calendar.json/finance.json/
+    ai_consultations.json 等の残骸が DailyContext チャンク数を狂わせうる。
+    ここで data/raw 全体を一旦更地にしてから自分の入力だけを書く (W-50)。"""
+    if DATA_RAW.exists():
+        shutil.rmtree(DATA_RAW)
     DATA_RAW.mkdir(parents=True, exist_ok=True)
     PROCESSED.mkdir(parents=True, exist_ok=True)
     DIARY_MD.write_text(diary_text, encoding="utf-8")

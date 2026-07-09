@@ -19,8 +19,12 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src" / "python"))
 
+# SPEC_FOXTROT_UI.md §10.1 (F-15): pytest 経由では tests/conftest.py がテスト
+# 収集より前に PKB_PROJECT_ROOT を Sandbox へ設定済み。setdefault により
+# それを尊重しつつ、本ファイルを単独実行 (`python tests/test_line_dedup.py`)
+# した場合の後方互換 (自前の一時ルート) も両立する (W-50: 上書きしない)。
 _TMP = tempfile.mkdtemp(prefix="pkb_line_dedup_")
-os.environ["PKB_PROJECT_ROOT"] = _TMP
+os.environ.setdefault("PKB_PROJECT_ROOT", _TMP)
 os.environ.setdefault("HF_HUB_OFFLINE", "1")
 os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
 

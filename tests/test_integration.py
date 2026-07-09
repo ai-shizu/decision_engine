@@ -24,9 +24,12 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src" / "python"))
 
-# core 各モジュールはインポート時に PKB_PROJECT_ROOT を解決するため、先に設定する
+# SPEC_FOXTROT_UI.md §10.1 (F-15): pytest 経由では tests/conftest.py がテスト
+# 収集より前に PKB_PROJECT_ROOT を Sandbox へ設定済み。setdefault により
+# それを尊重しつつ、本ファイルを単独実行 (`python tests/test_integration.py`)
+# した場合の後方互換 (自前の一時ルート) も両立する (W-50: 上書きしない)。
 _TMP = tempfile.mkdtemp(prefix="pkb_integration_")
-os.environ["PKB_PROJECT_ROOT"] = _TMP
+os.environ.setdefault("PKB_PROJECT_ROOT", _TMP)
 os.environ.setdefault("HF_HUB_OFFLINE", "1")
 os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
 os.environ.pop("PKB_ALLOW_ONLINE_FETCH", None)  # オフライン既定を保証
@@ -235,7 +238,12 @@ def test_fetch_tag_hook_and_queue() -> None:
 
 
 def test_offline_default_never_fetches() -> None:
-    """PKB_ALLOW_ONLINE_FETCH 未設定では、いかなる経路でも通信しない。"""
+    """PKB_ALLOW_ONLINE_FETCH 未設定では、いかなる経路でも通信しない。
+
+    F-15 (Sandbox): キューは _isolate_data により各テスト前に空となるため、
+    自分の入力を自前で seed する (他テストの副作用に依存しない)。"""
+    assert kf.queue_fetch_queries(
+        ["ロックフリーキュー 設計 面接", "HFT レイテンシ 最新動向"]) == 2
     assert not kf.online_fetch_allowed()
     summary = kf.process_pending()  # fetcher=None + 未許可 → 完全スキップ
     assert summary["processed"] == 0 and summary["skipped_offline"] == 2
@@ -250,7 +258,9 @@ def test_offline_default_never_fetches() -> None:
 
 
 def test_mock_fetch_ingestion_pipeline() -> None:
-    """モック取得 → Markdown 永続化 → 既存ナレッジローダーでの取り込み。"""
+    """モック取得 → Markdown 永続化 → 既存ナレッジローダーでの取り込み。
+
+    F-15 (Sandbox): キューは他テストの副作用に依存せず自前で seed する。"""
     def mock_fetcher(query: str) -> list[dict]:
         return [{
             "title": f"{query} の解説",
@@ -258,6 +268,8 @@ def test_mock_fetch_ingestion_pipeline() -> None:
             "text": f"{query} に関する専門知識のダミー本文。" * 5,
         }]
 
+    assert kf.queue_fetch_queries(
+        ["ロックフリーキュー 設計 面接", "HFT レイテンシ 最新動向"]) == 2
     summary = kf.process_pending(fetcher=mock_fetcher)
     assert summary["processed"] == 2 and summary["failed"] == 0, summary
     assert all(e["status"] == "done" for e in kf.load_queue())
@@ -395,6 +407,7 @@ def test_es_manager_dynamic_domain() -> None:
 
 
 def test_es_review_isolation() -> None:
+    _write_phase3_assets()  # F-15 (Sandbox): ES を自前で seed する
     fake = FakeBackend()
     eng = ConsultationEngine()
     eng._backend = fake
@@ -413,6 +426,7 @@ def test_es_review_isolation() -> None:
 
 
 def test_adversarial_interview_with_es() -> None:
+    _write_phase3_assets()  # F-15 (Sandbox): ES + gap_insights を自前で seed する
     fake = FakeBackend()
     eng = ConsultationEngine()
     eng._backend = fake
@@ -502,6 +516,7 @@ def test_oracle_payload_isolated_to_review_phase() -> None:
 
 
 def test_gd_sim_chaos() -> None:
+    _write_phase3_assets()  # F-15 (Sandbox): ES + gap_insights を自前で seed する
     fake = FakeBackend()
     eng = ConsultationEngine()
     eng._backend = fake
@@ -581,6 +596,7 @@ def test_kv_prefix_cache() -> None:
     from core.consultation_engine import SYSTEM_PROMPT
     from core.paths import KV_SLOTS_DIR
 
+    _write_phase3_assets()  # F-15 (Sandbox): 静的プレフィックスに gap を載せる
     # ---- (1) プロンプト分割の不変条件 ----
     eng = ConsultationEngine()
     static = eng.build_static_prefix()
@@ -679,6 +695,7 @@ def test_latency_evaluation() -> None:
 
 def test_dynamic_gd_personas() -> None:
     """フロントエンドから渡した N 人のペルソナ配列が動的展開される。"""
+    _write_phase3_assets()  # F-15 (Sandbox): 講評での gap 統合検証に必要
     personas = [
         {"name": "田中", "trait": "クラッシャー"},
         {"name": "鈴木", "trait": "協調型"},

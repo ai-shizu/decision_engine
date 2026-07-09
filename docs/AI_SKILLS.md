@@ -801,7 +801,7 @@ TOTAL:                                          ~1.6-2.2 秒 (< 3000ms ゲート
 
 ---
 
-## 13. Target Foxtrot — UI/UX 設計 (`docs/SPEC_FOXTROT_UI.md`。F0/F7/F1/F2/F2-EXT/F3/F3.5/F4a/F4b/F4c/Rev.10相関ID復元 完遂・F5/F6/エンジン多重化 未着手)
+## 13. Target Foxtrot — UI/UX 設計 (`docs/SPEC_FOXTROT_UI.md`。F0/F7/F1/F2/F2-EXT/F3/F3.5/F4a/F4b/F4c/Rev.10相関ID復元/Rev.11 Phase A(Sandbox) 完遂・§10.2〜§10.6/エンジン多重化 未着手)
 
 フロントエンド (Tauri + React) の設計仕様。**§3.4 (React UI 規約) が上位法** —
 SPEC はその適用解釈を確定させるもの。コードより先に存在する凍結事項:
@@ -1274,6 +1274,110 @@ INTERVIEW) を同時に操作した際のイベント混線ゼロの体感確認
 
 **仕様との差異 (申告)**: なし。SPEC Rev.10 §9〜§9.4 を実装レベルの差異なく
 実装した。
+
+---
+
+### Rev.11 Phase A 完遂 (2026-07-09) — as-built (Target Sandbox: テスト隔離防壁 / F-15)
+
+**急所**: `core/paths.py` の `PROJECT_ROOT`/`ES_DIR` 等は **import 時に確定する
+束縛済み Path**。したがって `PKB_PROJECT_ROOT` は「いかなる `from core...`
+import よりも前」に立てねば無効。`tests/conftest.py` はテスト収集
+(= 各 `test_*.py` の import) より前に pytest が読むため、ここが唯一の
+確実な差し込み点になる。
+
+**実変更点**:
+- `tests/conftest.py` (新設): モジュール最上部で `tempfile.mkdtemp(prefix=
+  "pkb_test_")` → `os.environ["PKB_PROJECT_ROOT"]` を設定し、
+  `data/{raw,es,knowledge,processed,records/interviews}`・`build`・`models`
+  のスケルトンを作成。`atexit.register` で全体を `rmtree(ignore_errors=True)`。
+  autouse・function-scoped の `_isolate_data` フィクスチャが各テストの前後で
+  `data/{es,knowledge,records/interviews,processed}` を rmtree→再作成する
+  (`data/raw` は対象外 — 同一ファイル内の複数テストが `data/raw` を介して
+  状態を共有する既存パターンを壊さないための意図的な除外。SPEC §10.1 の
+  施工構造どおり)。conftest 自身は `core` を import しない。
+- `tests/test_sandbox.py` (新設): `test_sandbox_active` (PROJECT_ROOT/ES_DIR
+  がリポジトリ実ルートを指さないことの二重証明) と
+  `test_no_literal_data_writes` (`src/python/core` 配下の `open("data/...")`
+  / `Path("data/...")` 直書きが `paths.py` 以外に無いことを静的検査する
+  トリップワイヤ)。
+- **既存8ファイルの自前 Sandbox 実装を `conftest.py` に一元化**
+  (`test_oracle.py`/`test_integration.py`/`test_lsm_index.py`/
+  `test_import_stats.py`/`test_narrative_compiler.py`/
+  `test_line_telemetry.py`/`test_tensor_store.py`/`test_line_dedup.py`):
+  各ファイルが個別に持っていた `os.environ["PKB_PROJECT_ROOT"] = _TMP`
+  (無条件上書き) を `os.environ.setdefault("PKB_PROJECT_ROOT", _TMP)` へ変更。
+  **これが本 Phase の実質的な根本修正** — 無条件上書きだと、pytest の
+  テスト収集がファイルを import する順序 (アルファベット順) によって
+  「最後に import されたファイルの `_TMP` が全テストに適用される」という
+  実行順依存のレースが発生していた (これが「HEADで11失敗」の実体)。
+  `setdefault` により conftest の Sandbox を尊重しつつ、各ファイルを
+  `python tests/test_X.py` として単独実行した場合 (conftest 非経由) の
+  後方互換 (自前の一時ルート) も両立する。`_TMP` 変数はファイル後半で
+  再利用されている箇所 (`test_tensor_store.py` のスクラッチパス生成、
+  `test_integration.py` の `__main__` ブロックの cleanup) があるため、
+  変数自体は削除せず維持した。
+- **汚染依存だった既存テストの自己完結化** (W-50): Sandbox 導入で
+  「前のテストが書いた状態にあとのテストが暗黙に依存する」設計が可視化
+  された。
+  - `test_integration.py`: `test_offline_default_never_fetches` /
+    `test_mock_fetch_ingestion_pipeline` が `test_fetch_tag_hook_and_queue`
+    の副作用 (fetch queue への enqueue) に依存していたため、各テスト内で
+    `kf.queue_fetch_queries(...)` を自前 seed。`test_es_review_isolation` /
+    `test_adversarial_interview_with_es` / `test_gd_sim_chaos` /
+    `test_dynamic_gd_personas` / `test_kv_prefix_cache` が
+    `test_es_manager_dynamic_domain` の副作用 (`_write_phase3_assets()` に
+    よる ES_DIR / DEEP_PROFILE の永続化) に依存していたため、各テストの
+    先頭で `_write_phase3_assets()` を明示呼び出しに変更 (既存の
+    `test_es_manager_dynamic_domain`/`test_oracle_payload_isolated_to_review_
+    phase`/`test_puppeteer_injects_whitelisted_text_only` が既に確立していた
+    パターンへの合流)。
+  - `test_lsm_index.py`: `_reset_project()` が `data/raw` 全体を事前に
+    `rmtree` するよう変更。`data/raw` は `_isolate_data` の対象外 (意図的)
+    のため、アルファベット順で先に collect される他ファイル
+    (`test_import_stats.py`/`test_integration.py` 等) が残す
+    `calendar.json`/`finance.json`/`ai_consultations.json` の残骸が
+    DailyContext チャンク数を狂わせていた (`assert 4 == 3` 等の失敗の実体)。
+  - `test_data_source_stats_dir_sources` / `test_interview_sim_flow` /
+    `test_interview_configurator_no_es` は Sandbox 導入だけで自動的に
+    GREEN になった (元々自己完結していたか、`_isolate_data` の対象範囲と
+    合致していたため追加の是正が不要だった)。
+- `core/*` (本番ロジック) は無変更 (`git diff --stat src/python/core/` が
+  空であることを確認済み)。
+
+**検証結果 (DoD)**:
+- `python -m pytest tests/ -q` (通常順): **144 passed, 0 failed**
+  (Sandbox導入直後の一時的な17失敗 — 汚染依存7件 + `_TMP` 未定義の
+  自己回帰7件 + LSM残骸3件 — を含め、最終的に全て解消)。
+- 同じコマンドをファイル逆順 (`test_tensor_store.py` → ... →
+  `test_apple_calendar_sync.py`) で実行: **144 passed, 0 failed** (実行順
+  非依存の証明。`pytest-randomly` は未インストールのため逆順収集で代替)。
+- 個別ファイル実行 (`test_lsm_index.py`/`test_integration.py`/
+  `test_tensor_store.py`/`test_import_stats.py` の4ファイル同時指定):
+  **52 passed**。単独スクリプト実行 (`python tests/test_oracle.py`・
+  `python tests/test_lsm_index.py`) も ALL PASS (conftest 非経由でも
+  `setdefault` 経路が機能することの確認)。
+- `git status --short data/` を pytest 実行の前後で比較し **差分ゼロ**
+  (本番 `data/es`・`data/knowledge` への新規書き込みなし)。
+- `git diff --stat src/python/core/` が空 (本番ロジック無変更の証明)。
+
+**仕様との差異 (申告)**: `test_no_literal_data_writes` は SPEC の想定どおり
+「現状ゼロ検出」で実装 (簡素化は不要だった)。`_isolate_data` の対象を
+SPEC 施工構造の4ディレクトリ (`data/{es,knowledge,records/interviews,
+processed}`) に厳密に一致させ、`data/raw` は意図通り対象外とした
+(その代替として `test_lsm_index.py` 側で自前リセットを実装 — SPEC の
+「入力不足になったテストはテスト側で seed して直す」方針の解釈)。
+
+**Phase A スコープ外で発見した既知問題 (このRevでは未修正・報告のみ)**:
+`python tests/ui_smoke.py` を実行すると、実リポジトリの
+`data/processed/metadata.json` (gitignore 対象・個人データ) の chunk
+レコードが `chunk_id` キーを持つ一方、`core/lsm_index.py:329` の
+`sync_diary_index_lsm()` は `c["id"]` を読もうとして `KeyError` になる。
+これは Sandbox とは無関係な**実データの状態不整合** (おそらく LSM 化以前の
+フォーマットの残骸、または最近の実機操作で生成された metadata.json が
+現行 `lsm_index.py` のスキーマ前提とズレている) であり、Phase A の
+スコープ (「core/\* を一切変更しない」「本番データに触れない」) 上、
+本Revでは修正しない。指揮官の実データ (`data/processed/metadata.json`)
+の検死、または `core/lsm_index.py` の別途是正指令を要する。
 
 ---
 
