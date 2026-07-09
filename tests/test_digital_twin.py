@@ -248,16 +248,3 @@ def test_compute_oii_dyad_scope_only() -> None:
         pass
     print("  compute_oii dyad-scope-only guard OK")
 
-
-if __name__ == "__main__":
-    test_fit_twin_deterministic_repeated_calls()
-    test_walk_forward_gate_fails_with_insufficient_lapses()
-    test_fit_twin_gate_fails_on_degenerate_data()
-    test_mc_seed_reproducible()
-    test_mc_output_size_independent_of_paths()
-    test_irls_separation_control_group()
-    test_simulate_rejects_non_finite_params()
-    test_sse_grid_search_rejects_non_finite_inputs()
-    test_causal_baseline_suppresses_naive_global_leakage()
-    test_compute_oii_dyad_scope_only()
-    print("test_digital_twin: ALL PASS")

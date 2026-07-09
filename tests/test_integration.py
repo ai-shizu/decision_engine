@@ -26,8 +26,8 @@ sys.path.insert(0, str(ROOT / "src" / "python"))
 
 # SPEC_FOXTROT_UI.md §10.1 (F-15): pytest 経由では tests/conftest.py がテスト
 # 収集より前に PKB_PROJECT_ROOT を Sandbox へ設定済み。setdefault により
-# それを尊重しつつ、本ファイルを単独実行 (`python tests/test_integration.py`)
-# した場合の後方互換 (自前の一時ルート) も両立する (W-50: 上書きしない)。
+# それを尊重する (W-50: 上書きしない)。単体実行は
+# `python -m pytest tests/test_integration.py` を使う (__main__ 直接実行は廃止)。
 _TMP = tempfile.mkdtemp(prefix="pkb_integration_")
 os.environ.setdefault("PKB_PROJECT_ROOT", _TMP)
 os.environ.setdefault("HF_HUB_OFFLINE", "1")
@@ -1291,49 +1291,3 @@ def test_simulated_persona_isolation() -> None:
         "建前人格の発言から宣言を誤検出"
     print("  simulated-persona isolation OK")
 
-
-if __name__ == "__main__":
-    try:
-        test_life_balance_stabilizer()
-        test_interview_sim_flow()  # ES 不在時のケースバンク・フォールバック
-        # ---- F4a/F4b (ES 不在前提。ES駆動時の優先順位は既存テストで別途保証) ----
-        test_interview_configurator_no_es()
-        test_stance_switches_persona()
-        test_stance_does_not_split_genre()
-        test_nonES_stance_clause_applied()
-        test_interview_report_schema_and_latency()
-        test_interview_report_axis_rejection()
-        test_interview_records_isolated_from_profiler()
-        # ---- F4c (継続学習ループ) ----
-        test_load_recent_reports_sorts_by_filename_not_mtime()
-        test_compute_growth_context_fallbacks()
-        test_growth_context_missing_axis_not_treated_as_zero()
-        test_growth_context_injected_without_gap_leak()
-        test_fetch_tag_hook_and_queue()
-        test_offline_default_never_fetches()
-        test_mock_fetch_ingestion_pipeline()
-        # ---- フェーズ3 (ES 駆動) — 以降は data/es/ が存在する状態 ----
-        test_es_manager_dynamic_domain()
-        test_es_manager_implicit_domain_from_text()
-        test_es_review_isolation()
-        test_es_review_ignores_latency()
-        test_interview_latency_preserved()
-        test_adversarial_interview_with_es()
-        test_oracle_payload_isolated_to_review_phase()
-        test_gd_sim_chaos()
-        test_all_interview_modes_persist()
-        test_gd_growth_injected()
-        test_debrief_transition_and_turn()
-        test_debrief_no_sanctuary_leak()
-        test_debrief_end_closes()
-        # ---- Target Delta D3 (Puppeteer) ----
-        test_puppeteer_injects_whitelisted_text_only()
-        # ---- フェーズ4 (レイテンシ / 動的ペルソナ / 建前隔離) ----
-        test_latency_evaluation()
-        test_dynamic_gd_personas()
-        test_simulated_persona_isolation()
-        # ---- Target Alpha (KV プレフィックス・ピニング) ----
-        test_kv_prefix_cache()
-        print("test_integration: ALL PASS")
-    finally:
-        shutil.rmtree(_TMP, ignore_errors=True)

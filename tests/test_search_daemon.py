@@ -459,16 +459,3 @@ def test_e2e_eof_suicide() -> None:
             cli.close()
     print("  E2E EOF suicide OK")
 
-
-if __name__ == "__main__":
-    test_layout_cross_validation()
-    test_fake_protocol_search()
-    test_fake_protocol_errors()
-    test_missing_exe_raises()
-    test_engine_daemon_primary()
-    test_engine_fallback_to_numpy()
-    test_engine_release_before_rebuild()
-    test_engine_shutdown_closes_daemon()
-    test_e2e_real_daemon()
-    test_e2e_eof_suicide()
-    print("test_search_daemon: ALL PASS")

@@ -91,12 +91,3 @@ def test_select_deterministic() -> None:
     assert r1 == r2
     print("  select deterministic OK")
 
-
-if __name__ == "__main__":
-    test_select_by_tension_descending()
-    test_select_ignores_closed_bounties()
-    test_select_no_repeat_across_bounties()
-    test_select_respects_prior_bank_question_id()
-    test_select_fallback_when_type_exhausted()
-    test_select_deterministic()
-    print("test_question_bank: ALL PASS")

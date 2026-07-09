@@ -301,21 +301,3 @@ def test_register_bounties_threshold_and_stability() -> None:
     assert loaded == again
     print("  register_bounties threshold + stability OK")
 
-
-if __name__ == "__main__":
-    test_alias_irreversible_and_stable()
-    test_burst_extraction_merges_same_speaker()
-    test_initiation_ratio_symmetric()
-    test_night_arrival_excluded_from_latency()
-    test_friction_requires_multi_signal_not_keyword_alone()
-    test_friction_detected_with_slow_reply_and_thread_death()
-    test_friction_appease_response_classification()
-    test_interpersonal_axes_confidence_gate()
-    test_interpersonal_axes_computed_with_enough_dyads()
-    test_sync_persists_and_excludes_group_contacts()
-    test_social_positioning_intention_gap()
-    test_social_positioning_blind_spot()
-    test_social_positioning_control_group_no_false_positive()
-    test_social_positioning_insufficient_dyads()
-    test_register_bounties_threshold_and_stability()
-    print("test_line_telemetry: ALL PASS")

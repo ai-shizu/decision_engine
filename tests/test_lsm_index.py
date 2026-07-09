@@ -376,17 +376,3 @@ def test_save_meta_writes_normally_under_limit() -> None:
     assert saved["num_vectors"] == 1
     print("  _save_meta writes normally under limit OK")
 
-
-if __name__ == "__main__":
-    test_content_hash_stability()
-    test_tomb_offset_layout()
-    test_write_segment_and_tombstone()
-    test_sync_diff_only_reembeds_changed_days()
-    test_sync_tombstones_deleted_day()
-    test_embedder_change_forces_full_rebuild()
-    test_bootstrap_from_legacy_vectors_bin()
-    test_search_lsm_date_dedup()
-    test_compaction_byte_copy_no_reembed()
-    test_save_meta_trips_on_oversized_ledger()
-    test_save_meta_writes_normally_under_limit()
-    print("test_lsm_index: ALL PASS")

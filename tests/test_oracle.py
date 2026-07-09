@@ -278,21 +278,3 @@ def test_cid_absent_request_emits_null_cid() -> None:
     assert status_events[0].get("cid") is None
     print("  cid-less request emits null cid without crashing OK")
 
-
-if __name__ == "__main__":
-    # ゲート付き SKIP (SPEC Rev.2 §5.5-4): 未実装モジュールの ImportError のみを
-    # SKIP 扱いにする。テスト本体の AssertionError はこの except に到達しない
-    # (各テストは import 成功後に assert するため、隔離ガードの検出力は落ちない)。
-    try:
-        from core import oracle, tensor_store  # noqa: F401
-    except ImportError as exc:
-        print(f"test_oracle: SKIP (E1/E4 未実装: {exc})")
-        sys.exit(0)
-    test_intervention_bank_target_lane_whitelist()
-    test_assert_sterile_rejects_free_text()
-    test_build_oracle_payload_end_to_end_real_tensor()
-    test_stdio_dispatch_ignores_unknown_params()
-    test_cid_stamped_on_all_events_single_path()
-    test_cid_distinguishes_sequential_requests()
-    test_cid_absent_request_emits_null_cid()
-    print("test_oracle: ALL PASS")

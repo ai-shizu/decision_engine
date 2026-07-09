@@ -66,8 +66,3 @@ def test_no_literal_data_writes() -> None:
     )
     print("  no literal data/ path writes outside paths.py (static tripwire) OK")
 
-
-if __name__ == "__main__":
-    test_sandbox_active()
-    test_no_literal_data_writes()
-    print("test_sandbox: ALL PASS")

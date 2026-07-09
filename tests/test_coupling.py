@@ -134,12 +134,3 @@ def test_short_series_raises_coupling_error() -> None:
         pass
     print("  short series -> CouplingError OK")
 
-
-if __name__ == "__main__":
-    test_known_lag_injection_detected()
-    test_independent_series_no_significant_coupling()
-    test_deterministic_repeated_calls()
-    test_shared_missingness_no_false_positive()
-    test_lag_sign_identity()
-    test_short_series_raises_coupling_error()
-    print("test_coupling: ALL PASS")

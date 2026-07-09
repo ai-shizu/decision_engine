@@ -336,21 +336,3 @@ def test_dyad_behavior_unchanged_by_group_logic() -> None:
     assert sessions[0]["turn_count"] == 2
     print("  dyad behavior unchanged by group-chat logic (T-25 Rev.2) OK")
 
-
-if __name__ == "__main__":
-    test_duplicate_export_reimport_count_invariant()
-    test_partial_overlap_union()
-    test_genuine_burst_within_block_preserved()
-    test_is_self_resolved_via_common_sender_across_contacts()
-    test_is_self_declared_name_takes_priority()
-    test_format_line_import_injects_header_when_missing()
-    test_date_regression_without_header_splits_block()
-    test_group_chat_excluded_from_session_extraction()
-    test_group_chat_does_not_poison_is_self_tier3()
-    test_session_day_slicing_no_duplication_across_span()
-    test_session_tripwire_fires_on_pathological_span()
-    test_group_message_attached_exactly_once_per_date()
-    test_group_long_silence_no_whale_session()
-    test_group_speech_isolated_from_self_channels()
-    test_dyad_behavior_unchanged_by_group_logic()
-    print("test_line_dedup: ALL PASS")

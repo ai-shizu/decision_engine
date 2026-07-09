@@ -245,21 +245,3 @@ def test_data_source_stats_es_single() -> None:
     assert stats["es"]["count"] == 1, "レガシーがカウントに混入している"
     print("  data_source_stats: es count は 0→1 に遷移し、legacy追加後も1のまま OK")
 
-
-if __name__ == "__main__":
-    test_data_source_stats_missing_sources()
-    test_data_source_stats_counts_real_content()
-    test_data_source_stats_dir_sources()
-    test_import_line_text_status_callback_order()
-    test_classify_document_line_wins_over_es_vocabulary()
-    test_classify_document_rejects()
-    test_import_document_idempotent_skip()
-    test_import_document_name_collision_renames()
-    test_import_document_dest_whitelist()
-    test_import_document_knowledge_triggers_index_sync()
-    test_es_import_overwrites_single()
-    test_es_import_idempotent()
-    test_legacy_es_invisible()
-    test_active_es_view_shape()
-    test_data_source_stats_es_single()
-    print("test_import_stats: ALL PASS")

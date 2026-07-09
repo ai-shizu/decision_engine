@@ -97,9 +97,3 @@ def test_sync_from_ics_roundtrip():
             archive.write_bytes(archive_backup)
         path.unlink(missing_ok=True)
 
-
-if __name__ == "__main__":
-    test_parse_ics()
-    test_merge_append_and_overwrite()
-    test_sync_from_ics_roundtrip()
-    print("test_calendar_sync: ALL PASS")

@@ -292,14 +292,3 @@ def test_line_daily_aggregates_smoke() -> None:
         store.close()
     print("  line daily aggregates smoke OK")
 
-
-if __name__ == "__main__":
-    test_layout_cross_validation()
-    test_mask_semantics_zero_vs_missing()
-    test_rebuild_under_open_handle()
-    test_consult_count_excludes_simulated_persona()
-    test_date_grid_no_epoch_seconds_arithmetic()
-    test_task_lanes_mask_only_on_observed_days()
-    test_line_silence_within_coverage_is_observed_zero()
-    test_line_daily_aggregates_smoke()
-    print("test_tensor_store: ALL PASS")

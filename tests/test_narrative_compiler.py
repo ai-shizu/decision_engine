@@ -167,12 +167,3 @@ def test_compile_gives_up_after_max_retries() -> None:
         "生成失敗なのに draft ファイルが書かれている"
     print("  compile gives up after max retries OK")
 
-
-if __name__ == "__main__":
-    test_no_deep_profile_returns_explicit_reason()
-    test_no_material_when_no_evidence()
-    test_material_selection_prioritizes_true_gakuchika()
-    test_compile_success_with_valid_refs()
-    test_compile_retries_then_succeeds()
-    test_compile_gives_up_after_max_retries()
-    print("test_narrative_compiler: ALL PASS")

@@ -220,13 +220,3 @@ def test_intellectualization_detection() -> None:
     assert not w3["flagged"] and w3["action_count"] >= 1
     print("  intellectualization detection OK")
 
-
-if __name__ == "__main__":
-    test_intention_gap_and_blind_spot()
-    test_aligned_behavior_no_career_gap()
-    test_subjective_objective_separation()
-    test_empty_and_sparse_data_safe()
-    test_hyperbolic_procrastination()
-    test_true_gakuchika_discovery()
-    test_intellectualization_detection()
-    print("test_gap_analysis: ALL PASS")

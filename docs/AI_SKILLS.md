@@ -49,7 +49,10 @@
 
 2. **個人データを絶対に流出させるな。**
    - `data/raw/`（日記・LINE・家計簿）、`data/processed/`、`models/`、`logs/` は **コミット禁止**（.gitignore 済み。解除するな）。
-   - テストコードが実データ（`diary.md`, `user_profile.json` 等）を書き換える場合、**実行前にバックアップし、終了時に必ず復元せよ**（`tests/ui_smoke.py` の diary/profile 復元パターンを踏襲）。
+   - テストは `tests/conftest.py` の Sandbox (`PKB_PROJECT_ROOT`) 上でのみ実行せよ。
+     実データ（`diary.md`, `user_profile.json` 等）への書き込みは禁止。
+     単体実行は `python -m pytest tests/test_x.py` のみ（`__main__` 直接実行は
+     廃止 — conftest 隔離を迂回するため）。
    - ログ・エラーメッセージに日記本文や LINE 本文をそのまま出すな。
 
 3. **責務分離を守れ。**
@@ -122,9 +125,9 @@ echo '{"id":1,"cmd":"health","params":{}}' | python -X utf8 src\python\engine_st
 # 5. デスクトップのエンジンログ（stderr の退避先）
 Get-Content data\logs\engine.log -Tail 50   # 開発時はリポジトリ data/、本番は %LOCALAPPDATA%\PKB\logs
 
-# 6. 回帰テスト（変更後の最低ライン）
-python tests\test_calendar_sync.py
-python tests\ui_smoke.py
+# 6. 回帰テスト（変更後の最低ライン — 単体実行は pytest 経由）
+python -m pytest tests/test_calendar_sync.py -q
+python -m pytest tests/test_ui_smoke.py -q
 ```
 
 ### 2.4 その他の既知の罠
@@ -180,14 +183,17 @@ python tests\ui_smoke.py
 
 ```powershell
 python -m py_compile <変更した .py 全部>
-python tests\test_calendar_sync.py     # ALL PASS
-python tests\test_apple_calendar_sync.py  # ALL PASS
-python tests\test_gap_analysis.py      # ALL PASS
-python tests\test_integration.py       # ALL PASS
-python tests\ui_smoke.py               # ALL PASS
+python -m pytest tests/ -q                  # 全スイート (161件。正順/逆順 GREEN)
+python -m pytest tests/test_ui_smoke.py -q  # TUI スモーク (textual 不在なら SKIP)
 npx tsc --noEmit                       # apps/desktop で (フロント変更時)
 cargo check                            # apps/desktop/src-tauri で (Rust 変更時)
 ```
+
+**テスト運用メモ**: 単体実行は `python -m pytest tests/test_x.py`。
+`python tests/test_x.py` の `__main__` 直接実行は廃止（conftest の Sandbox
+隔離を迂回するため）。各 `test_*.py` 先頭の `setdefault("PKB_PROJECT_ROOT")`
+は pytest 非経由 import 時の後方互換用で、pytest 下では conftest が先に env
+を確定させ no-op に縮退する。
 
 報告には「何を変えたか」「なぜか」「何で検証したか」を必ず含めろ。テストが通らないまま完了と言うことは、いかなる理由があっても禁止する。
 
@@ -1310,12 +1316,8 @@ import よりも前」に立てねば無効。`tests/conftest.py` はテスト�
   テスト収集がファイルを import する順序 (アルファベット順) によって
   「最後に import されたファイルの `_TMP` が全テストに適用される」という
   実行順依存のレースが発生していた (これが「HEADで11失敗」の実体)。
-  `setdefault` により conftest の Sandbox を尊重しつつ、各ファイルを
-  `python tests/test_X.py` として単独実行した場合 (conftest 非経由) の
-  後方互換 (自前の一時ルート) も両立する。`_TMP` 変数はファイル後半で
-  再利用されている箇所 (`test_tensor_store.py` のスクラッチパス生成、
-  `test_integration.py` の `__main__` ブロックの cleanup) があるため、
-  変数自体は削除せず維持した。
+  `setdefault` により conftest の Sandbox を尊重する。`_TMP` 変数は
+  `test_tensor_store.py` のスクラッチパス生成等で再利用されているため維持。
 - **汚染依存だった既存テストの自己完結化** (W-50): Sandbox 導入で
   「前のテストが書いた状態にあとのテストが暗黙に依存する」設計が可視化
   された。
@@ -1798,6 +1800,39 @@ interview_sim/gd_sim の両方に対称に実装した。
 メンターは講評・スコアを開示してよいが、生の gap/oracle (聖域) は感想戦へ
 一切注入しない (壁B不変・構造的に注入経路自体が存在しない)。フル pytest は
 実行順非依存で GREEN (160 passed)。
+
+---
+
+### Rev.11 Phase P2 完遂 (2026-07-09) — as-built (テスト基盤の完全無菌化)
+
+**方針**: pytest 収集 + conftest Sandbox を全テストの唯一の実行経路に統一。
+TUI スモークも Sandbox 上で自己完結させ、実 `data/` への書込ゼロを DoD に含める。
+
+**実変更点 (`tests/` のみ — `core/*` 無変更)**:
+- `tests/ui_smoke.py` → `tests/test_ui_smoke.py`: pytest 収集対象化。
+  `pytest.importorskip("textual")` で textual 不在環境は SKIP。
+  `asyncio.run(_smoke())` で同期テスト関数から完結 (pytest-asyncio 不要)。
+  `_seed_sandbox_tui_fixtures()` が `core.paths` 経由で `DIARY_MD` /
+  `CALENDAR_JSON` / `FINANCE_JSON` を seed。`facade.get_engine` を
+  `_FakeEngine` (sync_diary_index no-op) に差し替え、RECORD 保存時の
+  embedder/pipeline 起動を遮断。実データの backup/restore ロジックは撤去。
+- **16 ファイルの `if __name__ == "__main__":` ブロックを削除**
+  (`test_apple_calendar_sync` / `test_calendar_sync` / `test_coupling` /
+  `test_digital_twin` / `test_gap_analysis` / `test_import_stats` /
+  `test_integration` / `test_line_dedup` / `test_line_telemetry` /
+  `test_lsm_index` / `test_narrative_compiler` / `test_oracle` /
+  `test_question_bank` / `test_sandbox` / `test_search_daemon` /
+  `test_tensor_store`)。各ファイル先頭の `_TMP` + `setdefault(
+  "PKB_PROJECT_ROOT", _TMP)` は維持 (pytest 下では no-op)。
+
+**検証結果 (DoD)**:
+- `python -m pytest tests/ -q` (通常順): **161 passed, 0 failed**
+  (160 + `test_ui_smoke` 1件)。
+- 同コマンドをファイル逆順で実行: **161 passed, 0 failed** (実行順非依存)。
+- `git status --short data/`: 差分ゼロ (pytest 実行前後)。
+- `test_*.py` 内の `if __name__ == "__main__"`: **0 件** (stdlib grep 確認)。
+
+**仕様との差異**: なし。
 
 ---
 

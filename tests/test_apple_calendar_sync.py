@@ -118,11 +118,3 @@ def test_sync_from_apple_calendar_roundtrip(_mock_macos):
 def test_is_macos_matches_platform():
     assert acs.is_macos() == (sys.platform == "darwin")
 
-
-if __name__ == "__main__":
-    test_parse_calendar_item_db()
-    test_parse_legacy_event_table()
-    test_find_calendar_databases_custom_path()
-    test_sync_from_apple_calendar_roundtrip()
-    test_is_macos_matches_platform()
-    print("test_apple_calendar_sync: ALL PASS")
