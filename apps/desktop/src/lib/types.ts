@@ -151,6 +151,7 @@ export interface InterviewConfig {
   genre: string;
   difficulty: "standard" | "hard" | "extreme";
   stance: "adversarial" | "standard";
+  customTheme?: string;
 }
 
 /** F4b: 成績表の1軸分の評価 (バックエンドで軸ホワイトリスト・evidence必須を検証済み) */

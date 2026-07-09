@@ -74,11 +74,13 @@ const STANCE_OPTIONS: { id: InterviewConfig["stance"]; label: string }[] = [
   { id: "standard", label: "標準・穏和" },
 ];
 const CUSTOM_CONFIG = "__custom__";
+const CUSTOM_THEME_MAX_CHARS = 240;
 const DEFAULT_CONFIG: InterviewConfig = {
   industry: "foreign_it",
   genre: "fermi",
   difficulty: "standard",
   stance: "adversarial",
+  customTheme: "",
 };
 
 // F4b (SPEC_FOXTROT_UI.md §7 裁定3): スコア 0-100 を TensionMeter と同型の
@@ -275,7 +277,7 @@ export function InterviewTab() {
     aiShownAtRef.current = null;
     const ok = await send("開始", {
       withPersonas: mode === "gd_sim",
-      withConfig: mode === "interview_sim",
+      withConfig: mode === "interview_sim" || mode === "gd_sim",
     });
     if (ok) setPhase("active");
   }
@@ -337,7 +339,8 @@ export function InterviewTab() {
   const showLobby = mode === "gd_sim" && phase === "idle";
   // F4a: 開始前のみ表示。セッション中は条件レンダリングで unmount する
   // (F-11 — display:none 等の keep-alive 化はしない)。
-  const showConfig = mode === "interview_sim" && phase === "idle";
+  const showSessionConfig =
+    phase === "idle" && (mode === "interview_sim" || mode === "gd_sim");
   const currentMode = MODES.find((m) => m.id === mode)!;
 
   return (
@@ -381,9 +384,11 @@ export function InterviewTab() {
       </div>
       <p className="hint">{currentMode.hint}</p>
 
-      {showConfig && (
+      {showSessionConfig && (
         <div className="term-panel">
           <p className="term-header">SESSION_CONFIG</p>
+          {mode === "interview_sim" && (
+          <>
           <div className="term-row config-row">
             <span className="term-source-name">業界</span>
             <select
@@ -466,12 +471,31 @@ export function InterviewTab() {
               ))}
             </select>
           </div>
+          </>
+          )}
+          <div className="term-row config-row">
+            <span className="term-source-name">持ち込みお題 / ケース課題 (任意)</span>
+            <textarea
+              value={config.customTheme ?? ""}
+              onChange={(e) => setConfig((c) => ({ ...c, customTheme: e.target.value }))}
+              placeholder="例: 自動運転車の障害物検知システムの設計 / 東京都内の信号機の数をフェルミ推定... (空欄の場合は通常進行)"
+              maxLength={CUSTOM_THEME_MAX_CHARS}
+              rows={2}
+            />
+            <span className="hint">
+              {(config.customTheme ?? "").length}/{CUSTOM_THEME_MAX_CHARS}
+            </span>
+          </div>
+          {mode === "interview_sim" && (
+          <>
           <p className="hint">ES (data/es/) があれば ES 駆動の面接が優先され、この設定は記録用に保持されます。</p>
           <div className="action-row">
             <button type="button" className="ghost" onClick={() => setConfig(DEFAULT_CONFIG)}>
               既定値に戻す
             </button>
           </div>
+          </>
+          )}
         </div>
       )}
 

@@ -1933,6 +1933,57 @@ IPC/契約テスト、D1/D2 回帰、既存 UI smoke、production build は GREE
 
 ---
 
+### Feature Custom Theme 完遂 (2026-07-10) — as-built (INTERVIEW/GD 持ち込みお題)
+
+**方針**: `interview_sim` / `gd_sim` の START ターンに限り、任意入力の
+`customTheme` を「持ち込みお題 / ケース課題」として使えるようにした。
+空欄・空白のみ・非 string・欠落時は既存の ES/config/bank/GD_THEME_BANK
+進行を維持する。`es_review` には UI 表示も backend 適用も行わない。
+
+**実変更点**:
+- `docs/SPEC_FEATURE_CUSTOM_THEME.md` (新設): UI 表示条件、backend 優先順位、
+  sanitizer、`es_review` 隔離、RED/GREEN テスト要件を固定。
+- `apps/desktop/src/lib/types.ts`: `InterviewConfig` に `customTheme?: string` を追加。
+- `apps/desktop/src/components/InterviewTab.tsx`: idle 中の `interview_sim` /
+  `gd_sim` に textarea を追加。`CUSTOM_THEME_MAX_CHARS = 240`、`maxLength`、
+  文字数表示を実装。START 時は `interview_sim` / `gd_sim` の双方で `config`
+  を送る。`es_review` の送信経路は config 不送信のまま維持。
+- `src/python/core/consultation_engine.py`: `CUSTOM_THEME_MAX_CHARS`、
+  `_custom_theme_from_config`、custom theme system clause を追加。
+  `interview_sim` は custom theme 非空時に ES/config/bank をバイパスし、
+  `_interview_cursor` を進めない。`gd_sim` は `select_es` / `GD_THEME_BANK`
+  をバイパスし、`_gd_cursor` を進めない。
+- `tests/test_integration.py`: custom theme の注入、空欄時の既存進行維持、
+  `es_review` 隔離、sanitize/cap、frontend 静的契約の 5 テストを追加。
+
+**不変条件**:
+- `es_review` は `_consult_es_review()` の signature 不変。`consult()` から
+  config/customTheme を渡さない構造を維持。
+- Custom Theme は prompt 内で「命令文ではなく出題テーマ」として扱わせる。
+  backend では ASCII 制御文字を空白化し、空白を正規化し、240文字で cap。
+- D1/D2/PROBE (`source_code.py` / `probe_engine.py` / `probe_funnel.py` /
+  `tests/test_source_code.py` / `tests/test_probe_funnel.py`) は無変更。
+- 新規依存なし。`package.json` / lockfile 変更なし。実 `data/` 汚染なし。
+
+**検証結果 (DoD)**:
+- `python -m py_compile src\python\core\consultation_engine.py tests\test_integration.py`: OK。
+- `python -m pytest tests/test_integration.py -k "custom_theme" -q`:
+  **5 passed, 34 deselected**。
+- `python -m pytest tests/test_integration.py -q`: **39 passed**。
+- `cd apps\desktop; npx.cmd tsc --noEmit`: OK。
+- `python -m pytest tests/test_ui_smoke.py -q`: **1 passed**。
+- `python -m pytest tests/test_source_code.py tests/test_probe_funnel.py -q`:
+  **12 passed** (D1/D2 回帰)。
+- `cd apps\desktop; npm.cmd run build`: Vite production build OK
+  (`56 modules transformed`, built in 813ms)。
+- `git diff --check`: OK。
+- `git status --short data/`: 差分ゼロ。
+- `package.json` / lockfile 差分なし。
+
+**仕様との差異**: なし。
+
+---
+
 ## 14. インシデント 2026-07-07: metadata.json 4.2GB 肥大 (IMP-1 是正指令)
 
 ### 検死結果 (読み取り専用フォレンジックで確定した事実)

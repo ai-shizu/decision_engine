@@ -39,11 +39,14 @@ from core import knowledge_fetcher as kf  # noqa: E402
 from core.gap_analysis import analyze_gaps  # noqa: E402
 from core.consultation_engine import (  # noqa: E402
     ConsultationEngine,
+    CUSTOM_THEME_MAX_CHARS,
     GD_GENRE,
     GD_SYSTEM_PROMPT,
+    GD_THEME_BANK,
     INTERVIEW_CASE_BANK,
     INTERVIEWER_SYSTEM_PROMPT,
     STANCE_CLAUSES,
+    _custom_theme_from_config,
     _interview_genre,
     _stance_clause,
     build_gd_system_prompt,
@@ -1290,4 +1293,120 @@ def test_simulated_persona_isolation() -> None:
     assert result["procrastination"]["declarations"] == 0, \
         "建前人格の発言から宣言を誤検出"
     print("  simulated-persona isolation OK")
+
+
+def test_custom_theme_injection() -> None:
+    """SPEC_FEATURE_CUSTOM_THEME §5.1: 非空 customTheme は bank/ES より優先。"""
+    theme = "フェルミ推定: 日本の電柱の数"
+    bank_theme = INTERVIEW_CASE_BANK[0]["theme"]
+    gd_bank_theme = GD_THEME_BANK[0]
+    fake = FakeBackend()
+    eng = ConsultationEngine()
+    eng._backend = fake
+
+    eng.consult("開始", mode="interview_sim", config={"customTheme": theme})
+    sys_i, user_i = fake.calls[0]
+    assert theme in user_i
+    assert "持ち込み" in user_i or "テーマ" in user_i
+    assert bank_theme not in user_i
+    assert theme in sys_i
+    assert eng._interview_cursor == 0
+
+    eng.consult("開始", mode="gd_sim", config={"customTheme": theme})
+    sys_g, user_g = fake.calls[1]
+    assert theme in user_g
+    assert "このテーマで議論を開始し、第一声で発表せよ" in user_g
+    assert gd_bank_theme not in user_g
+    assert theme in sys_g
+    assert eng._gd_cursor == 0
+    print("  custom theme injection OK")
+
+
+def test_custom_theme_blank_preserves_default_flow() -> None:
+    """SPEC_FEATURE_CUSTOM_THEME §5.2: 空欄は既存 bank 巡回を維持。"""
+    fake = FakeBackend()
+    eng = ConsultationEngine()
+    eng._backend = fake
+    before_i = eng._interview_cursor
+    before_g = eng._gd_cursor
+    expected_i = INTERVIEW_CASE_BANK[before_i % len(INTERVIEW_CASE_BANK)]["theme"]
+    expected_g = GD_THEME_BANK[before_g % len(GD_THEME_BANK)]
+
+    eng.consult("開始", mode="interview_sim", config={"customTheme": ""})
+    _, user_i = fake.calls[0]
+    assert expected_i in user_i
+    assert eng._interview_cursor == before_i + 1
+
+    eng.consult("開始", mode="gd_sim", config={"customTheme": "   "})
+    _, user_g = fake.calls[1]
+    assert expected_g in user_g
+    assert eng._gd_cursor == before_g + 1
+    print("  custom theme blank preserves default flow OK")
+
+
+def test_custom_theme_es_review_ignored() -> None:
+    """SPEC_FEATURE_CUSTOM_THEME §5.3: es_review は customTheme を構造的に無視。"""
+    _write_phase3_assets()
+    leak = "これは漏れてはいけない"
+    fake = FakeBackend()
+    eng = ConsultationEngine()
+    eng._backend = fake
+    eng.consult("active_es", mode="es_review", config={"customTheme": leak})
+
+    for system, user in fake.calls:
+        assert leak not in system
+        assert leak not in user
+        _assert_no_gap_leak(system, user)
+    print("  custom theme es_review ignored OK")
+
+
+def test_custom_theme_sanitized_and_capped() -> None:
+    """SPEC_FEATURE_CUSTOM_THEME §5.4: 制御文字除去・空白正規化・240字上限。"""
+    import re
+
+    visible = "フェルミ推定テスト"
+    raw = visible + "\x00\x01" + "\n\r\t" + ("X" * 300)
+    expected = _custom_theme_from_config({"customTheme": raw})
+    assert expected
+    assert len(expected) <= CUSTOM_THEME_MAX_CHARS
+    assert visible in expected
+    assert not re.search(r"[\x00-\x1f\x7f]", expected)
+
+    fake = FakeBackend()
+    eng = ConsultationEngine()
+    eng._backend = fake
+    eng.consult("開始", mode="interview_sim", config={"customTheme": raw})
+    system, user = fake.calls[0]
+    assert expected in user
+    assert expected in system
+    for bad in ("\x00", "\x01"):
+        assert bad not in user
+        assert bad not in system
+    print("  custom theme sanitized and capped OK")
+
+
+def test_custom_theme_frontend_contract_static() -> None:
+    """SPEC_FEATURE_CUSTOM_THEME §5.5: フロントの静的契約。"""
+    types_src = (ROOT / "apps" / "desktop" / "src" / "lib" / "types.ts").read_text(
+        encoding="utf-8")
+    tab_src = (ROOT / "apps" / "desktop" / "src" / "components" / "InterviewTab.tsx").read_text(
+        encoding="utf-8")
+
+    assert "customTheme?: string" in types_src
+    assert "CUSTOM_THEME_MAX_CHARS = 240" in tab_src
+    assert "持ち込みお題 / ケース課題 (任意)" in tab_src
+    assert "例: 自動運転車の障害物検知システムの設計" in tab_src
+    assert "maxLength={CUSTOM_THEME_MAX_CHARS}" in tab_src
+    assert (
+        'mode === "interview_sim" || mode === "gd_sim"' in tab_src
+        or "mode === \"gd_sim\"" in tab_src and "mode === \"interview_sim\"" in tab_src
+    )
+    assert (
+        'withConfig: mode === "interview_sim" || mode === "gd_sim"' in tab_src
+    )
+    forbidden = ("fetch(", "localStorage", "sessionStorage", "Math.random")
+    custom_slice = tab_src.split("持ち込みお題 / ケース課題 (任意)")[1][:1200]
+    for token in forbidden:
+        assert token not in custom_slice, f"forbidden token in custom theme UI: {token}"
+    print("  custom theme frontend contract static OK")
 
