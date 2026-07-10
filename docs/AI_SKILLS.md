@@ -2003,6 +2003,12 @@ IPC/契約テスト、D1/D2 回帰、既存 UI smoke、production build は GREE
 - **実装内容**: ストリーミング応答に対する `<think>` タグ（Hidden CoT）の O(n) 非表示化パーサー実装によるフロントエンド二重防衛線の構築。および、外部依存ゼロ（純粋なSVGと三角関数）による6次元テンソルプロファイリング用六角形レーダーチャートUIの基盤構築。
 - **アーキテクチャ**: `InterviewTab.tsx` 内で `redactHiddenReasoning` を適用し、`<think>` 出力がストリーミングされた瞬間に失敗閉鎖でUIから完全除去。`ProfileTab.tsx` に `TensorRadarChart.tsx` を新設しプレビューデータを配置。バックエンドには一切影響を与えずにUI層を保護・拡張している。
 
+### Project Calculus Phase 2 - AS-BUILT
+- **状態**: 完了 (GREEN)
+- **実装内容**: MBB評価基準を正規化した6次元テンソルプロファイリングを実装。各軸を観測可能な候補者発言のEvidenceと厳密に結び付け、スコアとconfidenceを決定論的に算出する。長時間セッション向けに、固定文字予算とTurn/Atom単位の採否による決定論的Semantic Compressionを導入。
+- **アーキテクチャ**: `session_memory.py` が境界付きWorking Memoryと最新発言優先の証拠コンテキストを構築し、`tensor_profile.py` が6Dスキーマ、厳格validator、集約式を所有する。`interview_report.py` は構造化JSON生成、参照整合性検証、再試行、退化profileを提供する。`consultation_engine.py` にはnestedタグとchunk境界に対応した真のO(n) Hidden Reasoning除去ステートマシンを配線し、IPC前とUI側の二重防衛を完成させた。不正・未知Evidenceを拒否してハルシネーション由来の値を採用せず、既存`oracle.py`の無菌性と`interview_report.v1`の後方互換を維持。
+- **検証結果**: Python関連全回帰114件、TypeScript型検査、Vite本番ビルド、`git diff --check`がすべてPASS。frontend、package files、`data/`、既存D1/D2/PROBEコアへの無関係な変更なし。
+
 ---
 
 ## 14. インシデント 2026-07-07: metadata.json 4.2GB 肥大 (IMP-1 是正指令)

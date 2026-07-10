@@ -18,6 +18,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -429,6 +430,140 @@ def load_knowledge_chunks() -> list[dict]:
     return chunks
 
 
+# ============================================================ Hidden reasoning redactor
+class HiddenReasoningRedactor:
+    """Incremental O(n) redactor — no full raw buffer, bounded pending only."""
+
+    OPEN_TAG = "<" + "think" + ">"
+    CLOSE_TAG = "</" + "think" + ">"
+
+    def __init__(self) -> None:
+        self.depth = 0
+        self._pending = ""
+        self._visible: list[str] = []
+
+    @property
+    def pending_buffer(self) -> str:
+        return self._pending
+
+    @property
+    def max_hold_len(self) -> int:
+        return max(len(self.OPEN_TAG), len(self.CLOSE_TAG)) - 1
+
+    @classmethod
+    def redact_full(cls, raw: str) -> str:
+        inst = cls()
+        if raw:
+            inst.feed(raw)
+        return inst.finalize()
+
+    @classmethod
+    def _is_prefix(cls, tag: str, fragment: str) -> bool:
+        if not fragment or len(fragment) > len(tag):
+            return False
+        return tag[: len(fragment)].lower() == fragment.lower()
+
+    @classmethod
+    def _match_at(cls, data: str, pos: int, tag: str) -> bool:
+        end = pos + len(tag)
+        if end > len(data):
+            return False
+        return data[pos:end].lower() == tag.lower()
+
+    def _incomplete_tag_prefix_at(self, data: str, i: int) -> str | None:
+        remaining = len(data) - i
+        if remaining <= 0:
+            return None
+        max_tag = max(len(self.OPEN_TAG), len(self.CLOSE_TAG))
+        if remaining >= max_tag:
+            return None
+        fragment = data[i : i + remaining]
+        if self._is_prefix(self.OPEN_TAG, fragment) or self._is_prefix(
+            self.CLOSE_TAG, fragment
+        ):
+            return fragment
+        return None
+
+    def _process(self, incoming: str, *, final: bool = False) -> str:
+        data = self._pending + incoming
+        self._pending = ""
+        i = 0
+        chunk: list[str] = []
+        streaming = not final
+        while i < len(data):
+            if self.depth > 0:
+                if data[i] == "<":
+                    if self._match_at(data, i, self.OPEN_TAG):
+                        self.depth += 1
+                        i += len(self.OPEN_TAG)
+                        continue
+                    if self._match_at(data, i, self.CLOSE_TAG):
+                        self.depth -= 1
+                        i += len(self.CLOSE_TAG)
+                        continue
+                    if streaming:
+                        prefix = self._incomplete_tag_prefix_at(data, i)
+                        if prefix is not None:
+                            self._pending = prefix
+                            break
+                    i += 1
+                    continue
+                i += 1
+                continue
+
+            if data[i] == "<":
+                if self._match_at(data, i, self.OPEN_TAG):
+                    self.depth += 1
+                    i += len(self.OPEN_TAG)
+                    continue
+                if self._match_at(data, i, self.CLOSE_TAG):
+                    i += len(self.CLOSE_TAG)
+                    continue
+                if streaming:
+                    prefix = self._incomplete_tag_prefix_at(data, i)
+                    if prefix is not None:
+                        self._pending = prefix
+                        break
+                if not streaming:
+                    remaining = len(data) - i
+                    if remaining < len(self.OPEN_TAG):
+                        fragment = data[i : i + remaining]
+                        if self._is_prefix(self.OPEN_TAG, fragment):
+                            break
+                chunk.append(data[i])
+                i += 1
+                continue
+
+            chunk.append(data[i])
+            i += 1
+
+        if final:
+            if self.depth == 0 and self._pending:
+                if not self._is_prefix(self.OPEN_TAG, self._pending):
+                    chunk.append(self._pending)
+                self._pending = ""
+            elif self.depth > 0:
+                self._pending = ""
+
+        return "".join(chunk)
+
+    def feed(self, piece: str) -> str:
+        delta = self._process(piece, final=False)
+        if delta:
+            self._visible.append(delta)
+        return delta
+
+    def finalize(self) -> str:
+        delta = self._process("", final=True)
+        if delta:
+            self._visible.append(delta)
+        return "".join(self._visible)
+
+
+def _redact_answer(text: str) -> str:
+    return HiddenReasoningRedactor.redact_full(text)
+
+
 # ============================================================ LLMバックエンド
 class LlamaServerBackend:
     """llama-server (127.0.0.1) 経由の推論。プロセス・通信ともに完全ローカル。
@@ -551,6 +686,38 @@ class LlamaServerBackend:
                 pass
         return answer
 
+    def generate_structured(self, system: str, user: str, json_schema: dict,
+                            max_tokens: int | None = None) -> str:
+        """Non-streaming JSON-only generation with OpenAI-compatible schema hint."""
+        import urllib.request
+        self.start()
+        gen = generation_params()
+        body: dict = {
+            "messages": [{"role": "system", "content": system},
+                         {"role": "user", "content": user}],
+            "max_tokens": max_tokens if max_tokens is not None else gen["max_tokens"],
+            "temperature": 0,
+            "stream": False,
+            "response_format": {
+                "type": "json_schema",
+                "json_schema": {
+                    "name": "structured_output",
+                    "strict": True,
+                    "schema": json_schema,
+                },
+            },
+        }
+        payload = json.dumps(body).encode("utf-8")
+        req = urllib.request.Request(
+            f"http://127.0.0.1:{self.port}/v1/chat/completions",
+            data=payload, headers={"Content-Type": "application/json"})
+        try:
+            with urllib.request.urlopen(req, timeout=600) as r:
+                answer = json.load(r)["choices"][0]["message"]["content"].strip()
+        except Exception:
+            answer = self.generate(system, user, max_tokens=max_tokens, on_token=None)
+        return answer
+
     def stop(self) -> None:
         """自分が起動したサーバーを確実に終了させる (Terminate → Kill)。"""
         proc, self.proc = self.proc, None
@@ -581,6 +748,10 @@ class RuleBasedBackend:
         if on_token is not None:
             on_token(answer)
         return answer
+
+    def generate_structured(self, system: str, user: str, json_schema: dict,
+                            max_tokens: int | None = None) -> str:
+        return self.generate(system, user, max_tokens=max_tokens, on_token=None)
 
     def stop(self) -> None:
         pass
@@ -956,6 +1127,65 @@ class ConsultationEngine:
                 self._backend = RuleBasedBackend()
         return self._backend
 
+    def _session_id_for_state(self, state: dict, mode: str) -> str:
+        if "session_id" not in state:
+            payload = json.dumps(
+                {"mode": mode, "config": state.get("config", {})},
+                sort_keys=True,
+                ensure_ascii=False,
+            ).encode("utf-8")
+            state["session_id"] = hashlib.blake2b(payload, digest_size=8).hexdigest()
+        return state["session_id"]
+
+    def _bounded_context(
+        self,
+        state: dict,
+        query: str,
+        *,
+        mode: str,
+        current_role: str | None = None,
+        current_text: str | None = None,
+    ) -> str:
+        from .session_memory import build_bounded_context
+
+        session_id = self._session_id_for_state(state, mode)
+        context, working_memory = build_bounded_context(
+            session_id=session_id,
+            transcript=state["transcript"],
+            current_query=query,
+            current_turn_role=current_role,
+            current_turn_text=current_text,
+        )
+        state["working_memory"] = working_memory
+        return context
+
+    def _generate_redacted(
+        self,
+        system: str,
+        user: str,
+        on_token=None,
+        max_tokens: int | None = None,
+        prefix_hash: str | None = None,
+    ) -> str:
+        redactor = HiddenReasoningRedactor()
+        wrapped = None
+        if on_token is not None:
+            def wrapped(piece: str) -> None:
+                delta = redactor.feed(piece)
+                if delta:
+                    on_token(delta)
+        gen_kwargs: dict = {}
+        if max_tokens is not None:
+            gen_kwargs["max_tokens"] = max_tokens
+        if wrapped is not None:
+            gen_kwargs["on_token"] = wrapped
+        if prefix_hash is not None:
+            gen_kwargs["prefix_hash"] = prefix_hash
+        raw_answer = self.backend.generate(system, user, **gen_kwargs)
+        if wrapped is None:
+            return _redact_answer(raw_answer)
+        return redactor.finalize()
+
     # ---- 感想戦 (Debrief — 講評後の対話フェーズ) ---------------------------
     def _debrief_turn(self, state: dict, q: str, status=None, on_token=None) -> str:
         """F-20 (SPEC_FOXTROT_UI.md §10.6): interview_sim/gd_sim 共通の
@@ -966,21 +1196,18 @@ class ConsultationEngine:
         新たな暴露面になる。"""
         say = status or (lambda msg: None)
         say("メンターが応答中…")
-        transcript_text = "\n".join(
-            f"[{role}] {text}" for role, text in state["transcript"])
+        bounded = self._bounded_context(state, q, mode="debrief")
         metrics = (state.get("report") or {}).get("metrics", [])
         metrics_line = "、".join(
             f"{m['axis']}:{m['score']}" for m in metrics) or "(スコアなし)"
         prompt = (
-            f"# 面接トランスクリプト\n{transcript_text}\n\n"
+            f"# 面接トランスクリプト (bounded)\n{bounded}\n\n"
             f"# あなたが出した講評\n{state.get('summary', '')}\n\n"
             f"# 評価スコア\n{metrics_line}\n\n"
-            f"# 候補者の質問\n{q}\n\n"
             "上記の面接文脈と講評・評価に基づき、建設的なメンターとして具体的に"
             "答えよ。新しい事実を捏造しない。"
         )
-        answer = self.backend.generate(state["mentor_system"], prompt, on_token=on_token)
-        answer = re.sub(r"<think>.*?</think>\s*", "", answer, flags=re.DOTALL).strip()
+        answer = self._generate_redacted(state["mentor_system"], prompt, on_token=on_token)
         state["transcript"].append(("メンター", answer))
         return answer
 
@@ -1118,13 +1345,12 @@ class ConsultationEngine:
                 mark_bounty_status(s["bounty_id"], "queued",
                                    bank_question_id=s["question_id"])
 
-            answer = self.backend.generate(system, prompt, on_token=on_token)
+            answer = self._generate_redacted(system, prompt, on_token=on_token)
             self._interview_state["transcript"].append(("面接官", answer))
             return answer
 
         state = self._interview_state
-        transcript_text = "\n".join(
-            f"[{role}] {text}" for role, text in state["transcript"])
+        self._session_id_for_state(state, "interview_sim")
 
         # F-20: 講評後は phase=="debrief" へ遷移済み (null 化しない)。
         # START は上の分岐で既に捕捉済みなのでここに来るのは非START入力のみ。
@@ -1153,8 +1379,8 @@ class ConsultationEngine:
 # 出題
 {subject}
 {es_section}
-# 議論トランスクリプト
-{transcript_text or '(候補者の発言なし)'}
+# 議論トランスクリプト (bounded)
+{self._bounded_context(state, "講評", mode="interview_sim") or '(候補者の発言なし)'}
 {_format_latency_section(state.get('latencies', []))}
 # 講評指示
 1. 論理性の評価: MECE な分解ができていたか、前提と数字の扱いは妥当か、
@@ -1176,10 +1402,8 @@ class ConsultationEngine:
 
 # Echo: 物理量に基づく客観的分析 (認知リソース状態・結合行列・介入候補)
 {self._oracle_section()}"""
-            answer = self.backend.generate(
+            answer = self._generate_redacted(
                 state["system"], eval_prompt, on_token=on_token)
-            answer = re.sub(r"<think>.*?</think>\s*", "", answer,
-                            flags=re.DOTALL).strip()
             from .consultation_log import append_consultation
             append_consultation(log_label, answer, simulated=True)
             from .line_telemetry import mark_bounty_status
@@ -1194,9 +1418,14 @@ class ConsultationEngine:
             # F4c: セッション開始時と同一の genre 導出 (_interview_genre) を
             # 使う (W-42 の鏡像)。
             genre = _interview_genre(cfg, case)
+            transcript_text = "\n".join(
+                f"[{role}] {text}" for role, text in state["transcript"])
             report = _ireport.generate_report(
                 self, state["system"], transcript_text, answer, cfg,
-                state.get("latencies", []))
+                state.get("latencies", []),
+                transcript_pairs=list(state["transcript"]),
+                session_id=state.get("session_id"),
+            )
             try:
                 _ireport.persist_report(report, genre)
             except OSError:
@@ -1238,14 +1467,14 @@ class ConsultationEngine:
             injection_note = (
                 f"\n\nまた、以下の一般的な質問も自然な流れで織り交ぜて尋ねよ:\n"
                 f"「{injected_text}」")
-        prompt = f"""{es_ctx}# これまでの議論
-{transcript_text}
-[候補者] {q}{latency_note}
+        bounded = self._bounded_context(state, q, mode="interview_sim")
+        prompt = f"""{es_ctx}# これまでの議論 (bounded)
+{bounded}{latency_note}
 
 面接官として応答せよ。候補者の直前の発言の弱点 (前提の曖昧さ・MECE でない
 分解・数字の根拠欠如・ES 記載との矛盾) を1点だけ短く突き、
 次の問いを1つ投げること。{injection_note}"""
-        answer = self.backend.generate(state["system"], prompt, on_token=on_token)
+        answer = self._generate_redacted(state["system"], prompt, on_token=on_token)
         state["transcript"].append(("面接官", answer))
         return answer
 
@@ -1279,10 +1508,8 @@ class ConsultationEngine:
 2. 定量的根拠の欠如・主語の曖昧さ・再現性の説明不足をすべて列挙せよ。
 3. この ES で最も弱い一文を特定し、書き直し例を示せ。
 4. 「{es['target_domain']}」のトップ層選考を通過する確率を上げる修正方針を3点提示せよ。"""
-        answer = self.backend.generate(
+        answer = self._generate_redacted(
             build_reviewer_persona(es), prompt, on_token=on_token)
-        answer = re.sub(r"<think>.*?</think>\s*", "", answer,
-                        flags=re.DOTALL).strip()
         from .consultation_log import append_consultation
         append_consultation(f"[es_review] {es['name']}", answer, simulated=True)
         say("ES 添削完了 (相談履歴に保存)")
@@ -1372,13 +1599,12 @@ class ConsultationEngine:
                     "最初の発言から議論を開始せよ。[学生B] は同調か沈黙、"
                     "[学生C] は早速話を逸らすこと。"
                 )
-            answer = self.backend.generate(system, prompt, on_token=on_token)
+            answer = self._generate_redacted(system, prompt, on_token=on_token)
             self._gd_state["transcript"].append(("参加者", answer))
             return answer
 
         state = self._gd_state
-        transcript_text = "\n".join(
-            f"[{role}] {text}" for role, text in state["transcript"])
+        self._session_id_for_state(state, "gd_sim")
 
         # F-20: 講評後は phase=="debrief" へ遷移済み (null 化しない)。
         if state.get("phase") == "debrief":
@@ -1395,8 +1621,8 @@ class ConsultationEngine:
 # GD 設定
 {state['topic_hint']}
 
-# 議論トランスクリプト
-{transcript_text or '(候補者の発言なし)'}
+# 議論トランスクリプト (bounded)
+{self._bounded_context(state, "講評", mode="gd_sim") or '(候補者の発言なし)'}
 {_format_latency_section(state.get('latencies', []))}
 # 講評指示
 1. 候補者 (あなた以外の唯一の人間) の介入行動を評価せよ:
@@ -1418,10 +1644,8 @@ class ConsultationEngine:
 
 # Echo: 物理量に基づく客観的分析 (認知リソース状態・結合行列・介入候補)
 {self._oracle_section()}"""
-            answer = self.backend.generate(
+            answer = self._generate_redacted(
                 state["system"], eval_prompt, on_token=on_token)
-            answer = re.sub(r"<think>.*?</think>\s*", "", answer,
-                            flags=re.DOTALL).strip()
             from .consultation_log import append_consultation
             append_consultation(f"[gd_sim] {state['topic_hint'][:60]}", answer,
                                 simulated=True)
@@ -1429,10 +1653,15 @@ class ConsultationEngine:
             # F-19 (SPEC_FOXTROT_UI.md §10.5): interview_sim と対称の成績表
             # (interview_report.v1) 永続化。append_consultation (ログ) とは
             # 別物であり二重記録ではない。永続化失敗は講評提示をブロックしない。
+            transcript_text = "\n".join(
+                f"[{role}] {text}" for role, text in state["transcript"])
             report = _ireport.generate_report(
                 self, state["system"], transcript_text, answer,
                 state.get("config") or {"genre": GD_GENRE},
-                state.get("latencies", []))
+                state.get("latencies", []),
+                transcript_pairs=list(state["transcript"]),
+                session_id=state.get("session_id"),
+            )
             try:
                 _ireport.persist_report(report, GD_GENRE)
             except OSError:
@@ -1470,12 +1699,12 @@ class ConsultationEngine:
                 "学生C は別の話題を持ち出すこと。候補者が誰かに発言を振った場合のみ、\n"
                 "その学生は応じてよい。"
             )
-        prompt = f"""# これまでの議論
-{transcript_text}
-[候補者] {q}{latency_note}
+        bounded = self._bounded_context(state, q, mode="gd_sim")
+        prompt = f"""# これまでの議論 (bounded)
+{bounded}{latency_note}
 
 {turn_rule}"""
-        answer = self.backend.generate(state["system"], prompt, on_token=on_token)
+        answer = self._generate_redacted(state["system"], prompt, on_token=on_token)
         state["transcript"].append(("参加者", answer))
         return answer
 
@@ -1536,12 +1765,8 @@ class ConsultationEngine:
 
         say(f"ローカルLLMで推論中… ({self.backend.name})")
         t0 = time.perf_counter()
-        answer = self.backend.generate(SYSTEM_PROMPT, prompt, on_token=on_token,
-                                       prefix_hash=phash)
-        # DeepSeek-R1 系は <think>…</think> の思考過程を出力する。
-        # 保存・最終表示からは除去する (ストリーミング中は生表示され、
-        # 最終応答での置換時にクリーンな本文だけが残る)。
-        answer = re.sub(r"<think>.*?</think>\s*", "", answer, flags=re.DOTALL).strip()
+        answer = self._generate_redacted(
+            SYSTEM_PROMPT, prompt, on_token=on_token, prefix_hash=phash)
 
         # <fetch_query> フック: 本文から除去してキューへ永続化するだけ。
         # ここでネットワークへ出ることは絶対にない (knowledge_fetcher の原則参照)。
