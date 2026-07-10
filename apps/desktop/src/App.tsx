@@ -3,6 +3,7 @@ import { ConsultTab } from "./components/ConsultTab";
 import { ImportTab } from "./components/ImportTab";
 import { InterviewTab } from "./components/InterviewTab";
 import { ProbeTab } from "./components/ProbeTab";
+import { ProfileTab } from "./components/ProfileTab";
 import { RecordTab } from "./components/RecordTab";
 import { SettingsTab } from "./components/SettingsTab";
 import { TitleBar } from "./components/TitleBar";
@@ -29,6 +30,7 @@ const TABS: { id: MainTab; label: string }[] = [
   { id: "consult", label: "CONSULT" },
   { id: "interview", label: "INTERVIEW" },
   { id: "probe", label: "PROBE" },
+  { id: "profile", label: "PROFILE" },
   { id: "settings", label: "SETTINGS" },
 ];
 
@@ -66,11 +68,11 @@ export default function App() {
     };
   }, []);
 
-  // SPEC_FOXTROT_UI.md §3.6: Alt+1..6 でメインタブ切替。
+  // SPEC_FOXTROT_UI.md §3.6 / SPEC_UI_ORPHAN: Alt+[1-6] (PROBE まで) + [1-7] (PROFILE 追加)。
   useEffect(() => {
     if (!ready) return;
     const onKey = (e: KeyboardEvent) => {
-      if (e.altKey && !e.ctrlKey && /^[1-6]$/.test(e.key)) {
+      if (e.altKey && !e.ctrlKey && /^[1-7]$/.test(e.key)) {
         const idx = Number(e.key) - 1;
         const target = TABS[idx];
         if (target) {
@@ -114,6 +116,7 @@ export default function App() {
         {tab === "consult" && <ConsultTab />}
         {tab === "interview" && <InterviewTab />}
         {tab === "probe" && <ProbeTab />}
+        {tab === "profile" && <ProfileTab />}
         {tab === "settings" && <SettingsTab />}
       </main>
     </div>

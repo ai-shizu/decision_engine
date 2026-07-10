@@ -6,11 +6,13 @@ import {
   importDocument,
   importLineFiles,
   importStats,
+  knowledgeFetchPending,
   loadSettings,
   pkbInvoke,
   syncAppleCalendar,
   syncIcsContent,
   syncIcsFiles,
+  type KnowledgeFetchSummary,
 } from "../lib/engine";
 import type { ClassifyResult, EngineEvent, EsView, SourceStat } from "../lib/types";
 import { useCorrelationId } from "../lib/useCorrelationId";
@@ -73,6 +75,7 @@ export function ImportTab() {
   const [esActive, setEsActive] = useState<EsView | null>(null);
   const [log, setLog] = useState<string[]>(importLog);
   const [pending, setPending] = useState<PendingItem[]>([]);
+  const [fetchSummary, setFetchSummary] = useState<KnowledgeFetchSummary | null>(null);
   const lineRef = useRef<HTMLInputElement>(null);
   const icsRef = useRef<HTMLInputElement>(null);
   const otherRef = useRef<HTMLInputElement>(null);
@@ -281,6 +284,27 @@ export function ImportTab() {
     }
   }
 
+  async function handleKnowledgeFetch() {
+    setBusy(true);
+    try {
+      const summary = await knowledgeFetchPending();
+      if (mountedRef.current) setFetchSummary(summary);
+      pushImportLog(
+        typeof summary.message === "string"
+          ? summary.message
+          : `processed=${summary.processed} pending=${summary.pending}`,
+      );
+    } catch (err) {
+      pushImportLog(String(err));
+    } finally {
+      if (mountedRef.current) {
+        setBusy(false);
+        setLog([...importLog]);
+      }
+      void refreshStats();
+    }
+  }
+
   return (
     <section className="panel import-panel">
       <h2>データ取り込み</h2>
@@ -318,6 +342,33 @@ export function ImportTab() {
           </>
         ) : (
           <p className="hint">登録済み ES なし</p>
+        )}
+      </div>
+
+      <div className="term-panel knowledge-fetch-panel">
+        <p className="term-header">KNOWLEDGE_QUEUE</p>
+        <p className="hint">
+          ユーザー明示操作のみ。オフライン既定では pending 件数の報告のみ
+          (PKB_ALLOW_ONLINE_FETCH=1 時のみネットワーク取得)。
+        </p>
+        <button type="button" disabled={busy} onClick={() => void handleKnowledgeFetch()}>
+          {busy ? "処理中…" : "知識キューを処理 (ユーザー明示操作)"}
+        </button>
+        {fetchSummary && (
+          <>
+            <div className="term-row">
+              <span className="term-source-name">processed</span>
+              <span className="term-value">{fetchSummary.processed}</span>
+            </div>
+            <div className="term-row">
+              <span className="term-source-name">pending</span>
+              <span className="term-value">{fetchSummary.pending}</span>
+            </div>
+            <div className="term-row">
+              <span className="term-source-name">online_allowed</span>
+              <span className="term-value">{fetchSummary.online_allowed ? "true" : "false"}</span>
+            </div>
+          </>
         )}
       </div>
 

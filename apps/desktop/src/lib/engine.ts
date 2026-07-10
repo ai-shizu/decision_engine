@@ -273,6 +273,36 @@ export async function sourceCode(): Promise<SourceCodeView> {
   return pkbInvoke("profile.source_code");
 }
 
+export interface NarrativeCompileResult {
+  ok: boolean;
+  es_text?: string;
+  recruiters_eye?: string;
+  claims?: unknown[];
+  compiled_from?: string;
+  target_domain?: string;
+  draft_path?: string;
+  reason?: string;
+}
+
+export async function narrativeCompile(
+  targetDomain?: string,
+): Promise<NarrativeCompileResult> {
+  return pkbInvoke("narrative.compile", { target_domain: targetDomain ?? null });
+}
+
+export interface KnowledgeFetchSummary {
+  processed: number;
+  pending: number;
+  online_allowed: boolean;
+  index_rebuilt?: boolean;
+  message?: string;
+  [key: string]: unknown;
+}
+
+export async function knowledgeFetchPending(): Promise<KnowledgeFetchSummary> {
+  return pkbInvoke("knowledge.fetch_pending");
+}
+
 export async function probeStatus(today: string): Promise<ProbeStatus> {
   return pkbInvoke("probe.status", { today });
 }

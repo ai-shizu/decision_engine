@@ -1271,3 +1271,113 @@ button.secondary {
     grid-template-columns: 1fr;
   }
 }
+
+/* PROFILE (SPEC_UI_ORPHAN_INTEGRATION.md) */
+.profile-panel {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s3);
+}
+
+.profile-topline {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: var(--s3);
+  padding-bottom: var(--s2);
+  border-bottom: 1px solid var(--border);
+}
+
+.profile-topline h2 {
+  margin: 0 0 var(--s1);
+}
+
+.profile-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: var(--s4);
+}
+
+.profile-section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-raised);
+  padding: var(--s3);
+}
+
+.profile-metric-row {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--s2);
+  padding: var(--s1) 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.profile-metric-row:last-child {
+  border-bottom: none;
+}
+
+.profile-axis-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+
+.profile-axis-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1.4fr) repeat(3, minmax(0, 1fr));
+  gap: var(--s2);
+  padding: var(--s1) 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.profile-axis-row:last-child {
+  border-bottom: none;
+}
+
+.profile-report {
+  margin: var(--s2) 0 0;
+  padding: var(--s2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg);
+  white-space: pre-wrap;
+  font-size: 0.9rem;
+  max-height: 16rem;
+  overflow: auto;
+}
+
+.profile-form-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s3);
+  align-items: flex-end;
+}
+
+.profile-form-row label {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s1);
+  font-size: 0.85rem;
+}
+
+.knowledge-fetch-panel {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s2);
+}
+
+.narrative-panel {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s2);
+}
+
+@media (max-width: 720px) {
+  .profile-grid {
+    grid-template-columns: 1fr;
+  }
+}

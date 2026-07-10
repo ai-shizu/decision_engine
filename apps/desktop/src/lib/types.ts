@@ -50,7 +50,14 @@ export interface EngineEvent {
   text?: string;
 }
 
-export type MainTab = "record" | "import" | "consult" | "interview" | "probe" | "settings";
+export type MainTab =
+  | "record"
+  | "import"
+  | "consult"
+  | "interview"
+  | "probe"
+  | "profile"
+  | "settings";
 
 export type ProbeAxis =
   | "decision_threshold"

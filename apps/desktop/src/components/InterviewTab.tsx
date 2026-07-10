@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
-import { consult } from "../lib/engine";
+import { consult, narrativeCompile, type NarrativeCompileResult } from "../lib/engine";
 import type {
   EngineEvent,
   GdPersona,
@@ -145,6 +145,9 @@ export function InterviewTab() {
   const [personas, setPersonas] = useState<GdPersona[]>(DEFAULT_PERSONAS);
   const [config, setConfig] = useState<InterviewConfig>(DEFAULT_CONFIG);
   const [report, setReport] = useState<InterviewReport | null>(null);
+  const [narrativeTarget, setNarrativeTarget] = useState("");
+  const [narrativeResult, setNarrativeResult] = useState<NarrativeCompileResult | null>(null);
+  const [narrativeBusy, setNarrativeBusy] = useState(false);
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
   const [status, setStatus] = useState("");
@@ -334,6 +337,20 @@ export function InterviewTab() {
 
   function updatePersona(i: number, patch: Partial<GdPersona>) {
     setPersonas((prev) => prev.map((p, j) => (j === i ? { ...p, ...patch } : p)));
+  }
+
+  async function handleNarrativeCompile() {
+    setNarrativeBusy(true);
+    setNarrativeResult(null);
+    try {
+      const domain = narrativeTarget.trim();
+      const res = await narrativeCompile(domain || undefined);
+      setNarrativeResult(res);
+    } catch (err) {
+      setNarrativeResult({ ok: false, reason: String(err) });
+    } finally {
+      setNarrativeBusy(false);
+    }
   }
 
   const showLobby = mode === "gd_sim" && phase === "idle";
@@ -562,6 +579,69 @@ export function InterviewTab() {
               参加者を追加
             </button>
           </div>
+        </div>
+      )}
+
+      {phase === "idle" && (
+        <div className="term-panel narrative-panel">
+          <p className="term-header">NARRATIVE_DRAFT</p>
+          <p className="hint">
+            gap 素材から ES ドラフトを生成 (LLM 明示操作。マウント時は実行しない)。
+          </p>
+          <div className="term-row config-row">
+            <span className="term-source-name">志望領域 (任意)</span>
+            <input
+              value={narrativeTarget}
+              onChange={(e) => setNarrativeTarget(e.target.value)}
+              placeholder="空欄なら active ES / 既定ドメイン"
+            />
+          </div>
+          <button
+            type="button"
+            disabled={narrativeBusy || busy}
+            onClick={() => void handleNarrativeCompile()}
+          >
+            {narrativeBusy ? "コンパイル中…" : "Narrative をコンパイル"}
+          </button>
+          {narrativeResult && (
+            <>
+              <div className="term-row">
+                <span className="term-source-name">ok</span>
+                <span className="term-value">{narrativeResult.ok ? "true" : "false"}</span>
+              </div>
+              {narrativeResult.reason && (
+                <div className="term-row">
+                  <span className="term-source-name">reason</span>
+                  <span className="term-value">{narrativeResult.reason}</span>
+                </div>
+              )}
+              {narrativeResult.target_domain && (
+                <div className="term-row">
+                  <span className="term-source-name">target_domain</span>
+                  <span className="term-value">{narrativeResult.target_domain}</span>
+                </div>
+              )}
+              {narrativeResult.draft_path && (
+                <div className="term-row">
+                  <span className="term-source-name">draft_path</span>
+                  <span className="term-value">{narrativeResult.draft_path}</span>
+                </div>
+              )}
+              <div className="term-row">
+                <span className="term-source-name">claims</span>
+                <span className="term-value">{narrativeResult.claims?.length ?? 0}</span>
+              </div>
+              {narrativeResult.es_text && (
+                <pre className="term-es-body">{narrativeResult.es_text}</pre>
+              )}
+              {narrativeResult.recruiters_eye && (
+                <>
+                  <p className="term-header">RECRUITERS_EYE</p>
+                  <pre className="term-es-body">{narrativeResult.recruiters_eye}</pre>
+                </>
+              )}
+            </>
+          )}
         </div>
       )}
 

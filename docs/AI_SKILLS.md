@@ -1984,6 +1984,13 @@ IPC/契約テスト、D1/D2 回帰、既存 UI smoke、production build は GREE
 
 ---
 
+### UI Orphan Integration - AS-BUILT
+- **状態**: 完了 (GREEN)
+- **実装内容**: バックエンドに存在していたUI未統合機能（`profile.source_code`, `oracle.payload`, `oracle.report`, `twin.forecast`, `tensor.rebuild`, `narrative.compile`, `knowledge.fetch_pending`）を React UI へ完全統合。新設の PROFILE タブおよび既存タブへ配置。
+- **アーキテクチャ**: 重い処理（report, twin, tensor）は明示的なボタン実行（Lazy Load）に限定。証拠の生テキストや第三者実名をUIに露出させないプライバシー規律を厳守。バックエンドコアに一切変更を加えず、薄いラッパー層のみで接続を完遂。
+
+---
+
 ## 14. インシデント 2026-07-07: metadata.json 4.2GB 肥大 (IMP-1 是正指令)
 
 ### 検死結果 (読み取り専用フォレンジックで確定した事実)
