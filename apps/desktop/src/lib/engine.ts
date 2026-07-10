@@ -65,7 +65,7 @@ export async function esView(): Promise<EsView> {
 }
 
 export interface ConsultOptions {
-  mode?: "consult" | "interview_sim" | "es_review" | "gd_sim";
+  mode?: "consult" | "interview_sim" | "es_review" | "gd_sim" | "romance_analysis";
   personas?: { name: string; trait: string }[];
   /** AI 表示 → ユーザー送信までの経過秒 (面接/GD の思考速度評価用) */
   response_time_sec?: number;
@@ -73,11 +73,24 @@ export interface ConsultOptions {
   config?: InterviewConfig;
 }
 
+export interface RomanceAnalysisResult {
+  schema: string;
+  affinity_score: number | null;
+  interaction_tendency: string;
+  next_best_action: string;
+}
+
 export async function consult(
   query: string,
   opts: ConsultOptions = {},
   cid?: number,
-): Promise<{ query: string; mode?: string; answer: string; report?: InterviewReport }> {
+): Promise<{
+  query: string;
+  mode?: string;
+  answer: string;
+  report?: InterviewReport;
+  romance_analysis?: RomanceAnalysisResult;
+}> {
   return pkbInvoke("consult", { query, ...opts }, cid);
 }
 

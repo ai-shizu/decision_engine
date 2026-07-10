@@ -109,6 +109,11 @@ def last_interview_report() -> dict | None:
     return get_engine()._last_interview_report
 
 
+def last_romance_analysis() -> dict | None:
+    """Phase 3-B: 直前の romance_analysis 呼び出し結果 (検証済み構造体のみ)。"""
+    return get_engine()._last_romance_analysis
+
+
 def compile_narrative(target_domain: str | None = None) -> dict:
     """NARRATIVE COMPILER (Target Delta D3): gap_analysis の証拠付きギャップから
     ES ドラフト + Recruiter's Eye (メタ解説) を生成する。"""

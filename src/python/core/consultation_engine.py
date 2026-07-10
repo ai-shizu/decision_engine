@@ -779,6 +779,8 @@ class ConsultationEngine:
         # していればそれを保持する。consult() の呼び出しごとに None へ戻される
         # (per-call スナップショット — 古い成績表が別ターンへ漏れない)。
         self._last_interview_report: dict | None = None
+        # Phase 3-B: 直前の romance_analysis 呼び出し結果 (per-call スナップショット)。
+        self._last_romance_analysis: dict | None = None
 
     # ---- 埋め込み (pipeline.py と同一空間) --------------------------------
     @property
@@ -1708,6 +1710,18 @@ class ConsultationEngine:
         state["transcript"].append(("参加者", answer))
         return answer
 
+    def _consult_romance_analysis(
+        self, query: str, status=None, on_token=None,
+    ) -> str:
+        """Phase 3-B: 観測可能な会話往復量のみを解析する (検索・ログ保存なし)。"""
+        from .romance_analysis import analyze_input
+
+        say = status or (lambda msg: None)
+        say("交流パルスを集計中…")
+        self._last_romance_analysis = analyze_input(self, query)
+        say("交流パルス解析が完了しました。")
+        return "交流パルス解析が完了しました。"
+
     def consult(self, query: str, top_k: int = 3, status=None,
                 on_token=None, mode: str = "consult",
                 personas: list[dict] | None = None,
@@ -1726,6 +1740,10 @@ class ConsultationEngine:
         無視する境界防衛)。
         呼び出しごとに直前の成績表をリセットする (per-call スナップショット)。"""
         self._last_interview_report = None
+        self._last_romance_analysis = None
+        if mode == "romance_analysis":
+            return self._consult_romance_analysis(
+                query, status=status, on_token=on_token)
         if mode == "interview_sim":
             return self._consult_interview_sim(
                 query, status=status, on_token=on_token,

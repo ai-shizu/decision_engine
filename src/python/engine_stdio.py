@@ -109,6 +109,9 @@ def dispatch(cmd: str, params: dict[str, Any], emit: EventEmitter | None = None)
         report = facade.last_interview_report()
         if report is not None:
             result["report"] = report
+        romance = facade.last_romance_analysis()
+        if romance is not None:
+            result["romance_analysis"] = romance
         return result
     if cmd == "knowledge.fetch_pending":
         return facade.fetch_pending_knowledge()

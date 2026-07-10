@@ -2015,6 +2015,12 @@ IPC/契約テスト、D1/D2 回帰、既存 UI smoke、production build は GREE
 - **アーキテクチャ**: Phase 3-Aはフロントエンド表示層のみに限定し、新規IPC、永続化、推定処理を追加していない。MBTIは固定モックとして測定値・推定値から隔離。6D tooltipは外部ライブラリを使わず、ReactとCSSのみでhoverおよびkeyboard focusに対応した。新規hex色、リテラルpx、letter-spacing、外部npm依存を追加せず、既存CSS変数と`thin solid`によるスタイリング規律を維持。
 - **検証結果**: 強化UI契約、Phase 3-A契約、既存UI回帰、TypeScript型検査、Vite本番ビルド、`git diff --check`がすべてPASS。backend、package files、`data/`への変更なし。
 
+### Project Calculus Phase 3-B - AS-BUILT
+- **状態**: 完了 (GREEN)
+- **実装内容**: CONSULTへ`romance_analysis`モードを追加し、会話履歴から観測可能な発話数、ターン切り替え、往復バランス、返信遷移率を集計する交流パルス解析を実装。検証済み`romance_analysis.v1`構造体をstdio経由でReactへ渡し、PROFILEと共通するサイバーUI規律のメーター、傾向、次の一手として表示する。
+- **アーキテクチャ**: APIフィールド`affinity_score`は恋愛感情や脈あり度の推定ではなく、決定論的な交流往復指数として定義。生LINE本文・実名をLLM、ログ、派生UIへ渡さず、`contact_alias`形式と集計済み物理量だけを扱う。空本文を観測件数から除外し、未観測の文字数・時刻差を傾向へ使用しない。通常時とデータ不足時の文言集合を分離し、JSON Schema、strict validator、決定論fallbackの往復契約を保証。再解析開始・通信失敗・構造体欠落時には旧UI結果を確実に破棄する。
+- **検証結果**: Phase 3-B backend/UI契約、Python関連全回帰150件、TypeScript型検査、Vite本番ビルド、`git diff --check`がすべてPASS。Phase 1〜3-Aコア、package files、`data/`への無関係な変更なし。
+
 ---
 
 ## 14. インシデント 2026-07-07: metadata.json 4.2GB 肥大 (IMP-1 是正指令)

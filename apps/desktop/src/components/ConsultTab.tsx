@@ -1,9 +1,21 @@
 import { useEffect, useRef, useState } from "react";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
-import { consult } from "../lib/engine";
+import { consult, type RomanceAnalysisResult } from "../lib/engine";
 import type { ChatMessage, EngineEvent } from "../lib/types";
 import { useCorrelationId } from "../lib/useCorrelationId";
 import { useThrottledStream } from "../lib/useThrottledStream";
+import { RomanceAnalysisPanel } from "./RomanceAnalysisPanel";
+
+type ConsultMode = "consult" | "romance_analysis";
+
+const ROMANCE_SUCCESS_MESSAGE = "会話履歴を解析しました";
+const ROMANCE_PARSING_STATUS = "交流パルスを解析中…";
+
+function stripRomanceSuccessMessages(messages: ChatMessage[]): ChatMessage[] {
+  return messages.filter(
+    (m) => !(m.role === "assistant" && m.text === ROMANCE_SUCCESS_MESSAGE),
+  );
+}
 
 export function ConsultTab() {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -11,6 +23,8 @@ export function ConsultTab() {
   const [busy, setBusy] = useState(false);
   const [status, setStatus] = useState("");
   const [confirmingClear, setConfirmingClear] = useState(false);
+  const [mode, setMode] = useState<ConsultMode>("consult");
+  const [romanceResult, setRomanceResult] = useState<RomanceAnalysisResult | null>(null);
   const logRef = useRef<HTMLDivElement>(null);
   // SPEC_FOXTROT_UI.md §9 (Rev.10): 旧来の真偽値フラグ (F3 裁定1) を撤廃し、
   // 相関ID (cid) 照合へ移行した。自分の consult が in-flight の間だけ
@@ -81,21 +95,54 @@ export function ConsultTab() {
     };
   }, []);
 
+  function handleModeChange(next: ConsultMode) {
+    setMode(next);
+    setRomanceResult(null);
+  }
+
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     const q = input.trim();
     if (!q || busy) return;
     setInput("");
-    flushChunkQueue(); // 新規送信時に前回セッションの残留キューを破棄する
+    flushChunkQueue();
+    setBusy(true);
+    const myCid = cid.begin();
+    setStatus("考え中…");
+    stickRef.current = true;
+
+    if (mode === "romance_analysis") {
+      setRomanceResult(null);
+      setMessages((prev) => stripRomanceSuccessMessages(prev));
+      setStatus(ROMANCE_PARSING_STATUS);
+      try {
+        const res = await consult(q, { mode: "romance_analysis" }, myCid);
+        if (!res.romance_analysis) {
+          throw new Error("解析結果を取得できませんでした");
+        }
+        setRomanceResult(res.romance_analysis);
+        setMessages((prev) => [
+          ...prev,
+          { role: "assistant", text: ROMANCE_SUCCESS_MESSAGE },
+        ]);
+        setStatus("");
+      } catch (err) {
+        setRomanceResult(null);
+        setMessages((prev) => stripRomanceSuccessMessages(prev));
+        setStatus(String(err));
+      } finally {
+        setBusy(false);
+        cid.end(myCid);
+        if (stickRef.current) scrollToBottom(true);
+      }
+      return;
+    }
+
     setMessages((prev) => [
       ...prev,
       { role: "user", text: q },
       { role: "assistant", text: "", streaming: true },
     ]);
-    setBusy(true);
-    const myCid = cid.begin();
-    setStatus("考え中…");
-    stickRef.current = true;
     scrollToBottom(true);
     try {
       const res = await consult(q, {}, myCid);
@@ -140,8 +187,11 @@ export function ConsultTab() {
     }
     setMessages([]);
     setStatus("");
+    setRomanceResult(null);
     setConfirmingClear(false);
   }
+
+  const isRomance = mode === "romance_analysis";
 
   return (
     <section className="panel consult-panel">
@@ -159,6 +209,19 @@ export function ConsultTab() {
       </div>
       <p className="hint">記録・プロファイルに基づくオフライン相談。会話はこのセッション内のみ保持されます。</p>
 
+      <div className="consult-mode-row">
+        <label htmlFor="consult-mode-select">モード</label>
+        <select
+          id="consult-mode-select"
+          value={mode}
+          onChange={(e) => handleModeChange(e.target.value as ConsultMode)}
+          disabled={busy}
+        >
+          <option value="consult">通常相談</option>
+          <option value="romance_analysis">Romance（交流パルス解析）</option>
+        </select>
+      </div>
+
       <div className="chat-log" ref={logRef} onScroll={handleLogScroll}>
         {messages.length === 0 ? (
           <p className="hint chat-empty">質問を入力して送信してください。</p>
@@ -175,12 +238,19 @@ export function ConsultTab() {
         )}
       </div>
 
+      {isRomance && <RomanceAnalysisPanel result={romanceResult} />}
+
       <form className="consult-form" onSubmit={(e) => void handleSubmit(e)}>
         <textarea
           value={input}
           onChange={(e) => setInput(e.target.value)}
-          placeholder="相談内容を入力…"
-          rows={3}
+          placeholder={
+            isRomance
+              ? "[self] 自分の発言\n[contact_alias] 相手の発言\n…（最大12,000文字）"
+              : "相談内容を入力…"
+          }
+          rows={isRomance ? 6 : 3}
+          maxLength={isRomance ? 12000 : undefined}
           disabled={busy}
           onKeyDown={(e) => {
             if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
