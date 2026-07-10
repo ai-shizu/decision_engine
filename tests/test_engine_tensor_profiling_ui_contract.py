@@ -201,3 +201,38 @@ def test_tensor_radar_css_classes() -> None:
     end = css.find(".gd-thread-row", start)
     tensor_css = css[start:end] if end != -1 else css[start:]
     assert re.search(r"#[0-9a-fA-F]{3,8}", tensor_css) is None
+
+
+def _css_declaration_block(css: str, selector: str) -> str:
+    match = re.search(re.escape(selector) + r"\s*\{([^}]*)\}", css, re.DOTALL)
+    assert match, f"missing CSS block for {selector}"
+    return match.group(1)
+
+
+def test_phase3_added_css_blocks_have_no_literal_px() -> None:
+    css = _read("App.css")
+    for selector in (
+        ".mbti-preview-bar",
+        ".tensor-radar-help-trigger:focus-visible",
+        ".tensor-radar-tooltip",
+    ):
+        block = _css_declaration_block(css, selector)
+        hits = re.findall(r"\d+px", block)
+        assert hits == [], f"literal px in {selector}: {hits} in {block.strip()}"
+
+
+def test_tensor_radar_legend_renders_visible_axis_name() -> None:
+    chart = _read("components/TensorRadarChart.tsx")
+    legend = chart.split('className="tensor-radar-legend"', 1)[1].split("</ul>", 1)[0]
+    assert "d.axisName" in legend
+    assert "tensor-radar-axis-name" in legend
+    assert "{d.axisName}" in legend
+    assert legend.index("d.axisName") < legend.index("AxisHelp")
+    assert 'tabIndex={0}' in chart
+    assert 'aria-describedby' in chart
+    assert 'role="tooltip"' in chart
+    assert "[?]" in chart
+    assert "AxisHelp" in legend
+    assert legend.count("d.axisName") >= 1
+    desc_only = chart.split("<desc", 1)[0]
+    assert "tensor-radar-axis-name" not in desc_only or "{d.axisName}" in legend

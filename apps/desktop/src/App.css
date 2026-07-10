@@ -1492,10 +1492,111 @@ button.secondary {
 .tensor-radar-legend-label {
   color: var(--text-muted);
   font-size: 0.85rem;
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--s1);
 }
 
 .tensor-radar-legend-value {
   color: var(--text);
   font-family: var(--font-mono);
   font-size: 0.85rem;
+}
+
+/* Phase 3-A: Custom theme textarea */
+.custom-theme-textarea {
+  width: 100%;
+  min-height: 6rem;
+  resize: vertical;
+}
+
+/* Phase 3-A: MBTI preference preview (mock) */
+.mbti-preview-panel {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s2);
+}
+
+.mbti-preview-label {
+  margin: 0;
+  font-size: 0.85rem;
+  color: var(--text-muted);
+}
+
+.mbti-preview-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--s3);
+}
+
+.mbti-preview-row {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s1);
+}
+
+.mbti-preview-labels {
+  display: flex;
+  justify-content: space-between;
+  font-size: 0.85rem;
+  color: var(--text-muted);
+}
+
+.mbti-preview-bar {
+  height: 0.75rem;
+  border-radius: var(--radius-s);
+  border: thin solid var(--border);
+}
+
+/* Phase 3-A: Tensor radar axis help tooltips */
+.tensor-radar-help-wrap {
+  position: relative;
+  display: inline-flex;
+  margin-left: var(--s1);
+}
+
+.tensor-radar-help-trigger {
+  color: var(--accent);
+  font-size: 0.75rem;
+  cursor: help;
+  outline: none;
+}
+
+.tensor-radar-help-trigger:focus-visible {
+  outline: thin solid var(--accent);
+  outline-offset: 0.125rem;
+}
+
+.tensor-radar-tooltip {
+  position: absolute;
+  left: 50%;
+  bottom: calc(100% + var(--s2));
+  transform: translateX(-50%);
+  z-index: 2;
+  width: max-content;
+  max-width: min(16rem, 80vw);
+  padding: var(--s2);
+  border: thin solid var(--border);
+  border-radius: var(--radius-s);
+  background: var(--bg-deep);
+  color: var(--text);
+  font-size: 0.75rem;
+  line-height: 1.4;
+  opacity: 0;
+  pointer-events: none;
+  white-space: normal;
+}
+
+.tensor-radar-help-wrap:hover .tensor-radar-tooltip,
+.tensor-radar-help-wrap:focus-within .tensor-radar-tooltip {
+  opacity: 1;
+}
+
+.tensor-radar-axis-name {
+  color: var(--text-muted);
+  font-size: 0.75rem;
 }

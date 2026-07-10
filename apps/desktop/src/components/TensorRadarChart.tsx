@@ -2,6 +2,8 @@ export type TensorRadarDatum = {
   id: string;
   label: string;
   value: number | null;
+  axisName?: string;
+  description?: string;
 };
 
 export type TensorRadarChartProps = {
@@ -47,6 +49,24 @@ function labelAnchor(index: number): "start" | "middle" | "end" {
   return "middle";
 }
 
+function AxisHelp({ id, description }: { id: string; description: string }) {
+  const tooltipId = `tensor-radar-tooltip-${id}`;
+  return (
+    <span className="tensor-radar-help-wrap">
+      <span
+        className="tensor-radar-help-trigger"
+        tabIndex={0}
+        aria-describedby={tooltipId}
+      >
+        [?]
+      </span>
+      <span id={tooltipId} role="tooltip" className="tensor-radar-tooltip">
+        {description}
+      </span>
+    </span>
+  );
+}
+
 export function TensorRadarChart({ data, preview = false, title }: TensorRadarChartProps) {
   if (data.length !== N) {
     return <p className="hint">Tensor radar requires exactly six dimensions.</p>;
@@ -63,7 +83,10 @@ export function TensorRadarChart({ data, preview = false, title }: TensorRadarCh
     })
     .join(" ");
 
-  const descLines = normalized.map((d) => `${d.label}: ${formatDisplayValue(d.plot)}`);
+  const descLines = normalized.map((d) => {
+    const name = d.axisName ? `${d.label} (${d.axisName})` : d.label;
+    return `${name}: ${formatDisplayValue(d.plot)}`;
+  });
   const accessibleDesc = [
     title ?? "Six-dimensional tensor profile",
     preview ? PREVIEW_LABEL : null,
@@ -130,7 +153,15 @@ export function TensorRadarChart({ data, preview = false, title }: TensorRadarCh
       <ul className="tensor-radar-legend" aria-hidden="false">
         {normalized.map((d) => (
           <li key={d.id} className="tensor-radar-legend-row">
-            <span className="tensor-radar-legend-label">{d.label}</span>
+            <span className="tensor-radar-legend-label">
+              <span>{d.label}</span>
+              {d.axisName ? (
+                <span className="tensor-radar-axis-name">{d.axisName}</span>
+              ) : null}
+              {d.axisName && d.description ? (
+                <AxisHelp id={d.id} description={d.description} />
+              ) : null}
+            </span>
             <span className="tensor-radar-legend-value">{formatDisplayValue(d.plot)}</span>
           </li>
         ))}

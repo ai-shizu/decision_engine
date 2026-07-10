@@ -2009,6 +2009,12 @@ IPC/契約テスト、D1/D2 回帰、既存 UI smoke、production build は GREE
 - **アーキテクチャ**: `session_memory.py` が境界付きWorking Memoryと最新発言優先の証拠コンテキストを構築し、`tensor_profile.py` が6Dスキーマ、厳格validator、集約式を所有する。`interview_report.py` は構造化JSON生成、参照整合性検証、再試行、退化profileを提供する。`consultation_engine.py` にはnestedタグとchunk境界に対応した真のO(n) Hidden Reasoning除去ステートマシンを配線し、IPC前とUI側の二重防衛を完成させた。不正・未知Evidenceを拒否してハルシネーション由来の値を採用せず、既存`oracle.py`の無菌性と`interview_report.v1`の後方互換を維持。
 - **検証結果**: Python関連全回帰114件、TypeScript型検査、Vite本番ビルド、`git diff --check`がすべてPASS。frontend、package files、`data/`、既存D1/D2/PROBEコアへの無関係な変更なし。
 
+### Project Calculus Phase 3-A - AS-BUILT
+- **状態**: 完了 (GREEN)
+- **実装内容**: INTERVIEWの持ち込みお題textareaを拡大して縦方向のリサイズに対応し、NARRATIVE_DRAFTの説明を初学者向けに平易化。PROFILEへ未測定であることを明示した4軸MBTIグラデーションバーを追加し、6次元テンソル評価の英語軸名と日本語ヘルプツールチップを実装。
+- **アーキテクチャ**: Phase 3-Aはフロントエンド表示層のみに限定し、新規IPC、永続化、推定処理を追加していない。MBTIは固定モックとして測定値・推定値から隔離。6D tooltipは外部ライブラリを使わず、ReactとCSSのみでhoverおよびkeyboard focusに対応した。新規hex色、リテラルpx、letter-spacing、外部npm依存を追加せず、既存CSS変数と`thin solid`によるスタイリング規律を維持。
+- **検証結果**: 強化UI契約、Phase 3-A契約、既存UI回帰、TypeScript型検査、Vite本番ビルド、`git diff --check`がすべてPASS。backend、package files、`data/`への変更なし。
+
 ---
 
 ## 14. インシデント 2026-07-07: metadata.json 4.2GB 肥大 (IMP-1 是正指令)

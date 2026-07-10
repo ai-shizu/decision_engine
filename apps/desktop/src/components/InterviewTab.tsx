@@ -589,8 +589,9 @@ export function InterviewTab() {
               value={config.customTheme ?? ""}
               onChange={(e) => setConfig((c) => ({ ...c, customTheme: e.target.value }))}
               placeholder="例: 自動運転車の障害物検知システムの設計 / 東京都内の信号機の数をフェルミ推定... (空欄の場合は通常進行)"
+              rows={6}
+              className="custom-theme-textarea"
               maxLength={CUSTOM_THEME_MAX_CHARS}
-              rows={2}
             />
             <span className="hint">
               {(config.customTheme ?? "").length}/{CUSTOM_THEME_MAX_CHARS}
@@ -679,7 +680,7 @@ export function InterviewTab() {
         <div className="term-panel narrative-panel">
           <p className="term-header">NARRATIVE_DRAFT</p>
           <p className="hint">
-            gap 素材から ES ドラフトを生成 (LLM 明示操作。マウント時は実行しない)。
+            現在のスキルと目指す姿のギャップを分析し、自己PR・ESの草案を自動生成します（※模擬面接マウント中は実行不可）
           </p>
           <div className="term-row config-row">
             <span className="term-source-name">志望領域 (任意)</span>

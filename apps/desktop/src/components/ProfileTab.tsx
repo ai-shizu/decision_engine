@@ -11,14 +11,51 @@ import {
 } from "../lib/engine";
 import type { SourceCodeView } from "../lib/types";
 import { TensorRadarChart } from "./TensorRadarChart";
+import { MbtiGradientBars } from "./MbtiGradientBars";
 
 const TENSOR_RADAR_PREVIEW = [
-  { id: "problem_structuring", label: "構造化", value: 0.72 },
-  { id: "quantitative_rigor", label: "定量精度", value: 0.58 },
-  { id: "hypothesis_evidence", label: "仮説検証", value: 0.64 },
-  { id: "synthesis_judgment", label: "統合判断", value: 0.68 },
-  { id: "communication", label: "伝達", value: 0.76 },
-  { id: "collaboration_adaptability", label: "協働適応", value: 0.61 },
+  {
+    id: "problem_structuring",
+    label: "構造化",
+    value: 0.72,
+    axisName: "Structural_Decomposition",
+    description: "複雑な課題を漏れなく分解する力",
+  },
+  {
+    id: "quantitative_rigor",
+    label: "定量精度",
+    value: 0.58,
+    axisName: "Quantitative_Agility",
+    description: "数量や概算を正確かつ素早く扱う力",
+  },
+  {
+    id: "hypothesis_evidence",
+    label: "仮説検証",
+    value: 0.64,
+    axisName: "Logical_Rigor",
+    description: "前提と根拠を結び、筋道立てて検証する力",
+  },
+  {
+    id: "synthesis_judgment",
+    label: "統合判断",
+    value: 0.68,
+    axisName: "Domain_Adaptability",
+    description: "未知の業界やテーマへ知識を適用する力",
+  },
+  {
+    id: "communication",
+    label: "伝達",
+    value: 0.76,
+    axisName: "Communication_Bandwidth",
+    description: "考えを簡潔かつ明確に伝える力",
+  },
+  {
+    id: "collaboration_adaptability",
+    label: "協働適応",
+    value: 0.61,
+    axisName: "Cognitive_Flexibility",
+    description: "反証や相手の意見を受けて考えを更新する力",
+  },
 ] as const;
 
 function evidenceCount(evidence: unknown): number {
@@ -319,6 +356,10 @@ export function ProfileTab() {
             </span>
           </div>
         )}
+      </div>
+
+      <div className="profile-section">
+        <MbtiGradientBars />
       </div>
 
       <div className="profile-section tensor-radar-section">
