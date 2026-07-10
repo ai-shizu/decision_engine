@@ -10,6 +10,16 @@ import {
   type TwinScenario,
 } from "../lib/engine";
 import type { SourceCodeView } from "../lib/types";
+import { TensorRadarChart } from "./TensorRadarChart";
+
+const TENSOR_RADAR_PREVIEW = [
+  { id: "problem_structuring", label: "構造化", value: 0.72 },
+  { id: "quantitative_rigor", label: "定量精度", value: 0.58 },
+  { id: "hypothesis_evidence", label: "仮説検証", value: 0.64 },
+  { id: "synthesis_judgment", label: "統合判断", value: 0.68 },
+  { id: "communication", label: "伝達", value: 0.76 },
+  { id: "collaboration_adaptability", label: "協働適応", value: 0.61 },
+] as const;
 
 function evidenceCount(evidence: unknown): number {
   return Array.isArray(evidence) ? evidence.length : 0;
@@ -309,6 +319,19 @@ export function ProfileTab() {
             </span>
           </div>
         )}
+      </div>
+
+      <div className="profile-section tensor-radar-section">
+        <p className="term-header">TENSOR_PROFILE_6D</p>
+        <p className="tensor-radar-preview-label">PHASE 1 PREVIEW / NOT MEASURED</p>
+        <p className="hint">
+          幾何検証用の固定プレビューです。ユーザーの測定スコアではありません。
+        </p>
+        <TensorRadarChart
+          data={TENSOR_RADAR_PREVIEW}
+          preview
+          title="Six-dimensional tensor profile preview"
+        />
       </div>
 
       {error && <p className="status-line">{error}</p>}

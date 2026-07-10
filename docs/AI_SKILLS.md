@@ -1998,6 +1998,13 @@ IPC/契約テスト、D1/D2 回帰、既存 UI smoke、production build は GREE
 
 ---
 
+### Project Calculus Phase 1 - AS-BUILT
+- **状態**: 完了 (GREEN)
+- **実装内容**: ストリーミング応答に対する `<think>` タグ（Hidden CoT）の O(n) 非表示化パーサー実装によるフロントエンド二重防衛線の構築。および、外部依存ゼロ（純粋なSVGと三角関数）による6次元テンソルプロファイリング用六角形レーダーチャートUIの基盤構築。
+- **アーキテクチャ**: `InterviewTab.tsx` 内で `redactHiddenReasoning` を適用し、`<think>` 出力がストリーミングされた瞬間に失敗閉鎖でUIから完全除去。`ProfileTab.tsx` に `TensorRadarChart.tsx` を新設しプレビューデータを配置。バックエンドには一切影響を与えずにUI層を保護・拡張している。
+
+---
+
 ## 14. インシデント 2026-07-07: metadata.json 4.2GB 肥大 (IMP-1 是正指令)
 
 ### 検死結果 (読み取り専用フォレンジックで確定した事実)

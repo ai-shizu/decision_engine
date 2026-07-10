@@ -117,6 +117,53 @@ function avatarColor(name: string): string {
 
 const GD_SPEAKER_HEADER_RE = /^\[([^\][:\n]{1,24})\]:\s*(.*)$/;
 
+const REDACT_OPEN_TAG = "<think>";
+const REDACT_CLOSE_TAG = "</think>";
+
+function matchRedactTag(raw: string, pos: number, tag: string): number {
+  const remain = raw.length - pos;
+  if (remain <= 0) return -1;
+  const n = Math.min(tag.length, remain);
+  for (let i = 0; i < n; i++) {
+    if (raw[pos + i].toLowerCase() !== tag[i].toLowerCase()) return -1;
+  }
+  if (n < tag.length) return 0;
+  return tag.length;
+}
+
+function isPartialOpenPrefix(raw: string, pos: number): boolean {
+  const fragment = raw.slice(pos);
+  if (!fragment || fragment.length >= REDACT_OPEN_TAG.length) return false;
+  return fragment.toLowerCase() === REDACT_OPEN_TAG.slice(0, fragment.length).toLowerCase();
+}
+
+/** Hidden-reasoning blocks are removed before any AI/feedback text reaches the DOM. */
+export function redactHiddenReasoning(raw: string, streaming = false): string {
+  const out: string[] = [];
+  let depth = 0;
+  let i = 0;
+  while (i < raw.length) {
+    const openFull = matchRedactTag(raw, i, REDACT_OPEN_TAG);
+    if (openFull === REDACT_OPEN_TAG.length) {
+      depth += 1;
+      i += REDACT_OPEN_TAG.length;
+      continue;
+    }
+    const closeFull = matchRedactTag(raw, i, REDACT_CLOSE_TAG);
+    if (closeFull === REDACT_CLOSE_TAG.length) {
+      if (depth > 0) depth -= 1;
+      i += REDACT_CLOSE_TAG.length;
+      continue;
+    }
+    if (depth === 0) {
+      if (streaming && isPartialOpenPrefix(raw, i)) break;
+      out.push(raw[i]);
+    }
+    i += 1;
+  }
+  return out.join("");
+}
+
 /** GD_FORMAT_V1: 行頭 [話者名]: のみを認識し、文中の [学生A] は分割しない */
 export function parseGdSpeakerTurns(raw: string): GdSpeakerTurn[] {
   const normalized = raw.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
@@ -712,13 +759,14 @@ export function InterviewTab() {
                 </div>
               );
             }
+            const visibleText = redactHiddenReasoning(m.text, m.streaming);
             if (m.role === "feedback") {
               return (
                 <div key={i} className="line-row feedback">
                   <div className="line-bubble feedback">
                     <span className="feedback-label">■ システム講評 — 日常の Gap と統合</span>
                     <pre className="chat-text">
-                      {m.text}
+                      {visibleText}
                       {m.streaming && <span className="chat-cursor">▌</span>}
                     </pre>
                   </div>
@@ -728,7 +776,7 @@ export function InterviewTab() {
             if (m.renderAs === "gd_thread") {
               return (
                 <div key={i} className="line-row ai gd-thread-row">
-                  <GdThreadMessage text={m.text} streaming={m.streaming} />
+                  <GdThreadMessage text={visibleText} streaming={m.streaming} />
                 </div>
               );
             }
@@ -741,7 +789,7 @@ export function InterviewTab() {
                 <div className="line-bubble ai">
                   <span className="speaker-name">{name}</span>
                   <pre className="chat-text">
-                    {m.text}
+                    {visibleText}
                     {m.streaming && <span className="chat-cursor">▌</span>}
                   </pre>
                 </div>

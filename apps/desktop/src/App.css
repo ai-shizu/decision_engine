@@ -1425,3 +1425,77 @@ button.secondary {
   margin: 0;
   white-space: pre-wrap;
 }
+
+/* Tensor radar (SPEC_ENGINE_TENSOR_PROFILING.md Phase 1) */
+.tensor-radar-section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s2);
+}
+
+.tensor-radar-panel {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s3);
+}
+
+.tensor-radar-preview-label {
+  margin: 0;
+  font-size: 0.85rem;
+  color: var(--text-muted);
+}
+
+.tensor-radar-svg {
+  width: 100%;
+  aspect-ratio: 1;
+  display: block;
+}
+
+.tensor-radar-grid {
+  stroke: var(--border);
+  stroke-width: 1;
+}
+
+.tensor-radar-axis {
+  stroke: var(--border);
+  stroke-width: 1;
+}
+
+.tensor-radar-data {
+  fill: color-mix(in srgb, var(--accent) 28%, transparent);
+  stroke: var(--accent);
+  stroke-width: 1.5;
+}
+
+.tensor-radar-label {
+  fill: var(--text-muted);
+  font-size: 0.6875rem;
+}
+
+.tensor-radar-legend {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--s2);
+}
+
+.tensor-radar-legend-row {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--s2);
+  padding: var(--s1) 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.tensor-radar-legend-label {
+  color: var(--text-muted);
+  font-size: 0.85rem;
+}
+
+.tensor-radar-legend-value {
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: 0.85rem;
+}
