@@ -1410,3 +1410,56 @@ def test_custom_theme_frontend_contract_static() -> None:
         assert token not in custom_slice, f"forbidden token in custom theme UI: {token}"
     print("  custom theme frontend contract static OK")
 
+
+def test_gd_prompt_requires_thread_format() -> None:
+    """SPEC_FEATURE_GD_UI §4.1: 既定 GD prompt に GD_FORMAT_V1 を含める。"""
+    assert "GD_FORMAT_V1" in GD_SYSTEM_PROMPT
+    assert "[話者名]: 発言内容" in GD_SYSTEM_PROMPT
+    assert "議論フェーズ" in GD_SYSTEM_PROMPT
+    assert "講評" in GD_SYSTEM_PROMPT
+    assert "感想戦" in GD_SYSTEM_PROMPT
+    assert build_gd_system_prompt(None) == GD_SYSTEM_PROMPT
+    assert "GD_FORMAT_V1" not in INTERVIEWER_SYSTEM_PROMPT
+    print("  gd prompt requires thread format OK")
+
+
+def test_dynamic_gd_prompt_requires_thread_format() -> None:
+    """SPEC_FEATURE_GD_UI §4.1: 動的 persona prompt にも GD_FORMAT_V1。"""
+    personas = [
+        {"name": "田中", "trait": "協調型"},
+        {"name": "佐藤", "trait": "論理的"},
+    ]
+    prompt = build_gd_system_prompt(personas)
+    assert "田中" in prompt
+    assert "佐藤" in prompt
+    assert "GD_FORMAT_V1" in prompt
+    assert "[話者名]: 発言内容" in prompt
+    print("  dynamic gd prompt requires thread format OK")
+
+
+def test_custom_theme_gd_preserves_thread_format() -> None:
+    """SPEC_FEATURE_GD_UI §4.1: Custom Theme と GD_FORMAT_V1 の共存。"""
+    theme = "フェルミ推定: 日本の電柱の数"
+    fake = FakeBackend()
+    eng = ConsultationEngine()
+    eng._backend = fake
+    eng.consult("開始", mode="gd_sim", config={"customTheme": theme})
+    sys_g, _ = fake.calls[0]
+    assert "GD_FORMAT_V1" in sys_g
+    assert theme in sys_g
+
+    fake_i = FakeBackend()
+    eng_i = ConsultationEngine()
+    eng_i._backend = fake_i
+    eng_i.consult("開始", mode="interview_sim", config={"customTheme": theme})
+    assert "GD_FORMAT_V1" not in fake_i.calls[0][0]
+
+    _write_phase3_assets()
+    fake_e = FakeBackend()
+    eng_e = ConsultationEngine()
+    eng_e._backend = fake_e
+    eng_e.consult("active_es", mode="es_review", config={"customTheme": theme})
+    for system, _user in fake_e.calls:
+        assert "GD_FORMAT_V1" not in system
+    print("  custom theme gd preserves thread format OK")
+

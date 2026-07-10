@@ -1991,6 +1991,13 @@ IPC/契約テスト、D1/D2 回帰、既存 UI smoke、production build は GREE
 
 ---
 
+### Target Echo (GD Thread UI) - AS-BUILT
+- **状態**: 完了 (GREEN)
+- **実装内容**: `gd_sim` モードにおいて、単一テキストだったLLMの応答を参加者別（スレッド形式/チャットバブル）にパースして表示する専用UIを実装。ストリーミング中もリアルタイムにスレッドレンダリングを適用。
+- **アーキテクチャ**: バックエンド(`consultation_engine.py`)で `GD_FORMAT_V1` を強制し出力フォーマットを安定化。フロントエンド(`InterviewTab.tsx`)で正規表現を用いた専用パーサーとレンダラーを組み込み。既存の `interview_sim` や `es_review`、講評（debrief）フェーズへの影響は完全に隔離・保護。
+
+---
+
 ## 14. インシデント 2026-07-07: metadata.json 4.2GB 肥大 (IMP-1 是正指令)
 
 ### 検死結果 (読み取り専用フォレンジックで確定した事実)

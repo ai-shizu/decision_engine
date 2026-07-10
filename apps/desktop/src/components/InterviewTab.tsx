@@ -4,6 +4,7 @@ import { consult, narrativeCompile, type NarrativeCompileResult } from "../lib/e
 import type {
   EngineEvent,
   GdPersona,
+  GdSpeakerTurn,
   InterviewConfig,
   InterviewMessage,
   InterviewMode,
@@ -114,24 +115,62 @@ function avatarColor(name: string): string {
   return AVATAR_COLORS[Math.abs(h) % AVATAR_COLORS.length];
 }
 
-/** GD の AI 応答を [話者名] 区切りで複数メッセージへ分解する */
-function splitSpeakers(text: string): { speaker: string; text: string }[] {
-  const re = /\[([^\][\n]{1,24})\]\s*/g;
-  const out: { speaker: string; text: string }[] = [];
-  let last: { speaker: string; index: number } | null = null;
-  let m: RegExpExecArray | null;
-  while ((m = re.exec(text)) !== null) {
-    if (last) {
-      const body = text.slice(last.index, m.index).trim();
-      if (body) out.push({ speaker: last.speaker, text: body });
+const GD_SPEAKER_HEADER_RE = /^\[([^\][:\n]{1,24})\]:\s*(.*)$/;
+
+/** GD_FORMAT_V1: 行頭 [話者名]: のみを認識し、文中の [学生A] は分割しない */
+export function parseGdSpeakerTurns(raw: string): GdSpeakerTurn[] {
+  const normalized = raw.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+  const lines = normalized.split("\n");
+  const turns: GdSpeakerTurn[] = [];
+  let current: GdSpeakerTurn | null = null;
+
+  for (const line of lines) {
+    const m = GD_SPEAKER_HEADER_RE.exec(line);
+    if (m) {
+      const speaker = m[1].trim();
+      if (!speaker) continue;
+      if (current) turns.push(current);
+      current = { speaker, text: m[2].trim() };
+      continue;
     }
-    last = { speaker: m[1], index: re.lastIndex };
+    if (current) {
+      if (line.trim() || current.text) {
+        current.text = current.text ? `${current.text}\n${line}` : line;
+      }
+    }
   }
-  if (last) {
-    const body = text.slice(last.index).trim();
-    if (body) out.push({ speaker: last.speaker, text: body });
+  if (current) turns.push(current);
+
+  const trimmed = raw.trim();
+  if (turns.length === 0 && trimmed) {
+    return [{ speaker: "GD", text: trimmed }];
   }
-  return out.length ? out : [{ speaker: "", text: text.trim() }];
+  return turns;
+}
+
+function GdThreadMessage({ text, streaming }: { text: string; streaming?: boolean }) {
+  const turns = parseGdSpeakerTurns(text);
+  return (
+    <div className="gd-thread">
+      {turns.map((t, i) => (
+        <div key={i} className="gd-turn">
+          <span
+            className="gd-turn-avatar persona-avatar"
+            style={{ background: avatarColor(t.speaker) }}
+          >
+            {t.speaker.slice(0, 1) || "?"}
+          </span>
+          <div className="gd-turn-body">
+            <span className="gd-turn-speaker">{t.speaker}</span>
+            <pre className="gd-turn-text chat-text">
+              {t.text}
+              {streaming && i === turns.length - 1 && <span className="chat-cursor">▌</span>}
+            </pre>
+          </div>
+        </div>
+      ))}
+    </div>
+  );
 }
 
 // F-20 (SPEC_FOXTROT_UI.md §10.6): セッションの三状態。"debrief" は講評後の
@@ -207,9 +246,13 @@ export function InterviewTab() {
       responseTime?: number;
       placeholderRole?: "ai" | "feedback";
       userEcho?: boolean;
+      /** gd_sim 議論フェーズ (START 直後など phase 未反映時) */
+      gdThread?: boolean;
     } = {},
   ) {
     const role = opts.placeholderRole ?? "ai";
+    const shouldRenderGdThread =
+      role === "ai" && mode === "gd_sim" && (opts.gdThread ?? phase === "active");
     setBusy(true);
     setStatus("");
     setMessages((prev) => [
@@ -217,7 +260,13 @@ export function InterviewTab() {
       ...(opts.userEcho
         ? [{ role: "user" as const, text: query, responseTimeSec: opts.responseTime }]
         : []),
-      { role, speaker: role === "feedback" ? "講評" : undefined, text: "", streaming: true },
+      {
+        role,
+        speaker: role === "feedback" ? "講評" : undefined,
+        text: "",
+        streaming: true,
+        ...(shouldRenderGdThread ? { renderAs: "gd_thread" as const } : {}),
+      },
     ]);
     scrollToBottom();
     const myCid = cid.begin();
@@ -243,19 +292,14 @@ export function InterviewTab() {
           return [...withoutPlaceholder, { role: "feedback", speaker: "講評", text: res.answer }];
         }
         // F-20: 感想戦フェーズの AI 返信は mode に依らず「メンター」。
-        // splitSpeakers (GD の複数話者分解) は適用しない — メンターは
-        // 単一の統合された声で応答する。
+        // gd_thread renderer は適用しない — メンターは単一の統合された声で応答する。
         if (phase === "debrief") {
           return [...withoutPlaceholder, { role: "ai", speaker: "メンター", text: res.answer }];
         }
-        if (mode === "gd_sim") {
+        if (shouldRenderGdThread) {
           return [
             ...withoutPlaceholder,
-            ...splitSpeakers(res.answer).map((s) => ({
-              role: "ai" as const,
-              speaker: s.speaker || "参加者",
-              text: s.text,
-            })),
+            { role: "ai", text: res.answer, renderAs: "gd_thread" },
           ];
         }
         const speaker = mode === "es_review" ? "採用責任者" : "面接官";
@@ -278,11 +322,13 @@ export function InterviewTab() {
     setMessages([]);
     setReport(null);
     aiShownAtRef.current = null;
+    setPhase("active");
     const ok = await send("開始", {
       withPersonas: mode === "gd_sim",
       withConfig: mode === "interview_sim" || mode === "gd_sim",
+      gdThread: mode === "gd_sim",
     });
-    if (ok) setPhase("active");
+    if (!ok) setPhase("idle");
   }
 
   async function handleEsReview() {
@@ -676,6 +722,13 @@ export function InterviewTab() {
                       {m.streaming && <span className="chat-cursor">▌</span>}
                     </pre>
                   </div>
+                </div>
+              );
+            }
+            if (m.renderAs === "gd_thread") {
+              return (
+                <div key={i} className="line-row ai gd-thread-row">
+                  <GdThreadMessage text={m.text} streaming={m.streaming} />
                 </div>
               );
             }

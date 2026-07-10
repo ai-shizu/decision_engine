@@ -199,6 +199,14 @@ export interface InterviewMessage {
   streaming?: boolean;
   /** ユーザー発言に付随する応答時間 (秒) */
   responseTimeSec?: number;
+  /** gd_sim 議論フェーズのみ: 生テキストをスレッド renderer へ渡す */
+  renderAs?: "plain" | "gd_thread";
+}
+
+/** GD_FORMAT_V1 の1発言分 (parseGdSpeakerTurns の戻り値) */
+export interface GdSpeakerTurn {
+  speaker: string;
+  text: string;
 }
 
 export type RecordSubTab = "events" | "finance" | "diary";
