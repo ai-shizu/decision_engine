@@ -16,7 +16,8 @@
 | タスク種別 | 必読節 |
 |---|---|
 | UI (Foxtrot / React / Textual) | §1, §2.1, §3.4, §3.5, `docs/SPEC_FOXTROT_UI.md` |
-| Tauri/Rust sidecar・stdio IPC | §1, §2.1, §2.3, §9 |
+| Tauri/Rust sidecar・stdio IPC | §1, §2.1, §2.3, §9, §16 |
+| 永続化境界・シリアライズ・runtime検証・IPC契約 | §1, §16 (SKILL-PKB-BOUNDARY-V3), `docs/architecture/INCIDENT_LEDGER.md` |
 | macOS ビルド・配布・コード署名 | §1, §2.3, §4 |
 | LLM モデル選定・consult/KV キャッシュ | §1, §5, §7, §8 |
 | 検索エンジン・mmap・LSM 索引 | §1, §9, §10 |
@@ -2168,4 +2169,75 @@ coverage() 必須の型強制) / L3 BLACKBOX (実戦結果台帳 — 実選考�
 会計監査 — n=1 の効果推定を「証明」と呼ぶな) / L5 PHANTOM (合成ペルソナ
 known-answer 校正 — fixture-blindness 規律)。**着手順序は PHANTOM が最初**
 (校正装置なしの計測器増築は倒錯)。着手時は個別 SPEC → 憲法ガード RED → 実装。
+
+---
+
+## 16. SKILL-PKB-BOUNDARY-V3: Strict Runtime & Persistence Integrity (Phase 4-A As-Built)
+
+**次世代エージェントへの命令書。** Phase 4-A (Context Observatory / RetrievalManifestV1) の
+厳格監査ループで確立した「境界不変則」である。観測・シリアライズ・IPC・フロントランタイムの
+どの境界でも、**修復するな・握り潰すな・キャストで済ませるな**。違反はレビューで即座に落とせ。
+実装リファレンス: `src/python/core/retrieval_manifest.py`、`apps/desktop/src/lib/parseManifest.ts`、
+`apps/desktop/src/lib/manifestFetchState.ts`。事故の一次資料は
+`docs/architecture/INCIDENT_LEDGER.md` (INC-PHASE4A-01〜04)。
+
+### 16.1 Hash-Before-Construction Principle (INC-PHASE4A-02)
+
+- 構造体の ID / ハッシュを**ダミー値で一度インスタンス化してから再計算・上書きする two-phase
+  construction を永久禁止**する。平文状態から canonical hash を計算し、確定インスタンスを
+  **一度だけ**生成せよ。
+- `__post_init__` でも ID を独立再計算し、`self.manifest_id == expected_id` を強制する
+  (生成経路が hash-before-construction を守った証明を、モデル自身に持たせる)。
+- `x or ""` / `x or default` による欠損値の握り潰しを禁止。`None` は `None` として明示検証・拒否。
+- 型検証は `type(x) is T` と `bool` 明示除外で行え。`isinstance` の緩さ (bool⊂int、サブクラス
+  通過) に依存するな。float / bool / list を strict int として通した時点で不合格。
+
+### 16.2 Zero-Trust Deserialization & Hard Failure (INC-PHASE4A-03)
+
+- 永続化層 (JSON 読込等) での **Silent Sanitization を全面禁止**する。不正値を黙って安全値や
+  `None` へ変換して受理する処理を書くな (改ざん alias を `None` 化して「正常な無名 Manifest」
+  として蘇生させる、が典型犯)。
+- deserializer は**修復役を兼ねてはならない**。生入力をそのまま dataclass へ渡し、境界
+  (`__post_init__`) で検知したら即座に `ValueError` (Hard Fail) を強制せよ。
+- validator を恒真 (pass-through) にするな。serializer / writer / reader の**全境界**で
+  同一 validator を通し、書込時の健全性を根拠に読込時の検証を省略するな。
+- corrupt / 改ざん Manifest を `NO_MANIFEST` や無名 Manifest へ**退化させるな**。不存在
+  (`latest.json` が無い) のみが `NO_MANIFEST`。破損は hard failure。
+
+### 16.3 Pointer-Payload Cryptographic Binding (INC-PHASE4A-04)
+
+- 永続化の読込・保存時、**ポインタが主張する ID とペイロード内部の ID の完全一致 (`==`) を
+  強制**せよ。各ファイルの自己整合性だけでは「自己整合した別の有効 payload」によるすり替えを
+  防げない — 参照結合 (referential binding) を明示検証する。
+- 不一致時は**修復・上書き・自動整合を一切せず**、ファイルと pointer を不変のまま即座に
+  `ValueError` (`latest pointer manifest_id mismatch`)。既存 immutable ファイルの ID と保存
+  対象 ID も同様に突き合わせ、同一 ID の内容差し替えを拒否せよ。
+- 検証失敗時は副作用ゼロ (ファイル・pointer 不変、`.tmp` 残骸なし) を保証せよ。
+
+### 16.4 Runtime Boundary Validation for IPC (STEP 5 As-Built)
+
+- Tauri IPC 経由の外部 JSON に対する **TypeScript の型アサーション (`as` キャスト /
+  `pkbInvoke<T>()` の generic) を runtime 検証の代用にするな**。実行時境界に厳格な型ガード
+  パーサーを配置し、`pkbInvoke<unknown>(...)` → `parse...(raw)` の順で通せ。
+- パーサーは backend validator の**鏡像**とせよ: exact key 集合、Enum allowlist、
+  `Number.isSafeInteger` + 非負、strict 文字列、hex 形式、固定 schema / lane 順 / budget、
+  会計 (要素和・レーン別再計算)。extra key / `undefined` / NaN / Infinity / bool / float を
+  拒否し、clamp・null 化・削除・既定値化・catch-and-default をするな。
+- パーサーの例外 message に**違反値そのものを埋め込むな** (個人情報漏洩経路の遮断)。path と
+  期待形のみを載せよ。frontend で BLAKE2b を再実装するな (暗号学的 ID 結合は検収済み Python
+  境界が所有)。ただし hash 形式は検証する。
+- 検証失敗・IPC 失敗時は**安全な error ステートへハード遷移**させよ。状態は純 reducer が
+  `loading/ready/empty/error` を所有し、request 開始時に旧成功表示を消去、stale response は
+  seq 不一致で破棄、error イベントに payload / 例外文言を運ばせるな。取得は明示ボタンのみ
+  (polling・自動再試行・時刻依存を足すな)。
+
+### 16.5 検証パラダイム (全 4 則に共通)
+
+- **合計値の一致だけで正しさを宣言するな。** 各 reason・各 lane・各分岐が実際の制御フローに
+  対応することを個別に証明せよ。
+- **自己生成した期待値・未注入 mock・同一実装を呼ぶ wrapper 同士の比較を GREEN 証明に使うな。**
+  敵対的テストには malformed 入力だけでなく「自己整合した別の有効 payload によるすり替え」を
+  必ず含めよ。越境検証 (Python 実出力 → TS parser 受理) で片側実装の思い込みを排除せよ。
+- **実装より先に RED 契約を書け。** テストを通すために型・検証を緩和した時点で不合格。緩和が
+  必要に見えたら実装を止めて報告せよ。
 

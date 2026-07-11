@@ -1,12 +1,13 @@
 # PKB 最高アーキテクト補佐 引き継ぎ書
 
 > **更新日:** 2026-07-11
-> **対象:** Phase 4-A Context Observatory / RetrievalManifestV1 進行中
+> **対象:** Phase 4-A Context Observatory / RetrievalManifestV1 **完了 (As-Built)**
 > **リポジトリ:** `C:\Users\badger\Documents\cursur\decision_engine`
 > **ブランチ:** `main`
-> **HEAD / origin/main:** `412c1c2d9e02accb726909500faef75a5fe1d3c5`
-> **最新コミット:** `412c1c2 feat(consult): implement romance analysis with strict fallback schema (Calculus Phase 3-B final)`
-> **重要:** Phase 4-A成果物はすべて未コミット。commit / pushは禁止されたまま。
+> **origin/main:** `412c1c2d9e02accb726909500faef75a5fe1d3c5` (未push — Phase 4-Aは全てローカルコミット)
+> **Phase 4-A実装コミット:** `ff14ace feat(phase-4a): complete Context Observatory and secure IPC verification` (20 files)
+> **本書同期コミット:** 本書 + `docs/AI_SKILLS.md` §16 を後続のローカルコミットで確定 (docs同期)。
+> **重要:** local `main` は origin より先行。**push は指揮官の明示指示があるまで固く禁止。**
 
 ---
 
@@ -14,23 +15,28 @@
 
 PKBは、完全オフラインのTauri + React + Python意思決定支援アプリである。Phase 3-Bまでは`main`へpush済み。現在はPhase 4-Aとして、12,000文字のSemantic Compressionが「何を採用し、何を棄却したか」を決定論的に可視化するContext Observatoryを実装中である。
 
-完了・検収済み:
+完了・検収済み (全STEP完了):
 
 1. **STEP 1:** Python `RetrievalManifestV1`、context compiler計装、厳格永続化
 2. **STEP 2:** TypeScript Manifest型契約
 3. **STEP 3:** 静的`ContextObservatory` UI / SVG
 4. **STEP 4:** Python薄層IPC endpoint `context.manifest.latest`
+5. **STEP 5:** frontend runtime boundary — runtime parser (`parseManifest.ts`)、`engine.ts` wrapper (`latestContextManifest`)、純reducer (`manifestFetchState.ts`)、`ContextObservatoryContainer`
+6. **MOUNT:** `ContextObservatoryContainer` を **PROFILE タブ (`apps/desktop/src/components/ProfileTab.tsx`)** の `CONTEXT_OBSERVATORY` セクションへマウント済み (新タブ増設なし・App.tsx不変)。
 
-未実装:
+検証 (As-Built):
 
-- TypeScript runtime validator
-- `engine.ts`のIPC wrapper
-- loading / ready / empty / errorを所有するReact container
-- Context Observatoryの実画面への配置
-- frontend runtime境界テスト
-- Phase 4-A as-built、commit、push
+- boundary runtime テスト: **42/42 GREEN** (`tests-runtime/manifest_boundary.test.ts`、越境golden T-42含む)
+- Python回帰: **170 passed** (7スイート)
+- `tsc --noEmit` / `vite build`: PASS
 
-**次の作業はfrontend runtime validatorとIPC結合である。** 静的UIを完成扱いしてはいけない。
+残タスク:
+
+- INCIDENT_LEDGER への INC-PHASE4A-02/03/04 追記 → **完了** (`docs/architecture/INCIDENT_LEDGER.md`)
+- 本書 As-Built 同期 + `AI_SKILLS.md` §16 (SKILL-PKB-BOUNDARY-V3) 登録 → **本コミットで完了**
+- **push は指揮官裁定待ち** (依然禁止)
+
+**Phase 4-A のデータフローは全結線・全マウント完了。** 静的UIプレビューではなく実IPC経路で稼働する。
 
 ---
 
@@ -68,26 +74,34 @@ Get-FileHash apps/desktop/src/components/ContextObservatory.tsx -Algorithm SHA25
 
 ## 2. Git / worktreeの正確な状態
 
-`HEAD == origin/main == 412c1c2d9e02accb726909500faef75a5fe1d3c5`。
+`origin/main == 412c1c2d9e02accb726909500faef75a5fe1d3c5`(未push)。local `main` はこれより先行し、Phase 4-A成果物はローカルコミット `ff14ace`(実装20ファイル)+ 本 docs同期コミットに確定済み。
 
-2026-07-11時点の期待される`git status --short`:
+Phase 4-A実装コミット `ff14ace` に含まれる20ファイル(`git show --stat ff14ace`):
 
 ```text
- M src/python/core/consultation_engine.py
- M src/python/core/facade.py
- M src/python/core/paths.py
- M src/python/core/session_memory.py
- M src/python/engine_stdio.py
-?? .claude/
-?? apps/desktop/src/components/ContextObservatory.tsx
-?? apps/desktop/src/lib/manifest.ts
-?? docs/architecture/
-?? src/python/core/retrieval_manifest.py
-?? tests/test_context_manifest_ipc.py
-?? tests/test_retrieval_manifest.py
+src/python/core/retrieval_manifest.py     (新設 STEP 1)
+src/python/core/session_memory.py         (STEP 1 計装)
+src/python/core/consultation_engine.py    (STEP 1 接続)
+src/python/core/paths.py                  (STEP 1 保存先)
+src/python/core/facade.py                 (STEP 4 薄層API)
+src/python/engine_stdio.py                (STEP 4 dispatch)
+tests/test_retrieval_manifest.py          (STEP 1 契約79件)
+tests/test_context_manifest_ipc.py        (STEP 4 IPC契約7件)
+apps/desktop/src/lib/manifest.ts          (STEP 2 型契約)
+apps/desktop/src/lib/parseManifest.ts     (STEP 5 runtime parser)
+apps/desktop/src/lib/manifestFetchState.ts(STEP 5 純reducer)
+apps/desktop/src/lib/engine.ts            (STEP 5 wrapper 追記)
+apps/desktop/src/components/ContextObservatory.tsx          (STEP 3 dumb view)
+apps/desktop/src/components/ContextObservatoryContainer.tsx (STEP 5 container)
+apps/desktop/src/components/ProfileTab.tsx                  (MOUNT)
+apps/desktop/tests-runtime/manifest_boundary.test.ts       (STEP 5 境界42件)
+apps/desktop/tests-runtime/gen_manifest_fixture.py         (越境golden生成)
+apps/desktop/tsconfig.boundary.json                        (テスト専用tsconfig)
+docs/HANDOFF.md
+docs/architecture/INCIDENT_LEDGER.md
 ```
 
-本書更新後は、これに` M docs/HANDOFF.md`が加わる。
+`.claude/` は依然として未追跡・**stage禁止**。docs同期(本書 + `AI_SKILLS.md`)は後続コミットで確定する。
 
 ### 所有権
 
@@ -102,15 +116,25 @@ Get-FileHash apps/desktop/src/components/ContextObservatory.tsx -Algorithm SHA25
 | `tests/test_retrieval_manifest.py` | STEP 1契約・敵対テスト79件 |
 | `tests/test_context_manifest_ipc.py` | STEP 4 IPC契約テスト7件 |
 | `apps/desktop/src/lib/manifest.ts` | STEP 2型契約 |
-| `apps/desktop/src/components/ContextObservatory.tsx` | STEP 3静的UI |
-| `docs/architecture/INCIDENT_LEDGER.md` | Phase 4-A事故台帳。現状はINC-01のみ実ファイル化 |
+| `apps/desktop/src/lib/parseManifest.ts` | STEP 5。unknown入力のruntime parser (Python鏡像) |
+| `apps/desktop/src/lib/manifestFetchState.ts` | STEP 5。React非依存の純reducer (stale/monotonicガード) |
+| `apps/desktop/src/lib/engine.ts` | STEP 5。`latestContextManifest()` wrapper追記 (`pkbInvoke<unknown>`経由) |
+| `apps/desktop/src/components/ContextObservatory.tsx` | STEP 3。dumb view (凍結) |
+| `apps/desktop/src/components/ContextObservatoryContainer.tsx` | STEP 5。loading/ready/empty/error所有container |
+| `apps/desktop/src/components/ProfileTab.tsx` | MOUNT。`CONTEXT_OBSERVATORY` section を追加 |
+| `apps/desktop/tests-runtime/manifest_boundary.test.ts` | STEP 5境界テスト42件 (依存ゼロ自作ハーネス) |
+| `apps/desktop/tests-runtime/gen_manifest_fixture.py` | 越境golden生成 (Python実出力→TS parser受理の証明) |
+| `apps/desktop/tsconfig.boundary.json` | 境界テスト専用tsconfig |
+| `docs/architecture/INCIDENT_LEDGER.md` | Phase 4-A事故台帳。INC-01〜04を実ファイル化済み |
+| `docs/AI_SKILLS.md` | §16 SKILL-PKB-BOUNDARY-V3 登録済み |
 | `.claude/` | ユーザー環境由来の未追跡。触らない、stageしない |
 
 ### Git禁止事項
 
 - ユーザーの明示指示なしに`git add`、commit、pushを行わない。
+- **push は指揮官の明示指示があるまで固く禁止** (origin/main は `412c1c2` のまま)。
 - `.claude/**`をstageしない。
-- 未コミットのPhase 4-A差分をrevertしない。
+- コミット済みのPhase 4-Aコミット (`ff14ace` 等) を revert / reset しない。
 - `git reset --hard`、`git checkout --`を使用しない。
 
 ---
@@ -137,11 +161,14 @@ session_memory.py
   -> latest.json + immutable {manifest_id}.json
   -> facade.latest_context_manifest()
   -> engine_stdio.dispatch("context.manifest.latest", {})
-  -> engine.ts wrapper [未実装]
-  -> TypeScript runtime parser [未実装]
-  -> ContextObservatory container [未実装]
+  -> engine.ts latestContextManifest() wrapper (pkbInvoke<unknown>)
+  -> parseContextManifestResponseV1() runtime parser
+  -> ContextObservatoryContainer (useReducer + 明示ボタン)
   -> ContextObservatory dumb view
+  -> ProfileTab CONTEXT_OBSERVATORY section (mounted)
 ```
+
+全経路結線・マウント完了 (As-Built)。
 
 ---
 
@@ -420,98 +447,43 @@ npm.cmd run build
 
 ---
 
-## 11. 次の実装: Frontend runtime boundary
+## 11. Frontend runtime boundary — As-Built (STEP 5 完了)
 
-### 目的
+`context.manifest.latest` は React へ完全結線済み。TypeScript generic cast を runtime 検証の代用にしていない。実装は以下で確定 (`ff14ace`)。
 
-`context.manifest.latest`をReactへ接続する。ただしTypeScript generic castをruntime検証の代用にしない。
+### A. Runtime parser — `apps/desktop/src/lib/parseManifest.ts` (新設)
 
-### 推奨micro-step
+- `parseContextManifestResponseV1(raw: unknown)`。型は `import type` のみ (runtime import ゼロ)。
+- Python `retrieval_manifest.py` の `__post_init__` / `validate_manifest()` の**鏡像**: exact key 集合、Enum allowlist、`Number.isSafeInteger` + 非負、strict 文字列 (空・改行拒否)、32文字lowercase hex、固定schema、固定lane順、固定budget、candidate ID一意、status/reason連動、included/char関係、会計(candidate和・lane和・lane別再計算)。
+- 応答は 2 分岐のみ許可 (`manifest≠null&&reason==null` / `manifest==null&&reason=="NO_MANIFEST"`)。
+- 修復・clamp・null化・削除・既定値化・catch-and-default を全面排除。違反は `ManifestParseError` (path付き、**違反値はmessageへ埋め込まない** = 個人情報漏洩遮断)。
+- `any` / `as` cast ゼロ。enum判定は type predicate。BLAKE2b再計算はせず形式のみ検証 (暗号学的ID結合はPython境界が所有)。外部npm依存なし。
 
-#### A. Runtime parser
-
-対象候補: `apps/desktop/src/lib/manifest.ts`
-
-- 入力は`unknown`。
-- exact key集合を検証する。
-- Enum literalをallowlist検証する。
-- integerは`typeof value === "number" && Number.isInteger(value)`。
-- nonnegative、32文字lowercase hex、固定schema、固定lane順、固定budgetを検証する。
-- candidate ID一意、lane件数、文字数会計を検証する。
-- responseは次の2分岐だけを許可する。
-
-```text
-manifest != null && reason == null
-manifest == null && reason == "NO_MANIFEST"
-```
-
-- extra key、optional、`undefined`、NaN、Infinity、bool、floatを拒否する。
-- 不正値をclamp、`null`化、削除、既定値化しない。
-- 外部npm依存を追加しない。Zodは現状未導入なので、stdlib TypeScriptの明示parserを優先する。
-- frontendでBLAKE2bを独自再実装しない。暗号学的ID結合は検収済みPython境界が所有する。ただしhash形式は検証する。
-
-#### B. engine wrapper
-
-対象候補: `apps/desktop/src/lib/engine.ts`
-
-禁止:
+### B. engine wrapper — `apps/desktop/src/lib/engine.ts` (追記)
 
 ```typescript
-return pkbInvoke<ContextManifestResponseV1>("context.manifest.latest");
+export async function latestContextManifest(): Promise<ContextManifestResponseV1> {
+  const raw = await pkbInvoke<unknown>("context.manifest.latest");
+  return parseContextManifestResponseV1(raw);
+}
 ```
 
-推奨:
+params は送らない。generic cast は使用していない (静的grepで0件を確認済み)。
 
-```typescript
-const raw = await pkbInvoke<unknown>("context.manifest.latest");
-return parseContextManifestResponseV1(raw);
-```
+### C. Container — `apps/desktop/src/components/ContextObservatoryContainer.tsx` (新設)
 
-paramsは送らない。
+- `useReducer(reduceManifestFetch, INITIAL_MANIFEST_FETCH_STATE)` + `useRef` 単調seq。
+- 純reducer (`manifestFetchState.ts`、React非依存) が `loading/ready/empty/error` を所有。`REQUEST_START` で旧Manifest/旧エラーを消去、stale seq応答は同一参照で破棄、FAILUREイベントにmessageフィールドを持たせず例外文言のUI混入を構造的に遮断。
+- **`useEffect`自動取得なし・明示ボタンのみ**。polling/自動再試行/時刻依存なし。catch節は`REQUEST_FAILURE`のdispatchのみ (payload/例外文言を描画経路へ渡さない)。
+- `NO_MANIFEST`→empty、parser失敗/IPC失敗→error (固定文言のみ表示)。
 
-#### C. Container state
+### D. マウント — `apps/desktop/src/components/ProfileTab.tsx`
 
-静的`ContextObservatory`はdumb viewとして維持する。別containerまたは明確な親で次を所有する。
+**PROFILE タブの `CONTEXT_OBSERVATORY` section へマウント済み** (SOURCE_CODE / ECHO_METRICS / ORACLE_REPORT / TWIN_FORECAST / TENSOR_DIAGNOSTICS と並ぶ既存の診断ダッシュボード内)。新タブ増設なし・`App.tsx` 不変。指揮官裁定 (既存診断パネル内へ配置) に準拠。
 
-```text
-state: "loading" | "ready" | "empty" | "error"
-manifest: RetrievalManifestV1 | null
-errorMessage: string
-```
+### 検証済みテスト (`tests-runtime/manifest_boundary.test.ts`、依存ゼロ自作ハーネス、42件)
 
-- request開始時に旧Manifestと旧成功表示を消す。
-- `NO_MANIFEST`はempty。
-- parser失敗、IPC失敗はerror。
-- error時に不正payloadや個人情報を画面へdumpしない。
-- refreshは明示ボタンのみ。polling、時刻依存、自動再試行を追加しない。
-- stale response対策は既存correlation ID規律へ従う。
-
-#### D. UI配置
-
-`ContextObservatory.tsx`はまだAppへ登録されていない。どのタブへ置くかは未裁定。勝手に新タブを増やさない。PROFILE内panel、独立タブ等の配置は指揮官の明示裁定を得てから実装する。
-
-### 次段階の必須テスト
-
-- valid responseを受理
-- exact `NO_MANIFEST`を受理
-- missing / extra key拒否
-- Enum未知値拒否
-- float / bool / NaN / Infinity拒否
-- lane重複・順序違反・固定budget違反拒否
-- candidate/lane/count/accounting不整合拒否
-- `manifest:null, reason:null`等の不正組合せ拒否
-- parser失敗時に旧Manifestを表示しない
-- IPC error時にsafe error state
-- `pkbInvoke<unknown>`経路を静的契約で確認
-- `tsc --noEmit`、Vite build、Python 170回帰
-
-### 次の停止条件
-
-- 実装前にRED契約を作る。
-- backend coreを変更しない。
-- testを通すために型を緩和しない。
-- App配置まで一気に進まない。
-- commit / pushしない。
+valid受理 / exact NO_MANIFEST受理 / candidate順保存 / トップレベル・manifest・candidate・lane_usage各層の全拒絶 / status-reason不整合 / 会計違反 / alias値非漏洩 / reducer遷移・staleガード / 越境golden (Python実出力→parser受理) を網羅。`tsc --noEmit`・Vite build・Python 170回帰すべてPASS。
 
 ---
 
@@ -539,14 +511,17 @@ HEAD `412c1c2`には以下が含まれる。
 次のチャットでは、以下を最初の命令として扱う。
 
 ```text
-docs/HANDOFF.mdを全文読み、git HEAD/statusと凍結hashを照合せよ。
-docs/AI_SKILLS.mdとdocs/architecture/INCIDENT_LEDGER.mdの防衛命令をロードせよ。
-Phase 4-A STEP 1〜4は検収済み未コミット成果物として保護せよ。
-次はfrontend runtime validator / IPC wrapper / containerをmicro-stepで設計する。
-TypeScript castだけの見せかけのGREEN、silent sanitization、backend変更、App配置への先回りを禁止する。
-commit / pushは指揮官の明示指示まで行うな。
+docs/HANDOFF.mdを全文読み、git log/statusと凍結hashを照合せよ。
+docs/AI_SKILLS.md (§16 SKILL-PKB-BOUNDARY-V3 含む) と
+docs/architecture/INCIDENT_LEDGER.md (INC-01〜04) の防衛命令をロードせよ。
+Phase 4-Aは STEP 1〜5 + PROFILEマウント完了・ローカルコミット済み (ff14ace + docs同期)。
+これらは検収済み成果物として保護し、コアロジック (src/python/core/) を1 byteも変更するな。
+push は指揮官の明示指示があるまで固く禁止 (origin/main は 412c1c2 のまま)。
+新規作業は個別SPEC → 憲法ガードRED → 実装のmicro-step順を守る。
+TypeScript castだけの見せかけのGREEN、silent sanitization、
+自己生成期待値をGREEN証明に使う行為を禁止する。
 ```
 
 ---
 
-*本書は2026-07-11の実worktreeと、最高アーキテクト補佐が再実行した170件のGREENを基準に作成した。*
+*本書は2026-07-11のPhase 4-A As-Built (実装コミット `ff14ace`、boundary 42/42・Python 170 GREEN、PROFILEマウント) を基準に同期した。*
