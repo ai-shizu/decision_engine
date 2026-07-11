@@ -6,8 +6,23 @@ from __future__ import annotations
 import hashlib
 import re
 import unicodedata
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Literal
+
+from .retrieval_manifest import (
+    CandidateStatus,
+    ContextLane,
+    LaneUsageV1,
+    ReasonCode,
+    RetrievalCandidateV1,
+    SourceType,
+    compute_content_hash,
+    compute_context_hash,
+    compute_query_hash,
+    build_retrieval_manifest,
+    make_candidate_id,
+    safe_manifest_speaker_alias,
+)
 
 MemoryKind = Literal[
     "goal",
@@ -423,6 +438,507 @@ def _assemble_context_units(units: list[tuple[str, str]], total_budget: int) -> 
     return "\n\n".join(selected)
 
 
+@dataclass
+class _ContextUnit:
+    header: str
+    body: str
+    lane: ContextLane
+    candidate_ids: tuple[str, ...]
+
+
+def _assemble_context_units_instrumented(
+    units: list[_ContextUnit],
+    total_budget: int,
+    recorder: dict[str, RetrievalCandidateV1],
+) -> tuple[str, dict[ContextLane, int]]:
+    selected: list[str] = []
+    used = 0
+    lane_formatting: dict[ContextLane, int] = {lane: 0 for lane in ContextLane}
+    for unit in units:
+        if not unit.body:
+            continue
+        block = f"{unit.header}\n{unit.body}" if unit.header else unit.body
+        inter_sep = 2 if selected else 0
+        cost = char_count(block) + inter_sep
+        if used + cost > total_budget:
+            for cid in unit.candidate_ids:
+                prev = recorder[cid]
+                recorder[cid] = replace(
+                    prev,
+                    status=CandidateStatus.REJECTED,
+                    reason_code=ReasonCode.REJECTED_TOTAL_BUDGET,
+                    included_chars=0,
+                )
+            continue
+        included_sum = 0
+        for cid in unit.candidate_ids:
+            prev = recorder[cid]
+            if prev.status in (
+                CandidateStatus.ACCEPTED,
+                CandidateStatus.ACCEPTED_TRUNCATED,
+            ):
+                included = (
+                    prev.included_chars
+                    if prev.status == CandidateStatus.ACCEPTED_TRUNCATED
+                    else prev.char_count
+                )
+                included_sum += included
+                recorder[cid] = replace(prev, included_chars=included)
+        lane_formatting[unit.lane] += cost - included_sum
+        selected.append(block)
+        used += cost
+    return "\n\n".join(selected), lane_formatting
+
+
+def _record_candidate(
+    store: dict[str, RetrievalCandidateV1],
+    *,
+    lane: ContextLane,
+    document_id: str,
+    rendered: str,
+    source_type: SourceType,
+    status: CandidateStatus,
+    reason_code: ReasonCode,
+    selection_rank: int | None,
+    source_index: int | None,
+    speaker_alias: str | None,
+    memory_kind: str | None,
+    full_char_count: int | None = None,
+) -> str:
+    cid = make_candidate_id(lane, document_id)
+    block_count = full_char_count if full_char_count is not None else char_count(rendered)
+    if status == CandidateStatus.ACCEPTED_TRUNCATED:
+        included = char_count(rendered)
+    elif status == CandidateStatus.ACCEPTED:
+        included = block_count
+    else:
+        included = 0
+    store[cid] = RetrievalCandidateV1(
+        candidate_id=cid,
+        document_id=document_id,
+        content_hash=compute_content_hash(rendered),
+        source_type=source_type,
+        lane=lane,
+        char_count=block_count,
+        included_chars=included,
+        status=status,
+        reason_code=reason_code,
+        selection_rank=selection_rank,
+        source_index=source_index,
+        speaker_alias=safe_manifest_speaker_alias(speaker_alias),
+        memory_kind=memory_kind,
+    )
+    return cid
+
+
+def _instrument_tail_turn_blocks(
+    turns: list[dict],
+    char_budget: int,
+    *,
+    exclude_turn_index: int | None,
+    store: dict[str, RetrievalCandidateV1],
+) -> list[str]:
+    blocks: list[str] = []
+    used = 0
+    rank = 0
+    for turn in reversed(turns):
+        if exclude_turn_index is not None and turn["turn_index"] == exclude_turn_index:
+            block = format_turn_block(turn)
+            _record_candidate(
+                store,
+                lane=ContextLane.RECENT_TRANSCRIPT,
+                document_id=turn["turn_id"],
+                rendered=block,
+                source_type=SourceType.TRANSCRIPT_TURN,
+                status=CandidateStatus.DEDUPLICATED,
+                reason_code=ReasonCode.DEDUPLICATED_HIGHER_LANE,
+                selection_rank=rank,
+                source_index=turn["turn_index"],
+                speaker_alias=turn["speaker_alias"],
+                memory_kind=None,
+            )
+            rank += 1
+            continue
+        block = format_turn_block(turn)
+        cost = char_count(block) + 2
+        if used + cost > char_budget:
+            _record_candidate(
+                store,
+                lane=ContextLane.RECENT_TRANSCRIPT,
+                document_id=turn["turn_id"],
+                rendered=block,
+                source_type=SourceType.TRANSCRIPT_TURN,
+                status=CandidateStatus.REJECTED,
+                reason_code=ReasonCode.REJECTED_BUDGET_LIMIT,
+                selection_rank=rank,
+                source_index=turn["turn_index"],
+                speaker_alias=turn["speaker_alias"],
+                memory_kind=None,
+            )
+            rank += 1
+            continue
+        _record_candidate(
+            store,
+            lane=ContextLane.RECENT_TRANSCRIPT,
+            document_id=turn["turn_id"],
+            rendered=block,
+            source_type=SourceType.TRANSCRIPT_TURN,
+            status=CandidateStatus.ACCEPTED,
+            reason_code=ReasonCode.ACCEPTED_WITHIN_BUDGET,
+            selection_rank=rank,
+            source_index=turn["turn_index"],
+            speaker_alias=turn["speaker_alias"],
+            memory_kind=None,
+        )
+        blocks.append(block)
+        used += cost
+        rank += 1
+    return list(reversed(blocks))
+
+
+def _instrument_select_atoms(
+    atoms: list[MemoryAtom],
+    query: str,
+    current_turn_index: int,
+    active_goal_ids: tuple[str, ...],
+    max_atoms: int,
+    char_budget: int,
+    lane: ContextLane,
+    store: dict[str, RetrievalCandidateV1],
+) -> list[MemoryAtom]:
+    active = [a for a in atoms if a.status == "active"]
+    ranked = sorted(
+        active,
+        key=lambda a: (
+            -atom_priority(a, query, current_turn_index, active_goal_ids),
+            -a.source.turn_index,
+            a.atom_id,
+        ),
+    )
+    selected: list[MemoryAtom] = []
+    used = 0
+    rank = 0
+    for atom in ranked:
+        line = _format_atom_line(atom)
+        if atom.status == "superseded":
+            _record_candidate(
+                store,
+                lane=lane,
+                document_id=atom.atom_id,
+                rendered=line,
+                source_type=SourceType.MEMORY_ATOM,
+                status=CandidateStatus.REJECTED,
+                reason_code=ReasonCode.REJECTED_SUPERSEDED,
+                selection_rank=rank,
+                source_index=atom.source.turn_index,
+                speaker_alias=atom.source.speaker_alias,
+                memory_kind=atom.kind,
+            )
+            rank += 1
+            continue
+        if len(selected) >= max_atoms:
+            _record_candidate(
+                store,
+                lane=lane,
+                document_id=atom.atom_id,
+                rendered=line,
+                source_type=SourceType.MEMORY_ATOM,
+                status=CandidateStatus.REJECTED,
+                reason_code=ReasonCode.REJECTED_LOW_PRIORITY,
+                selection_rank=rank,
+                source_index=atom.source.turn_index,
+                speaker_alias=atom.source.speaker_alias,
+                memory_kind=atom.kind,
+            )
+            rank += 1
+            continue
+        cost = char_count(line) + 1
+        if used + cost > char_budget:
+            _record_candidate(
+                store,
+                lane=lane,
+                document_id=atom.atom_id,
+                rendered=line,
+                source_type=SourceType.MEMORY_ATOM,
+                status=CandidateStatus.REJECTED,
+                reason_code=ReasonCode.REJECTED_BUDGET_LIMIT,
+                selection_rank=rank,
+                source_index=atom.source.turn_index,
+                speaker_alias=atom.source.speaker_alias,
+                memory_kind=atom.kind,
+            )
+            rank += 1
+            continue
+        _record_candidate(
+            store,
+            lane=lane,
+            document_id=atom.atom_id,
+            rendered=line,
+            source_type=SourceType.MEMORY_ATOM,
+            status=CandidateStatus.ACCEPTED,
+            reason_code=ReasonCode.ACCEPTED_WITHIN_BUDGET,
+            selection_rank=rank,
+            source_index=atom.source.turn_index,
+            speaker_alias=atom.source.speaker_alias,
+            memory_kind=atom.kind,
+        )
+        selected.append(atom)
+        used += cost
+        rank += 1
+    return selected
+
+
+def _build_lane_usage(
+    candidates: tuple[RetrievalCandidateV1, ...],
+    lane_formatting: dict[ContextLane, int],
+) -> tuple[LaneUsageV1, ...]:
+    from .retrieval_manifest import LANE_FIXED_BUDGETS, LANE_FIXED_ORDER
+
+    usage: list[LaneUsageV1] = []
+    for lane in LANE_FIXED_ORDER:
+        lane_cands = [c for c in candidates if c.lane == lane]
+        included = sum(c.included_chars for c in lane_cands)
+        fmt = lane_formatting.get(lane, 0)
+        accepted = sum(
+            1
+            for c in lane_cands
+            if c.status
+            in (CandidateStatus.ACCEPTED, CandidateStatus.ACCEPTED_TRUNCATED)
+            and c.included_chars > 0
+        )
+        rejected = sum(1 for c in lane_cands if c.status == CandidateStatus.REJECTED)
+        deduped = sum(1 for c in lane_cands if c.status == CandidateStatus.DEDUPLICATED)
+        usage.append(
+            LaneUsageV1(
+                lane=lane,
+                budget_chars=LANE_FIXED_BUDGETS[lane],
+                used_chars=included + fmt,
+                formatting_chars=fmt,
+                accepted_count=accepted,
+                rejected_count=rejected,
+                deduplicated_count=deduped,
+            ),
+        )
+    return tuple(usage)
+
+
+def _compile_context(
+    *,
+    session_id: str,
+    transcript: list[tuple[str, str]],
+    current_query: str,
+    model_hash: str = "",
+    prompt_version: str = "pv1",
+    current_turn_role: str | None = None,
+    current_turn_text: str | None = None,
+) -> tuple[str, WorkingMemoryV1, RetrievalManifestV1]:
+    del current_turn_role, current_turn_text
+    query = normalize_text(current_query)
+    turns = transcript_turns_from_pairs(transcript, session_id)
+    current_turn_index = len(turns)
+    store: dict[str, RetrievalCandidateV1] = {}
+
+    exclude_turn_index: int | None = None
+    units: list[_ContextUnit] = []
+    if query:
+        header, body, exclude_turn_index = _build_authoritative_current_unit(
+            query, turns, transcript, CURRENT_TURN_CHAR_BUDGET,
+        )
+        if exclude_turn_index is not None:
+            turn = turns[-1]
+            rendered = body
+            full_count = char_count(format_turn_block(turn))
+            truncated = _TURN_TRUNCATION_MARKER in body
+            status = (
+                CandidateStatus.ACCEPTED_TRUNCATED
+                if truncated
+                else CandidateStatus.ACCEPTED
+            )
+            reason = (
+                ReasonCode.ACCEPTED_TRUNCATED_TO_BUDGET
+                if truncated
+                else ReasonCode.ACCEPTED_REQUIRED_CURRENT
+            )
+            cid = _record_candidate(
+                store,
+                lane=ContextLane.CURRENT,
+                document_id=turn["turn_id"],
+                rendered=rendered,
+                source_type=SourceType.TRANSCRIPT_TURN,
+                status=status,
+                reason_code=reason,
+                selection_rank=None,
+                source_index=turn["turn_index"],
+                speaker_alias=turn["speaker_alias"],
+                memory_kind=None,
+                full_char_count=full_count,
+            )
+        else:
+            q_hash = compute_query_hash(query)
+            full_count = char_count(query)
+            truncated = _QUERY_TRUNCATION_MARKER in body
+            status = (
+                CandidateStatus.ACCEPTED_TRUNCATED
+                if truncated
+                else CandidateStatus.ACCEPTED
+            )
+            reason = (
+                ReasonCode.ACCEPTED_TRUNCATED_TO_BUDGET
+                if truncated
+                else ReasonCode.ACCEPTED_REQUIRED_CURRENT
+            )
+            cid = _record_candidate(
+                store,
+                lane=ContextLane.CURRENT,
+                document_id=q_hash,
+                rendered=body,
+                source_type=SourceType.CURRENT_QUERY,
+                status=status,
+                reason_code=reason,
+                selection_rank=None,
+                source_index=None,
+                speaker_alias=None,
+                memory_kind=None,
+                full_char_count=full_count,
+            )
+        units.append(
+            _ContextUnit(
+                header=header,
+                body=body,
+                lane=ContextLane.CURRENT,
+                candidate_ids=(cid,),
+            ),
+        )
+
+    tail_blocks = _instrument_tail_turn_blocks(
+        turns,
+        EXACT_TAIL_CHAR_BUDGET,
+        exclude_turn_index=exclude_turn_index,
+        store=store,
+    )
+    if tail_blocks:
+        tail_ids = tuple(
+            make_candidate_id(ContextLane.RECENT_TRANSCRIPT, turn["turn_id"])
+            for turn in turns
+            if not (
+                exclude_turn_index is not None
+                and turn["turn_index"] == exclude_turn_index
+            )
+        )
+        accepted_ids = tuple(
+            cid
+            for cid in tail_ids
+            if cid in store
+            and store[cid].status == CandidateStatus.ACCEPTED
+        )
+        units.append(
+            _ContextUnit(
+                header="# Recent transcript",
+                body="\n\n".join(tail_blocks),
+                lane=ContextLane.RECENT_TRANSCRIPT,
+                candidate_ids=accepted_ids,
+            ),
+        )
+
+    atoms = compile_atoms(transcript, session_id)
+    if exclude_turn_index is not None:
+        atoms = [a for a in atoms if a.source.turn_index != exclude_turn_index]
+    active_goal_ids = tuple(
+        a.atom_id for a in atoms if a.kind == "goal" and a.status == "active"
+    )
+    wm_atoms = _instrument_select_atoms(
+        atoms,
+        query,
+        current_turn_index,
+        active_goal_ids,
+        MAX_ACTIVE_MEMORY_ATOMS,
+        WORKING_MEMORY_CHAR_BUDGET,
+        ContextLane.WORKING_MEMORY,
+        store,
+    )
+    wm_lines = _select_atom_blocks(wm_atoms, WORKING_MEMORY_CHAR_BUDGET)
+    if wm_lines:
+        wm_ids = tuple(
+            make_candidate_id(ContextLane.WORKING_MEMORY, a.atom_id) for a in wm_atoms
+        )
+        units.append(
+            _ContextUnit(
+                header="# Working memory",
+                body="\n".join(wm_lines),
+                lane=ContextLane.WORKING_MEMORY,
+                candidate_ids=wm_ids,
+            ),
+        )
+
+    wm_atom_ids = frozenset(a.atom_id for a in wm_atoms)
+    retrieved_top = _instrument_select_atoms(
+        atoms,
+        query,
+        current_turn_index,
+        active_goal_ids,
+        MAX_RETRIEVED_ATOMS,
+        RETRIEVED_EVIDENCE_BUDGET,
+        ContextLane.RETRIEVED_EVIDENCE,
+        store,
+    )
+    for atom in retrieved_top:
+        if atom.atom_id in wm_atom_ids:
+            cid = make_candidate_id(ContextLane.RETRIEVED_EVIDENCE, atom.atom_id)
+            prev = store[cid]
+            store[cid] = replace(
+                prev,
+                status=CandidateStatus.DEDUPLICATED,
+                reason_code=ReasonCode.DEDUPLICATED_HIGHER_LANE,
+                included_chars=0,
+            )
+    retrieved_atoms = [a for a in retrieved_top if a.atom_id not in wm_atom_ids]
+    rv_lines = _select_atom_blocks(retrieved_atoms, RETRIEVED_EVIDENCE_BUDGET)
+    if rv_lines:
+        rv_ids = tuple(
+            make_candidate_id(ContextLane.RETRIEVED_EVIDENCE, a.atom_id)
+            for a in retrieved_atoms
+        )
+        units.append(
+            _ContextUnit(
+                header="# Retrieved evidence",
+                body="\n".join(rv_lines),
+                lane=ContextLane.RETRIEVED_EVIDENCE,
+                candidate_ids=rv_ids,
+            ),
+        )
+
+    context, lane_formatting = _assemble_context_units_instrumented(
+        units, DYNAMIC_CONTEXT_CHAR_BUDGET, store,
+    )
+    included_atoms = [
+        a for a in wm_atoms + retrieved_atoms
+        if _format_atom_line(a) in context
+    ]
+    wm = _working_memory_from_atoms(
+        included_atoms,
+        char_count(context),
+        session_id,
+        len(transcript),
+    )
+    candidates = tuple(store[cid] for cid in store)
+    used_chars = char_count(context)
+    included_sum = sum(c.included_chars for c in candidates)
+    formatting_overhead = used_chars - included_sum
+    manifest = build_retrieval_manifest(
+        session_id=session_id,
+        transcript_version=len(transcript),
+        query_hash=compute_query_hash(query),
+        context_hash=compute_context_hash(context),
+        prompt_version=prompt_version,
+        model_hash=model_hash,
+        used_chars=used_chars,
+        formatting_overhead_chars=formatting_overhead,
+        candidates=candidates,
+        lane_usage=_build_lane_usage(candidates, lane_formatting),
+    )
+    return context, wm, manifest
+
+
 def build_bounded_context(
     *,
     session_id: str,
@@ -434,73 +950,38 @@ def build_bounded_context(
     current_turn_text: str | None = None,
 ) -> tuple[str, WorkingMemoryV1]:
     """Select prompt context under fixed budgets. Raw transcript is never edited."""
-    del model_hash, prompt_version
-    del current_turn_role, current_turn_text
-    query = normalize_text(current_query)
-    turns = transcript_turns_from_pairs(transcript, session_id)
-    current_turn_index = len(turns)
-
-    exclude_turn_index: int | None = None
-    units: list[tuple[str, str]] = []
-    if query:
-        header, body, exclude_turn_index = _build_authoritative_current_unit(
-            query, turns, transcript, CURRENT_TURN_CHAR_BUDGET
-        )
-        units.append((header, body))
-
-    tail_blocks = _select_tail_turn_blocks(
-        transcript,
-        session_id,
-        EXACT_TAIL_CHAR_BUDGET,
-        exclude_turn_index=exclude_turn_index,
+    del model_hash
+    context, memory, _ = _compile_context(
+        session_id=session_id,
+        transcript=transcript,
+        current_query=current_query,
+        model_hash="",
+        prompt_version=prompt_version,
+        current_turn_role=current_turn_role,
+        current_turn_text=current_turn_text,
     )
-    if tail_blocks:
-        units.append(("# Recent transcript", "\n\n".join(tail_blocks)))
+    return context, memory
 
-    atoms = compile_atoms(transcript, session_id)
-    if exclude_turn_index is not None:
-        atoms = [a for a in atoms if a.source.turn_index != exclude_turn_index]
-    active_goal_ids = tuple(
-        a.atom_id for a in atoms if a.kind == "goal" and a.status == "active"
-    )
-    wm_atoms = _select_atoms(
-        atoms,
-        query,
-        current_turn_index,
-        active_goal_ids,
-        MAX_ACTIVE_MEMORY_ATOMS,
-        WORKING_MEMORY_CHAR_BUDGET,
-    )
-    wm_lines = _select_atom_blocks(wm_atoms, WORKING_MEMORY_CHAR_BUDGET)
-    if wm_lines:
-        units.append(("# Working memory", "\n".join(wm_lines)))
 
-    retrieved = _select_atoms(
-        atoms,
-        query,
-        current_turn_index,
-        active_goal_ids,
-        MAX_RETRIEVED_ATOMS,
-        RETRIEVED_EVIDENCE_BUDGET,
+def build_bounded_context_with_manifest(
+    *,
+    session_id: str,
+    transcript: list[tuple[str, str]],
+    current_query: str,
+    model_hash: str = "",
+    prompt_version: str = "pv1",
+    current_turn_role: str | None = None,
+    current_turn_text: str | None = None,
+) -> tuple[str, WorkingMemoryV1, RetrievalManifestV1]:
+    return _compile_context(
+        session_id=session_id,
+        transcript=transcript,
+        current_query=current_query,
+        model_hash=model_hash,
+        prompt_version=prompt_version,
+        current_turn_role=current_turn_role,
+        current_turn_text=current_turn_text,
     )
-    retrieved_ids = {a.atom_id for a in wm_atoms}
-    retrieved = [a for a in retrieved if a.atom_id not in retrieved_ids]
-    rv_lines = _select_atom_blocks(retrieved, RETRIEVED_EVIDENCE_BUDGET)
-    if rv_lines:
-        units.append(("# Retrieved evidence", "\n".join(rv_lines)))
-
-    context = _assemble_context_units(units, DYNAMIC_CONTEXT_CHAR_BUDGET)
-    included_atoms = [
-        a for a in wm_atoms + retrieved
-        if _format_atom_line(a) in context
-    ]
-    wm = _working_memory_from_atoms(
-        included_atoms,
-        char_count(context),
-        session_id,
-        len(transcript),
-    )
-    return context, wm
 
 
 def _select_atoms(

@@ -184,6 +184,10 @@ def dispatch(cmd: str, params: dict[str, Any], emit: EventEmitter | None = None)
             params["answer"],
             params["today"],
         )
+    if cmd == "context.manifest.latest":
+        if type(params) is not dict or params:
+            raise ValueError("context.manifest.latest accepts no params")
+        return facade.latest_context_manifest()
     if cmd == "shutdown":
         facade.shutdown_engine()
         return {"status": "stopped"}

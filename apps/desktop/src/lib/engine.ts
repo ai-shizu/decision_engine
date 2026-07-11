@@ -1,5 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { readTextLenient } from "./textDecode";
+import type { ContextManifestResponseV1 } from "./manifest";
+import { parseContextManifestResponseV1 } from "./parseManifest";
 import type {
   ClassifyResult,
   EsView,
@@ -336,4 +338,9 @@ export async function probeAnswer(
     answer,
     today,
   });
+}
+
+export async function latestContextManifest(): Promise<ContextManifestResponseV1> {
+  const raw = await pkbInvoke<unknown>("context.manifest.latest");
+  return parseContextManifestResponseV1(raw);
 }

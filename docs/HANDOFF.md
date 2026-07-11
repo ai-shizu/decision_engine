@@ -1,301 +1,552 @@
-# PKB — Claude Code 引き継ぎ書
+# PKB 最高アーキテクト補佐 引き継ぎ書
 
-> **更新:** 2026-07-06  
-> **対象:** Snapdragon X / Windows on ARM64、Python 3.12-arm64  
-> **リポジトリ:** `C:\Users\badger\Documents\cursur\decision_engine`  
-> **最新コミット:** `6d1dec9` — `feat: Phase B refactoring and Tauri desktop integration`
-
----
-
-## 0. 最初に読むもの
-
-| ファイル | 内容 |
-|----------|------|
-| 本書 (`docs/HANDOFF.md`) | 引き継ぎ・作業の入口 |
-| `docs/CONTEXT.md` | 技術仕様・DailyContext・profiler・カレンダー同期の詳細 |
-| `README.md` | ユーザー向けクイックスタート・ディレクトリ構造 |
-| `apps/desktop/README.md` | デスクトップ開発・ビルド手順 |
-
-**設計の核:** 完全オフライン、外部 API 不使用、記録と相談の分離、手動インポートのみ。
+> **更新日:** 2026-07-11
+> **対象:** Phase 4-A Context Observatory / RetrievalManifestV1 進行中
+> **リポジトリ:** `C:\Users\badger\Documents\cursur\decision_engine`
+> **ブランチ:** `main`
+> **HEAD / origin/main:** `412c1c2d9e02accb726909500faef75a5fe1d3c5`
+> **最新コミット:** `412c1c2 feat(consult): implement romance analysis with strict fallback schema (Calculus Phase 3-B final)`
+> **重要:** Phase 4-A成果物はすべて未コミット。commit / pushは禁止されたまま。
 
 ---
 
-## 1. プロジェクト概要
+## 0. 30秒で把握する現在地
 
-**PKB (Personal Knowledge Base)** — 日記・LINE・予定・家計簿・AI 相談履歴を **DailyContext**（1 日 = 1 ベクトル）に統合し、C++ NEON ベクトル検索 + ローカル LLM (llama-server @ 127.0.0.1) で意思決定を支援する。
+PKBは、完全オフラインのTauri + React + Python意思決定支援アプリである。Phase 3-Bまでは`main`へpush済み。現在はPhase 4-Aとして、12,000文字のSemantic Compressionが「何を採用し、何を棄却したか」を決定論的に可視化するContext Observatoryを実装中である。
 
-| レイヤ | 技術 | 役割 |
-|--------|------|------|
-| デスクトップ UI | Tauri v2 + React | **主軸** — NSIS インストーラー配布 |
-| IPC | Rust `EngineManager` + Python stdio JSON | UI ↔ エンジン（HTTP なし） |
-| Python コア | `src/python/core/` | UI 非依存ビジネスロジック |
-| 検索 | `build/search_engine.exe` (C++17, PKBVEC01) | 384 次元 AoSoA Top-K |
-| TUI | Textual (`ui_tui/app.py`) | 開発・デバッグ用 |
-| LLM | `tools/llama-arm64/llama-server.exe` + GGUF | 相談・profiler 時のみ起動 |
+完了・検収済み:
 
----
+1. **STEP 1:** Python `RetrievalManifestV1`、context compiler計装、厳格永続化
+2. **STEP 2:** TypeScript Manifest型契約
+3. **STEP 3:** 静的`ContextObservatory` UI / SVG
+4. **STEP 4:** Python薄層IPC endpoint `context.manifest.latest`
 
-## 2. アーキテクチャ（フェーズ B 完了）
+未実装:
 
-```
-React (apps/desktop/src/)
-  │  engine.ts → invoke("pkb_invoke", { cmd, params })
-  ▼
-Rust (src-tauri/src/engine.rs) — EngineManager
-  │  子プロセス: python run_engine.py  (dev) / pkb-engine-*.exe (release)
-  │  stdin/stdout: JSON 1 行ずつ
-  ▼
-engine_stdio.py — dispatch(cmd, params)
-  ▼
-core/facade.py — load_record, save_record, consult, import_line, sync_calendar, ...
-  ▼
-core/consultation_engine.py → search_engine.exe + llama-server
-```
+- TypeScript runtime validator
+- `engine.ts`のIPC wrapper
+- loading / ready / empty / errorを所有するReact container
+- Context Observatoryの実画面への配置
+- frontend runtime境界テスト
+- Phase 4-A as-built、commit、push
 
-**TUI** は stdio を経由せず `core/facade.py` を直接 import。
-
-### Stdio プロトコル
-
-起動直後 stdout:
-```json
-{"event": "ready", "offline": true}
-```
-
-リクエスト (stdin):
-```json
-{"id": 1, "cmd": "record.load", "params": {"date": "2026-07-06"}}
-```
-
-応答 (stdout):
-```json
-{"id": 1, "ok": true, "result": {...}}
-```
-
-| cmd | 説明 |
-|-----|------|
-| `health` | 生存確認 |
-| `record.load` / `record.save` | 予定・家計簿・日記 |
-| `calendar.event_dates` | カレンダー `*` マーク用 |
-| `calendar.sync` | ICS / Apple (`source`, `mode`, `ics_content` 等) |
-| `import.line` | LINE 取込 → **profiler 自動実行** |
-| `consult` | 相談（検索 + LLM） |
-| `settings.get` / `settings.save_fixed` | 基本情報 6 項目 |
-| `settings.run_profiler` | 深層プロファイル再分析 |
-| `shutdown` | エンジン停止 |
-
-実装: `src/python/engine_stdio.py`  
-Rust 側: `apps/desktop/src-tauri/src/engine.rs`, `commands.rs`
+**次の作業はfrontend runtime validatorとIPC結合である。** 静的UIを完成扱いしてはいけない。
 
 ---
 
-## 3. ディレクトリマップ（重要パスのみ）
+## 1. 新チャット開始時の必須手順
 
-```
-decision_engine/
-├── apps/desktop/              # Tauri + React（主軸 UI）
-│   ├── src/components/        # RecordTab, ImportTab, ConsultTab, SettingsTab
-│   ├── src/lib/engine.ts      # pkb_invoke ラッパー
-│   ├── src-tauri/src/         # engine.rs, paths.rs, commands.rs
-│   ├── dev.cmd / build.cmd
-│   └── scripts/build-engine.ps1  # PyInstaller → binaries/pkb-engine-*.exe
-│
-├── src/python/
-│   ├── core/                  # ★ ビジネスロジック（ここを触る）
-│   │   ├── facade.py          # TUI / stdio 共通 API
-│   │   ├── consultation_engine.py
-│   │   ├── pipeline.py, data_merger.py, profiler.py
-│   │   ├── calendar_*.py, finance_manager.py, settings_api.py
-│   │   └── paths.py           # PROJECT_ROOT, データパス
-│   ├── ui_tui/app.py          # Textual 4 タブ
-│   ├── engine_stdio.py        # デスクトップ IPC
-│   └── run_engine.py          # エンジンエントリ
-│
-├── src/ui/app.py              # TUI 互換ラッパー（中身は ui_tui へ委譲）
-├── src/cpp/search_engine.cpp
-├── data/raw/                  # gitignore — 個人データ
-├── data/processed/            # gitignore — vectors.bin, プロファイル
-├── data/knowledge/            # 外部知識 Markdown（コミット可）
-├── build/search_engine.exe    # gitignore
-├── models/*.gguf              # gitignore
-└── tools/llama-arm64/         # gitignore
-```
+次任者は、設計・レビュー・編集の前に必ず以下を実行する。
 
----
-
-## 4. 環境変数
-
-| 変数 | 用途 |
-|------|------|
-| `PKB_PROJECT_ROOT` | データルート（未設定時 = リポジトリルート / 本番 = `%LOCALAPPDATA%\PKB`） |
-| `PKB_PYTHON` | 開発時 Python 実行ファイル |
-| `PKB_MODELS_DIR` | GGUF 配置 |
-| `PKB_LLAMA_DIR` | llama-server 配置 |
-| `PKB_LLAMA_THREADS/CTX/BATCH`, `PKB_LLM_PORT` | LLM チューニング |
-| `HF_HUB_OFFLINE=1` | 埋め込みモデルオフライン運用 |
-
----
-
-## 5. 開発コマンド
+1. 本書を全文読む。
+2. `docs/AI_SKILLS.md`を全文読む。不変条件が競合する場合はAI_SKILLSを優先する。
+3. `docs/architecture/INCIDENT_LEDGER.md`を読む。
+4. 下記コマンドでHEADとworktreeを照合する。
 
 ```powershell
 cd C:\Users\badger\Documents\cursur\decision_engine
-
-# ── デスクトップ（推奨）──
-cd apps\desktop
-.\dev.cmd                    # ★ pkb-desktop.exe 直接起動は NG（黒画面）
-
-# ── TUI ──
-python src\python\ui_tui\app.py
-python src\ui\app.py         # 互換ラッパー
-
-# ── パイプライン / C++ ──
-.\build.ps1                  # pipeline + search_engine.exe ビルド
-python src\python\core\pipeline.py
-python src\python\core\profiler.py --no-llm
-
-# ── テスト ──
-python tests\ui_smoke.py
-python tests\test_calendar_sync.py
-python tests\test_apple_calendar_sync.py
-python tests\benchmark.py --quick
-
-# ── リリース ──
-cd apps\desktop
-.\build.cmd                  # → src-tauri\target\release\bundle\nsis\PKB_*-setup.exe
+git rev-parse HEAD
+git rev-parse origin/main
+git status --short
+git diff --check
 ```
 
-**前提:** Python 3.12 (ARM64 推奨), Node 20+, Rust stable, clang++ + OpenMP または MSVC。
+5. 下記の凍結hashを再取得し、本書の値と照合する。
 
----
-
-## 6. 設計原則（破ってはいけないもの）
-
-| 原則 | 挙動 |
-|------|------|
-| 記録と相談の分離 | RECORD / カレンダー同期 → `sync_diary_index()` のみ |
-| 記録と分析の分離 | RECORD 保存は profiler **走らない** |
-| LINE 取込のみ例外 | IMPORT LINE → profiler 自動実行 |
-| 手動カレンダー | ICS / Apple — クラウド API・自動同期なし |
-| 遅延初期化 | 埋め込み・llama-server は初回 consult / profiler まで |
-| プロファイル二層 | `fixed_attributes`（手入力）/ `inferred_profile`（自動・読取専用） |
-| UI とコア分離 | ビジネスロジックは `core/` のみ。UI は `facade` または stdio 経由 |
-
----
-
-## 7. 直近まで完了した作業（2026-07-06）
-
-- [x] Python コアを `src/python/core/` へ分離
-- [x] `core/facade.py` — TUI / デスクトップ共通 API
-- [x] TUI を `src/python/ui_tui/` へ移行（`src/ui/app.py` はラッパー）
-- [x] `engine_stdio.py` + Rust `EngineManager` — stdio JSON IPC
-- [x] Tauri v2 + React 4 タブ UI (`apps/desktop/`)
-- [x] `README.md` / `docs/CONTEXT.md` を現行構成に同期
-- [x] `.gitignore` 整備（node_modules, target, data/, models, logs）
-- [x] コミット `6d1dec9` — Phase B + デスクトップ統合
-
----
-
-## 8. 次に着手すべきタスク（優先度順）
-
-### 高 — 機能ギャップ
-
-1. **fixed_attributes を profiler LLM プロンプトに注入**（上書きはしない。分析文脈のみ）  
-   対象: `core/profiler.py`
-
-2. **CONSULT streaming 表示**（デスクトップ）  
-   現状: stdio は一括応答。status コールバックを IPC に載せる必要あり  
-   対象: `engine_stdio.py`, `engine.rs`, `ConsultTab.tsx`
-
-3. **カレンダーマーク拡張** — 家計簿入力日・相談日も `*` 表示  
-   対象: `facade.calendar_event_dates()`, `RecordTab.tsx`, TUI カレンダー
-
-### 中 — UX / 品質
-
-4. SETTINGS 基本情報保存後の profiler 再実行（任意・要望次第）
-5. `awaiting_user` セッションの UI 表示（`data_merger`）
-6. CI: `ui_smoke.py` + `boost_check.py` + `benchmark.py --quick`
-
-### 低 — バックログ
-
-7. Apple カレンダー DB スキーマ追従（ICS フォールバック維持）
-8. 予定密度 × profiler 共起分析
-
----
-
-## 9. 既知の落とし穴
-
-| 問題 | 対処 |
-|------|------|
-| `pkb-desktop.exe` 直接起動 → 黒画面 | 必ず `apps/desktop/dev.cmd` |
-| Windows cp932 と JSON | `engine_stdio.py` は UTF-8 専用 stdout + `text_utils.sanitize_obj` |
-| Textual DuplicateIds | カレンダー日ボタンに **id を付けない** |
-| 7B 初回ロード ~2–3 分 | `llm_config.model_startup_timeout()` 参照 |
-| Apple カレンダー | macOS のみ。Windows デスクトップ/TUI ではボタン無効 |
-| Git author（Cursor 環境） | サンドボックスで `git config` が空のことがある → 環境変数 `GIT_AUTHOR_*` で回避 |
-| `search_engine.exe` 未ビルド | `.\build.ps1` または benchmark/consult 前にビルド |
-
----
-
-## 10. データファイル形式（クイックリファレンス）
-
-**calendar.json**
-```json
-{"2026-07-06": [{"time": "09:00", "title": "会議"}, ...]}
-```
-
-**user_profile.json** — schema `user_profile.v2`  
-- `fixed_attributes`: age, gender, height, weight, address, occupation  
-- `inferred_profile`: profiler 自動生成（UI 読取専用）
-
-**vectors.bin** — magic `PKBVEC01`, 384 dim, AoSoA 4-lane（Python `pipeline.py` と C++ 完全同期）
-
----
-
-## 11. テスト方針
-
-- **ui_smoke.py** — Textual ヘッドレス。facade をモック。UI 配線のみ。
-- **test_calendar_sync.py** — ICS パース・マージ（stdlib のみ）
-- **benchmark.py** — C++ QPS（`--quick` で短縮）
-
-変更後の最低確認:
 ```powershell
-python tests\test_calendar_sync.py
-python tests\ui_smoke.py
+Get-FileHash src/python/core/retrieval_manifest.py -Algorithm SHA256
+Get-FileHash src/python/core/session_memory.py -Algorithm SHA256
+Get-FileHash src/python/core/consultation_engine.py -Algorithm SHA256
+Get-FileHash src/python/core/paths.py -Algorithm SHA256
+Get-FileHash apps/desktop/src/lib/manifest.ts -Algorithm SHA256
+Get-FileHash apps/desktop/src/components/ContextObservatory.tsx -Algorithm SHA256
+```
+
+差分を「汚れ」と判断して戻してはいけない。Phase 4-Aの正規成果物である。
+
+---
+
+## 2. Git / worktreeの正確な状態
+
+`HEAD == origin/main == 412c1c2d9e02accb726909500faef75a5fe1d3c5`。
+
+2026-07-11時点の期待される`git status --short`:
+
+```text
+ M src/python/core/consultation_engine.py
+ M src/python/core/facade.py
+ M src/python/core/paths.py
+ M src/python/core/session_memory.py
+ M src/python/engine_stdio.py
+?? .claude/
+?? apps/desktop/src/components/ContextObservatory.tsx
+?? apps/desktop/src/lib/manifest.ts
+?? docs/architecture/
+?? src/python/core/retrieval_manifest.py
+?? tests/test_context_manifest_ipc.py
+?? tests/test_retrieval_manifest.py
+```
+
+本書更新後は、これに` M docs/HANDOFF.md`が加わる。
+
+### 所有権
+
+| パス | 意味 |
+|---|---|
+| `src/python/core/retrieval_manifest.py` | STEP 1新設。Manifestモデル・validator・永続化 |
+| `src/python/core/session_memory.py` | STEP 1。既存context選択を変えない計装 |
+| `src/python/core/consultation_engine.py` | STEP 1。Manifest生成・保存経路の接続 |
+| `src/python/core/paths.py` | STEP 1。Manifest保存先 |
+| `src/python/core/facade.py` | STEP 4。latest Manifest薄層API |
+| `src/python/engine_stdio.py` | STEP 4。`context.manifest.latest` dispatch |
+| `tests/test_retrieval_manifest.py` | STEP 1契約・敵対テスト79件 |
+| `tests/test_context_manifest_ipc.py` | STEP 4 IPC契約テスト7件 |
+| `apps/desktop/src/lib/manifest.ts` | STEP 2型契約 |
+| `apps/desktop/src/components/ContextObservatory.tsx` | STEP 3静的UI |
+| `docs/architecture/INCIDENT_LEDGER.md` | Phase 4-A事故台帳。現状はINC-01のみ実ファイル化 |
+| `.claude/` | ユーザー環境由来の未追跡。触らない、stageしない |
+
+### Git禁止事項
+
+- ユーザーの明示指示なしに`git add`、commit、pushを行わない。
+- `.claude/**`をstageしない。
+- 未コミットのPhase 4-A差分をrevertしない。
+- `git reset --hard`、`git checkout --`を使用しない。
+
+---
+
+## 3. Phase 4-Aの目的
+
+既存の12,000文字Semantic Compressionを変更せず、選択過程をManifestへ記録し、Reactで可視化する。
+
+絶対原則:
+
+- **Observabilityは純粋な計装。** context、候補順、採択集合を1 byteも変えない。
+- SLM/LLMはManifestの採否・会計・Reason Codeへ関与しない。
+- Pythonだけが候補採否、予算、重複、状態を確定する。
+- UIは検証済みManifestを表示するだけ。再採点・補正・推測をしない。
+- 生本文、quote、任意の第三者実名をManifest/UIへ出さない。
+
+データフローの完成予定形:
+
+```text
+session_memory.py
+  -> RetrievalManifestV1
+  -> validate_manifest()
+  -> save_retrieval_manifest()
+  -> latest.json + immutable {manifest_id}.json
+  -> facade.latest_context_manifest()
+  -> engine_stdio.dispatch("context.manifest.latest", {})
+  -> engine.ts wrapper [未実装]
+  -> TypeScript runtime parser [未実装]
+  -> ContextObservatory container [未実装]
+  -> ContextObservatory dumb view
 ```
 
 ---
 
-## 12. コーディング規約（このリポジトリ）
+## 4. STEP 1: Backend Manifest / Context計装
 
-- **最小 diff** — 依頼外のリファクタ禁止
-- **core/ に UI 依存を入れない**
-- 新 UI 機能 → まず `facade.py` に API を足す → `engine_stdio.py` dispatch → React `engine.ts`
-- コメントは非自明なビジネスロジックのみ
-- コミットはユーザー明示指示時のみ（メッセージは why 重視）
-- `data/raw/`, `models/`, `logs/` はコミットしない
+### 実装済み
+
+`src/python/core/retrieval_manifest.py`:
+
+- `CandidateStatus`
+- `ContextLane`
+- `SourceType`
+- `ReasonCode`
+- frozen `RetrievalCandidateV1`
+- frozen `LaneUsageV1`
+- frozen `RetrievalManifestV1`
+- `build_retrieval_manifest()`
+- `validate_manifest()`
+- `manifest_to_dict()` / `manifest_from_dict()`
+- `save_retrieval_manifest()` / `load_latest_retrieval_manifest()`
+- BLAKE2b-128 canonical `manifest_id`
+
+### 固定lane
+
+| Lane | candidate content budget |
+|---|---:|
+| `CURRENT` | 2400 |
+| `RECENT_TRANSCRIPT` | 3600 |
+| `WORKING_MEMORY` | 4000 |
+| `RETRIEVED_EVIDENCE` | 2000 |
+
+`budget_chars`はheader/separatorを除くcandidate content budget。会計は次である。
+
+```text
+lane.used_chars - lane.formatting_chars <= lane.budget_chars
+sum(candidate.included_chars) + formatting_overhead_chars == used_chars
+sum(lane_usage.used_chars) == used_chars
+total_budget_chars == 12000
+```
+
+### Retrievedの凍結挙動
+
+旧Phase 3-Bの挙動を維持する。
+
+1. 上位8件を先に確定する。
+2. Working Memoryとの重複を`DEDUPLICATED_HIGHER_LANE`へ変換する。
+3. 重複除去後の空き枠を下位Atomで補充しない。
+
+### Privacy
+
+Manifestの`speaker_alias`は次のみ許可する。
+
+- 固定内部role
+- 検証済み`C-xxxxxxxx` contact alias
+- `None`
+
+未知roleや実名はcompiler境界で`None`にする。永続化読込時にはsanitizationせず、不正aliasを`ValueError`で拒否する。
+
+### 永続化境界
+
+- hashはdataclass生成前に計算し、完成dataclassを一度だけ生成する。
+- `__post_init__`でもIDを再計算する。
+- `latest.json`のIDとpayload内部IDを比較する。
+- 既存immutableファイルIDと保存対象IDを比較する。
+- 不一致は修復・上書きせず`ValueError`。
+- corrupt Manifestを`NO_MANIFEST`へ退化させない。
 
 ---
 
-## 13. Git 履歴（参考）
+## 5. STEP 2: TypeScript型契約
 
-```
-6d1dec9 feat: Phase B refactoring and Tauri desktop integration
-db3bebe Update README and CONTEXT for calendar sync.
-c57a139 Initial commit: PKB offline decision engine prototype
+ファイル: `apps/desktop/src/lib/manifest.ts`
+
+実装済み:
+
+- `CandidateStatus`
+- `ContextLane`
+- `SourceType`
+- `ReasonCode`
+- `RetrievalCandidateV1`
+- `LaneUsageV1`
+- `RetrievalManifestV1`
+- `ContextManifestResponseV1`
+
+IPC responseは次のdiscriminated union。
+
+```typescript
+export type ContextManifestResponseV1 =
+  | { manifest: RetrievalManifestV1; reason: null }
+  | { manifest: null; reason: "NO_MANIFEST" };
 ```
 
-push 前確認: `git status -sb`
+注意: TypeScript型はruntime防御ではない。`pkbInvoke<ContextManifestResponseV1>()`のgeneric castだけで済ませてはいけない。
 
 ---
 
-## 14. Claude Code への最初のプロンプト例
+## 6. STEP 3: 静的Context Observatory UI
 
+ファイル: `apps/desktop/src/components/ContextObservatory.tsx`
+
+実装済みcomponent tree:
+
+```text
+ContextObservatory
+├── ContextSummary
+├── ContextBudgetMeter
+├── SourceTypeBreakdown
+├── CandidateFilters
+└── CandidateLedger
+    └── CandidateLedgerRow
 ```
-docs/HANDOFF.md と docs/CONTEXT.md を読んで PKB の文脈を把握してください。
-次のタスク: [例: profiler に fixed_attributes をプロンプト注入]
-変更は core/ と必要最小限の UI のみ。完了後 tests/test_calendar_sync.py と tests/ui_smoke.py を実行。
+
+特性:
+
+- 純粋React + SVG `viewBox="0 0 100 8"`
+- 外部chart依存なし
+- 新規hex色、正のletter-spacing、リテラルpxなし
+- IPCなし
+- `useEffect`、時刻、乱数、DOM測定なし
+- candidate順を維持し、`sort()`しない
+- `speaker_alias`、`document_id`、`content_hash`、raw text、quoteを表示しない
+- Previewは`STATIC PREVIEW / NO IPC`と明示
+
+`CONTEXT_OBSERVATORY_PREVIEW_MANIFEST`は表示確認専用であり、永続化・IPC・runtime parserの正当性証明に使用してはいけない。canonical `manifest_id`を持つ本番Manifestとして扱わない。
+
+現在、このcomponentは`App.tsx`へ登録されていない。これは意図どおり。
+
+---
+
+## 7. STEP 4: Backend IPC endpoint
+
+### facade
+
+`core.facade.latest_context_manifest()`:
+
+```python
+manifest = load_latest_retrieval_manifest()
+if manifest is None:
+    return {"manifest": None, "reason": "NO_MANIFEST"}
+return {"manifest": manifest_to_dict(manifest), "reason": None}
+```
+
+例外をcatchしない。loader/serializerを迂回しない。Engine/LLMを起動しない。
+
+### stdio command
+
+```text
+context.manifest.latest
+```
+
+空dict paramsだけを受理する。
+
+```python
+if type(params) is not dict or params:
+    raise ValueError("context.manifest.latest accepts no params")
+```
+
+### 重要な意味
+
+- `latest.json`不存在のみ`NO_MANIFEST`。
+- corrupt JSON、schema違反、alias違反、hash違反、pointer-payload不一致はhard failure。
+- endpointは`get_engine()`もLLMも呼ばない。
+
+---
+
+## 8. 凍結hash
+
+以下はSTEP 4検収時のSHA-256。次の実装開始前に一致を確認する。
+
+| ファイル | SHA-256 |
+|---|---|
+| `src/python/core/retrieval_manifest.py` | `A5271917C49531D2956B7BEDA491E0E4FEA5513149C8FB2776AEB986FC9CE94A` |
+| `src/python/core/session_memory.py` | `B2252DA64DACDC5B8F5CEFBC2117F245C37306BB3A4B567FDECC1E8E4A47B078` |
+| `src/python/core/consultation_engine.py` | `3CB1C2632D21B13FD04445A209ABEE4C1BD813CBB196CDC98F7AEAEA8097806F` |
+| `src/python/core/paths.py` | `7C1CEF6EFE50BD6377409C0F0BCD2022AA1F10380A76506B70CD5DCCAAFF023D` |
+| `apps/desktop/src/lib/manifest.ts` | `A3AFFA2611DBEDA0B3466C3208F0696D3F7EF5D57DB1673DD9429B491500B294` |
+| `apps/desktop/src/components/ContextObservatory.tsx` | `09F3CFC68B5F944F45491ACCD448E4C8EE0E8ACD8E7B24771E92F27128C2EFBD` |
+
+`facade.py`と`engine_stdio.py`はSTEP 4で正当に変更されているため、この表の凍結対象には含めていない。
+
+---
+
+## 9. 四度のPhase 4-Aインシデント
+
+新規設計・レビュー前に必ず適用する。
+
+### INC-PHASE4A-01: Observabilityが選択を変更
+
+- Retrieved重複除去後に下位Atomで再充填し、contextを変更した。
+- 任意roleをaliasへ転記し、実名漏洩可能にした。
+- lane会計、Reason Code、validatorが実分岐と一致しなかった。
+- 同じ新実装を呼ぶwrapper同士を比較する循環テストを作った。
+
+裁定: 観測機能はbyte-for-byte不変をgolden fixtureで証明する。上位8件確定後に補充しない。
+
+### INC-PHASE4A-02: Dummy construction / implicit coercion
+
+- ダミーManifest IDで一度生成し、後で正しいIDへ帳尻を合わせた。
+- `model_hash or ""`で`None`を握り潰した。
+- float、bool、listをstrict型として拒否できなかった。
+
+裁定: hash-before-construction。direct constructor / factory / from_dictの全入口でstrict型検証し、例外を`ValueError`へ統一する。
+
+### INC-PHASE4A-03: Persistence読込時のSilent Sanitization
+
+- 改ざんaliasを読込時に`None`へ変換して受理した。
+- `validate_manifest()`がpass-throughだった。
+
+裁定: deserializerは修復しない。raw値をdataclassへ渡し、`__post_init__`でhard rejectする。serializer/writer/readerの全境界でvalidatorを通す。
+
+### INC-PHASE4A-04: Pointer-payload decoupling
+
+- `latest.json`のIDとpayload内部IDを個別検証したが、相互一致を検証しなかった。
+- Manifest Aの位置へ自己整合したManifest Bを置くすり替えが成立した。
+
+裁定: 参照元IDとpayload IDを全永続化境界で比較する。不一致時はファイルとpointerを変更せず`ValueError`。
+
+### 防衛命令
+
+- 合計値一致だけで正しさを宣言しない。各lane、Reason、分岐を個別に証明する。
+- 同じ新実装を呼ぶAPI同士、未注入mock、自己生成期待値をGREEN証明に使わない。
+- malformed入力だけでなく「自己整合した別の有効payload」によるすり替えを試験する。
+- runtime境界でcast、silent clamp、optional化、catch-and-defaultを行わない。
+
+`docs/architecture/INCIDENT_LEDGER.md`の実ファイルには現時点でINC-01だけが記録されている。INC-02〜04は会話上の承認済みドラフトであり、Phase 4-A最終化前にappend-onlyで追記する必要がある。既存entryを編集・上書きしてはいけない。
+
+---
+
+## 10. 最新GREENゲート
+
+最高アーキテクト補佐が実環境で再実行した結果:
+
+```text
+170 passed in 1.32s
+```
+
+対象:
+
+- `tests/test_context_manifest_ipc.py`: 7
+- `tests/test_retrieval_manifest.py`: 79
+- `tests/test_engine_tensor_profiling_backend_contract.py`: 28
+- `tests/test_integration.py`: 42
+- `tests/test_probe_ui_ipc.py`: 2
+- `tests/test_source_code.py` + `tests/test_probe_funnel.py`: 12
+
+コマンド:
+
+```powershell
+& 'C:\Users\badger\AppData\Local\Programs\Python\Python312-arm64\python.exe' -m pytest `
+  tests/test_context_manifest_ipc.py `
+  tests/test_retrieval_manifest.py `
+  tests/test_engine_tensor_profiling_backend_contract.py `
+  tests/test_integration.py `
+  tests/test_probe_ui_ipc.py `
+  tests/test_source_code.py `
+  tests/test_probe_funnel.py -q
+```
+
+Frontend:
+
+```powershell
+cd apps\desktop
+npx.cmd tsc --noEmit
+npm.cmd run build
+```
+
+最新再検証:
+
+- TypeScript: PASS
+- Vite build: PASS、60 modules transformed、766ms
+- `git diff --check`: PASS
+- `git status --short data/`: clean
+- package files: 差分なし
+
+テストは必ず`python -m pytest`で実行し、`tests/conftest.py`のSandboxを通す。実`data/`へ1 byteも書かない。
+
+---
+
+## 11. 次の実装: Frontend runtime boundary
+
+### 目的
+
+`context.manifest.latest`をReactへ接続する。ただしTypeScript generic castをruntime検証の代用にしない。
+
+### 推奨micro-step
+
+#### A. Runtime parser
+
+対象候補: `apps/desktop/src/lib/manifest.ts`
+
+- 入力は`unknown`。
+- exact key集合を検証する。
+- Enum literalをallowlist検証する。
+- integerは`typeof value === "number" && Number.isInteger(value)`。
+- nonnegative、32文字lowercase hex、固定schema、固定lane順、固定budgetを検証する。
+- candidate ID一意、lane件数、文字数会計を検証する。
+- responseは次の2分岐だけを許可する。
+
+```text
+manifest != null && reason == null
+manifest == null && reason == "NO_MANIFEST"
+```
+
+- extra key、optional、`undefined`、NaN、Infinity、bool、floatを拒否する。
+- 不正値をclamp、`null`化、削除、既定値化しない。
+- 外部npm依存を追加しない。Zodは現状未導入なので、stdlib TypeScriptの明示parserを優先する。
+- frontendでBLAKE2bを独自再実装しない。暗号学的ID結合は検収済みPython境界が所有する。ただしhash形式は検証する。
+
+#### B. engine wrapper
+
+対象候補: `apps/desktop/src/lib/engine.ts`
+
+禁止:
+
+```typescript
+return pkbInvoke<ContextManifestResponseV1>("context.manifest.latest");
+```
+
+推奨:
+
+```typescript
+const raw = await pkbInvoke<unknown>("context.manifest.latest");
+return parseContextManifestResponseV1(raw);
+```
+
+paramsは送らない。
+
+#### C. Container state
+
+静的`ContextObservatory`はdumb viewとして維持する。別containerまたは明確な親で次を所有する。
+
+```text
+state: "loading" | "ready" | "empty" | "error"
+manifest: RetrievalManifestV1 | null
+errorMessage: string
+```
+
+- request開始時に旧Manifestと旧成功表示を消す。
+- `NO_MANIFEST`はempty。
+- parser失敗、IPC失敗はerror。
+- error時に不正payloadや個人情報を画面へdumpしない。
+- refreshは明示ボタンのみ。polling、時刻依存、自動再試行を追加しない。
+- stale response対策は既存correlation ID規律へ従う。
+
+#### D. UI配置
+
+`ContextObservatory.tsx`はまだAppへ登録されていない。どのタブへ置くかは未裁定。勝手に新タブを増やさない。PROFILE内panel、独立タブ等の配置は指揮官の明示裁定を得てから実装する。
+
+### 次段階の必須テスト
+
+- valid responseを受理
+- exact `NO_MANIFEST`を受理
+- missing / extra key拒否
+- Enum未知値拒否
+- float / bool / NaN / Infinity拒否
+- lane重複・順序違反・固定budget違反拒否
+- candidate/lane/count/accounting不整合拒否
+- `manifest:null, reason:null`等の不正組合せ拒否
+- parser失敗時に旧Manifestを表示しない
+- IPC error時にsafe error state
+- `pkbInvoke<unknown>`経路を静的契約で確認
+- `tsc --noEmit`、Vite build、Python 170回帰
+
+### 次の停止条件
+
+- 実装前にRED契約を作る。
+- backend coreを変更しない。
+- testを通すために型を緩和しない。
+- App配置まで一気に進まない。
+- commit / pushしない。
+
+---
+
+## 12. Phase 3-Bまでの確定baseline
+
+HEAD `412c1c2`には以下が含まれる。
+
+- D1 5軸HumanSourceCode
+- D2 PROBE funnel / immutable HistoricalNode
+- F6 PROBE UI
+- Custom Theme
+- UI Orphan Integration / PROFILE
+- GD Thread UI + streaming
+- Project Calculus Phase 1: frontend Hidden CoT redactor / SVG 6D radar
+- Phase 2: 6D tensor profile / deterministic Semantic Compression / O(n) redactor
+- Phase 3-A: UX overhaul / MBTI preview / tensor tooltips
+- Phase 3-B: Romance Analysis strict schema
+
+これらはpush済みbaselineであり、Phase 4-A作業を理由に変更しない。
+
+---
+
+## 13. 新任アーキテクト補佐への最初の指示
+
+次のチャットでは、以下を最初の命令として扱う。
+
+```text
+docs/HANDOFF.mdを全文読み、git HEAD/statusと凍結hashを照合せよ。
+docs/AI_SKILLS.mdとdocs/architecture/INCIDENT_LEDGER.mdの防衛命令をロードせよ。
+Phase 4-A STEP 1〜4は検収済み未コミット成果物として保護せよ。
+次はfrontend runtime validator / IPC wrapper / containerをmicro-stepで設計する。
+TypeScript castだけの見せかけのGREEN、silent sanitization、backend変更、App配置への先回りを禁止する。
+commit / pushは指揮官の明示指示まで行うな。
 ```
 
 ---
 
-*この引き継ぎ書は 2026-07-06 時点のローカル main (`6d1dec9`) に基づく。*
+*本書は2026-07-11の実worktreeと、最高アーキテクト補佐が再実行した170件のGREENを基準に作成した。*

@@ -114,6 +114,24 @@ def last_romance_analysis() -> dict | None:
     return get_engine()._last_romance_analysis
 
 
+def latest_context_manifest() -> dict:
+    from .retrieval_manifest import (
+        load_latest_retrieval_manifest,
+        manifest_to_dict,
+    )
+
+    manifest = load_latest_retrieval_manifest()
+    if manifest is None:
+        return {
+            "manifest": None,
+            "reason": "NO_MANIFEST",
+        }
+    return {
+        "manifest": manifest_to_dict(manifest),
+        "reason": None,
+    }
+
+
 def compile_narrative(target_domain: str | None = None) -> dict:
     """NARRATIVE COMPILER (Target Delta D3): gap_analysis の証拠付きギャップから
     ES ドラフト + Recruiter's Eye (メタ解説) を生成する。"""
@@ -847,6 +865,7 @@ __all__ = [
     "import_document",
     "import_line_batch",
     "import_line_text",
+    "latest_context_manifest",
     "oracle_payload",
     "oracle_report",
     "probe_answer",

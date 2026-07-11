@@ -12,6 +12,7 @@ import {
 import type { SourceCodeView } from "../lib/types";
 import { TensorRadarChart } from "./TensorRadarChart";
 import { MbtiGradientBars } from "./MbtiGradientBars";
+import { ContextObservatoryContainer } from "./ContextObservatoryContainer";
 
 const TENSOR_RADAR_PREVIEW = [
   {
@@ -356,6 +357,15 @@ export function ProfileTab() {
             </span>
           </div>
         )}
+      </div>
+
+      <div className="profile-section">
+        <p className="term-header">CONTEXT_OBSERVATORY</p>
+        <p className="hint">
+          直近の相談で 12,000 字コンテキストが何を採用・棄却したかの決定論的マニフェスト。
+          明示ボタンでのみ取得し、生本文・実名・quote は表示しません。
+        </p>
+        <ContextObservatoryContainer />
       </div>
 
       <div className="profile-section">

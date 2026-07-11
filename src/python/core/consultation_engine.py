@@ -1148,16 +1148,19 @@ class ConsultationEngine:
         current_role: str | None = None,
         current_text: str | None = None,
     ) -> str:
-        from .session_memory import build_bounded_context
+        from .session_memory import build_bounded_context_with_manifest
+        from .retrieval_manifest import save_retrieval_manifest, validate_manifest
 
         session_id = self._session_id_for_state(state, mode)
-        context, working_memory = build_bounded_context(
+        context, working_memory, manifest = build_bounded_context_with_manifest(
             session_id=session_id,
             transcript=state["transcript"],
             current_query=query,
             current_turn_role=current_role,
             current_turn_text=current_text,
         )
+        validate_manifest(manifest)
+        save_retrieval_manifest(manifest)
         state["working_memory"] = working_memory
         return context
 

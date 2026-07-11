@@ -48,6 +48,8 @@ USER_PROFILE = DATA_PROCESSED / "user_profile.json"
 
 # llama-server の KV キャッシュ (プレフィックス・ピニング) 永続化先
 KV_SLOTS_DIR = DATA_PROCESSED / "kv_slots"
+RETRIEVAL_MANIFESTS_DIR = DATA_PROCESSED / "retrieval_manifests"
+LATEST_RETRIEVAL_MANIFEST = RETRIEVAL_MANIFESTS_DIR / "latest.json"
 
 # Target Echo (PKBTEN01): 日次×特徴量テンソル。dyad スコープはファイル名に
 # alias のみを含む (実名の永続化は I-15 によりファイル名の全経路で禁止)。
