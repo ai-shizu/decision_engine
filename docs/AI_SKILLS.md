@@ -2,7 +2,14 @@
 
 > このファイルは System Prompt / `.cursorrules` にそのままコピペして使う。
 > トーンは意図的に命令形。「守るべき理由」より「何をするか」を優先して書いてある。
-> 迷ったら本書 → `docs/HANDOFF.md` → `docs/CONTEXT.md` の順に参照せよ。
+>
+> **文書の役割（混同するな）:**
+> - 本書 (`docs/AI_SKILLS.md`): 不変の開発規律。読み込みは §0 のタスク別表を優先（全文読了を強制するな）。
+> - `docs/HANDOFF.md`: 現在地・worktree・直近作業（揮発的事実）。
+> - `docs/CONTEXT.md`: 安定アーキテクチャと正本への索引（タブ数・IPC 一覧・件数の正本ではない）。
+> - `docs/architecture/INCIDENT_LEDGER.md`: 事故と絶対裁定。
+> - タブ・IPC コマンド・schema・現在挙動など volatile な事実は実コードで確認せよ。
+> 競合時は実コードと INCIDENT_LEDGER を優先し、文書側を直せ。
 
 ---
 
@@ -55,6 +62,13 @@
      単体実行は `python -m pytest tests/test_x.py` のみ（`__main__` 直接実行は
      廃止 — conftest 隔離を迂回するため）。
    - ログ・エラーメッセージに日記本文や LINE 本文をそのまま出すな。
+   - **`logs/engine.log` は raw stderr dump ではない**（INC-ENGINE-LOG-01 / Finding 12）。
+     永続化は exact allowlist `[PKB_DIAG_V1] REQUEST_FAILED` のみ（終端 CRLF は可、marker 内 CR は不可）。
+     安全判定は **V1 header + 以降全行の allowlist 検証**。`Path::exists()` 禁止・
+     `symlink_metadata` のみ。traceback・exception message・payload・path・query を
+     永続化するな。保持は不変契約として **1 MiB × (`engine.log` + `.1` + `.2`)**。
+     library `print` は protocol 保護のため stderr へ退避されるが、persistent log では
+     allowlist 外として破棄される。Finding 13（UI への生例外表示）と混同するな。
 
 3. **責務分離を守れ。**
    - **C++ (`src/cpp/search_engine.cpp`)**: パフォーマンス限界突破専用。384 次元 AoSoA 内積・Top-K のみ。ビジネスロジック・ファイル形式の解釈・日本語処理を C++ に入れるな。バイナリ形式 `PKBVEC01` は Python `pipeline.py` と 1 バイト単位で同期していること（片方だけ変えたら即データ破損）。
@@ -123,7 +137,9 @@ python tests\benchmark.py --quick
 #    ready 行 → health 応答が UTF-8 JSON で返れば IPC 層は健全
 echo '{"id":1,"cmd":"health","params":{}}' | python -X utf8 src\python\engine_stdio.py
 
-# 5. デスクトップのエンジンログ（stderr の退避先）
+# 5. デスクトップのエンジンログ（V1 固定診断のみ・有限保持）
+#    raw stderr / traceback は永続化されない。受理行は [PKB_DIAG_V1] REQUEST_FAILED のみ。
+#    保持契約: 1 MiB × engine.log + .1 + .2（最新結果ではなく不変上限）
 Get-Content data\logs\engine.log -Tail 50   # 開発時はリポジトリ data/、本番は %LOCALAPPDATA%\PKB\logs
 
 # 6. 回帰テスト（変更後の最低ライン — 単体実行は pytest 経由）
@@ -154,6 +170,11 @@ python -m pytest tests/test_ui_smoke.py -q
 
 1. **ループの計算量を言え。** ネストループを書いたら、N が何で最悪何回回るかをコメントか PR 説明で言語化せよ。日記が 10 年分（~3,650 日 × 複数ソース）でも耐えるか？ O(N²) は原則書き直し。
 2. **ファイル I/O をループに入れるな。** `load_calendar()` / `load_finance()` のような JSON 全読みを for の中で呼んだら即修正。ループ外で 1 回読み、dict で引け。
+   未変更ファイルの derived count（`import.stats` の diary/LINE 等）を毎回全文再計算するな。
+   process-local の bounded metadata cache（file identity = `st_dev`/`st_ino` + `st_size` + `st_mtime_ns`）を使え。
+   `st_ino == 0` で identity 不明なら cache せず再走査。scan 前後の fingerprint が一致したときだけ保存。
+   既知の書込経路では書込試行の前に invalidate。scanner 例外結果を cache するな。
+   TTL / timer / background thread / sidecar / content-hash 全読込による cache は禁止。
 3. **メモリコピーを数えろ。** numpy では `copy()` / `tolist()` / 不要な `astype` を疑え。ベクトルは `float32` 統一。`np.frombuffer` + view で済むところに reshape コピーを重ねるな。
 4. **遅延 import を守れ。** 重い依存（numpy, sentence-transformers, urllib）は使う関数の中で import する（起動時間 = UI の体感速度）。`engine_stdio.py` の ready 送出前に重い import を足すな。
 5. **エンコーディング明示。** `open`/`read_text`/`write_text`/`subprocess` に `encoding="utf-8"` が付いているか。
@@ -174,6 +195,12 @@ python -m pytest tests/test_ui_smoke.py -q
 2. 新 UI ライブラリ（MUI, Tailwind, framer-motion 等）を導入するな。現状は素の React + CSS で足りている。依存追加はバンドル・起動時間・オフライン保証の全部を悪化させる。
 3. 情報を隠すな。モーダルやアコーディオンで畳む前に、一覧で見せられないか考えろ。クリック数を増やす変更はUX改悪である。
 4. キーボード操作を守れ。保存は Ctrl+S、送信は Ctrl+Enter。新機能にもキーボード経路を必ず用意しろ。
+   メインタブは WAI-ARIA Tabs の manual activation に従え: `tablist` / `tab` / `tabpanel`、
+   `aria-selected`、決定論的 ID の相互参照（`aria-controls` / `aria-labelledby`）、roving `tabIndex`。
+   ArrowLeft/Right/Home/End は focus 移動のみ（`setTab` 禁止）。Enter/Space（native button）と
+   click で activation。マウント時に IPC を開始し得るため、focus 即 activation は禁止。
+   ARIA ID 参照のための空 tabpanel shell のみ常設可。inactive の React component keep-alive は禁止。
+   フォーカス可視化（`:focus-visible` outline）を必須とする。
 5. 状態は最小に。サーバー状態（エンジンからのデータ）を複数コンポーネントに複製するな。取得はタブのマウント時、更新は保存成功時の再取得で足りる。
 6. `useEffect` のイベントリスナー（Tauri `listen` 含む）は必ずクリーンアップを返せ。
 7. 長時間処理（consult, profiler, import）は必ず「進捗の見える化」をセットで実装しろ。busy フラグでボタンを殺すだけの UI は不合格。status イベント（2.1 参照）を表示せよ。
@@ -181,13 +208,27 @@ python -m pytest tests/test_ui_smoke.py -q
 ### 3.5 完了の定義 (Definition of Done)
 
 以下を全部通してから「完了」と報告せよ。エラーが出たら自分で直せ。
+件数・module 数・所要時間などの固定スナップショットを DoD に書くな（陳腐化する）。
 
 ```powershell
+# --- リポジトリルート ---
 python -m py_compile <変更した .py 全部>
-python -m pytest tests/ -q                  # 全スイート (161件。正順/逆順 GREEN)
+python -m pytest tests/ -q
 python -m pytest tests/test_ui_smoke.py -q  # TUI スモーク (textual 不在なら SKIP)
-npx tsc --noEmit                       # apps/desktop で (フロント変更時)
-cargo check                            # apps/desktop/src-tauri で (Rust 変更時)
+git diff --check
+
+# --- apps/desktop ---
+cd apps/desktop
+npm.cmd run test:boundary
+# 境界 runtime。通常の `npx.cmd tsc --noEmit` は tests-runtime を対象にしないため代替不可。
+# fixture 生成と `"type":"module"` 下の CommonJS 回避は runner 内。手動再現するな。入口はこれだけ。
+npx.cmd tsc --noEmit
+npm.cmd run build
+
+# --- apps/desktop/src-tauri (Rust 変更時は必須。無変更でも回帰確認推奨) ---
+cd src-tauri
+cargo test
+cargo check
 ```
 
 **テスト運用メモ**: 単体実行は `python -m pytest tests/test_x.py`。
@@ -330,6 +371,9 @@ python3 -c "import platform; print(platform.machine())"  # Python 自体のア�
 4. **DeepSeek-R1 系は `<think>…</think>` を出力する。** `consult()` が最終応答から除去済み（`consultation_engine.py`）。ストリーミング中は思考過程が見えるが、最終置換でクリーンになる仕様。この除去を消すと保存ログと DailyContext が思考過程で汚染される。
 5. 生成パラメータ（temperature / max_tokens）は `generation_params()` 経由で取れ。`0.6` や `900` を直書きするな。
 6. モデルは `models/` に手動配置（gitignore 済み）。**ダウンロードを自動化するコードを書くな** — オフライン原則違反である。
+7. **llama-server HTTP クライアントの唯一所有者は `core/llm_backend.py`。** `/health` と `/v1/chat/completions`（非ストリーム・SSE・structured・KV slot 連携・process lifecycle）を他モジュールへ再実装するな。`consultation_engine` と `cli` は `from .llm_backend import LlamaServerBackend` のみ。host は固定 `127.0.0.1` — remote host 化・cloud fallback・`requests`/`httpx` 追加禁止。
+8. **model / generation / server command の正本は引き続き `llm_config.py`。** クライアントへ温度・max_tokens・ctx を複製するな。CLI 固有 `LlamaCliBackend` も `generation_params()` と `LLAMA_CTX` を使え。
+9. **レガシー CLI（`app.py` → `cli.py`）を「古い」という理由だけで削除するな。** Finding 14 が解消したのは transport 所有権だけ。固有 retrieval / prompt / `--show-prompt` / `--top-k` / interactive loop は維持。相談経路の model は `find_gguf(role="consult")`。クライアント契約テストに実 server・外部 network を使うな（`tests/test_llm_client_single_owner.py` = networkless fake）。
 
 ---
 
@@ -604,10 +648,23 @@ D3 完遂によりTarget Charlie / Target Delta (DL1・DL2・D3) は全て実装
 
 ---
 
-## 12. Target Echo — 設計のみ完了 (`docs/SPEC_ECHO_GENESIS.md`。実装は全て未着手)
+## 12. Target Echo — E0〜E4完遂 / E5は計測ゲート未達のため未着手
 
-時系列直交結合マトリクス (PKBTEN01) / 敵対的デジタルツイン / Hyper-Personalized
-Oracle の設計仕様。**実装着手前に同書を全文読め。** コードより先に存在する凍結事項:
+本節は Target Echo の設計規律と as-built の両方を所有する。現在挙動の最終正本は実コード。
+凍結された数式・レイアウト・不変条件は `docs/SPEC_ECHO_GENESIS.md` を参照する。Echo 変更時は
+SPEC の該当節と §5.9〜§5.10、および本節の対応 as-built を読むこと。完遂済み E0〜E4 を再実装しては
+ならない。E5 は性能劣化の実測が 3000ms ゲートを超えない限り着手禁止。
+
+| Phase | 状態 | 正本 |
+|---|---|---|
+| E0 | 完遂 | 憲法ガードと既存テスト |
+| E1 | 完遂 | `tensor_store.py` / PKBTEN01 |
+| E2 | 完遂 | `coupling.py` |
+| E3 | 完遂 | `digital_twin.py` |
+| E4 | 完遂 | `oracle.py`、facade/stdio/frontend配線 |
+| E5 | 未着手・着手禁止 | 3000ms計測ゲート未達 |
+
+コードより先に存在する凍結事項 (設計規律。完遂済みフェーズの再実装禁止と両立する):
 
 1. **PKBTEN01 レイアウトは凍結済み** (header 64B "<8sIIIIiIQ24x" / row 136B "<iI32f"
    / 特徴量レーン番号表 §5.2)。実装時は C++ struct と tensor_store.py を同時に
@@ -2011,10 +2068,11 @@ IPC/契約テスト、D1/D2 回帰、既存 UI smoke、production build は GREE
 - **検証結果**: Python関連全回帰114件、TypeScript型検査、Vite本番ビルド、`git diff --check`がすべてPASS。frontend、package files、`data/`、既存D1/D2/PROBEコアへの無関係な変更なし。
 
 ### Project Calculus Phase 3-A - AS-BUILT
-- **状態**: 完了 (GREEN)
+- **状態**: 完了 (GREEN) — 歴史記録。Finding 9 (2026-07-12) で PROFILE 恒久モックを退役。
 - **実装内容**: INTERVIEWの持ち込みお題textareaを拡大して縦方向のリサイズに対応し、NARRATIVE_DRAFTの説明を初学者向けに平易化。PROFILEへ未測定であることを明示した4軸MBTIグラデーションバーを追加し、6次元テンソル評価の英語軸名と日本語ヘルプツールチップを実装。
 - **アーキテクチャ**: Phase 3-Aはフロントエンド表示層のみに限定し、新規IPC、永続化、推定処理を追加していない。MBTIは固定モックとして測定値・推定値から隔離。6D tooltipは外部ライブラリを使わず、ReactとCSSのみでhoverおよびkeyboard focusに対応した。新規hex色、リテラルpx、letter-spacing、外部npm依存を追加せず、既存CSS変数と`thin solid`によるスタイリング規律を維持。
 - **検証結果**: 強化UI契約、Phase 3-A契約、既存UI回帰、TypeScript型検査、Vite本番ビルド、`git diff --check`がすべてPASS。backend、package files、`data/`への変更なし。
+- **Finding 9 追補 (2026-07-12)**: PROFILE の `MbtiGradientBars` と固定 `TENSOR_RADAR_PREVIEW` を撤去。`TensorRadarChart` の `preview` prop / preview CSS / `.mbti-preview-*` を削除。実測 6D は Interview/GD の `MISSION_RESULT`→`TensorProfilePanel` のみ。MBTI は測定契約ができるまで非表示・推定禁止。PROFILE 用 latest 契約・新規 IPC は追加しない。再導入禁止。
 
 ### Project Calculus Phase 3-B - AS-BUILT
 - **状態**: 完了 (GREEN)
@@ -2179,7 +2237,7 @@ known-answer 校正 — fixture-blindness 規律)。**着手順序は PHANTOM �
 どの境界でも、**修復するな・握り潰すな・キャストで済ませるな**。違反はレビューで即座に落とせ。
 実装リファレンス: `src/python/core/retrieval_manifest.py`、`apps/desktop/src/lib/parseManifest.ts`、
 `apps/desktop/src/lib/manifestFetchState.ts`。事故の一次資料は
-`docs/architecture/INCIDENT_LEDGER.md` (INC-PHASE4A-01〜04)。
+`docs/architecture/INCIDENT_LEDGER.md` (INC-PHASE4A-01〜05)。
 
 ### 16.1 Hash-Before-Construction Principle (INC-PHASE4A-02)
 
@@ -2230,8 +2288,70 @@ known-answer 校正 — fixture-blindness 規律)。**着手順序は PHANTOM �
   `loading/ready/empty/error` を所有し、request 開始時に旧成功表示を消去、stale response は
   seq 不一致で破棄、error イベントに payload / 例外文言を運ばせるな。取得は明示ボタンのみ
   (polling・自動再試行・時刻依存を足すな)。
+- **seq / stale guard は応答整合性であり、多重発行防止ではない** (Finding 10)。明示取得 UI は
+  即時更新される `useRef` 再入拒否と `phase === "loading"` の button `disabled` を併用せよ。
+  ref は IPC / dispatch より前に立て、`finally` で必ず解除する。第2操作は queue / retry /
+  debounce / throttle せず即座に無視する。polling・`useEffect` 自動取得の禁止は維持。
 
-### 16.5 検証パラダイム (全 4 則に共通)
+### 16.4.1 UI 例外表示の無菌化 (INC-UI-ERROR-01 / Finding 13)
+
+- React catch は例外値を表示するな。`String(err)` / `err.message` / `err.stack` /
+  template 展開 / `console.log(err)` 禁止。state・log・DOM・aria へ渡すな。
+- 操作種別は catch 値ではなく、呼び出し前から確定した有限キー (`UiErrorCode`) で選べ。
+  `apps/desktop/src/lib/uiErrorMessages.ts` の固定文言のみを表示せよ。error 引数を取る helper を作るな。
+- 例外内容の解析・分類（substring / regex / class名 / Rust固定文言比較 / code抽出）禁止。
+  開発モードだけの生表示分岐も禁止。
+- Finding 2 `replay_policy` と回復案内を一致させよ。retry-safe（読取再試行可）だけ
+  「もう一度お試しください」。NoReplay 相当は verify-first（状態確認後、必要な場合だけ再実行）。
+  error 文字列を見て retry-safe へ昇格するな。自動再試行・polling・hidden resend 禁止。
+- progress 表示は `role="status"`、error は `role="alert"` + `error-text`。kind を
+  メッセージ内容から推測するな（操作開始/status event/成功 → info、catch 固定文言 → error）。
+- error state へ payload / path / query / filename を運ぶな。backend raw error を消すために
+  IPC schema や `engine_stdio` を勝手に変えるな（Finding 12 との責務分離）。
+
+### 16.5 Persistence Failure Containment (INC-PHASE4A-05)
+
+観測ストアの障害で面接・GD・debrief を落とすな。ただし hard-fail 契約を緩めたり
+corrupt store を修復したりするな。
+
+| 事象 | 動作 |
+|---|---|
+| 生成Manifestのvalidation失敗 | 即時hard-fail |
+| typed persistence failure (`RetrievalManifestPersistenceError`) | 固定警告＋検証済みcontextで継続 |
+| latest読込時の破損 (`context.manifest.latest` 等) | 即時hard-fail |
+| 未知例外 | 伝播 |
+| corrupt store | 修復・削除・上書き・`NO_MANIFEST`化禁止 |
+
+- `save_retrieval_manifest()` は入力 `validate_manifest` を storage `try` の**外**で行い、
+  書込前に既存 latest pointer+payload を厳格検証する。storage 中の `OSError`/`ValueError`
+  のみを固定文言 `"retrieval manifest persistence failed"` の typed error へ変換
+  (`raise ... from exc`)。message に path / JSON / 元例外文字列を連結するな。
+- `_bounded_context(..., status=None)` は validate → working_memory 更新 → save の順。
+  typed persistence error だけを捕捉し、固定 stderr と status 警告を各1回。
+- 通常 `mode="consult"` は `_bounded_context()` を使わない。影響範囲は interview_sim /
+  gd_sim / 講評 / debrief。
+
+### 16.5.1 Bounded Retrieval Manifest Retention (INC-PHASE4A-06)
+
+immutable は保持中の非改変性であり、無期限保存ではない。`save_retrieval_manifest()` は
+latest commit **後**にだけ `_prune_retrieval_manifests` を実行する。
+
+| 事象 | 動作 |
+|---|---|
+| owned valid が上限以内 | 削除なし |
+| owned valid が上限超過 | latest 保護 + `(mtime_ns, filename)` 降順で残りを保持し、超過分のみ unlink |
+| corrupt / ID mismatch / symlink (owned) | preflight hard-fail、削除ゼロ、修復禁止 |
+| non-hex / `.tmp` / 未知ファイル | 所有外として無視・非削除 |
+| latest 更新失敗 | prune 禁止、有効 orphan 保持 |
+| unlink 部分失敗 | latest / 新 immutable 維持。既削除の valid 旧履歴は rollback しない |
+| retention の `OSError`/`ValueError` | 固定 `RetrievalManifestPersistenceError`（path/JSON/例外文言を message へ出さない） |
+| load 経路 | prune・修復・削除禁止 |
+
+- 上限定数: `RETRIEVAL_MANIFEST_RETENTION_LIMIT = 256`（strict `int` かつ ≥1）。
+- mtime は削除候補の順序付けだけに使え。integrity・ID・履歴意味論の根拠にするな。
+- startup cleanup / background thread / timer / UI 設定を追加するな。
+
+### 16.6 検証パラダイム (全則に共通)
 
 - **合計値の一致だけで正しさを宣言するな。** 各 reason・各 lane・各分岐が実際の制御フローに
   対応することを個別に証明せよ。

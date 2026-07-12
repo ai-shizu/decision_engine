@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
 import sys
 from datetime import date, datetime
@@ -76,6 +77,9 @@ def save_record(
     diary: str,
 ) -> dict:
     date.fromisoformat(date_str)
+    # Finding 18: invalidate before any diary write attempt (accuracy over
+    # avoiding an extra rescan when only events/finance change).
+    _invalidate_source_count(DIARY_MD)
     cal.set_events_for_date(date_str, events)
     fin.set_transactions_for_date(date_str, transactions)
     body = diary.strip()
@@ -286,13 +290,66 @@ def _mtime_iso(path: Path) -> str | None:
     return datetime.fromtimestamp(path.stat().st_mtime).isoformat()
 
 
+# Finding 18: diary/LINE count — streaming scan + process-local metadata cache.
+_DIARY_ENTRY_RE = re.compile(r"^##\s+\d{4}-\d{2}-\d{2}")
+SourceFingerprint = tuple[int, int, int, int]
+SourceCountCacheEntry = tuple[SourceFingerprint, int]
+_CACHEABLE_SOURCE_PATHS = frozenset((DIARY_MD, LINE_HISTORY))
+_SOURCE_COUNT_CACHE: dict[Path, SourceCountCacheEntry] = {}
+
+
 def _diary_entry_count(path: Path) -> int:
-    text = path.read_text(encoding="utf-8")
-    return len(re.findall(r"^##\s+\d{4}-\d{2}-\d{2}", text, re.MULTILINE))
+    with path.open("r", encoding="utf-8") as stream:
+        return sum(1 for line in stream if _DIARY_ENTRY_RE.match(line))
 
 
 def _line_export_count(path: Path) -> int:
-    return path.read_text(encoding="utf-8").count("[LINE]")
+    with path.open("r", encoding="utf-8") as stream:
+        return sum(line.count("[LINE]") for line in stream)
+
+
+def _source_fingerprint(stat: os.stat_result) -> SourceFingerprint | None:
+    if stat.st_ino == 0:
+        return None
+    return (stat.st_dev, stat.st_ino, stat.st_size, stat.st_mtime_ns)
+
+
+def _invalidate_source_count(path: Path) -> None:
+    _SOURCE_COUNT_CACHE.pop(path, None)
+
+
+def _cached_source_count(
+    path: Path,
+    count_fn: Callable[[Path], int],
+) -> int:
+    if path not in _CACHEABLE_SOURCE_PATHS:
+        return count_fn(path)
+
+    before_stat = path.stat()
+    before_fp = _source_fingerprint(before_stat)
+    if before_fp is None:
+        _SOURCE_COUNT_CACHE.pop(path, None)
+        return count_fn(path)
+
+    cached = _SOURCE_COUNT_CACHE.get(path)
+    if cached is not None and cached[0] == before_fp:
+        return cached[1]
+
+    count = count_fn(path)
+
+    try:
+        after_stat = path.stat()
+    except FileNotFoundError:
+        _SOURCE_COUNT_CACHE.pop(path, None)
+        return count
+
+    after_fp = _source_fingerprint(after_stat)
+    if after_fp is None or after_fp != before_fp:
+        _SOURCE_COUNT_CACHE.pop(path, None)
+        return count
+
+    _SOURCE_COUNT_CACHE[path] = (after_fp, count)
+    return count
 
 
 def _json_entry_count(path: Path) -> int:
@@ -313,6 +370,7 @@ def data_source_stats() -> dict:
     """F2 (SPEC_FOXTROT_UI.md §2.2.1 裁定4): IMPORT タブの SourceTable 用。
     stdlib のみの軽量 stat ({exists, count, mtime})。LLM/埋め込みは一切
     使わない (遅延初期化 (AI_SKILLS §1) を壊さないこと)。
+    Finding 18: diary/LINE のみ process-local fingerprint cache。
     """
     sources = {
         "diary": (DIARY_MD, _diary_entry_count),
@@ -320,12 +378,21 @@ def data_source_stats() -> dict:
         "calendar": (CALENDAR_JSON, _json_entry_count),
         "finance": (FINANCE_JSON, _json_entry_count),
     }
+    cached_names = {"diary", "line"}
     result: dict[str, dict] = {}
     for name, (path, count_fn) in sources.items():
         exists = path.exists()
+        if not exists:
+            if name in cached_names:
+                _invalidate_source_count(path)
+            count = 0
+        elif name in cached_names:
+            count = _cached_source_count(path, count_fn)
+        else:
+            count = count_fn(path)
         result[name] = {
             "exists": exists,
-            "count": count_fn(path) if exists else 0,
+            "count": count,
             "mtime": _mtime_iso(path),
         }
     # F-16 (SPEC_FOXTROT_UI.md §10.2改定): 保持ESは active_es.md ただ1件。
@@ -384,6 +451,7 @@ def _append_line_text(text: str, filename: str = "") -> None:
     stem = Path(filename).stem.lower() if filename else ""
     if "[LINE]" not in head and "line" not in stem and not filename.lower().endswith(".txt"):
         raise ValueError("LINE履歴 (.txt) のみ取り込めます")
+    _invalidate_source_count(LINE_HISTORY)
     with open(LINE_HISTORY, "a", encoding="utf-8") as f:
         f.write("\n" + format_line_import(text, filename) + "\n")
 
@@ -836,6 +904,7 @@ def get_settings() -> dict:
 def import_line_history(path: str | Path) -> None:
     path = Path(path)
     text = path.read_text(encoding="utf-8", errors="replace")
+    _invalidate_source_count(LINE_HISTORY)
     with open(LINE_HISTORY, "a", encoding="utf-8") as f:
         f.write("\n" + format_line_import(text, path.name) + "\n")
 

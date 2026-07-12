@@ -22,12 +22,8 @@ AXIS_DESCRIPTIONS: dict[str, str] = {
     "Cognitive_Flexibility": "反証や相手の意見を受けて考えを更新する力",
 }
 
-MBTI_MOCK = (
-    ("E", 42, "I", 58),
-    ("S", 55, "N", 45),
-    ("T", 61, "F", 39),
-    ("J", 47, "P", 53),
-)
+MBTI_MOCK_VALUES = ("42", "58", "55", "45", "61", "39", "47", "53")
+FIXED_6D_PREVIEW = ("0.72", "0.58", "0.64", "0.68", "0.76", "0.61")
 
 
 def _read(rel: str) -> str:
@@ -57,55 +53,46 @@ def test_narrative_draft_copy() -> None:
     assert NARRATIVE_DRAFT_COPY in tab
 
 
-def test_mbti_gradient_bars_mock_axes() -> None:
-    mbti = _read("components/MbtiGradientBars.tsx")
+def test_profile_has_no_mbti_or_fixed_6d_mocks() -> None:
+    """Finding 9 — reintroduction guard for PROFILE permanent mocks."""
     profile = _read("components/ProfileTab.tsx")
-    assert "MBTI_PREFERENCE_PREVIEW" in mbti
-    assert "PREVIEW / NOT MEASURED" in mbti
-    assert "MbtiGradientBars" in profile
-    assert profile.index("MbtiGradientBars") < profile.index("TENSOR_PROFILE_6D")
-    for left, left_pct, right, right_pct in MBTI_MOCK:
-        assert str(left_pct) in mbti
-        assert str(right_pct) in mbti
-        assert left in mbti and right in mbti
-    assert "linear-gradient" in mbti
+    assert "MbtiGradientBars" not in profile
+    assert not (DESKTOP / "components" / "MbtiGradientBars.tsx").exists()
+    assert "TENSOR_RADAR_PREVIEW" not in profile
+    assert "PHASE 1 PREVIEW / NOT MEASURED" not in profile
+    assert "TENSOR_PROFILE_6D" not in profile
+    for value in FIXED_6D_PREVIEW + MBTI_MOCK_VALUES:
+        assert value not in profile, value
 
 
 def test_tensor_radar_axis_tooltips_and_keyboard() -> None:
     chart = _read("components/TensorRadarChart.tsx")
-    profile = _read("components/ProfileTab.tsx")
+    view = _read("lib/tensorProfileView.ts")
+    parser = _read("lib/parseConsultResponse.ts")
     css = _read("App.css")
     assert 'role="tooltip"' in chart
     assert "tabIndex={0}" in chart
     assert "aria-describedby" in chart
     assert "tensor-radar-help" in chart or "tensor-radar-tooltip" in css
     for axis, desc in AXIS_DESCRIPTIONS.items():
-        assert axis in profile or axis in chart
-        assert desc in chart or desc in profile
+        assert axis in parser or axis in view
+        assert desc in view
     assert "[?]" in chart or "?" in chart.split("legend", 1)[-1]
 
 
-def test_phase3_preview_no_external_or_ipc() -> None:
+def test_phase3_profile_and_radar_stay_offline() -> None:
+    """PROFILE/radar must not invent client-side mock persistence or entropy."""
     surfaces = (
-        _read("components/InterviewTab.tsx"),
         _read("components/ProfileTab.tsx"),
         _read("components/TensorRadarChart.tsx"),
-        _read("components/MbtiGradientBars.tsx"),
     )
     joined = "\n".join(surfaces)
-    assert "PREVIEW / NOT MEASURED" in joined or "PHASE 1 PREVIEW / NOT MEASURED" in joined
     forbidden = (
         "fetch(",
         "localStorage",
         "sessionStorage",
         "Math.random",
         "Date.now",
-        "pkb_invoke",
-        "consult(",
-        "narrativeCompile(",
     )
-    mbti = _read("components/MbtiGradientBars.tsx")
     for token in forbidden:
-        assert token not in mbti, f"forbidden in MbtiGradientBars: {token}"
-    assert "oraclePayload" not in mbti
-    assert "tensorRebuild" not in mbti
+        assert token not in joined, f"forbidden on PROFILE/radar surface: {token}"

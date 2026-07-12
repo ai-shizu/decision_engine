@@ -20,6 +20,11 @@ _CONTACT_ALIAS_RE = re.compile(r"^C-[0-9a-f]{8}$")
 
 FIXED_INTERNAL_ALIASES = frozenset({"candidate", "面接官", "参加者", "メンター"})
 
+
+class RetrievalManifestPersistenceError(ValueError):
+    """A valid manifest could not be persisted without violating store integrity."""
+
+
 MEMORY_KIND_ALLOWLIST = frozenset(
     {
         "goal",
@@ -786,35 +791,143 @@ def _validate_latest_pointer(latest: Any) -> str:
     return manifest_id
 
 
+_PERSISTENCE_FAILED_MSG = "retrieval manifest persistence failed"
+RETRIEVAL_MANIFEST_RETENTION_LIMIT = 256
+_OWNED_MANIFEST_FILENAME = re.compile(r"^[0-9a-f]{32}\.json$")
+
+
+def _atomic_write_text(path: Any, text: str) -> None:
+    """Write UTF-8 text via same-dir .tmp then os.replace; best-effort tmp cleanup."""
+    from pathlib import Path
+
+    target = Path(path)
+    tmp = target.with_suffix(".json.tmp")
+    try:
+        tmp.write_text(text, encoding="utf-8")
+        os.replace(tmp, target)
+    except Exception:
+        try:
+            tmp.unlink(missing_ok=True)
+        except OSError:
+            pass
+        raise
+
+
+def _assert_existing_latest_integrity() -> None:
+    """Strict-validate latest pointer + payload before any write. No repair."""
+    from . import paths
+
+    if not paths.LATEST_RETRIEVAL_MANIFEST.exists():
+        return
+    latest = json.loads(
+        paths.LATEST_RETRIEVAL_MANIFEST.read_text(encoding="utf-8"),
+    )
+    manifest_id = _validate_latest_pointer(latest)
+    manifest_path = paths.RETRIEVAL_MANIFESTS_DIR / f"{manifest_id}.json"
+    if not manifest_path.exists():
+        raise ValueError("latest manifest file missing")
+    data = json.loads(manifest_path.read_text(encoding="utf-8"))
+    existing = validate_manifest(manifest_from_dict(data))
+    if existing.manifest_id != manifest_id:
+        raise ValueError("latest pointer manifest_id mismatch")
+
+
+def _prune_retrieval_manifests(*, latest_manifest_id: str) -> None:
+    """Delete oldest owned valid immutables beyond the retention limit.
+
+    latest_manifest_id's file is always retained. Selection among the rest uses
+    (st_mtime_ns, filename) descending only — mtime is never an integrity signal.
+    Corrupt / id-mismatched / symlink owned paths hard-fail with zero deletes.
+    Unknown non-hex names are ignored and never deleted.
+    """
+    from pathlib import Path
+
+    from . import paths
+
+    limit = RETRIEVAL_MANIFEST_RETENTION_LIMIT
+    if type(limit) is not int or limit < 1:
+        raise ValueError("invalid retention limit")
+    if type(latest_manifest_id) is not str or not _HEX32.fullmatch(latest_manifest_id):
+        raise ValueError("invalid latest_manifest_id")
+
+    directory = Path(paths.RETRIEVAL_MANIFESTS_DIR)
+    if not directory.is_dir():
+        return
+
+    latest_name = f"{latest_manifest_id}.json"
+    # Preflight: collect and strict-validate every owned path before any unlink.
+    owned: list[tuple[int, str, Path]] = []
+    latest_seen = False
+    for entry in directory.iterdir():
+        name = entry.name
+        if name == "latest.json" or name.endswith(".tmp"):
+            continue
+        if not _OWNED_MANIFEST_FILENAME.fullmatch(name):
+            continue
+        if entry.is_symlink():
+            raise ValueError("symlink owned manifest path")
+        if not entry.is_file():
+            raise ValueError("owned manifest path is not a regular file")
+        data = json.loads(entry.read_text(encoding="utf-8"))
+        payload = validate_manifest(manifest_from_dict(data))
+        if payload.manifest_id != entry.stem:
+            raise ValueError("owned manifest_id mismatch")
+        mtime_ns = entry.stat().st_mtime_ns
+        owned.append((mtime_ns, name, entry))
+        if name == latest_name:
+            latest_seen = True
+
+    if not latest_seen:
+        raise ValueError("latest manifest missing from owned set")
+
+    if len(owned) <= limit:
+        return
+
+    non_latest = [(mt, name, path) for mt, name, path in owned if name != latest_name]
+    # Newest first; ties broken by filename descending (deterministic).
+    non_latest.sort(key=lambda item: (item[0], item[1]), reverse=True)
+    keep_non_latest = {name for _, name, _ in non_latest[: max(limit - 1, 0)]}
+    to_delete = [
+        path
+        for _, name, path in non_latest
+        if name not in keep_non_latest
+    ]
+    for path in to_delete:
+        path.unlink()
+
+
 def save_retrieval_manifest(manifest: RetrievalManifestV1) -> None:
     from . import paths
 
     manifest = validate_manifest(manifest)
-    paths.RETRIEVAL_MANIFESTS_DIR.mkdir(parents=True, exist_ok=True)
-    path = paths.RETRIEVAL_MANIFESTS_DIR / f"{manifest.manifest_id}.json"
-    if path.exists():
-        existing_data = json.loads(path.read_text(encoding="utf-8"))
-        existing_manifest = manifest_from_dict(existing_data)
-        existing_manifest = validate_manifest(existing_manifest)
-        if existing_manifest.manifest_id != manifest.manifest_id:
-            raise ValueError("existing manifest_id mismatch")
-    else:
-        tmp = path.with_suffix(".json.tmp")
-        payload = json.dumps(
-            manifest_to_dict(manifest),
+    try:
+        paths.RETRIEVAL_MANIFESTS_DIR.mkdir(parents=True, exist_ok=True)
+        _assert_existing_latest_integrity()
+        path = paths.RETRIEVAL_MANIFESTS_DIR / f"{manifest.manifest_id}.json"
+        if path.exists():
+            existing_data = json.loads(path.read_text(encoding="utf-8"))
+            existing_manifest = validate_manifest(manifest_from_dict(existing_data))
+            if existing_manifest.manifest_id != manifest.manifest_id:
+                raise ValueError("existing manifest_id mismatch")
+        else:
+            payload = json.dumps(
+                manifest_to_dict(manifest),
+                ensure_ascii=False,
+                indent=2,
+            )
+            _atomic_write_text(path, payload + "\n")
+        latest_payload = json.dumps(
+            {"manifest_id": manifest.manifest_id},
             ensure_ascii=False,
             indent=2,
         )
-        tmp.write_text(payload + "\n", encoding="utf-8")
-        os.replace(tmp, path)
-    latest_tmp = paths.LATEST_RETRIEVAL_MANIFEST.with_suffix(".json.tmp")
-    latest_payload = json.dumps(
-        {"manifest_id": manifest.manifest_id},
-        ensure_ascii=False,
-        indent=2,
-    )
-    latest_tmp.write_text(latest_payload + "\n", encoding="utf-8")
-    os.replace(latest_tmp, paths.LATEST_RETRIEVAL_MANIFEST)
+        _atomic_write_text(
+            paths.LATEST_RETRIEVAL_MANIFEST,
+            latest_payload + "\n",
+        )
+        _prune_retrieval_manifests(latest_manifest_id=manifest.manifest_id)
+    except (OSError, ValueError) as exc:
+        raise RetrievalManifestPersistenceError(_PERSISTENCE_FAILED_MSG) from exc
 
 
 def load_latest_retrieval_manifest() -> RetrievalManifestV1 | None:

@@ -38,3 +38,4 @@ apps/desktop/src-tauri/target/
 apps/desktop/src-tauri/binaries/pkb-engine*
 apps/desktop/src-tauri/binaries/pkb-api*
 !apps/desktop/src-tauri/binaries/README.md
+/apps/desktop/.boundary-tests-out/

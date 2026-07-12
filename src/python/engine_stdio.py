@@ -7,13 +7,15 @@ from __future__ import annotations
 import io
 import json
 import sys
-import traceback
 from pathlib import Path
 from typing import Any, Callable, TextIO
 
 _PYTHON_ROOT = Path(__file__).resolve().parent
 if str(_PYTHON_ROOT) not in sys.path:
     sys.path.insert(0, str(_PYTHON_ROOT))
+
+# Exact sterile diagnostic persisted by the Rust engine-log allowlist (Finding 12).
+_PKB_DIAG_REQUEST_FAILED = "[PKB_DIAG_V1] REQUEST_FAILED"
 
 
 def _open_json_stdout() -> TextIO:
@@ -44,6 +46,12 @@ def _emit(payload: dict[str, Any]) -> None:
     _JSON_OUT.flush()
 
 
+def _emit_request_failed_diag() -> None:
+    """Write the sole allowlisted persistent diagnostic to stderr (no exception data)."""
+    sys.stderr.write(_PKB_DIAG_REQUEST_FAILED + "\n")
+    sys.stderr.flush()
+
+
 def _import_facade():
     from core import facade  # noqa: WPS433
 
@@ -67,11 +75,7 @@ def dispatch(cmd: str, params: dict[str, Any], emit: EventEmitter | None = None)
         save_settings_fixed(params.get("attributes", {}))
         return {"saved": True}
 
-    try:
-        facade = _import_facade()
-    except Exception:
-        traceback.print_exc(file=sys.stderr)
-        raise
+    facade = _import_facade()
 
     if cmd == "record.load":
         return facade.load_record(params["date"])
@@ -216,7 +220,7 @@ def main() -> None:
             result = dispatch(req["cmd"], req.get("params") or {}, emit=emit_event)
             out: dict[str, Any] = {"id": req_id, "ok": True, "result": result}
         except Exception as exc:  # noqa: BLE001
-            traceback.print_exc(file=sys.stderr)
+            _emit_request_failed_diag()
             out = {"id": req_id, "ok": False, "error": f"{type(exc).__name__}: {exc}"}
         _emit(out)
 

@@ -7,6 +7,9 @@
 #   §2.7 F7 (Desktop Native Chrome)、§3.6 (キーボード予約表)、§6 (W-22〜W-27
 #   React 実装罠) を追加。F6 (PROBE) の様式定義は D2/E4 完成後の着手時に確定
 #   させる (ゲートは不変)。
+# Finding 17 (2026-07-12): メインタブを WAI-ARIA Tabs manual activation に是正。
+#   Arrow/Home/End は focus only、Enter/Space/click で activation。F-11 は空
+#   tabpanel shell のみ常設可・inactive component keep-alive は引き続き禁止。
 # Rev.4 (2026-07-08): F7 完遂を受けた F1 着工前裁定。§2.1 に F1 専用の 3 裁定
 #   (recordDraft によるタブローカル state 隔離・isCommitEnter による IME
 #   ガード共通化・Alt/Ctrl キーボード配線レイヤ) を追加。
@@ -361,6 +364,10 @@ ImportTab                          ← 状態: sources[] (name/status/count/mtim
 `{exists, count, mtime}` の軽量 stat (diary 行スキャン・json len・ファイル
 mtime — stdlib のみ、LLM/埋め込み不使用、遅延初期化を起こさないこと)。
 マウント時 + import 完了時に再取得する (§3.4-5)。
+**Finding 18 追補**: diary/LINE の count は UTF-8 逐次走査とし、未変更時は
+process-local fingerprint cache（`st_dev`/`st_ino`/`st_size`/`st_mtime_ns`）
+で再走査を省略する。calendar/finance はこの cache 対象外。IPC shape と
+frontend の `refreshStats()` 頻度は不変。cache は性能補助であり永続正本ではない。
 
 ### 2.2.2 F2-EXT 着工前裁定 (Rev.6) — 汎用インポートの決定論的拡張
 
@@ -703,6 +710,10 @@ TitleBar (新設。App.tsx 最上位・shell の最初の子要素)
   セッション中に oracle/twin データ (PROFILE ペインの state と DOM) を生かした
   まま残す — 画面共有・スクリーンショット・state 参照の全てが漏洩面積になる。
   unmount は状態消去の構造的保証である (App.tsx の既存パターンを凍結)。
+  **Finding 17 限定解釈**: WAI-ARIA Tabs の ID 参照を成立させるための**空の
+  tabpanel shell**（`hidden` 付き・中身なし）だけは DOM 常設を許可する。
+  shell 内に React tab component・ローカル state・個人データ・IPC subscription
+  を保持してはならない。active shell のみが component を条件 mount する。
 - **F-12 (Rev.2)**: **oracle/twin/OII 系の数値を共有クローム (topbar・subtitle・
   status line) に出さない。** 表示は PROFILE 系ペインと PreSessionBriefing の
   内部のみ。共有クロームに出した瞬間、面接セッション中に自分の R 値が視界に
@@ -743,10 +754,15 @@ cargo check               # src-tauri (Rust に触れた場合のみ)
 | `Alt+1`〜`Alt+5` | メインタブ切替 (グローバル) |
   RECORD/IMPORT/CONSULT/INTERVIEW/SETTINGS (PROBE 追加時は `Alt+6`) | Rev.3 新設 |
 | `Enter` | RECORD QuickAddRow | 行追加 | §2.1 (**W-25 の IME ガード必須**) |
+| `ArrowLeft` / `ArrowRight` | メインタブ tablist 内 | 隣接 tab へ **focus のみ**（activation しない） | Finding 17 (WAI-ARIA manual activation) |
+| `Home` / `End` | メインタブ tablist 内 | 先頭 / 末尾 tab へ **focus のみ** | Finding 17 |
+| `Enter` / `Space` | メインタブ tab ボタン | activation（native button click → 選択） | Finding 17 |
 
 メインタブに `Ctrl+1〜5` を使わないのは、RECORD のサブタブ予約と衝突する
 ため (グローバルとローカルで同じキーを持たせるとフォーカス依存の誤爆が
-起きる)。メインタブ切替は `Alt` 系に系統的に分離する。
+起きる)。メインタブ切替は `Alt` 系に系統的に分離する。Finding 17 の
+Arrow/Home/End は tablist 内の focus 移動に限定し、既存 Alt ショートカットと
+競合させない。タブ数・タブ名の正本はここに重複新設しない。
 
 ---
 

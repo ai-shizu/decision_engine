@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { consult, type RomanceAnalysisResult } from "../lib/engine";
 import type { ChatMessage, EngineEvent } from "../lib/types";
+import { uiErrorMessage } from "../lib/uiErrorMessages";
 import { useCorrelationId } from "../lib/useCorrelationId";
 import { useThrottledStream } from "../lib/useThrottledStream";
 import { RomanceAnalysisPanel } from "./RomanceAnalysisPanel";
@@ -22,6 +23,7 @@ export function ConsultTab() {
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
   const [status, setStatus] = useState("");
+  const [statusKind, setStatusKind] = useState<"info" | "error">("info");
   const [confirmingClear, setConfirmingClear] = useState(false);
   const [mode, setMode] = useState<ConsultMode>("consult");
   const [romanceResult, setRomanceResult] = useState<RomanceAnalysisResult | null>(null);
@@ -73,6 +75,7 @@ export function ConsultTab() {
       // W-34/W-45〜W-49: 自分の in-flight cid のイベントだけを処理する。
       if (!cid.accepts(payload)) return;
       if (payload.event === "status" && payload.message) {
+        setStatusKind("info");
         setStatus(payload.message);
         return;
       }
@@ -108,12 +111,14 @@ export function ConsultTab() {
     flushChunkQueue();
     setBusy(true);
     const myCid = cid.begin();
+    setStatusKind("info");
     setStatus("考え中…");
     stickRef.current = true;
 
     if (mode === "romance_analysis") {
       setRomanceResult(null);
       setMessages((prev) => stripRomanceSuccessMessages(prev));
+      setStatusKind("info");
       setStatus(ROMANCE_PARSING_STATUS);
       try {
         const res = await consult(q, { mode: "romance_analysis" }, myCid);
@@ -125,11 +130,13 @@ export function ConsultTab() {
           ...prev,
           { role: "assistant", text: ROMANCE_SUCCESS_MESSAGE },
         ]);
+        setStatusKind("info");
         setStatus("");
-      } catch (err) {
+      } catch {
         setRomanceResult(null);
         setMessages((prev) => stripRomanceSuccessMessages(prev));
-        setStatus(String(err));
+        setStatusKind("error");
+        setStatus(uiErrorMessage("ROMANCE_ANALYSIS"));
       } finally {
         setBusy(false);
         cid.end(myCid);
@@ -157,8 +164,9 @@ export function ConsultTab() {
         }
         return [...prev, { role: "assistant", text: res.answer }];
       });
+      setStatusKind("info");
       setStatus("");
-    } catch (err) {
+    } catch {
       flushChunkQueue(); // W-35: エラー経路でも確定 (削除/凍結) 前にキューを破棄する
       // 空のプレースホルダーは取り除き、エラーは status 行に出す
       setMessages((prev) => {
@@ -171,7 +179,8 @@ export function ConsultTab() {
         }
         return prev;
       });
-      setStatus(String(err));
+      setStatusKind("error");
+      setStatus(uiErrorMessage("CONSULT_RESPONSE"));
     } finally {
       setBusy(false);
       cid.end(myCid);
@@ -264,7 +273,14 @@ export function ConsultTab() {
           </button>
         </div>
       </form>
-      {status && <p className="status-line">{status}</p>}
+      {status && (
+        <p
+          className={`status-line${statusKind === "error" ? " error-text" : ""}`}
+          role={statusKind === "error" ? "alert" : "status"}
+        >
+          {status}
+        </p>
+      )}
     </section>
   );
 }

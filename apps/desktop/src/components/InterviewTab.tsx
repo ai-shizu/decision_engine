@@ -10,7 +10,9 @@ import type {
   InterviewMode,
   InterviewReport,
 } from "../lib/types";
+import { uiErrorMessage } from "../lib/uiErrorMessages";
 import { useCorrelationId } from "../lib/useCorrelationId";
+import { TensorProfilePanel } from "./TensorProfilePanel";
 
 // F-17 (SPEC_FOXTROT_UI.md §10.3): es_review は思考速度を計測も評価もしない
 // (latency 構造的皆無)。hint はモード別に単一定義し、二重定義を作らない
@@ -237,6 +239,7 @@ export function InterviewTab() {
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
   const [status, setStatus] = useState("");
+  const [statusKind, setStatusKind] = useState<"info" | "error">("info");
   const logRef = useRef<HTMLDivElement>(null);
   // AI メッセージ表示完了時刻 — 次のユーザー送信までの経過が response_time_sec
   const aiShownAtRef = useRef<number | null>(null);
@@ -256,6 +259,7 @@ export function InterviewTab() {
     const unlisten = listen<EngineEvent>("pkb-engine-event", ({ payload }) => {
       if (!cid.accepts(payload)) return;
       if (payload.event === "status" && payload.message) {
+        setStatusKind("info");
         setStatus(payload.message);
         return;
       }
@@ -301,6 +305,7 @@ export function InterviewTab() {
     const shouldRenderGdThread =
       role === "ai" && mode === "gd_sim" && (opts.gdThread ?? phase === "active");
     setBusy(true);
+    setStatusKind("info");
     setStatus("");
     setMessages((prev) => [
       ...prev,
@@ -354,9 +359,10 @@ export function InterviewTab() {
       });
       aiShownAtRef.current = Date.now();
       return true;
-    } catch (err) {
+    } catch {
       setMessages((prev) => (prev[prev.length - 1]?.streaming ? prev.slice(0, -1) : prev));
-      setStatus(String(err));
+      setStatusKind("error");
+      setStatus(uiErrorMessage("INTERVIEW_RESPONSE"));
       return false;
     } finally {
       setBusy(false);
@@ -439,8 +445,8 @@ export function InterviewTab() {
       const domain = narrativeTarget.trim();
       const res = await narrativeCompile(domain || undefined);
       setNarrativeResult(res);
-    } catch (err) {
-      setNarrativeResult({ ok: false, reason: String(err) });
+    } catch {
+      setNarrativeResult({ ok: false, reason: uiErrorMessage("NARRATIVE_COMPILE") });
     } finally {
       setNarrativeBusy(false);
     }
@@ -706,7 +712,12 @@ export function InterviewTab() {
               {narrativeResult.reason && (
                 <div className="term-row">
                   <span className="term-source-name">reason</span>
-                  <span className="term-value">{narrativeResult.reason}</span>
+                  <span
+                    className={`term-value${narrativeResult.ok === false ? " error-text" : ""}`}
+                    role={narrativeResult.ok === false ? "alert" : undefined}
+                  >
+                    {narrativeResult.reason}
+                  </span>
                 </div>
               )}
               {narrativeResult.target_domain && (
@@ -819,6 +830,7 @@ export function InterviewTab() {
               {m.axis}: {m.evidence}
             </p>
           ))}
+          <TensorProfilePanel tensorProfile={report.tensor_profile} />
           <div className="term-row mission-result-row">
             <span className="term-source-name">実測レイテンシ (AI評価ではなく計測値)</span>
             <span className="term-value">
@@ -861,7 +873,14 @@ export function InterviewTab() {
           </>
         )}
       </form>
-      {status && <p className="status-line">{status}</p>}
+      {status && (
+        <p
+          className={`status-line${statusKind === "error" ? " error-text" : ""}`}
+          role={statusKind === "error" ? "alert" : "status"}
+        >
+          {status}
+        </p>
+      )}
     </section>
   );
 }

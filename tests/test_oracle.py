@@ -139,6 +139,7 @@ def test_stdio_dispatch_ignores_unknown_params() -> None:
     class _FakeFacade:
         consult = staticmethod(fake_consult)
         last_interview_report = staticmethod(lambda: None)
+        last_romance_analysis = staticmethod(lambda: None)
 
     original_import = engine_stdio._import_facade
     engine_stdio._import_facade = lambda: _FakeFacade

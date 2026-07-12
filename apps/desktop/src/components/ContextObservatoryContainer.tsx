@@ -53,27 +53,42 @@ export function ContextObservatoryContainer() {
     INITIAL_MANIFEST_FETCH_STATE,
   );
   const seqRef = useRef(0);
+  const inFlightRef = useRef(false);
+  const isLoading = state.phase === "loading";
 
   async function loadManifest() {
-    seqRef.current += 1;
-    const seq = seqRef.current;
+    if (inFlightRef.current) return;
+    inFlightRef.current = true;
+
+    const seq = ++seqRef.current;
     dispatch({ kind: "REQUEST_START", seq });
+
     try {
       const response = await latestContextManifest();
       dispatch({ kind: "REQUEST_SUCCESS", seq, response });
     } catch {
       dispatch({ kind: "REQUEST_FAILURE", seq });
+    } finally {
+      inFlightRef.current = false;
     }
   }
 
   const buttonLabel =
-    state.phase === "empty" || state.phase === "error"
-      ? "読み込み"
-      : "再読み込み";
+    isLoading
+      ? "読み込み中…"
+      : state.phase === "empty" || state.phase === "error"
+        ? "読み込み"
+        : "再読み込み";
 
   return (
-    <div style={rootStyle}>
-      <button type="button" style={buttonStyle} onClick={() => void loadManifest()}>
+    <div style={rootStyle} aria-busy={isLoading}>
+      <button
+        type="button"
+        style={buttonStyle}
+        disabled={isLoading}
+        aria-busy={isLoading}
+        onClick={() => void loadManifest()}
+      >
         {buttonLabel}
       </button>
       {state.phase === "loading" ? (

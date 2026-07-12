@@ -60,9 +60,9 @@ from . import pipeline  # noqa: E402
 from .llm_config import (  # noqa: E402
     find_gguf,
     generation_params,
-    llama_server_cmd,
     SERVER_PORT,
 )
+from .llm_backend import LlamaServerBackend  # noqa: E402
 
 SYSTEM_PROMPT = (
     "あなたはユーザーの思考・価値観を完全に理解する分身AIである。"
@@ -136,6 +136,13 @@ INTERVIEW_CASE_BANK: list[dict] = [
 
 INTERVIEW_END_COMMANDS = ("終了", "講評", "講評して", "review", "end")
 INTERVIEW_START_COMMANDS = ("開始", "start", "次の問題", "新しい問題")
+
+MANIFEST_PERSISTENCE_WARNING = (
+    "コンテキスト監査記録を保存できませんでした。相談処理は継続します。"
+)
+_MANIFEST_PERSISTENCE_STDERR = (
+    "[PKB] retrieval manifest persistence failed; continuing without manifest update"
+)
 
 # ============================================================ F4a コンフィギュレータ
 # SPEC_FOXTROT_UI.md §7 裁定2: プリセットはバックエンドの静的バンクに置き、
@@ -565,173 +572,7 @@ def _redact_answer(text: str) -> str:
 
 
 # ============================================================ LLMバックエンド
-class LlamaServerBackend:
-    """llama-server (127.0.0.1) 経由の推論。プロセス・通信ともに完全ローカル。
-
-    ライフサイクル管理:
-      - 自分が spawn したサーバープロセスのみを終了対象とする
-        (既存サーバーを再利用した場合は他所有プロセスを殺さない)
-      - stop() は Terminate → 5秒待機 → Kill の段階的終了
-      - インスタンス生成時に atexit へ登録し、TUI/CLI がどのような経路で
-        終了してもゾンビプロセスを残さない
-    """
-
-    name = "llama-server (127.0.0.1, ARM64 native)"
-
-    def __init__(self, exe: Path, model: Path, port: int):
-        self.exe, self.model, self.port = exe, model, port
-        self.proc: subprocess.Popen | None = None
-        self._slot_cache = None  # KV プレフィックス・ピニング (遅延生成)
-        import atexit
-        atexit.register(self.stop)
-
-    def _port_open(self) -> bool:
-        import socket
-        with socket.socket() as s:
-            s.settimeout(0.3)
-            return s.connect_ex(("127.0.0.1", self.port)) == 0
-
-    def start(self, timeout_s: int | None = None) -> None:
-        import urllib.request
-        from .llm_config import model_startup_timeout
-        if timeout_s is None:
-            timeout_s = model_startup_timeout(self.model)
-        if self.proc is not None and self.proc.poll() is None:
-            return  # 自前サーバーが稼働中
-        if self._port_open():
-            return  # 既存サーバーを再利用 (所有権なし → stop対象外)
-        self.proc = subprocess.Popen(
-            llama_server_cmd(self.exe, self.model, self.port),
-            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        deadline = time.time() + timeout_s
-        while time.time() < deadline:
-            try:
-                with urllib.request.urlopen(
-                        f"http://127.0.0.1:{self.port}/health", timeout=2) as r:
-                    if json.load(r).get("status") == "ok":
-                        return
-            except OSError:
-                time.sleep(1.0)
-        self.stop()
-        raise RuntimeError("llama-server の起動がタイムアウトしました")
-
-    def _slot_cache_client(self):
-        """KV スロットキャッシュのクライアント (遅延生成・サーバー非対応なら不使用)。"""
-        from .llm_config import server_supports_slot_save
-        if self._slot_cache is None and server_supports_slot_save(self.exe):
-            from .kv_cache import SlotCacheClient
-            self._slot_cache = SlotCacheClient(self.port)
-        return self._slot_cache
-
-    def generate(self, system: str, user: str, max_tokens: int | None = None,
-                 on_token=None, prefix_hash: str | None = None) -> str:
-        """on_token が渡された場合は SSE ストリーミングでトークン毎に呼ぶ。
-
-        prefix_hash を渡すと KV プレフィックス・ピニングが有効化される:
-        生成前にディスクからスロット復元を試み、生成後 (初回のみ) 保存する。
-        キャッシュ操作の失敗は無視される (best-effort — 生成は必ず続行)。
-        温度・トークン上限は config/model_params.json (generation) で管理。"""
-        import urllib.request
-        self.start()
-        slot_client = self._slot_cache_client() if prefix_hash else None
-        if slot_client is not None:
-            try:
-                outcome = slot_client.ensure_prefix(prefix_hash)
-                print(f"[kv_cache] prefix {prefix_hash[:8]}: {outcome}",
-                      file=sys.stderr)
-            except Exception:  # noqa: BLE001 — キャッシュ不調で生成を止めない
-                slot_client = None
-        gen = generation_params()
-        body: dict = {
-            "messages": [{"role": "system", "content": system},
-                         {"role": "user", "content": user}],
-            "max_tokens": max_tokens if max_tokens is not None else gen["max_tokens"],
-            "temperature": gen["temperature"],
-            "stream": on_token is not None,
-        }
-        if prefix_hash is not None:
-            from .kv_cache import SLOT_ID
-            body["id_slot"] = SLOT_ID       # 復元したスロットで生成する
-            body["cache_prompt"] = True     # 共通トークン接頭辞の再利用を明示
-        payload = json.dumps(body).encode("utf-8")
-        req = urllib.request.Request(
-            f"http://127.0.0.1:{self.port}/v1/chat/completions",
-            data=payload, headers={"Content-Type": "application/json"})
-        with urllib.request.urlopen(req, timeout=600) as r:
-            if on_token is None:
-                answer = json.load(r)["choices"][0]["message"]["content"].strip()
-            else:
-                parts: list[str] = []
-                for raw in r:  # SSE: "data: {...}\n" 行を逐次読む
-                    line = raw.decode("utf-8", errors="replace").strip()
-                    if not line.startswith("data:"):
-                        continue
-                    data = line[len("data:"):].strip()
-                    if data == "[DONE]":
-                        break
-                    try:
-                        delta = json.loads(data)["choices"][0].get("delta", {})
-                    except (json.JSONDecodeError, KeyError, IndexError):
-                        continue
-                    piece = delta.get("content")
-                    if piece:
-                        parts.append(piece)
-                        on_token(piece)
-                answer = "".join(parts).strip()
-        # 生成成功後にのみ保存 (プレフィックスの KV が確実に温まっている状態)
-        if slot_client is not None:
-            try:
-                slot_client.commit_prefix(prefix_hash)
-            except Exception:  # noqa: BLE001 — 保存失敗は高速化の機会損失に過ぎない
-                pass
-        return answer
-
-    def generate_structured(self, system: str, user: str, json_schema: dict,
-                            max_tokens: int | None = None) -> str:
-        """Non-streaming JSON-only generation with OpenAI-compatible schema hint."""
-        import urllib.request
-        self.start()
-        gen = generation_params()
-        body: dict = {
-            "messages": [{"role": "system", "content": system},
-                         {"role": "user", "content": user}],
-            "max_tokens": max_tokens if max_tokens is not None else gen["max_tokens"],
-            "temperature": 0,
-            "stream": False,
-            "response_format": {
-                "type": "json_schema",
-                "json_schema": {
-                    "name": "structured_output",
-                    "strict": True,
-                    "schema": json_schema,
-                },
-            },
-        }
-        payload = json.dumps(body).encode("utf-8")
-        req = urllib.request.Request(
-            f"http://127.0.0.1:{self.port}/v1/chat/completions",
-            data=payload, headers={"Content-Type": "application/json"})
-        try:
-            with urllib.request.urlopen(req, timeout=600) as r:
-                answer = json.load(r)["choices"][0]["message"]["content"].strip()
-        except Exception:
-            answer = self.generate(system, user, max_tokens=max_tokens, on_token=None)
-        return answer
-
-    def stop(self) -> None:
-        """自分が起動したサーバーを確実に終了させる (Terminate → Kill)。"""
-        proc, self.proc = self.proc, None
-        if proc is None or proc.poll() is not None:
-            return
-        proc.terminate()
-        try:
-            proc.wait(timeout=5)
-        except subprocess.TimeoutExpired:
-            proc.kill()
-            try:
-                proc.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                pass
+# LlamaServerBackend の唯一の所有者は core/llm_backend.py (INC-LLM-CLIENT-01)。
 
 
 class RuleBasedBackend:
@@ -1147,9 +988,14 @@ class ConsultationEngine:
         mode: str,
         current_role: str | None = None,
         current_text: str | None = None,
+        status=None,
     ) -> str:
         from .session_memory import build_bounded_context_with_manifest
-        from .retrieval_manifest import save_retrieval_manifest, validate_manifest
+        from .retrieval_manifest import (
+            RetrievalManifestPersistenceError,
+            save_retrieval_manifest,
+            validate_manifest,
+        )
 
         session_id = self._session_id_for_state(state, mode)
         context, working_memory, manifest = build_bounded_context_with_manifest(
@@ -1160,8 +1006,13 @@ class ConsultationEngine:
             current_turn_text=current_text,
         )
         validate_manifest(manifest)
-        save_retrieval_manifest(manifest)
         state["working_memory"] = working_memory
+        try:
+            save_retrieval_manifest(manifest)
+        except RetrievalManifestPersistenceError:
+            print(_MANIFEST_PERSISTENCE_STDERR, file=sys.stderr)
+            if status is not None:
+                status(MANIFEST_PERSISTENCE_WARNING)
         return context
 
     def _generate_redacted(
@@ -1201,7 +1052,7 @@ class ConsultationEngine:
         新たな暴露面になる。"""
         say = status or (lambda msg: None)
         say("メンターが応答中…")
-        bounded = self._bounded_context(state, q, mode="debrief")
+        bounded = self._bounded_context(state, q, mode="debrief", status=status)
         metrics = (state.get("report") or {}).get("metrics", [])
         metrics_line = "、".join(
             f"{m['axis']}:{m['score']}" for m in metrics) or "(スコアなし)"
@@ -1385,7 +1236,7 @@ class ConsultationEngine:
 {subject}
 {es_section}
 # 議論トランスクリプト (bounded)
-{self._bounded_context(state, "講評", mode="interview_sim") or '(候補者の発言なし)'}
+{self._bounded_context(state, "講評", mode="interview_sim", status=say) or '(候補者の発言なし)'}
 {_format_latency_section(state.get('latencies', []))}
 # 講評指示
 1. 論理性の評価: MECE な分解ができていたか、前提と数字の扱いは妥当か、
@@ -1472,7 +1323,7 @@ class ConsultationEngine:
             injection_note = (
                 f"\n\nまた、以下の一般的な質問も自然な流れで織り交ぜて尋ねよ:\n"
                 f"「{injected_text}」")
-        bounded = self._bounded_context(state, q, mode="interview_sim")
+        bounded = self._bounded_context(state, q, mode="interview_sim", status=say)
         prompt = f"""{es_ctx}# これまでの議論 (bounded)
 {bounded}{latency_note}
 
@@ -1627,7 +1478,7 @@ class ConsultationEngine:
 {state['topic_hint']}
 
 # 議論トランスクリプト (bounded)
-{self._bounded_context(state, "講評", mode="gd_sim") or '(候補者の発言なし)'}
+{self._bounded_context(state, "講評", mode="gd_sim", status=say) or '(候補者の発言なし)'}
 {_format_latency_section(state.get('latencies', []))}
 # 講評指示
 1. 候補者 (あなた以外の唯一の人間) の介入行動を評価せよ:
@@ -1704,7 +1555,7 @@ class ConsultationEngine:
                 "学生C は別の話題を持ち出すこと。候補者が誰かに発言を振った場合のみ、\n"
                 "その学生は応じてよい。"
             )
-        bounded = self._bounded_context(state, q, mode="gd_sim")
+        bounded = self._bounded_context(state, q, mode="gd_sim", status=say)
         prompt = f"""# これまでの議論 (bounded)
 {bounded}{latency_note}
 

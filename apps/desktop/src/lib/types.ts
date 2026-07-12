@@ -175,10 +175,49 @@ export interface InterviewReportLatency {
   n: number;
 }
 
+/** Six-dimensional tensor profile (SPEC_ENGINE_TENSOR_PROFILING.md §6).
+ * Mirrors core/tensor_profile.py CANONICAL_DIMENSION_IDS fixed order. */
+export type TensorDimensionId =
+  | "problem_structuring"
+  | "quantitative_rigor"
+  | "hypothesis_evidence"
+  | "synthesis_judgment"
+  | "communication"
+  | "collaboration_adaptability";
+
+/** One accepted evidence item backing a dimension's score/confidence. */
+export interface TensorEvidenceV1 {
+  evidence_id: string;
+  dimension_id: TensorDimensionId;
+  indicator_id: string;
+  level: number;
+  turn_id: string;
+  turn_index: number;
+  speaker_alias: string;
+  quote: string;
+}
+
+export interface TensorDimensionV1 {
+  dimension_id: TensorDimensionId;
+  calculus_axis: string;
+  score: number | null;
+  confidence: number;
+  evidence: TensorEvidenceV1[];
+}
+
+/** core/tensor_profile.py report_tensor_field() output shape. */
+export interface TensorProfileReportV1 {
+  schema: "tensor_profile.6d.v1";
+  dimensions: TensorDimensionV1[];
+}
+
 /**
  * F4b (SPEC_FOXTROT_UI.md §7 裁定3): interview_report.v1。
  * W-37: UI はこの構造体を stdio 応答からそのまま受け取るのみで、
  * LLM 出力の JSON.parse を絶対に書かない。
+ * tensor_profile は interview_sim/gd_sim の全 report で常時添付される
+ * (core/consultation_engine.py が generate_report を transcript_pairs 付きで
+ * 呼ぶ経路のみを使用するため) — required とし、optional/既定値での受理を禁じる。
  */
 export interface InterviewReport {
   schema: "interview_report.v1";
@@ -188,6 +227,7 @@ export interface InterviewReport {
   summary: string;
   latency: InterviewReportLatency;
   simulated: true;
+  tensor_profile: TensorProfileReportV1;
 }
 
 /** INTERVIEW タブのチャットメッセージ */

@@ -18,8 +18,13 @@
 #   確定版)。5軸データフロー・共通 Axis コントラクト・新規2軸 (locus_of_control
 #   の ATTRIBUTION_LEXICON+否定ガード / unlearning_rate の突合窓 W_MAX+逆数式)
 #   の決定論アルゴリズムを確定。憲法ガード test_source_code.py の RED 項目に直結。
+# Rev.7 (2026-07-12): 読者向け前提命令を AI_SKILLS §0 の読み込みプロトコルへ同期。
+#   実装状態宣言・設計本文は変更なし (Finding 7)。
 
-> **読者への前提命令**: 本書を読む前に `docs/AI_SKILLS.md` を全文読め (第0原則)。
+> **読者への前提命令**: `docs/AI_SKILLS.md` §0 のルーティング表に従い、§1 は必読。
+> 検索・LSM なら §9〜§10、対人テレメトリ・Puppeteer・Narrative なら §11 など、
+> 変更対象に対応する行を選択せよ。横断的変更なら関係する行を複数選べ。
+> AI_SKILLS 全体の無条件な全文読了は要求しない。
 > 本書と AI_SKILLS.md が矛盾した場合、**不変条件については AI_SKILLS.md が正**、
 > 未実装機能の設計については本書が正。
 >

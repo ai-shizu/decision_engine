@@ -1,9 +1,19 @@
 # Project Calculus: Tensor Profiling Advanced Edition
 
-> Status: DESIGN FROZEN for Phase 1
+> Status: DESIGN FROZEN for Phase 1 (history) / Phase 2 measured wiring AS-BUILT
 > Scope: long-session context compression, private-reasoning redaction, evidence-backed six-dimensional profiling, and zero-dependency SVG visualization
-> Phase 1: frontend defenses and preview visualization only
+> Phase 1: frontend defenses and preview visualization only (historical)
 > Phase 2: Python backend, memory compiler, prompt policy, validated scoring, and real data wiring
+
+## 現行優先裁定 (Finding 9 / 2026-07-12)
+
+Phase 1 の PROFILE 固定 preview（`TENSOR_RADAR_PREVIEW` / `preview` prop /
+`PHASE 1 PREVIEW / NOT MEASURED`）は **退役済み**。Phase 2 で Interview/GD の
+`MISSION_RESULT` → `TensorProfilePanel` → 検証済み `report.tensor_profile` が
+実測 6D の唯一の UI 出口となったため、PROFILE 上の幾何検証用モックは撤去した。
+`TensorRadarChart` の `preview` prop も削除済み。復元・再導入は禁止。
+PROFILE 用の genre 横断「最新成績表」IPC / 永続化 / latest 選択は新設しない。
+下記 §7 等の Phase 1 preview 記述は **履歴** として保持する（現行要件ではない）。
 
 ## 0. Authority and architectural rulings
 

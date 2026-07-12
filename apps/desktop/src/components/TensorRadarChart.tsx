@@ -8,7 +8,6 @@ export type TensorRadarDatum = {
 
 export type TensorRadarChartProps = {
   data: readonly TensorRadarDatum[];
-  preview?: boolean;
   title?: string;
 };
 
@@ -17,7 +16,6 @@ const CX = 160;
 const CY = 160;
 const RADIUS = 104;
 const GRID_SCALES = [0.25, 0.5, 0.75, 1] as const; // 0.25, 0.50, 0.75, 1.00
-const PREVIEW_LABEL = "PHASE 1 PREVIEW / NOT MEASURED";
 
 function axisPoint(index: number, scale: number): { x: number; y: number } {
   const angle = -Math.PI / 2 + index * ((2 * Math.PI) / N);
@@ -67,7 +65,7 @@ function AxisHelp({ id, description }: { id: string; description: string }) {
   );
 }
 
-export function TensorRadarChart({ data, preview = false, title }: TensorRadarChartProps) {
+export function TensorRadarChart({ data, title }: TensorRadarChartProps) {
   if (data.length !== N) {
     return <p className="hint">Tensor radar requires exactly six dimensions.</p>;
   }
@@ -87,17 +85,10 @@ export function TensorRadarChart({ data, preview = false, title }: TensorRadarCh
     const name = d.axisName ? `${d.label} (${d.axisName})` : d.label;
     return `${name}: ${formatDisplayValue(d.plot)}`;
   });
-  const accessibleDesc = [
-    title ?? "Six-dimensional tensor profile",
-    preview ? PREVIEW_LABEL : null,
-    ...descLines,
-  ]
-    .filter(Boolean)
-    .join("; ");
+  const accessibleDesc = [title ?? "Six-dimensional tensor profile", ...descLines].join("; ");
 
   return (
     <div className="tensor-radar-panel">
-      {preview && <p className="tensor-radar-preview-label">{PREVIEW_LABEL}</p>}
       <svg
         className="tensor-radar-svg"
         viewBox="0 0 320 320"

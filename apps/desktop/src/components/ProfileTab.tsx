@@ -10,54 +10,8 @@ import {
   type TwinScenario,
 } from "../lib/engine";
 import type { SourceCodeView } from "../lib/types";
-import { TensorRadarChart } from "./TensorRadarChart";
-import { MbtiGradientBars } from "./MbtiGradientBars";
+import { uiErrorMessage } from "../lib/uiErrorMessages";
 import { ContextObservatoryContainer } from "./ContextObservatoryContainer";
-
-const TENSOR_RADAR_PREVIEW = [
-  {
-    id: "problem_structuring",
-    label: "構造化",
-    value: 0.72,
-    axisName: "Structural_Decomposition",
-    description: "複雑な課題を漏れなく分解する力",
-  },
-  {
-    id: "quantitative_rigor",
-    label: "定量精度",
-    value: 0.58,
-    axisName: "Quantitative_Agility",
-    description: "数量や概算を正確かつ素早く扱う力",
-  },
-  {
-    id: "hypothesis_evidence",
-    label: "仮説検証",
-    value: 0.64,
-    axisName: "Logical_Rigor",
-    description: "前提と根拠を結び、筋道立てて検証する力",
-  },
-  {
-    id: "synthesis_judgment",
-    label: "統合判断",
-    value: 0.68,
-    axisName: "Domain_Adaptability",
-    description: "未知の業界やテーマへ知識を適用する力",
-  },
-  {
-    id: "communication",
-    label: "伝達",
-    value: 0.76,
-    axisName: "Communication_Bandwidth",
-    description: "考えを簡潔かつ明確に伝える力",
-  },
-  {
-    id: "collaboration_adaptability",
-    label: "協働適応",
-    value: 0.61,
-    axisName: "Cognitive_Flexibility",
-    description: "反証や相手の意見を受けて考えを更新する力",
-  },
-] as const;
 
 function evidenceCount(evidence: unknown): number {
   return Array.isArray(evidence) ? evidence.length : 0;
@@ -88,8 +42,8 @@ export function ProfileTab() {
       const [sc, op] = await Promise.all([sourceCode(), oraclePayload("global")]);
       setSource(sc);
       setOracle(op);
-    } catch (err) {
-      setError(String(err));
+    } catch {
+      setError(uiErrorMessage("PROFILE_LOAD"));
     } finally {
       setBusy(null);
     }
@@ -106,8 +60,8 @@ export function ProfileTab() {
       const res = await oracleReport("global");
       setOracle(res.payload);
       setOracleAnalysis(res.analysis);
-    } catch (err) {
-      setError(String(err));
+    } catch {
+      setError(uiErrorMessage("ORACLE_REPORT"));
     } finally {
       setBusy(null);
     }
@@ -125,8 +79,8 @@ export function ProfileTab() {
     try {
       const res = await twinForecast(scenario, "global");
       setForecast(res);
-    } catch (err) {
-      setError(String(err));
+    } catch {
+      setError(uiErrorMessage("TWIN_FORECAST"));
     } finally {
       setBusy(null);
     }
@@ -138,8 +92,8 @@ export function ProfileTab() {
     try {
       const res = await tensorRebuild();
       setTensorResult(res);
-    } catch (err) {
-      setError(String(err));
+    } catch {
+      setError(uiErrorMessage("TENSOR_REBUILD"));
     } finally {
       setBusy(null);
     }
@@ -368,24 +322,11 @@ export function ProfileTab() {
         <ContextObservatoryContainer />
       </div>
 
-      <div className="profile-section">
-        <MbtiGradientBars />
-      </div>
-
-      <div className="profile-section tensor-radar-section">
-        <p className="term-header">TENSOR_PROFILE_6D</p>
-        <p className="tensor-radar-preview-label">PHASE 1 PREVIEW / NOT MEASURED</p>
-        <p className="hint">
-          幾何検証用の固定プレビューです。ユーザーの測定スコアではありません。
+      {error && (
+        <p className="status-line error-text" role="alert">
+          {error}
         </p>
-        <TensorRadarChart
-          data={TENSOR_RADAR_PREVIEW}
-          preview
-          title="Six-dimensional tensor profile preview"
-        />
-      </div>
-
-      {error && <p className="status-line">{error}</p>}
+      )}
     </section>
   );
 }

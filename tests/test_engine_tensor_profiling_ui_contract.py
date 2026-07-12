@@ -140,20 +140,12 @@ def test_tensor_radar_chart_contract() -> None:
         assert token not in chart, f"forbidden in TensorRadarChart: {token}"
 
 
-def test_profile_tab_tensor_preview() -> None:
+def test_profile_tab_has_no_tensor_preview() -> None:
     tab = _read("components/ProfileTab.tsx")
-    assert "TensorRadarChart" in tab
-    assert "TENSOR_PROFILE_6D" in tab
-    assert "PHASE 1 PREVIEW / NOT MEASURED" in tab
-    for axis_id in (
-        "problem_structuring",
-        "quantitative_rigor",
-        "hypothesis_evidence",
-        "synthesis_judgment",
-        "communication",
-        "collaboration_adaptability",
-    ):
-        assert axis_id in tab
+    assert "TensorRadarChart" not in tab
+    assert "TENSOR_PROFILE_6D" not in tab
+    assert "PHASE 1 PREVIEW / NOT MEASURED" not in tab
+    assert "TENSOR_RADAR_PREVIEW" not in tab
 
 
 def test_forbidden_tokens_on_changed_surface() -> None:
@@ -165,9 +157,8 @@ def test_forbidden_tokens_on_changed_surface() -> None:
         "MISSION_RESULT", 1
     )[0]
     profile = _read("components/ProfileTab.tsx")
-    profile_slice = profile.split("TENSOR_PROFILE_6D", 1)[1]
     chart = _read("components/TensorRadarChart.tsx")
-    changed = redactor_slice + render_slice + profile_slice + chart
+    changed = redactor_slice + render_slice + profile + chart
     forbidden = (
         "fetch(",
         "axios",
@@ -212,7 +203,6 @@ def _css_declaration_block(css: str, selector: str) -> str:
 def test_phase3_added_css_blocks_have_no_literal_px() -> None:
     css = _read("App.css")
     for selector in (
-        ".mbti-preview-bar",
         ".tensor-radar-help-trigger:focus-visible",
         ".tensor-radar-tooltip",
     ):

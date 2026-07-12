@@ -6,6 +6,7 @@ import {
 } from "../lib/engine";
 import { defaultBirthday } from "../lib/birthdayUtils";
 import type { FixedField, SettingsData } from "../lib/types";
+import { uiErrorMessage } from "../lib/uiErrorMessages";
 import { BirthdayPicker } from "./BirthdayPicker";
 import { Toggle } from "./Toggle";
 
@@ -13,6 +14,7 @@ export function SettingsTab() {
   const [settings, setSettings] = useState<SettingsData | null>(null);
   const [attrs, setAttrs] = useState<Record<string, string>>({});
   const [status, setStatus] = useState("");
+  const [statusKind, setStatusKind] = useState<"info" | "error">("info");
   const [saveNotice, setSaveNotice] = useState<{ text: string; kind: "success" | "error" } | null>(
     null,
   );
@@ -22,6 +24,7 @@ export function SettingsTab() {
   async function fetchSettings() {
     setLoadError("");
     setStatus("");
+    setStatusKind("info");
     try {
       const s = await loadSettings();
       const merged = { ...s.fixed_attributes };
@@ -30,10 +33,8 @@ export function SettingsTab() {
       }
       setSettings(s);
       setAttrs(merged);
-    } catch (err) {
-      const msg = String(err);
-      setLoadError(msg);
-      setStatus(msg);
+    } catch {
+      setLoadError(uiErrorMessage("SETTINGS_LOAD"));
     }
   }
 
@@ -48,12 +49,13 @@ export function SettingsTab() {
   async function handleSaveFixed() {
     setBusy(true);
     setStatus("");
+    setStatusKind("info");
     setSaveNotice(null);
     try {
       await saveFixedAttributes(attrs);
       setSaveNotice({ text: "基本情報を保存しました", kind: "success" });
-    } catch (err) {
-      setSaveNotice({ text: String(err), kind: "error" });
+    } catch {
+      setSaveNotice({ text: uiErrorMessage("SETTINGS_SAVE"), kind: "error" });
     } finally {
       setBusy(false);
     }
@@ -61,15 +63,18 @@ export function SettingsTab() {
 
   async function handleProfiler() {
     setBusy(true);
+    setStatusKind("info");
     setStatus("プロファイラ実行中… (数分かかる場合があります)");
     try {
       const res = await runProfiler();
+      setStatusKind("info");
       setStatus(res.message);
       const s = await loadSettings();
       setSettings(s);
       setAttrs({ ...s.fixed_attributes });
-    } catch (err) {
-      setStatus(String(err));
+    } catch {
+      setStatusKind("error");
+      setStatus(uiErrorMessage("PROFILER_RUN"));
     } finally {
       setBusy(false);
     }
@@ -78,15 +83,19 @@ export function SettingsTab() {
   if (!settings) {
     return (
       <section className="panel">
-        <p className="hint">{loadError ? "設定の読み込みに失敗しました" : "設定を読み込み中…"}</p>
+        <p className="hint">{loadError ? "" : "設定を読み込み中…"}</p>
         {loadError && (
-          <div className="action-row">
-            <button type="button" className="primary" onClick={() => void fetchSettings()}>
-              再読み込み
-            </button>
-          </div>
+          <>
+            <p className="status-line error-text" role="alert">
+              {loadError}
+            </p>
+            <div className="action-row">
+              <button type="button" className="primary" onClick={() => void fetchSettings()}>
+                再読み込み
+              </button>
+            </div>
+          </>
         )}
-        {status && <p className="status-line error-text">{status}</p>}
         {!loadError && (
           <p className="hint">初回はエンジンの準備に数十秒かかることがあります。</p>
         )}
@@ -141,7 +150,12 @@ export function SettingsTab() {
             基本情報を保存
           </button>
           {saveNotice && (
-            <p className={`save-notice ${saveNotice.kind}`}>{saveNotice.text}</p>
+            <p
+              className={`save-notice ${saveNotice.kind}${saveNotice.kind === "error" ? " error-text" : ""}`}
+              role={saveNotice.kind === "error" ? "alert" : undefined}
+            >
+              {saveNotice.text}
+            </p>
           )}
         </div>
       </div>
@@ -175,7 +189,14 @@ export function SettingsTab() {
         </div>
       </details>
 
-      {status && <p className="status-line">{status}</p>}
+      {status && (
+        <p
+          className={`status-line${statusKind === "error" ? " error-text" : ""}`}
+          role={statusKind === "error" ? "alert" : "status"}
+        >
+          {status}
+        </p>
+      )}
     </section>
   );
 }

@@ -253,7 +253,10 @@ python tests\benchmark.py --quick
 
 ## 詳細ドキュメント
 
-開発者向け仕様・引継ぎ: [`docs/CONTEXT.md`](docs/CONTEXT.md)
+- 開発規律: [`docs/AI_SKILLS.md`](docs/AI_SKILLS.md)
+- 現在地・引継ぎ: [`docs/HANDOFF.md`](docs/HANDOFF.md)
+- 安定アーキテクチャ索引: [`docs/CONTEXT.md`](docs/CONTEXT.md)
+- 事故裁定: [`docs/architecture/INCIDENT_LEDGER.md`](docs/architecture/INCIDENT_LEDGER.md)
 
 ---
 

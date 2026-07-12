@@ -11,9 +11,6 @@
     "outDir": ".boundary-tests-out"
   },
   "include": [
-    "tests-runtime/manifest_boundary.test.ts",
-    "src/lib/parseManifest.ts",
-    "src/lib/manifestFetchState.ts",
-    "src/lib/manifest.ts"
+    "tests-runtime/**/*.test.ts"
   ]
 }

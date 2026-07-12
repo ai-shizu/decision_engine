@@ -137,6 +137,12 @@ body {
   flex-wrap: wrap;
 }
 
+.tabs button:focus-visible,
+.main-tab-panel:focus-visible {
+  outline: thin solid var(--accent);
+  outline-offset: 0.125rem;
+}
+
 .tabs button,
 .sub-tabs button {
   border: 1px solid var(--border);
@@ -981,6 +987,44 @@ button:disabled {
   margin: 2px 0 0;
 }
 
+/* Audit finding remediation: measured six-dimensional tensor profile panel
+   inside MISSION_RESULT (interview_sim / gd_sim). Reuses term-panel/term-header
+   tokens — no new hex colors, no literal px, no animation. */
+.tensor-profile-panel {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s3);
+}
+
+.tensor-profile-session-label {
+  margin: 0;
+  font-size: 0.85rem;
+  color: var(--text-muted);
+}
+
+.tensor-profile-summary-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--s1);
+}
+
+.tensor-profile-summary-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: var(--s2);
+  padding: var(--s1) 0;
+  border-bottom: thin solid var(--border);
+}
+
+.tensor-profile-confidence {
+  color: var(--text-muted);
+}
+
 /* Settings (F5 — iOS list groups + Toggle) */
 .settings-block {
   margin-bottom: var(--s5);
@@ -1520,23 +1564,11 @@ button.secondary {
   white-space: pre-wrap;
 }
 
-/* Tensor radar (SPEC_ENGINE_TENSOR_PROFILING.md Phase 1) */
-.tensor-radar-section {
-  display: flex;
-  flex-direction: column;
-  gap: var(--s2);
-}
-
+/* Tensor radar (SPEC_ENGINE_TENSOR_PROFILING.md — measured display) */
 .tensor-radar-panel {
   display: flex;
   flex-direction: column;
   gap: var(--s3);
-}
-
-.tensor-radar-preview-label {
-  margin: 0;
-  font-size: 0.85rem;
-  color: var(--text-muted);
 }
 
 .tensor-radar-svg {
@@ -1575,6 +1607,12 @@ button.secondary {
   gap: var(--s2);
 }
 
+@media (max-width: 30rem) {
+  .tensor-radar-legend {
+    grid-template-columns: 1fr;
+  }
+}
+
 .tensor-radar-legend-row {
   display: flex;
   justify-content: space-between;
@@ -1603,47 +1641,6 @@ button.secondary {
   width: 100%;
   min-height: 6rem;
   resize: vertical;
-}
-
-/* Phase 3-A: MBTI preference preview (mock) */
-.mbti-preview-panel {
-  display: flex;
-  flex-direction: column;
-  gap: var(--s2);
-}
-
-.mbti-preview-label {
-  margin: 0;
-  font-size: 0.85rem;
-  color: var(--text-muted);
-}
-
-.mbti-preview-list {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  display: flex;
-  flex-direction: column;
-  gap: var(--s3);
-}
-
-.mbti-preview-row {
-  display: flex;
-  flex-direction: column;
-  gap: var(--s1);
-}
-
-.mbti-preview-labels {
-  display: flex;
-  justify-content: space-between;
-  font-size: 0.85rem;
-  color: var(--text-muted);
-}
-
-.mbti-preview-bar {
-  height: 0.75rem;
-  border-radius: var(--radius-s);
-  border: thin solid var(--border);
 }
 
 /* Phase 3-A: Tensor radar axis help tooltips */

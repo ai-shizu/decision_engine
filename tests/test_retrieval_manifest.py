@@ -20,6 +20,7 @@ from core.retrieval_manifest import (  # noqa: E402
     LaneUsageV1,
     ReasonCode,
     RetrievalCandidateV1,
+    RetrievalManifestPersistenceError,
     RetrievalManifestV1,
     SourceType,
     build_bounded_context_with_manifest,
@@ -1090,7 +1091,10 @@ def test_save_rejects_existing_file_with_different_embedded_manifest_id(
     )
     file_before = manifest_path.read_bytes()
     assert not latest_path.exists()
-    with pytest.raises(ValueError, match="existing manifest_id mismatch"):
+    with pytest.raises(
+        RetrievalManifestPersistenceError,
+        match="retrieval manifest persistence failed",
+    ):
         save_retrieval_manifest(manifest_a)
     assert manifest_path.read_bytes() == file_before
     assert not latest_path.exists()

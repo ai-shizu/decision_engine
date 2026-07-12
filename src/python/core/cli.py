@@ -32,11 +32,9 @@ import os
 os.environ.setdefault("HF_HUB_OFFLINE", "1")
 os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
 import re
-import socket
 import subprocess
 import sys
 import time
-import urllib.request
 from pathlib import Path
 
 from .paths import (
@@ -57,7 +55,13 @@ SEARCH_EXE = SEARCH_EXE
 TMP_QUERY_BIN = DATA_PROCESSED / "_app_query.bin"
 LAST_ANSWER_MD = DATA_PROCESSED / "last_consultation.md"
 
-from .llm_config import find_gguf, llama_server_cmd, SERVER_PORT  # noqa: E402
+from .llm_config import (  # noqa: E402
+    find_gguf,
+    generation_params,
+    LLAMA_CTX,
+    SERVER_PORT,
+)
+from .llm_backend import LlamaServerBackend  # noqa: E402
 from .pipeline import build_embedder, l2_normalize  # noqa: E402
 
 SYSTEM_PROMPT = (
@@ -161,7 +165,11 @@ def summarize_profile(p: dict) -> str:
     return "\n".join(lines)
 
 
-def load_knowledge(max_chars_per_file: int = 900) -> str:
+# Knowledge excerpt budget (not LLM generation max_tokens).
+_DEFAULT_KNOWLEDGE_CHARS = 450 * 2
+
+
+def load_knowledge(max_chars_per_file: int = _DEFAULT_KNOWLEDGE_CHARS) -> str:
     KNOWLEDGE_DIR.mkdir(parents=True, exist_ok=True)
     parts = []
     for f in sorted(KNOWLEDGE_DIR.glob("*")):
@@ -191,67 +199,7 @@ def build_user_prompt(query: str, profile: dict, chunks: list[dict]) -> str:
 
 
 # ============================================================ ローカルLLMラッパー
-class LlamaServerBackend:
-    """llama-server を 127.0.0.1 に起動し OpenAI互換エンドポイントへ接続する。
-    プロセスもソケットも完全にローカル。外部への通信は発生しない。"""
-
-    name = "llama-server (127.0.0.1, ARM64 native)"
-
-    def __init__(self, exe: Path, model: Path, port: int):
-        self.exe, self.model, self.port = exe, model, port
-        self.proc: subprocess.Popen | None = None
-        import atexit
-        atexit.register(self.stop)  # CLI終了時にゾンビを残さない
-
-    def _port_open(self) -> bool:
-        with socket.socket() as s:
-            s.settimeout(0.3)
-            return s.connect_ex(("127.0.0.1", self.port)) == 0
-
-    def start(self, timeout_s: int | None = None) -> None:
-        from .llm_config import model_startup_timeout
-        if timeout_s is None:
-            timeout_s = model_startup_timeout(self.model)
-        if self._port_open():
-            return  # 既存サーバーを再利用
-        self.proc = subprocess.Popen(
-            llama_server_cmd(self.exe, self.model, self.port),
-            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        deadline = time.time() + timeout_s
-        while time.time() < deadline:
-            try:
-                with urllib.request.urlopen(
-                        f"http://127.0.0.1:{self.port}/health", timeout=2) as r:
-                    if json.load(r).get("status") == "ok":
-                        return
-            except OSError:
-                time.sleep(1.0)
-        raise RuntimeError("llama-server の起動がタイムアウトしました")
-
-    def generate(self, system: str, user: str, max_tokens: int = 900) -> str:
-        self.start()
-        payload = json.dumps({
-            "messages": [{"role": "system", "content": system},
-                         {"role": "user", "content": user}],
-            "max_tokens": max_tokens,
-            "temperature": 0.6,
-        }).encode("utf-8")
-        req = urllib.request.Request(
-            f"http://127.0.0.1:{self.port}/v1/chat/completions",
-            data=payload, headers={"Content-Type": "application/json"})
-        with urllib.request.urlopen(req, timeout=600) as r:
-            body = json.load(r)
-        return body["choices"][0]["message"]["content"].strip()
-
-    def stop(self) -> None:
-        proc, self.proc = self.proc, None
-        if proc is None or proc.poll() is not None:
-            return
-        proc.terminate()
-        try:
-            proc.wait(timeout=5)
-        except subprocess.TimeoutExpired:
-            proc.kill()
+# LlamaServerBackend は core/llm_backend.py が唯一所有 (INC-LLM-CLIENT-01)。
 
 
 class LlamaCliBackend:
@@ -262,13 +210,24 @@ class LlamaCliBackend:
     def __init__(self, exe: Path, model: Path):
         self.exe, self.model = exe, model
 
-    def generate(self, system: str, user: str, max_tokens: int = 900) -> str:
+    def generate(
+        self,
+        system: str,
+        user: str,
+        max_tokens: int | None = None,
+    ) -> str:
+        gen = generation_params()
+        effective_max_tokens = (
+            max_tokens if max_tokens is not None else gen["max_tokens"]
+        )
+        temperature = gen["temperature"]
         pf = ROOT / "build" / "_app_prompt.txt"
         pf.write_text(user, encoding="utf-8", newline="\n")
         out = subprocess.run(
             [str(self.exe), "cli", "-m", str(self.model), "-f", str(pf),
-             "-sys", system, "-n", str(max_tokens), "-st",
-             "--no-display-prompt", "--temp", "0.6", "-c", "8192"],
+             "-sys", system, "-n", str(effective_max_tokens), "-st",
+             "--no-display-prompt", "--temp", str(temperature),
+             "-c", str(LLAMA_CTX)],
             capture_output=True, timeout=1200)
         text = out.stdout.decode("utf-8", errors="replace")
         # バナー・プロンプトエコー・統計行を除去して本文のみ抽出
@@ -321,7 +280,7 @@ data/knowledge/ の外部知識を参照のこと (LLM無効のため自動要�
 def select_backend(profile: dict, chunks: list[dict]):
     from .paths import LLAMA_CLI_EXE, LLAMA_SERVER_EXE
 
-    model = find_gguf()
+    model = find_gguf(role="consult")
     server_exe = LLAMA_SERVER_EXE
     cli_exe = LLAMA_CLI_EXE
     if model and server_exe.exists():
@@ -346,7 +305,7 @@ def consult(query: str, top_k: int = 3, show_prompt: bool = False) -> str:
 
     backend = select_backend(profile, chunks)
     print(f"[app] 推論バックエンド: {backend.name}")
-    model = find_gguf()
+    model = find_gguf(role="consult")
     if model:
         print(f"[app] モデル: {model.name}")
 

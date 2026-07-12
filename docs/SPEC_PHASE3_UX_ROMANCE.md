@@ -2,7 +2,9 @@
 
 ## Scope
 
-Phase 3-A is **completed** (UI-only). Interview/Profile preview surfaces use mock data or existing sterile reads.
+Phase 3-A is **completed** (UI-only; historical). Interview custom-theme / NARRATIVE_DRAFT
+surfaces remain. PROFILE permanent mocks (MBTI + fixed 6D preview) were **retired in
+Finding 9 (2026-07-12)** — they are not current deliverables.
 
 Phase 3-B (**Romance / 交流パルス解析**) is the **current** confirmed specification and implementation target for `romance_analysis` mode.
 
@@ -15,24 +17,26 @@ Phase 3-B (**Romance / 交流パルス解析**) is the **current** confirmed spe
 - Insufficient data → `affinity_score=null`; never fabricate 0 or 100.
 - `interaction_tendency` / `next_best_action` are derived from measured metrics only; validator requires exact key set match.
 - UI clears previous romance panel and success message when a new analysis starts.
-- MBTI preview in 3-A is mock; do **not** derive MBTI from D1 five-axis scores.
+- **MBTI**: 測定契約ができるまで非表示。Do **not** derive MBTI from D1, Source Code, or Echo values.
+- **6D tensor**: display only via Interview/GD measured `MISSION_RESULT` → `report.tensor_profile` → `TensorProfilePanel`. No PROFILE fixed preview.
 
-## Phase 3-A deliverables
+## Phase 3-A deliverables (historical — Finding 9 retirement note)
 
-### Interview tab
+### Interview tab (still current)
 
 - Custom Theme textarea: `rows={6}`, `className="custom-theme-textarea"`, `resize: vertical` (CSS), `maxLength={240}` unchanged.
 - NARRATIVE_DRAFT copy: gap analysis + ES draft explanation; mock interview mount blocks execution.
 
-### Profile tab
+### Profile tab (Finding 9)
 
-- `MbtiGradientBars`: fixed mock E/I, S/N, T/F, J/P pairs summing to 100%; labeled **PREVIEW / NOT MEASURED**.
-- `TensorRadarChart` legend: per-axis `[?]` tooltips with Japanese descriptions; keyboard focus + `aria-describedby`.
+- ~~`MbtiGradientBars` fixed mock~~ — **removed**. Component deleted; CSS `.mbti-preview-*` removed.
+- ~~PROFILE fixed `TENSOR_RADAR_PREVIEW`~~ — **removed**. Measured 6D lives on Interview/GD only.
+- `TensorRadarChart` remains for **measured** display (legend `[?]` tooltips, keyboard focus + `aria-describedby`); `preview` prop deleted.
 
 ### Accessibility
 
 - Tooltips: `role="tooltip"`, unique IDs, `tabIndex={0}` on triggers, hover + focus visibility.
-- MBTI block: visible and accessible preview / not-measured labeling.
+- MBTI mock labeling is historical only (surface gone).
 
 ## CSS discipline
 
@@ -41,13 +45,15 @@ Phase 3-B (**Romance / 交流パルス解析**) is the **current** confirmed spe
 
 ## Tests
 
-- `tests/test_phase3_ux_contract.py` — static contracts for textarea, CSS, narrative copy, MBTI mock, 6D tooltips, forbidden tokens.
+- `tests/test_phase3_ux_contract.py` — textarea, CSS, narrative copy, mock-removal guards, 6D tooltips, forbidden tokens.
+- `tests/test_profile_mock_removal_contract.py` — Finding 9 reintroduction prevention.
 
 ## Stop conditions
 
 - Changes outside allowed files.
 - package.json / backend / `data/` diffs.
 - Breaking Phase 1/2 tensor radar geometry, redactor, or IPC contracts.
+- Reintroducing PROFILE MBTI/6D mocks or inventing MBTI from D1/Source Code/Echo.
 
 ---
 

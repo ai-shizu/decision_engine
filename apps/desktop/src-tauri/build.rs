@@ -32,6 +32,20 @@ fn ensure_engine_placeholder(manifest_dir: &Path, target: &str) {
 fn main() {
     let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap());
     let target = env::var("TARGET").unwrap_or_else(|_| "aarch64-pc-windows-msvc".to_string());
+
     ensure_engine_placeholder(&manifest_dir, &target);
-    tauri_build::build();
+
+    if target.contains("windows-msvc") {
+        println!("cargo::rustc-link-arg=/MANIFEST:EMBED");
+        println!(
+            "cargo::rustc-link-arg=/MANIFESTDEPENDENCY:type='win32' name='Microsoft.Windows.Common-Controls' version='6.0.0.0' publicKeyToken='6595b64144ccf1df' language='*' processorArchitecture='*'"
+        );
+
+        let attributes = tauri_build::Attributes::new().windows_attributes(
+            tauri_build::WindowsAttributes::new_without_app_manifest(),
+        );
+        tauri_build::try_build(attributes).expect("failed to run Tauri build script");
+    } else {
+        tauri_build::build();
+    }
 }

@@ -2,11 +2,11 @@ import { invoke } from "@tauri-apps/api/core";
 import { readTextLenient } from "./textDecode";
 import type { ContextManifestResponseV1 } from "./manifest";
 import { parseContextManifestResponseV1 } from "./parseManifest";
+import { parseConsultResponse, type ConsultResponse } from "./parseConsultResponse";
 import type {
   ClassifyResult,
   EsView,
   InterviewConfig,
-  InterviewReport,
   RecordData,
   SettingsData,
   SourceCodeView,
@@ -75,25 +75,26 @@ export interface ConsultOptions {
   config?: InterviewConfig;
 }
 
-export interface RomanceAnalysisResult {
-  schema: string;
-  affinity_score: number | null;
-  interaction_tendency: string;
-  next_best_action: string;
-}
+// Re-exported for existing import sites (ConsultTab.tsx, RomanceAnalysisPanel.tsx
+// import RomanceAnalysisResult from "../lib/engine") — canonical declaration now
+// lives in parseConsultResponse.ts alongside its runtime validator.
+export type { RomanceAnalysisResult } from "./parseConsultResponse";
 
+/**
+ * Audit finding remediation (interview_report.v1 tensor_profile): the raw
+ * IPC result is routed through pkbInvoke<unknown> and validated by
+ * parseConsultResponse() before reaching React. A generic-cast
+ * `pkbInvoke<T>("consult", ...)` must not be reintroduced here — that is
+ * exactly the pattern that silently dropped tensor_profile in the first
+ * place (docs/AUDIT_FINDINGS_2026-07-11.md).
+ */
 export async function consult(
   query: string,
   opts: ConsultOptions = {},
   cid?: number,
-): Promise<{
-  query: string;
-  mode?: string;
-  answer: string;
-  report?: InterviewReport;
-  romance_analysis?: RomanceAnalysisResult;
-}> {
-  return pkbInvoke("consult", { query, ...opts }, cid);
+): Promise<ConsultResponse> {
+  const raw = await pkbInvoke<unknown>("consult", { query, ...opts }, cid);
+  return parseConsultResponse(raw);
 }
 
 export async function syncIcsContent(
@@ -186,10 +187,6 @@ export async function saveFixedAttributes(
 
 export async function runProfiler(): Promise<{ ok: boolean; message: string }> {
   return pkbInvoke("settings.run_profiler");
-}
-
-export async function readFileAsText(file: File): Promise<string> {
-  return file.text();
 }
 
 // ---------------------------------------------------------------- Target Echo (E4)

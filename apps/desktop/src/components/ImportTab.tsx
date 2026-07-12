@@ -15,6 +15,7 @@ import {
   type KnowledgeFetchSummary,
 } from "../lib/engine";
 import type { ClassifyResult, EngineEvent, EsView, SourceStat } from "../lib/types";
+import { uiErrorMessage } from "../lib/uiErrorMessages";
 import { useCorrelationId } from "../lib/useCorrelationId";
 
 const LOG_MAX = 50;
@@ -151,8 +152,8 @@ export function ImportTab() {
       const res = await importLineFiles(list, myCid);
       const msg = res.message ?? `${list.length} 件の LINE 履歴を取り込みました`;
       pushImportLog(res.ok === false ? `取り込み失敗: ${msg}` : msg);
-    } catch (err) {
-      pushImportLog(String(err));
+    } catch {
+      pushImportLog(uiErrorMessage("LINE_IMPORT"));
     } finally {
       cid.end(myCid);
       // W-29/W-46: 中断はしない (取込は継続済み) — フロント側の反映のみガードする。
@@ -177,8 +178,8 @@ export function ImportTab() {
           ? res.message
           : `${list.length} 件の ICS を同期しました (${mode})`,
       );
-    } catch (err) {
-      pushImportLog(String(err));
+    } catch {
+      pushImportLog(uiErrorMessage("ICS_SYNC"));
     } finally {
       cid.end(myCid);
       if (mountedRef.current) {
@@ -196,8 +197,8 @@ export function ImportTab() {
     try {
       const res = await syncAppleCalendar(mode, myCid);
       pushImportLog(typeof res.message === "string" ? res.message : "Appleカレンダーを同期しました");
-    } catch (err) {
-      pushImportLog(String(err));
+    } catch {
+      pushImportLog(uiErrorMessage("APPLE_CALENDAR_SYNC"));
     } finally {
       cid.end(myCid);
       if (mountedRef.current) setBusy(false);
@@ -268,8 +269,8 @@ export function ImportTab() {
           const res = await importDocument(content, file.name, dest, myCid);
           pushImportLog(res.message ?? `${file.name} を ${dest} へ取り込みました`);
           if (dest === "es") void refreshEsActive();
-        } catch (err) {
-          pushImportLog(`${file.name}: ${String(err)}`);
+        } catch {
+          pushImportLog(uiErrorMessage("DOCUMENT_IMPORT"));
         }
       }
     } finally {
@@ -294,8 +295,8 @@ export function ImportTab() {
           ? summary.message
           : `processed=${summary.processed} pending=${summary.pending}`,
       );
-    } catch (err) {
-      pushImportLog(String(err));
+    } catch {
+      pushImportLog(uiErrorMessage("KNOWLEDGE_FETCH"));
     } finally {
       if (mountedRef.current) {
         setBusy(false);
@@ -479,7 +480,12 @@ export function ImportTab() {
         {log.length === 0 ? (
           <p className="hint">(取込ログはまだありません)</p>
         ) : (
-          <ul className="term-log-list">
+          <ul
+            className="term-log-list"
+            role="log"
+            aria-live="polite"
+            aria-relevant="additions text"
+          >
             {log.map((line, i) => (
               <li key={i} className="term-log-line">
                 {line}

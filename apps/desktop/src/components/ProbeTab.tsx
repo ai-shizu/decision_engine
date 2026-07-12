@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { probeAnswer, probeNext, probeStatus } from "../lib/engine";
 import { todayIso } from "../lib/dateUtils";
+import { uiErrorMessage } from "../lib/uiErrorMessages";
 import type {
   ProbeAxis,
   ProbeQuestionView,
@@ -53,8 +54,8 @@ export function ProbeTab() {
       try {
         const s = await probeStatus(todayIso());
         if (!disposed) setStatus(s);
-      } catch (err) {
-        if (!disposed) setError(String(err));
+      } catch {
+        if (!disposed) setError(uiErrorMessage("PROBE_STATUS_LOAD"));
       } finally {
         if (!disposed) setBusy(false);
       }
@@ -70,8 +71,8 @@ export function ProbeTab() {
     setError("");
     try {
       await refreshStatus();
-    } catch (err) {
-      setError(String(err));
+    } catch {
+      setError(uiErrorMessage("PROBE_STATUS_LOAD"));
     } finally {
       setBusy(false);
     }
@@ -86,8 +87,8 @@ export function ProbeTab() {
       setAnswer("");
       await refreshStatus();
       requestAnimationFrame(() => answerRef.current?.focus());
-    } catch (err) {
-      setError(String(err));
+    } catch {
+      setError(uiErrorMessage("PROBE_NEXT"));
     } finally {
       setBusy(false);
     }
@@ -112,8 +113,8 @@ export function ProbeTab() {
       } else {
         requestAnimationFrame(() => nextBtnRef.current?.focus());
       }
-    } catch (err) {
-      setError(String(err));
+    } catch {
+      setError(uiErrorMessage("PROBE_ANSWER"));
     } finally {
       setBusy(false);
     }
@@ -157,7 +158,11 @@ export function ProbeTab() {
         </button>
       </div>
 
-      {error && <p className="error-text probe-error">{error}</p>}
+      {error && (
+        <p className="error-text probe-error" role="alert">
+          {error}
+        </p>
+      )}
 
       <div className="probe-grid">
         <div className="probe-main">

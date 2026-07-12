@@ -1,4 +1,8 @@
-import { useEffect, useState } from "react";
+import {
+  useEffect,
+  useState,
+  type KeyboardEvent as ReactKeyboardEvent,
+} from "react";
 import { ConsultTab } from "./components/ConsultTab";
 import { ImportTab } from "./components/ImportTab";
 import { InterviewTab } from "./components/InterviewTab";
@@ -33,6 +37,70 @@ const TABS: { id: MainTab; label: string }[] = [
   { id: "profile", label: "PROFILE" },
   { id: "settings", label: "SETTINGS" },
 ];
+
+function tabButtonId(id: MainTab): string {
+  return `main-tab-${id}`;
+}
+
+function tabPanelId(id: MainTab): string {
+  return `main-tabpanel-${id}`;
+}
+
+function renderMainTab(id: MainTab) {
+  switch (id) {
+    case "record":
+      return <RecordTab />;
+    case "import":
+      return <ImportTab />;
+    case "consult":
+      return <ConsultTab />;
+    case "interview":
+      return <InterviewTab />;
+    case "probe":
+      return <ProbeTab />;
+    case "profile":
+      return <ProfileTab />;
+    case "settings":
+      return <SettingsTab />;
+    default: {
+      const _exhaustive: never = id;
+      throw new Error(`unreachable main tab: ${_exhaustive as string}`);
+    }
+  }
+}
+
+function focusTabByIndex(index: number): void {
+  const len = TABS.length;
+  const normalized = ((index % len) + len) % len;
+  const target = TABS[normalized];
+  if (!target) return;
+  document.getElementById(tabButtonId(target.id))?.focus();
+}
+
+function handleTabKeyDown(
+  event: ReactKeyboardEvent<HTMLButtonElement>,
+  index: number,
+): void {
+  let next: number | null = null;
+  switch (event.key) {
+    case "ArrowLeft":
+      next = index - 1;
+      break;
+    case "ArrowRight":
+      next = index + 1;
+      break;
+    case "Home":
+      next = 0;
+      break;
+    case "End":
+      next = TABS.length - 1;
+      break;
+    default:
+      return;
+  }
+  event.preventDefault();
+  focusTabByIndex(next);
+}
 
 export default function App() {
   const [ready, setReady] = useState(false);
@@ -97,13 +165,24 @@ export default function App() {
           <h1>PKB</h1>
           <p className="subtitle">{status}</p>
         </div>
-        <nav className="tabs">
-          {TABS.map(({ id, label }) => (
+        <nav
+          className="tabs"
+          role="tablist"
+          aria-label="メインタブ"
+          aria-orientation="horizontal"
+        >
+          {TABS.map(({ id, label }, index) => (
             <button
               key={id}
+              id={tabButtonId(id)}
               type="button"
+              role="tab"
+              aria-selected={tab === id}
+              aria-controls={tabPanelId(id)}
+              tabIndex={tab === id ? 0 : -1}
               className={tab === id ? "active" : ""}
               onClick={() => setTab(id)}
+              onKeyDown={(event) => handleTabKeyDown(event, index)}
             >
               {label}
             </button>
@@ -111,13 +190,19 @@ export default function App() {
         </nav>
       </header>
       <main className="content">
-        {tab === "record" && <RecordTab />}
-        {tab === "import" && <ImportTab />}
-        {tab === "consult" && <ConsultTab />}
-        {tab === "interview" && <InterviewTab />}
-        {tab === "probe" && <ProbeTab />}
-        {tab === "profile" && <ProfileTab />}
-        {tab === "settings" && <SettingsTab />}
+        {TABS.map(({ id }) => (
+          <div
+            key={id}
+            id={tabPanelId(id)}
+            className="main-tab-panel"
+            role="tabpanel"
+            aria-labelledby={tabButtonId(id)}
+            hidden={tab !== id}
+            tabIndex={tab === id ? 0 : -1}
+          >
+            {tab === id && renderMainTab(id)}
+          </div>
+        ))}
       </main>
     </div>
   );

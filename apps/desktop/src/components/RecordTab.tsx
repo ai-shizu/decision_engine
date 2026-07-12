@@ -7,6 +7,7 @@ import {
 import { formatDateLabel, parseAmount, summarizeDay, todayIso } from "../lib/dateUtils";
 import { isCommitEnter } from "../lib/keyUtils";
 import { defaultTime } from "../lib/timeUtils";
+import { uiErrorMessage } from "../lib/uiErrorMessages";
 import type { RecordEvent, RecordSubTab, Transaction } from "../lib/types";
 import { CalendarPicker } from "./CalendarPicker";
 import { TimePicker } from "./TimePicker";
@@ -31,6 +32,7 @@ export function RecordTab() {
   const [diary, setDiary] = useState("");
   const [eventDates, setEventDates] = useState<Set<string>>(new Set());
   const [status, setStatus] = useState("");
+  const [statusKind, setStatusKind] = useState<"info" | "error">("info");
   const [saveNotice, setSaveNotice] = useState<{ text: string; kind: "success" | "error" } | null>(
     null,
   );
@@ -67,6 +69,7 @@ export function RecordTab() {
   const loadDay = useCallback(async (d: string) => {
     setBusy(true);
     setStatus("");
+    setStatusKind("info");
     try {
       const data = await loadRecord(d);
       const diskSnapshot: DraftSnapshot = {
@@ -92,8 +95,9 @@ export function RecordTab() {
         setDiary(data.diary);
         recordDraft = null;
       }
-    } catch (err) {
-      setStatus(String(err));
+    } catch {
+      setStatusKind("error");
+      setStatus(uiErrorMessage("RECORD_LOAD"));
     } finally {
       setBusy(false);
     }
@@ -142,7 +146,11 @@ export function RecordTab() {
     setSaveNotice({ text, kind });
     setNoticeVisible(true);
     if (noticeTimerRef.current !== null) window.clearTimeout(noticeTimerRef.current);
-    noticeTimerRef.current = window.setTimeout(() => setNoticeVisible(false), 3000);
+    if (kind === "success") {
+      noticeTimerRef.current = window.setTimeout(() => setNoticeVisible(false), 3000);
+    } else {
+      noticeTimerRef.current = null;
+    }
   }
 
   async function handleDateSelect(d: string) {
@@ -153,6 +161,7 @@ export function RecordTab() {
   function addEvent() {
     const title = eventTitle.trim();
     if (!title) {
+      setStatusKind("info");
       setStatus("予定内容を入力してください");
       return;
     }
@@ -161,6 +170,7 @@ export function RecordTab() {
     );
     setEvents(next);
     setEventTitle("");
+    setStatusKind("info");
     setStatus(`${formatDateLabel(date)} ${eventTime} ${title} を追加 — Ctrl+S で保存`);
   }
 
@@ -168,16 +178,19 @@ export function RecordTab() {
     const cat = category.trim();
     const amount = parseAmount(amountRaw);
     if (!cat) {
+      setStatusKind("info");
       setStatus("カテゴリを入力してください");
       return;
     }
     if (amount === null) {
+      setStatusKind("info");
       setStatus("金額は正の整数で入力してください");
       return;
     }
     const tx: Transaction = { type, category: cat, amount };
     setTransactions((prev) => [...prev, tx]);
     const label = type === "expense" ? "支出" : "収入";
+    setStatusKind("info");
     setStatus(`家計簿追加 [${label}] ${cat} ${amount.toLocaleString()}円 — Ctrl+S で保存`);
     if (type === "expense") {
       setExpCat("");
@@ -207,8 +220,9 @@ export function RecordTab() {
       baselineRef.current = { events, transactions, diary };
       showNotice(`${date} を保存しました — ${syncMsg}`, "success");
       setStatus("");
-    } catch (err) {
-      showNotice(String(err), "error");
+      setStatusKind("info");
+    } catch {
+      showNotice(uiErrorMessage("RECORD_SAVE"), "error");
     } finally {
       setBusy(false);
     }
@@ -397,13 +411,23 @@ export function RecordTab() {
           {busy ? "保存中…" : "保存 (Ctrl+S)"}
         </button>
         <p
-          className={`save-notice ${saveNotice?.kind ?? ""} ${noticeVisible ? "visible" : ""}`}
+          className={`save-notice ${saveNotice?.kind ?? ""} ${noticeVisible ? "visible" : ""}${
+            saveNotice?.kind === "error" ? " error-text" : ""
+          }`}
+          role={saveNotice?.kind === "error" ? "alert" : undefined}
         >
           {saveNotice?.text ?? ""}
         </p>
         <span className="hint">選択中の日付を一括保存</span>
       </div>
-      {status && <p className="status-line">{status}</p>}
+      {status && (
+        <p
+          className={`status-line${statusKind === "error" ? " error-text" : ""}`}
+          role={statusKind === "error" ? "alert" : undefined}
+        >
+          {status}
+        </p>
+      )}
     </section>
   );
 }

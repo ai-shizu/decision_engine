@@ -45,7 +45,7 @@ PKBは、完全オフラインのTauri + React + Python意思決定支援アプ�
 次任者は、設計・レビュー・編集の前に必ず以下を実行する。
 
 1. 本書を全文読む。
-2. `docs/AI_SKILLS.md`を全文読む。不変条件が競合する場合はAI_SKILLSを優先する。
+2. `docs/AI_SKILLS.md` §0 の読み込みプロトコルを読む。§1 は必ず読む。§0 の表から現在のタスクに対応する節だけを選ぶ。横断的変更・分類不能時は関連しそうな行を複数選ぶ。「とりあえず全文」は行わない。不変条件が他文書と競合する場合は AI_SKILLS を優先する。
 3. `docs/architecture/INCIDENT_LEDGER.md`を読む。
 4. 下記コマンドでHEADとworktreeを照合する。
 
@@ -397,53 +397,33 @@ if type(params) is not dict or params:
 
 ---
 
-## 10. 最新GREENゲート
+## 10. 検証ゲートの正本と実行規律
 
-最高アーキテクト補佐が実環境で再実行した結果:
+### 所有権
 
-```text
-170 passed in 1.32s
-```
+- 完了判定は `docs/AI_SKILLS.md` §3.5 の全 DoD に従う。§3.5 が唯一の正本である。
+- 本節は全コマンドや結果を複製しない。正本への案内・実行規律・boundary 入口だけを所有する。
+- 実行時点の全ゲートが成功するまで完了報告を禁止する。
+- 実測結果は対応する finding の監査台帳 (`docs/AUDIT_FINDINGS_*.md`) へ記録する。
+- 過去の結果を現在の成功証明として再利用しない。
 
-対象:
-
-- `tests/test_context_manifest_ipc.py`: 7
-- `tests/test_retrieval_manifest.py`: 79
-- `tests/test_engine_tensor_profiling_backend_contract.py`: 28
-- `tests/test_integration.py`: 42
-- `tests/test_probe_ui_ipc.py`: 2
-- `tests/test_source_code.py` + `tests/test_probe_funnel.py`: 12
-
-コマンド:
+### boundary 入口
 
 ```powershell
-& 'C:\Users\badger\AppData\Local\Programs\Python\Python312-arm64\python.exe' -m pytest `
-  tests/test_context_manifest_ipc.py `
-  tests/test_retrieval_manifest.py `
-  tests/test_engine_tensor_profiling_backend_contract.py `
-  tests/test_integration.py `
-  tests/test_probe_ui_ipc.py `
-  tests/test_source_code.py `
-  tests/test_probe_funnel.py -q
+cd apps/desktop
+npm.cmd run test:boundary
 ```
 
-Frontend:
+- runner (`scripts/run-boundary-tests.ps1`) が fixture 生成、専用 tsconfig コンパイル、全 runtime suite 実行、生成物削除を所有する。
+- 通常の `tsc --noEmit` は `tests-runtime` を対象にしないため代替不可。
+- suite 名や件数を本節へ固定しない。
 
-```powershell
-cd apps\desktop
-npx.cmd tsc --noEmit
-npm.cmd run build
-```
+### Python 隔離規律
 
-最新再検証:
-
-- TypeScript: PASS
-- Vite build: PASS、60 modules transformed、766ms
-- `git diff --check`: PASS
-- `git status --short data/`: clean
-- package files: 差分なし
-
-テストは必ず`python -m pytest`で実行し、`tests/conftest.py`のSandboxを通す。実`data/`へ1 byteも書かない。
+- Python テストは必ず `python -m pytest` で実行する。
+- `tests/conftest.py` の Sandbox を通す。
+- 実 `data/` へ書き込まない。
+- Python 実行ファイルのユーザー固有絶対パスを本節に書かない。
 
 ---
 
@@ -476,6 +456,7 @@ params は送らない。generic cast は使用していない (静的grepで0�
 - 純reducer (`manifestFetchState.ts`、React非依存) が `loading/ready/empty/error` を所有。`REQUEST_START` で旧Manifest/旧エラーを消去、stale seq応答は同一参照で破棄、FAILUREイベントにmessageフィールドを持たせず例外文言のUI混入を構造的に遮断。
 - **`useEffect`自動取得なし・明示ボタンのみ**。polling/自動再試行/時刻依存なし。catch節は`REQUEST_FAILURE`のdispatchのみ (payload/例外文言を描画経路へ渡さない)。
 - `NO_MANIFEST`→empty、parser失敗/IPC失敗→error (固定文言のみ表示)。
+- **Finding 10:** single-flight 二重防壁を追加 — `inFlightRef` 再入拒否 (IPC前に立て、`finally` で解除) + `phase === "loading"` の button `disabled` / `aria-busy`。第2操作は queue せず無視。seq/stale ガードは維持。
 
 ### D. マウント — `apps/desktop/src/components/ProfileTab.tsx`
 
