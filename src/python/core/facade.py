@@ -212,28 +212,7 @@ def tensor_rebuild() -> dict:
 
 
 def fetch_pending_knowledge() -> dict:
-    """<fetch_query> キューを処理し、取得済み知識をインデックスへ統合する。
-
-    ネットワーク取得は PKB_ALLOW_ONLINE_FETCH=1 の時のみ。未許可時は
-    pending 件数を返すだけで一切通信しない (完全オフライン維持)。"""
-    from .knowledge_fetcher import load_queue, online_fetch_allowed, process_pending
-
-    summary = process_pending()
-    if summary["processed"]:
-        summary["index_rebuilt"] = get_engine().sync_knowledge_index(force=True)
-    pending = sum(1 for e in load_queue() if e["status"] == "pending")
-    summary["pending"] = pending
-    summary["online_allowed"] = online_fetch_allowed()
-    if summary["processed"]:
-        summary["message"] = (
-            f"{summary['processed']} 件の外部知識を取得し、知識インデックスへ統合しました")
-    elif not summary["online_allowed"] and pending:
-        summary["message"] = (
-            f"pending {pending} 件 — ネットワーク取得は無効です "
-            "(PKB_ALLOW_ONLINE_FETCH=1 で許可、または data/knowledge/ に手動配置)")
-    else:
-        summary["message"] = "処理対象の外部知識リクエストはありません"
-    return summary
+    raise NotImplementedError("Egress blocked by E0a strict lockdown.")
 
 
 def sync_diary_index(force: bool = False) -> bool:

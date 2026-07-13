@@ -79,13 +79,7 @@ SYSTEM_PROMPT = (
     "本人の思い込みを心地よく強化するだけか — 後者なら助言を書き直すこと。\n"
     "思考フェーズの内容は最終回答に含めず、検証を通過した結論のみを"
     "指定の4セクション形式で出力すること。事実に基づく指摘は誠実に、"
-    "ただし断罪ではなく本人が動ける形で伝えること。\n\n"
-    "【外部知識リクエスト (任意・厳格運用)】\n"
-    "提供された知識だけでは答えられない客観的・一般的な専門知識が必要な場合のみ、"
-    "回答本文の末尾に <fetch_query>検索クエリ</fetch_query> を出力してよい "
-    "(最大2件)。クエリは一般名詞のみで構成し、ユーザーの個人情報"
-    "(氏名・所属・日記の内容・金額等) を絶対に含めないこと。"
-    "取得はユーザーの明示許可時のみ実行され、次回の相談から検索コンテキストに反映される。"
+    "ただし断罪ではなく本人が動ける形で伝えること。"
 )
 
 OUTPUT_FRAMEWORK = """回答は必ず以下の4セクション構成のMarkdownで出力すること:
@@ -1640,19 +1634,6 @@ class ConsultationEngine:
         answer = self._generate_redacted(
             SYSTEM_PROMPT, prompt, on_token=on_token, prefix_hash=phash)
 
-        # <fetch_query> フック: 本文から除去してキューへ永続化するだけ。
-        # ここでネットワークへ出ることは絶対にない (knowledge_fetcher の原則参照)。
-        from .knowledge_fetcher import extract_fetch_queries, queue_fetch_queries
-        answer, fetch_queries = extract_fetch_queries(answer)
-        if fetch_queries:
-            added = queue_fetch_queries(fetch_queries)
-            say(f"外部知識リクエストを {added} 件キューに追加 (取得は明示許可時のみ)")
-            answer += (
-                f"\n\n---\n※ 外部知識リクエストを {len(fetch_queries)} 件キューしました: "
-                + " / ".join(fetch_queries)
-                + "\n(取得して反映するには「知識フェッチ」を明示的に実行してください。"
-                "オフラインのままにする場合は data/knowledge/ に資料を手動配置でも可)"
-            )
         say(f"生成完了 ({time.perf_counter() - t0:.1f}s)")
 
         log = PROCESSED / "last_consultation.md"

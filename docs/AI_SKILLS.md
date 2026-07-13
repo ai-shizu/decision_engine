@@ -51,7 +51,7 @@
 1. **完全オフラインを死守せよ。**
    - 外部 API・クラウドサービス・CDN・テレメトリを呼ぶコードを書くな。`fetch` / `axios` / `urllib` で `127.0.0.1` 以外に接続する行を書いた時点で設計違反である。
    - 許可されている通信は 2 つだけ: (a) `llama-server` への `http://127.0.0.1:{PKB_LLM_PORT}`、(b) Tauri ↔ Python の stdio パイプ。
-   - **唯一の公認例外**: `core/knowledge_fetcher.py`（§7 参照）。ただし「デフォルト無効・`PKB_ALLOW_ONLINE_FETCH=1` の明示設定・ユーザー起動時のみ・全クエリ監査可能」の 4 条件下でのみ許される。この 4 条件のどれか 1 つでも緩める変更、および knowledge_fetcher 以外の場所に外部通信を書く変更は、例外の追認ではなく原則違反である。
+   - 外部 HTTP・クラウド・CDN・テレメトリを書くな。`knowledge_fetcher` を含むいかなるモジュールも外向き通信の例外にしない（Phase 4-E E0a: 外向き knowledge fetch は無条件封鎖中）。
    - Python 起動パスでは必ず `HF_HUB_OFFLINE=1` / `TRANSFORMERS_OFFLINE=1` が効いていること。sentence-transformers がネットに出ようとしたらそれはバグだ。
    - npm パッケージを追加する時、ランタイムで外部通信するもの（アナリティクス、フォント CDN、自動アップデータ）は選ぶな。
 
@@ -484,16 +484,19 @@ PKB のプロファイリングは 2 世代で構成される:
 - 建前 doc からは Gap の「引用証拠」も「先延ばしの宣言」も採らない（面接で語った「毎日 LeetCode を解いています」は日常の宣言ではない）。
 - DailyContext のレンダリングとベクトル検索インデックスには建前ログも含まれる（**記録**としては本物）。除外するのは**自己分析チャネル**だけ。「記録と分析の分離」原則（§1）の適用例である。
 
-### 7.2 外部知識のオンデマンド・インジェクション (`core/knowledge_fetcher.py`)
+### 7.2 外部知識キュー (`core/knowledge_fetcher.py`) — E0a 封鎖中
 
-オフライン原則（§1）の唯一の公認例外。動作 4 段階と絶対条件:
+Phase 4-E **E0a EMERGENCY EGRESS LOCKDOWN** により、外向き knowledge fetch は無条件封鎖されている。
 
-1. **タグフック**: LLM が回答末尾に `<fetch_query>クエリ</fetch_query>` を出す（SYSTEM_PROMPT が「一般名詞のみ・個人情報禁止・最大2件」を指示）。consult() は本文からタグを除去し**キューに永続化するだけ** — consult 中にネットワークへ出ることは絶対にない。
-2. **キュー**: `data/knowledge/_fetch_queue.json` に平文保存。ユーザーが取得前に監査・削除できる。
-3. **取得（明示起動のみ）**: `facade.fetch_pending_knowledge()` / stdio `knowledge.fetch_pending` をユーザーが呼んだ時だけ実行。さらに `PKB_ALLOW_ONLINE_FETCH=1` が無ければ**一切通信せず** pending 件数を返すだけ。`default_online_fetcher` は未許可時に RuntimeError を投げる — **これを try/except で握って続行するコードを書いた瞬間、それは情報漏洩バグである。**
-4. **統合**: 取得結果は `data/knowledge/fetched_*.md` に永続化 → 既存の `sync_knowledge_index()` が次回 consult で自動ベクトル化。**専用のインデックス機構を新設するな** — 手動配置の知識ファイルと同じ経路に乗せることで、オフライン充足（ユーザーが資料を手で置く）と等価になる。
+- `_http_get` / `default_online_fetcher` / `process_pending` / `facade.fetch_pending_knowledge` は
+  `NotImplementedError("Egress blocked by E0a strict lockdown.")` を raise する一文 stub。
+- `online_fetch_allowed()` は常に `False`。`PKB_ALLOW_ONLINE_FETCH` や mock fetcher では解除できない。
+- legacy `_fetch_queue.json` と `extract_fetch_queries` / `queue_fetch_queries` / `ingest_results` は
+  **ローカル専用**として残るが、キューから外へ送出する経路は無い。
+- consult の SYSTEM_PROMPT に外向き検索タグ生成指示は無い。生成後のタグ抽出・キュー書込 hook も無い。
+- ローカル knowledge の手動配置 → `sync_knowledge_index()` → `knowledge_hits` 検索注入は維持（オフライン充足）。
 
-**テスト規律**: ネットワークを叩くテストを書くな。`process_pending(fetcher=mock)` の依存注入がそのためにある。`test_integration.py` の `test_offline_default_never_fetches` は「未設定なら絶対に外へ出ない」ことの回帰ガードであり、削除禁止。
+**テスト規律**: 実ネットワークを叩くテストを書くな。E0a 契約は `tests/test_e0a_egress_lockdown.py`。
 
 ---
 

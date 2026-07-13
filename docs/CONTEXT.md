@@ -39,7 +39,7 @@ PKB（Personal Knowledge Base）は、完全オフラインを原則とする自
 - UI と Python は Tauri/Rust 管理の **stdio JSON IPC**
 - 個人データはローカル永続化（コミット禁止領域あり）
 - 埋め込みモデル・LLM は遅延初期化（初回 consult / profiler まで起動しない）
-- オンライン knowledge fetch は既存の明示許可例外（`knowledge_fetcher` + 環境フラグ）のみ
+- オンライン knowledge fetch は Phase 4-E E0a により無条件封鎖中（外向き HTTP 経路なし）
 
 モデル名、容量、具体的テスト件数は本書に書かない（揮発するため。正本は `config/model_params.json` とテスト実行結果）。
 

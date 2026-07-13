@@ -5,7 +5,7 @@
   1. ライフバランス・スタビライザー評価 (gap_analysis.analyze_life_balance)
   2. CONSULT interview_sim モード (状態機械 + gap_insights 接続講評)
   3. 外部知識オンデマンド・インジェクション (knowledge_fetcher)
-     — オフライン既定・キュー永続化・モック取得での取り込みまで
+     — E0a: 外向き送出は封鎖。legacy タグのローカル parse/queue のみ検証。
 
 モックペルソナ: トップティア SWE を目指して焦る情報理工系大学3年生。
 躰道部の新歓マネジメントとパートナーとの時間に意義を見出し、
@@ -57,7 +57,6 @@ from core.paths import (  # noqa: E402
     DEEP_PROFILE,
     ES_DIR,
     INTERVIEW_RECORDS_DIR,
-    KNOWLEDGE_DIR,
 )
 
 # 日常プロファイル (gap_insights) にのみ存在し、ES には現れない語。
@@ -233,6 +232,9 @@ def test_interview_sim_flow() -> None:
 
 # ============================================================ 3. knowledge_fetcher
 def test_fetch_tag_hook_and_queue() -> None:
+    """Legacy <fetch_query> 文字列のローカル parse / queue 永続化のみを検証する。
+
+    送出能力・オンライン取得・HTTP 経路は対象外（E0a で封鎖）。"""
     text = ("## 1. 現状分析\n本文。\n"
             "<fetch_query>ロックフリーキュー 設計 面接</fetch_query>\n"
             "<fetch_query>HFT レイテンシ 最新動向</fetch_query>")
@@ -244,34 +246,49 @@ def test_fetch_tag_hook_and_queue() -> None:
     assert kf.queue_fetch_queries(queries) == 0, "重複クエリが再追加された"
     queue = kf.load_queue()
     assert len(queue) == 2 and all(e["status"] == "pending" for e in queue)
-    print("  fetch tag hook + queue OK")
+    print("  fetch tag local parse + queue OK")
 
 
 def test_offline_default_never_fetches() -> None:
-    """PKB_ALLOW_ONLINE_FETCH 未設定では、いかなる経路でも通信しない。
+    """E0a: process_pending は env 未設定でも =1 でも NotImplementedError。
 
     F-15 (Sandbox): キューは _isolate_data により各テスト前に空となるため、
     自分の入力を自前で seed する (他テストの副作用に依存しない)。"""
+    e0a_msg = "Egress blocked by E0a strict lockdown."
     assert kf.queue_fetch_queries(
         ["ロックフリーキュー 設計 面接", "HFT レイテンシ 最新動向"]) == 2
-    assert not kf.online_fetch_allowed()
-    summary = kf.process_pending()  # fetcher=None + 未許可 → 完全スキップ
-    assert summary["processed"] == 0 and summary["skipped_offline"] == 2
-    assert all(e["status"] == "pending" for e in kf.load_queue())
 
+    # Unset path
+    os.environ.pop("PKB_ALLOW_ONLINE_FETCH", None)
     try:
-        kf.default_online_fetcher("test")
-        raise AssertionError("未許可なのに default_online_fetcher が通った")
-    except RuntimeError as exc:
-        assert "PKB_ALLOW_ONLINE_FETCH" in str(exc)
-    print("  offline-default safety OK")
+        kf.process_pending()
+        raise AssertionError("process_pending must hard-fail under E0a (env unset)")
+    except NotImplementedError as exc:
+        assert str(exc) == e0a_msg
+
+    # Explicit allow env must not unlock egress
+    os.environ["PKB_ALLOW_ONLINE_FETCH"] = "1"
+    try:
+        try:
+            kf.process_pending()
+            raise AssertionError(
+                "process_pending must hard-fail under E0a (env=1)")
+        except NotImplementedError as exc:
+            assert str(exc) == e0a_msg
+    finally:
+        os.environ.pop("PKB_ALLOW_ONLINE_FETCH", None)
+
+    assert all(e["status"] == "pending" for e in kf.load_queue())
+    print("  E0a process_pending hard-fail OK")
 
 
 def test_mock_fetch_ingestion_pipeline() -> None:
-    """モック取得 → Markdown 永続化 → 既存ナレッジローダーでの取り込み。
+    """E0a: fetcher=mock でも process_pending は同一例外、mock は一度も呼ばれない。"""
+    e0a_msg = "Egress blocked by E0a strict lockdown."
+    calls: list[str] = []
 
-    F-15 (Sandbox): キューは他テストの副作用に依存せず自前で seed する。"""
     def mock_fetcher(query: str) -> list[dict]:
+        calls.append(query)
         return [{
             "title": f"{query} の解説",
             "url": "https://example.com/article",
@@ -280,33 +297,14 @@ def test_mock_fetch_ingestion_pipeline() -> None:
 
     assert kf.queue_fetch_queries(
         ["ロックフリーキュー 設計 面接", "HFT レイテンシ 最新動向"]) == 2
-    summary = kf.process_pending(fetcher=mock_fetcher)
-    assert summary["processed"] == 2 and summary["failed"] == 0, summary
-    assert all(e["status"] == "done" for e in kf.load_queue())
-
-    files = sorted(KNOWLEDGE_DIR.glob("fetched_*.md"))
-    assert len(files) == 2, files
-    body = files[0].read_text(encoding="utf-8")
-    assert "出典: https://example.com/article" in body
-    assert "専門知識のダミー本文" in body
-
-    # 既存の知識チャンクローダー (consult の検索対象) が自動で拾うこと
-    from core.consultation_engine import load_knowledge_chunks
-    chunks = load_knowledge_chunks()
-    assert any("専門知識のダミー本文" in c["text"] for c in chunks), \
-        "取得知識が knowledge チャンクに統合されていない"
-
-    # 失敗する fetcher は該当クエリだけを failed にし、全体を止めない
-    kf.queue_fetch_queries(["失敗するクエリ"])
-
-    def failing_fetcher(query: str) -> list[dict]:
-        raise OSError("network unreachable")
-
-    summary2 = kf.process_pending(fetcher=failing_fetcher)
-    assert summary2["failed"] == 1 and summary2["processed"] == 0
-    failed = [e for e in kf.load_queue() if e["status"] == "failed"]
-    assert failed and "OSError" in failed[0]["error"]
-    print("  mock fetch ingestion OK")
+    try:
+        kf.process_pending(fetcher=mock_fetcher)
+        raise AssertionError("process_pending must hard-fail even with mock fetcher")
+    except NotImplementedError as exc:
+        assert str(exc) == e0a_msg
+    assert calls == [], f"mock fetcher must not be invoked; got {calls}"
+    assert all(e["status"] == "pending" for e in kf.load_queue())
+    print("  E0a mock cannot unlock egress OK")
 
 
 # ============================================================ フェーズ3: ES 駆動シミュレーター
