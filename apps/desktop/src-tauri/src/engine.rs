@@ -8,6 +8,8 @@ use std::thread::{self, JoinHandle};
 use serde_json::{json, Value};
 use tauri::{AppHandle, Emitter};
 
+#[cfg(not(debug_assertions))]
+use crate::artifact_auth::{verify_production_artifacts, ProductionAttestation};
 use crate::os_sandbox::ChildControl;
 #[cfg(not(debug_assertions))]
 use crate::os_sandbox::spawn_kernel_sandboxed;
@@ -464,8 +466,10 @@ fn spawn_configured_engine(root: &Path) -> Result<ProcessConnection, String> {
     let path = bundled_engine_path().ok_or_else(|| {
         "Bundled PKB engine is required in production; fallback is forbidden.".to_string()
     })?;
+    let attestation = verify_production_artifacts(root, &path)
+        .map_err(|_| "PKB artifact preflight verification failed".to_string())?;
     EngineManager::log(&format!("release: {}", path.display()));
-    spawn_bundled_engine(&path, root)
+    spawn_bundled_engine(&path, root, &attestation)
 }
 
 #[cfg(debug_assertions)]
@@ -504,10 +508,18 @@ fn spawn_python_engine(
 fn spawn_bundled_engine(
     path: &std::path::Path,
     root: &std::path::Path,
+    attestation: &ProductionAttestation,
 ) -> Result<ProcessConnection, String> {
     let mut cmd = Command::new(path);
     configure_offline_child_environment(&mut cmd, root);
     cmd.env("PYTHONUTF8", "1")
+        .env("PKB_REQUIRE_ARTIFACT_AUTH", "1")
+        .env("PKB_ARTIFACT_MANIFEST", &attestation.manifest_path)
+        .env(
+            "PKB_ARTIFACT_MANIFEST_SHA256",
+            &attestation.manifest_digest_hex,
+        )
+        .env("PKB_ARTIFACT_APP_ROOT", &attestation.app_root)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());

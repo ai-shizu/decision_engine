@@ -46,6 +46,7 @@ import subprocess
 import threading
 from pathlib import Path
 
+from .artifact_auth import verify_artifact_path
 from .paths import PROCESSED, SEARCH_EXE
 
 # ---------------------------------------------------------------- レイアウト定義
@@ -127,6 +128,7 @@ class SearchDaemonClient:
             return
         if not self.exe.exists():
             raise SearchDaemonError(f"search engine not found: {self.exe}")
+        verify_artifact_path("search_engine", self.exe)
         self._init_scratch()
         self.proc = self._spawn([str(self.exe), "--daemon", str(self.scratch_path)])
         self._reader = threading.Thread(target=self._read_loop, daemon=True)

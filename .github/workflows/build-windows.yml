@@ -1,0 +1,123 @@
+name: build-windows
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: [self-hosted, Windows, ARM64, pkb-release]
+    env:
+      PYTHONHASHSEED: "0"
+      PKB_RELEASE_ASSET_ROOT: ${{ vars.PKB_RELEASE_ASSET_ROOT }}
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          persist-credentials: false
+
+      - name: Verify pinned release toolchain
+        shell: powershell
+        run: |
+          if ((python --version) -ne "Python 3.12.10") { throw "Python version mismatch" }
+          if ((node --version) -ne "v24.18.0") { throw "Node version mismatch" }
+          if (-not ((rustc --version) -match '^rustc 1\.96\.1 ')) { throw "Rust version mismatch" }
+          if (-not (rustup target list --installed | Select-String -SimpleMatch 'aarch64-pc-windows-msvc')) { throw "Rust target missing" }
+          if (-not $env:PKB_RELEASE_ASSET_ROOT) { throw "PKB_RELEASE_ASSET_ROOT is required" }
+          if (-not (Test-Path -LiteralPath "$env:PKB_RELEASE_ASSET_ROOT\models" -PathType Container)) { throw "trusted models missing" }
+          if (-not (Test-Path -LiteralPath "$env:PKB_RELEASE_ASSET_ROOT\tools\llama-arm64" -PathType Container)) { throw "trusted runtime missing" }
+          "SOURCE_DATE_EPOCH=$(git log -1 --format=%ct)" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: Build native search engine
+        shell: powershell
+        run: .\build.ps1 -SkipPy -SkipDemo
+
+      - name: Build hash-locked Python sidecar
+        shell: powershell
+        env:
+          PKB_PYTHON: python
+        run: .\apps\desktop\scripts\build-engine.ps1
+
+      - name: Reproducibility comparison for unsigned inputs
+        shell: powershell
+        env:
+          PKB_PYTHON: python
+        run: |
+          $binary = "apps\desktop\src-tauri\binaries\pkb-engine-aarch64-pc-windows-msvc.exe"
+          $first = Join-Path $env:RUNNER_TEMP "pkb-engine-first.exe"
+          Copy-Item -LiteralPath $binary -Destination $first
+          .\apps\desktop\scripts\build-engine.ps1
+          if ((Get-FileHash -Algorithm SHA256 -LiteralPath $first).Hash -ne (Get-FileHash -Algorithm SHA256 -LiteralPath $binary).Hash) { throw "sidecar is not reproducible" }
+
+      - name: Install frontend dependencies
+        working-directory: apps/desktop
+        run: npm ci --ignore-scripts
+
+      - name: Cache locked Rust dependencies for offline build
+        working-directory: apps/desktop/src-tauri
+        run: cargo fetch --locked --target aarch64-pc-windows-msvc
+
+      - name: Build Tauri application
+        working-directory: apps/desktop
+        env:
+          CARGO_NET_OFFLINE: "true"
+        run: node ./node_modules/@tauri-apps/cli/tauri.js build --target aarch64-pc-windows-msvc
+
+      - name: Verify staged sidecar byte identity
+        shell: powershell
+        run: |
+          $source = "apps\desktop\src-tauri\binaries\pkb-engine-aarch64-pc-windows-msvc.exe"
+          $staged = "apps\desktop\src-tauri\target\aarch64-pc-windows-msvc\release\pkb-engine.exe"
+          if (-not (Test-Path -LiteralPath $staged -PathType Leaf)) { throw "staged sidecar missing" }
+          if ((Get-FileHash -Algorithm SHA256 -LiteralPath $source).Hash -ne (Get-FileHash -Algorithm SHA256 -LiteralPath $staged).Hash) { throw "Tauri changed sidecar bytes" }
+
+      - name: Assemble offline production artifact pack
+        shell: powershell
+        run: |
+          $releaseRoot = Join-Path $env:RUNNER_TEMP "pkb-release-aarch64-pc-windows-msvc"
+          $releaseData = Join-Path $releaseRoot "data"
+          New-Item -ItemType Directory -Force -Path "$releaseData\models", "$releaseData\tools", "$releaseData\build", "$releaseData\config", "$releaseData\sbom" | Out-Null
+          Copy-Item -Recurse -Force -Path "$env:PKB_RELEASE_ASSET_ROOT\models\*" -Destination "$releaseData\models"
+          Copy-Item -Recurse -Force -Path "$env:PKB_RELEASE_ASSET_ROOT\tools\llama-arm64\*" -Destination "$releaseData\tools\llama-arm64"
+          Copy-Item -LiteralPath "build\search_engine.exe" -Destination "$releaseData\build\search_engine.exe"
+          Copy-Item -LiteralPath "config\model_params.json" -Destination "$releaseData\config\model_params.json"
+          "PKB_RELEASE_ROOT=$releaseRoot" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "PKB_RELEASE_DATA=$releaseData" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: Generate deterministic SBOM
+        shell: powershell
+        run: |
+          python scripts\generate_release_sbom.py --root . --output "$env:PKB_RELEASE_DATA\sbom\release.cdx.json"
+          python scripts\generate_release_sbom.py --root . --output "$env:RUNNER_TEMP\release-second.cdx.json"
+          if ((Get-FileHash -Algorithm SHA256 "$env:PKB_RELEASE_DATA\sbom\release.cdx.json").Hash -ne (Get-FileHash -Algorithm SHA256 "$env:RUNNER_TEMP\release-second.cdx.json").Hash) { throw "SBOM is not reproducible" }
+
+      - name: Sign canonical artifact allowlist
+        working-directory: apps/desktop/src-tauri
+        env:
+          PKB_ARTIFACT_SIGNING_KEY: ${{ secrets.PKB_ARTIFACT_SIGNING_KEY }}
+        shell: powershell
+        run: |
+          cargo run --locked --release --bin pkb-artifact-manifest -- `
+            --app-root binaries `
+            --data-root "$env:PKB_RELEASE_DATA" `
+            --plan ..\artifact-plan.production.json `
+            --manifest "$env:PKB_RELEASE_DATA\config\artifacts_allowlist.json" `
+            --signature "$env:PKB_RELEASE_DATA\config\artifacts_allowlist.sig" `
+            --target aarch64-pc-windows-msvc
+
+      - name: Package signed artifact inventory and SBOM
+        shell: powershell
+        run: |
+          Get-FileHash -Algorithm SHA256 "apps\desktop\src-tauri\binaries\pkb-engine-aarch64-pc-windows-msvc.exe", "build\search_engine.exe", "$env:PKB_RELEASE_DATA\config\artifacts_allowlist.json", "$env:PKB_RELEASE_DATA\config\artifacts_allowlist.sig" | ConvertTo-Json | Out-File "$env:PKB_RELEASE_ROOT\SBOM-SHA256SUMS.json" -Encoding utf8
+          tar.exe -C "$env:PKB_RELEASE_ROOT" -czf "pkb-artifact-pack-aarch64-pc-windows-msvc.tar.gz" data SBOM-SHA256SUMS.json
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: pkb-windows-aarch64
+          path: |
+            apps/desktop/src-tauri/target/aarch64-pc-windows-msvc/release/bundle/nsis/*.exe
+            pkb-artifact-pack-aarch64-pc-windows-msvc.tar.gz
+          if-no-files-found: error

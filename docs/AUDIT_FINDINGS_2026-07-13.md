@@ -82,7 +82,7 @@
 
 - **ID**: `FSA-2026-07-13-04`
 - **重要度**: `CRITICAL`
-- **状態**: `UNRESOLVED`
+- **状態**: `RESOLVED`
 - **症状（攻撃ベクトル）**: 改変されたPython interpreter、sidecar、llama-server、GGUF、embedding modelを正規成果物として起動できる。攻撃者は同じ名前と十分なサイズのファイルへ置換するだけで機密データを取得し、結果を改変できる。ビルド時にも未固定依存が取り込まれ、同一commitから異なる成果物が生成され得る。
 - **根本原因**: `PKB_PYTHON`やPATH候補は`is_file`中心、sidecarは存在とサイズ、GGUFは名前とサイズで検証される。内容digest、署名、許可manifest、toolchain identityがない。PyInstaller、Python package、Rust stable、GitHub Actionsが完全なversion/hash/commitへ固定されていない。
 - **実コード証拠**:
@@ -94,6 +94,10 @@
   - `apps/desktop/scripts/build-sidecar.sh:50-56`
   - `.github/workflows/build-macos.yml:35-89`
 - **必須是正措置**: 実行物、model、prompt bundle、runtime、設定のdigestを署名済みallowlist manifestへ固定し、起動前に全byteを検証する。ユーザーoverrideは明示的な非production modeへ隔離する。Python/Rust/Node/toolchain、package、GitHub Actionをversionとhashまたはcommit SHAへ固定し、offlineかつhash検証付きで再現可能なbuildを成立させる。生成成果物のSBOM、署名、再現性比較をrelease gateへ追加する。
+- **解決日**: `2026-07-14`
+- **解決記録**: production専用Ed25519公開鍵をRustへ静的固定し、canonical `pkb.artifact_allowlist.v1`とdetached signatureを起動前に検証する。manifestはsidecar、C++検索実行物、llama runtime tree、model config、決定論的SBOM、1件以上のGGUFを必須とし、相対path・base・file/tree種別・size・SHA-256を結合する。symlink/junction/reparse、未知key、重複ID、非canonical JSON、path差替え、不足、1byte改変はhard-failする。Rustは全artifactを検証してからproduction sidecarをspawnし、manifest exact SHA-256とapp/data rootだけをclear済み子環境へ渡す。Pythonはそのattestationを再検証し、GGUF、llama runtime、検索exe、外部embedding、model configの使用直前にexact pathとbytesを再検証する。config削除はdefault fallbackせずhard-failする。RFC 8032公開テスト鍵はtest fixtureだけに隔離し、production signerは秘密鍵から導出した公開鍵が固定trust rootと不一致なら出力を作らない。
+- **供給網記録**: Python `3.12.10`、Node `24.18.0`、Rust `1.96.1`、Ed25519/SHA-256依存、Cargo/npm lock、Python wheel全hash、GitHub Actions完全commit SHAを固定した。Windows/macOS releaseはself-hosted secure runnerでsidecar二回buildのbyte一致を要求し、macOSは最終codesign後の.app内sidecarを署名対象にする。Cargo/npm/Python lockからtimestamp・UUID・絶対pathなしのCycloneDX SBOMを二回生成してbyte比較し、そのSBOM tree自体を署名manifestへ含める。署名済みoffline artifact packなしのrelease uploadは禁止する。
+- **検証証拠**: 初期REDはPython `7 failed`、Rustはverifier/module不在でcompile RED。追加敵対契約として署名済みconfig削除時のsilent defaultと、決定論的path-free SBOM不在を個別RED確認した。対象GREENはPython FSA-04 `9/9`、Rust `5/5`、関連Python `80/80`、hash-lock実resolver、workflow YAML、PowerShell parser、`cargo check --locked --release --all-targets`。全体回帰はpytest `596 passed, 1 skipped`、boundary `120/120`、TypeScript/Vite、Rust unit `46/46` + artifact `5/5` + IPC `4/4` + kernel sandbox `2/2`、debug build/check/release build、`git diff --check`がGREEN。production秘密鍵はローカルへ存在しないため、production署名成功だけはCI secret所有のrelease gateで実行し、ローカル契約はRFC 8032 test fixtureによる正署名と誤鍵拒否を検証する。
 
 ---
 

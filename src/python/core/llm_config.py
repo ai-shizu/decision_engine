@@ -7,6 +7,12 @@ import json
 import os
 from pathlib import Path
 
+from .artifact_auth import (
+    ArtifactIntegrityError,
+    artifact_auth_required,
+    verified_artifact_paths,
+    verify_artifact_path,
+)
 from .paths import MODELS_DIR, PROJECT_ROOT as ROOT
 
 
@@ -43,6 +49,8 @@ _DEFAULT_PARAMS: dict = {
 def load_model_params() -> dict:
     """Load model configuration, overlaying known sections on fixed defaults."""
     params = json.loads(json.dumps(_DEFAULT_PARAMS))
+    if artifact_auth_required():
+        verify_artifact_path("config:model_params", MODEL_PARAMS_JSON)
     if MODEL_PARAMS_JSON.exists():
         try:
             user = json.loads(MODEL_PARAMS_JSON.read_text(encoding="utf-8"))
@@ -106,6 +114,14 @@ def _expand_pattern(pattern: str) -> list[Path]:
 def find_gguf(role: str = "default") -> Path | None:
     """Select the configured local GGUF for a role without remote fallback."""
     params = load_model_params()
+    if artifact_auth_required():
+        candidates = verified_gguf_candidates(role)
+        for artifact_id, candidate in candidates:
+            verify_artifact_path(artifact_id, candidate)
+            if _is_valid_gguf(candidate, params):
+                return candidate
+        raise ArtifactIntegrityError("artifact integrity verification failed")
+
     roles = params["roles"]
 
     patterns = list(roles.get(role, {}).get("preferred", []))
@@ -137,6 +153,26 @@ def find_gguf(role: str = "default") -> Path | None:
         if "7b" in candidate.name.lower():
             return candidate
     return candidates[0] if candidates else None
+
+
+def verified_gguf_candidates(role: str) -> list[tuple[str, Path]]:
+    """Return only GGUF paths bound by the Rust-attested production manifest."""
+    artifacts = verified_artifact_paths("gguf")
+    role_prefix = f"gguf:{role}"
+    selected = [
+        item
+        for item in artifacts
+        if item[0] == role_prefix or item[0].startswith(role_prefix + ":")
+    ]
+    if role != "default":
+        selected.extend(
+            item
+            for item in artifacts
+            if item[0] == "gguf:default" or item[0].startswith("gguf:default:")
+        )
+    if not selected:
+        raise ArtifactIntegrityError("artifact integrity verification failed")
+    return selected
 
 
 def generation_params() -> dict:

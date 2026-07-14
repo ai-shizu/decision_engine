@@ -34,6 +34,7 @@ import sys
 import time
 from pathlib import Path
 
+from .artifact_auth import verify_artifact_path
 from .offline_runtime import enforce_offline_environment
 
 enforce_offline_environment()
@@ -100,6 +101,7 @@ def search_topk(query_vec, top_k: int = 3) -> list[dict]:
 
     hits: list[tuple[int, float]] = []
     if SEARCH_EXE.exists():
+        verify_artifact_path("search_engine", SEARCH_EXE)
         TMP_QUERY_BIN.write_bytes(query_vec.tobytes())
         out = subprocess.run(
             [str(SEARCH_EXE), str(VECTORS_BIN), str(TMP_QUERY_BIN), str(top_k)],

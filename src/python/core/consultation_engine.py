@@ -29,6 +29,7 @@ import time
 from datetime import datetime
 from pathlib import Path
 
+from .artifact_auth import verify_artifact_path
 from .offline_runtime import enforce_offline_environment
 
 enforce_offline_environment()
@@ -707,6 +708,7 @@ class ConsultationEngine:
                 self._drop_search_daemon()  # 以後は 1-shot / NumPy 経路
                 hits = []
         if not hits and SEARCH_EXE.exists():
+            verify_artifact_path("search_engine", SEARCH_EXE)
             tmp = PROCESSED / f"_ce_query_{os.getpid()}.bin"
             tmp.write_bytes(qvec.tobytes())
             try:

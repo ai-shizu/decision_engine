@@ -23,7 +23,7 @@
 | タスク種別 | 必読節 |
 |---|---|
 | UI (Foxtrot / React / Textual) | §1, §2.1, §3.4, §3.5, `docs/SPEC_FOXTROT_UI.md` |
-| Tauri/Rust sidecar・stdio IPC | §1, §2.1, §2.3, §9, §16 |
+| Tauri/Rust sidecar・stdio IPC・artifact署名 | §1, §2.1, §2.3, §2.5, §9, §16 |
 | 永続化境界・シリアライズ・runtime検証・IPC契約 | §1, §16 (SKILL-PKB-BOUNDARY-V3), `docs/architecture/INCIDENT_LEDGER.md` |
 | macOS ビルド・配布・コード署名 | §1, §2.3, §4 |
 | LLM モデル選定・consult/KV キャッシュ | §1, §5, §7, §8 |
@@ -54,6 +54,8 @@
    - 外部 HTTP・クラウド・CDN・テレメトリを書くな。`knowledge_fetcher` を含むいかなるモジュールも外向き通信の例外にしない（Phase 4-E E0a: 外向き knowledge fetch は無条件封鎖中）。
    - Python起動パスでは`core.offline_runtime`がoffline環境を強制上書きし、proxy/token/llama remote環境を除去し、AF_INET/AF_INET6とDNSを監査hookで拒否すること。`SentenceTransformer`は`local_files_only=True`かつ`trust_remote_code=False`以外で生成するな。
    - **Pythonの言語hookを隔離境界と呼ぶな。** productionはbundled sidecarのみをRustの`os_sandbox.rs`から起動する。Windowsはcapability数0のAppContainer、Linuxはarch検証付きseccomp-BPFで`socket(AF_INET/AF_INET6)`を`EACCES`、macOSは署名済みApp Sandbox（network entitlementなし）を必須とする。適用失敗時の通常起動は禁止。System Pythonは`PKB_UNSAFE_DEV_ENGINE=1`を明示したdebug buildだけの非保証モードである。
+   - production artifactはEd25519署名済み`pkb.artifact_allowlist.v1`だけを信頼する。Rustは固定公開鍵で署名と全SHA-256を検証してからsidecarをspawnし、PythonはRustが渡したmanifest digestへ再結合してGGUF、llama runtime、C++検索実行物、model config、外部embedding modelを各使用直前に再検証する。不在・改変・symlink/reparse・path差替えはfallbackせずhard-failする。
+   - production秘密鍵はCI secret `PKB_ARTIFACT_SIGNING_KEY`だけに置く。RFC 8032公開テストvectorのseedは`tests/`専用であり、production signerは対応公開鍵が固定trust rootと一致しなければ出力を1byteも作らない。
    - npm パッケージを追加する時、ランタイムで外部通信するもの（アナリティクス、フォント CDN、自動アップデータ）は選ぶな。
 
 2. **個人データを絶対に流出させるな。**
@@ -157,6 +159,15 @@ python -m pytest tests/test_ui_smoke.py -q
 - **スキーマ移行時は grep で全参照を潰せ。** 過去に `fixed_attributes` の `age` → `birthday` 移行で TUI とテストに古い `#fixed-age` 参照が残り、SETTINGS タブが実行時クラッシュした。フィールド名・cmd 名・イベント名を変えたら `rg <旧名>` をリポジトリ全体に必ず実行し、ヒット 0 を確認してから完了と言え。
 - llama.cppのライフサイクル: 推論ごとに新しい所有子をspawnし、そのPIDだけをstop対象にする。listener探索・外部プロセス再利用・三回目の再送を追加するな。`atexit`登録済み。ゾンビを残す変更をするな。
 
+### 2.5 Production artifact真正性
+
+- trust rootは`artifact_auth.rs::PRODUCTION_PUBLIC_KEY_HEX`のEd25519公開鍵だけ。環境変数やユーザーファイルから公開鍵を上書きする経路を作るな。
+- manifestはcanonical JSON、detached Ed25519署名、strict key、正規化relative path、SHA-256、size、file/tree種別を同時検証する。tree hashは相対path・size・各file digestを固定順で結合する。symlink、junction、reparse point、special fileは禁止。
+- production inventoryは`engine_sidecar`、`search_engine`、`llama_runtime`、`config:model_params`、`release_sbom`、1件以上の`gguf:*`を必須とする。署名生成前と起動前の両方で不足を拒否する。
+- release buildはPython `3.12.10`、Node `24.18.0`、Rust `1.96.1`、Cargo/npm lock、`requirements-sidecar.lock`の全wheel hash、完全commit SHAのGitHub Actionsへ固定する。可変tag、`pip install`の無hash、`rust-toolchain stable`は禁止。
+- SBOMはlockfile三種から時刻・UUID・絶対pathなしで決定論的に生成し、二回生成のbyte一致を確認してからmanifestへ含める。署名後に別SBOMへ差し替えてはならない。
+- macOSは最終codesign後の.app内sidecar byteを署名対象にする。署名前のPyInstaller出力を代用するな。Windows/macOSとも署名済みdata packがないreleaseを配布してはならない。
+
 ---
 
 ## 3. コード生成のトーン＆マナー (Code Generation Guidelines)
@@ -258,23 +269,24 @@ cargo check
 
 実物は `.github/workflows/build-macos.yml`。構成の要点:
 
-1. **PyInstaller はクロスコンパイル不可。** これが全構成を支配する制約である。
-   - aarch64 (Apple Silicon) → `macos-14` 以降のランナー（arm64 ネイティブ）
-   - x86_64 (Intel) → `macos-13` ランナー（x86_64 ネイティブ）
-   - `macos-latest` は arm64 である。**「latest 1 本で両アーキ」は Python sidecar がある限り不可能。** matrix で分けろ:
+1. **PyInstaller はクロスコンパイル不可。** releaseは固定toolchainと秘密鍵を持つself-hosted runnerだけで行う。
+   - aarch64 → `[self-hosted, macOS, ARM64, pkb-release]`
+   - x86_64 → `[self-hosted, macOS, X64, pkb-release]`
+   - `macos-latest`などの可変hosted imageへ戻すな。matrixでnative architectureを分けろ:
 
 ```yaml
 strategy:
   matrix:
     include:
-      - { os: macos-14, target: aarch64-apple-darwin }
-      - { os: macos-13, target: x86_64-apple-darwin }
+      - { runner: [self-hosted, macOS, ARM64, pkb-release], target: aarch64-apple-darwin }
+      - { runner: [self-hosted, macOS, X64, pkb-release], target: x86_64-apple-darwin }
 steps:
-  - run: bash build.sh --skip-py                      # C++ (NEON は aarch64 で自動有効)
-  - run: bash apps/desktop/scripts/build-sidecar.sh   # Python sidecar (ネイティブビルド)
-  - run: npx tauri build --target ${{ matrix.target }}
-    working-directory: apps/desktop
+  - run: bash build.sh --skip-py
+  - run: bash apps/desktop/scripts/build-sidecar.sh
+  - run: npx --no-install tauri build --target ${{ matrix.target }}
 ```
+
+   actionはmajor tagではなく完全commit SHAへ固定する。Tauri build後に.appから最終sidecarを再抽出し、そのbyteを`pkb-artifact-manifest`で署名する。`PKB_RELEASE_ASSET_ROOT`のGGUF/llama runtimeと`PKB_ARTIFACT_SIGNING_KEY`がないrunnerはreleaseをhard-failする。
 
 2. **ユニバーサルバイナリ (`--target universal-apple-darwin`) は使うな。** Rust 側は lipo で結合できるが、PyInstaller 製 sidecar と C++ exe が単アーキのままなので不整合になる。per-arch の DMG を 2 つ配布する方が確実で、サイズも半分になる。どうしても 1 本にしたければ、両ランナーの成果物を `lipo -create -output pkb-engine pkb-engine-x86_64 pkb-engine-arm64` で自分で結合してから universal ビルドに載せる必要がある（工数に見合わない。やるな）。
 3. **C++ の指定:** aarch64 は AArch64 の仕様として NEON 必須なので `__ARM_NEON` が自動定義され、既存の NEON パスがそのまま有効になる（macOS では `-march` 指定不要。Linux のみ `-march=armv8-a+simd`）。x86_64 に NEON パスは無い — スカラー + 自動ベクトル化で `-march=x86-64-v2`。OpenMP は Apple clang に同梱されないため `brew install libomp` + `-Xpreprocessor -fopenmp -lomp`、失敗時は直列フォールバック（`build.sh` 実装済み）。
@@ -307,7 +319,7 @@ Tauri v2 は**環境変数が設定されているだけ**で署名→公証→�
   - `APPLE_PASSWORD` は Apple ID のログインパスワードではない。**App 用パスワード**を発行して使え。
   - 公証には **Hardened Runtime 必須** — `tauri.macos.conf.json` の `"hardenedRuntime": true` を消すな。
   - 親アプリは`com.apple.security.app-sandbox=true`を必須とし、`com.apple.security.network.client/server`を一切持たせない。PyInstaller製sidecarは`sidecar-entitlements.plist`の`app-sandbox + inherit`だけで別途署名し、CIで実体から再抽出して検証する。親のHardened Runtime例外（`allow-unsigned-executable-memory` / `disable-library-validation`）と子の継承entitlementを混同するな。
-  - env 未設定なら Tauri は ad-hoc 署名でビルドを完走させる（CI の PR ビルドはこれで良い）。「secrets が無いから」とワークフローを分岐で複雑化するな。
+  - ad-hoc署名は明示的なローカル開発artifactに限る。release workflowでApple署名secret、production artifact秘密鍵、署名済みdata packのいずれかが欠けた場合はhard-failし、配布物としてuploadするな。
 - **手動での公証確認コマンド**（失敗調査時に上から順に）:
 
 ```bash

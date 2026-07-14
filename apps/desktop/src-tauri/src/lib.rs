@@ -1,3 +1,5 @@
+#[doc(hidden)]
+pub mod artifact_auth;
 mod commands;
 mod engine;
 #[doc(hidden)]

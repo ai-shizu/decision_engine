@@ -8,6 +8,7 @@ $DesktopRoot = Split-Path -Parent $PSScriptRoot
 $RepoRoot = Resolve-Path (Join-Path $DesktopRoot "..\..")
 $RunEngine = Join-Path $RepoRoot "src\python\run_engine.py"
 $OutDir = Join-Path $DesktopRoot "src-tauri\binaries"
+$RequirementsLock = Join-Path $DesktopRoot "requirements-sidecar.lock"
 
 if (-not $Python) {
     $candidates = @(
@@ -20,10 +21,15 @@ if (-not $Python) {
 }
 if (-not $Python) { $Python = "python" }
 
+$PythonVersion = (& $Python -c "import platform; print(platform.python_version())").Trim()
+if ($PythonVersion -ne "3.12.10") {
+    throw "Release sidecar requires Python 3.12.10 exactly; found $PythonVersion."
+}
+
 Write-Host "Python: $Python"
 Write-Host "Entry : $RunEngine"
 
-& $Python -m pip install pyinstaller -q
+& $Python -m pip install --disable-pip-version-check --only-binary=:all: --require-hashes -r $RequirementsLock -q
 & $Python -m PyInstaller `
     --onefile `
     --name pkb-engine `

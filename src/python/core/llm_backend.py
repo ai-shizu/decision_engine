@@ -10,6 +10,7 @@ import threading
 from pathlib import Path
 from typing import Callable
 
+from .artifact_auth import verify_artifact_path, verify_artifact_path_by_prefix
 from .llm_config import generation_params, llama_stdio_cmd
 from .llm_transport import PromptChannel, secure_prompt_channel
 from .offline_runtime import enforce_offline_environment, offline_subprocess_environment
@@ -213,6 +214,8 @@ class LlamaStdioBackend:
         json_schema: dict | None,
         on_token: Callable[[str], None] | None,
     ) -> str:
+        verify_artifact_path("llama_runtime", self.exe.parent)
+        verify_artifact_path_by_prefix("gguf", self.model)
         prompt = _prompt_bytes(system, user)
         channel = self._prompt_channel_factory(prompt)
         command = llama_stdio_cmd(

@@ -272,3 +272,30 @@ This ledger is a mandatory pre-read before architecture blueprinting, implementa
   * New IPC operations require a Rust closed request schema, fixed Python mapping, frontend `unknown` parser, RED boundary fixtures, and a least-privilege capability review.
 
 ---
+
+## INCIDENT: `INC-ARTIFACT-AUTH-01`
+* **DATE**: 2026-07-14
+* **MODULE**: production artifact supply chain / startup preflight (`FSA-2026-07-13-04`)
+* **SYMPTOM (症状)**:
+  * A same-name sidecar, search executable, llama runtime, GGUF, embedding model, or model config could be accepted by existence and size checks alone.
+  * Python/PyInstaller, Rust toolchains, GitHub Actions, and release evidence used mutable versions or unsigned outputs.
+* **ROOT CAUSE (エージェントの思考エラー)**:
+  * Local filesystem placement was mistaken for authenticity, and an unkeyed content hash was mistaken for a trust root.
+  * The public RFC 8032 test vector was initially proposed as a production key pair even though its private seed is public.
+  * Pre-codesign sidecar bytes and path-bearing build metadata were nearly accepted as release evidence, which would have produced false integrity and reproducibility claims.
+* **ARCHITECTURAL RULING (絶対裁定)**:
+  * Production trust is rooted only in the static Ed25519 public key in `artifact_auth.rs`. Its private key exists only as CI secret `PKB_ARTIFACT_SIGNING_KEY`. The RFC 8032 key pair is restricted to test fixtures; the production signer rejects it before creating output.
+  * `pkb.artifact_allowlist.v1` is canonical JSON with an exact detached signature. Every entry binds normalized relative path, base, file/tree kind, byte size, and SHA-256. Symlinks, junctions, reparse points, special files, unknown keys, duplicate IDs, noncanonical JSON, and alternate paths hard-fail.
+  * The signer and startup verifier both require sidecar, C++ search executable, llama runtime tree, model config, signed deterministic SBOM, and at least one GGUF. Rust verifies the signature and all bytes before spawn; Python rechecks the Rust-attested manifest digest and exact artifact at every native/model load boundary.
+  * Production config absence is not a default-value condition. Deletion after Rust preflight must hard-fail in Python. No unsigned model fallback or user-selected production path is permitted.
+  * Release Python wheels use exact versions and hashes. Python, Node, Rust, Cargo/npm locks, and GitHub Actions are fixed. macOS signs the final embedded post-codesign sidecar bytes. Windows and macOS publish a separate signed offline data pack.
+  * SBOM is generated deterministically from Cargo/npm/Python lockfiles without timestamp, UUID, or absolute runner path. Byte-identical regeneration is a gate, and the SBOM tree itself is covered by the signed artifact manifest.
+* **VERIFICATION**:
+  * RED: Python artifact contracts failed 7/7 before implementation; the config-deletion race and deterministic SBOM were then independently added as RED contracts. Rust contract initially failed to compile because no verifier existed.
+  * GREEN: Python FSA-04 contracts 9/9; Rust signature/tamper/path/wrong-key contracts 5/5; production release all-target compile GREEN. A one-byte model change, unsigned/wrong-key manifest, noncanonical JSON, path substitution, missing attestation, deleted config, and public test signing seed are rejected.
+  * The hash-locked Python wheel set resolves successfully under Python 3.12.10. Windows/macOS workflow YAML and PowerShell release scripts parse successfully. Production signing success is intentionally owned by CI because the production private key is unavailable to local tests.
+* **PREVENTION INSTRUCTION (今後のメタ・プロンプトに組み込むべき防衛命令)**:
+  * Name, size, location, code-signing identity, or an unsigned digest alone is never sufficient artifact identity.
+  * Never add a production public-key override, unsigned compatibility fallback, mutable GitHub Action tag, unhashed pip dependency, pre-codesign sidecar hash, or unsigned SBOM.
+
+---

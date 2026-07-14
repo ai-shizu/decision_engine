@@ -20,6 +20,7 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 DESKTOP_ROOT="$(dirname "$SCRIPT_DIR")"
 REPO_ROOT="$(cd "$DESKTOP_ROOT/../.." && pwd)"
 RUN_ENGINE="$REPO_ROOT/src/python/run_engine.py"
+REQUIREMENTS_LOCK="$DESKTOP_ROOT/requirements-sidecar.lock"
 OUT_DIR="$DESKTOP_ROOT/src-tauri/binaries"
 WORK_DIR="$DESKTOP_ROOT/build-engine"
 VENV_DIR="$WORK_DIR/.venv-sidecar"
@@ -38,6 +39,10 @@ if [ -z "$PYTHON" ]; then
     echo "ERROR: python3 が見つかりません (brew install python@3.12)" >&2
     exit 1
 fi
+if [ "$($PYTHON -c 'import platform; print(platform.python_version())')" != "3.12.10" ]; then
+    echo "ERROR: release sidecar requires Python 3.12.10 exactly" >&2
+    exit 1
+fi
 echo "Python : $($PYTHON --version) ($(command -v "$PYTHON"))"
 echo "Entry  : $RUN_ENGINE"
 
@@ -47,14 +52,9 @@ if [ ! -x "$VENV_DIR/bin/python" ]; then
     "$PYTHON" -m venv "$VENV_DIR"
 fi
 VPY="$VENV_DIR/bin/python"
-"$VPY" -m pip install --quiet --upgrade pip
-# エンジンの必須ランタイム依存は numpy のみ
-# (sentence-transformers は遅延 import + hashed n-gram フォールバックがあるため
-#  サイズ肥大を避けて同梱しない。フル埋め込みが必要なら PKB_SIDECAR_FULL=1)
-"$VPY" -m pip install --quiet numpy pyinstaller
-if [ "${PKB_SIDECAR_FULL:-0}" = "1" ]; then
-    "$VPY" -m pip install --quiet sentence-transformers
-fi
+# Runtime and build tools are accepted only from the hash-locked wheel set.
+"$VPY" -m pip install --quiet --disable-pip-version-check \
+    --only-binary=:all: --require-hashes -r "$REQUIREMENTS_LOCK"
 
 # ---- 3. PyInstaller ---------------------------------------------------------
 "$VPY" -m PyInstaller \

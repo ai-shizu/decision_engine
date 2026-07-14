@@ -29,10 +29,12 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import struct
 import sys
 import time
 from datetime import date, timedelta
+from pathlib import Path
 
 import numpy as np
 
@@ -138,6 +140,26 @@ class HashedNgramEmbedder:
 def build_embedder():
     enforce_offline_environment()
     """本番: SentenceTransformers / 不可時: フォールバックを返す。"""
+    from .artifact_auth import artifact_auth_required, verify_artifact_path
+
+    if artifact_auth_required():
+        model_dir = os.environ.get("PKB_EMBEDDING_MODEL_DIR")
+        if not model_dir:
+            return HashedNgramEmbedder()
+        verified = verify_artifact_path("embedding_model", Path(model_dir))
+        from sentence_transformers import SentenceTransformer
+
+        model = SentenceTransformer(
+            str(verified),
+            local_files_only=True,
+            trust_remote_code=False,
+        )
+        test = model.encode(["dim check"])
+        if test.shape[-1] != DIM:
+            raise RuntimeError(f"次元不一致: {test.shape[-1]} != {DIM}")
+        model.name = str(verified)
+        return model
+
     try:
         from sentence_transformers import SentenceTransformer
 

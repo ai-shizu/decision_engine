@@ -3,7 +3,7 @@
 #   .\build.ps1          -> パイプライン実行 + C++ コンパイル + 検索デモ
 #   .\build.ps1 -SkipPy  -> C++ コンパイルと検索デモのみ
 # ============================================================================
-param([switch]$SkipPy)
+param([switch]$SkipPy, [switch]$SkipDemo)
 
 $ErrorActionPreference = "Stop"
 $root = $PSScriptRoot
@@ -46,4 +46,6 @@ Write-Host "built: $exe"
 
 # ---- 3. 検索デモ ---------------------------------------------------------------
 Write-Host "== [3/3] search demo ==" -ForegroundColor Cyan
-& $exe "$root\data\processed\vectors.bin" "$root\data\processed\query.bin" 5
+if (-not $SkipDemo) {
+    & $exe "$root\data\processed\vectors.bin" "$root\data\processed\query.bin" 5
+}
