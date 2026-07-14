@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { consult, type RomanceAnalysisResult } from "../lib/engine";
+import { parseEngineEvent } from "../lib/parseEngineResponse";
 import type { ChatMessage, EngineEvent } from "../lib/types";
 import { uiErrorMessage } from "../lib/uiErrorMessages";
 import { useCorrelationId } from "../lib/useCorrelationId";
@@ -71,7 +72,13 @@ export function ConsultTab() {
     let disposed = false;
     let unlistenFn: UnlistenFn | null = null;
 
-    const handler = ({ payload }: { payload: EngineEvent }) => {
+    const handler = ({ payload: raw }: { payload: unknown }) => {
+      let payload: EngineEvent;
+      try {
+        payload = parseEngineEvent(raw);
+      } catch {
+        return;
+      }
       // W-34/W-45〜W-49: 自分の in-flight cid のイベントだけを処理する。
       if (!cid.accepts(payload)) return;
       if (payload.event === "status" && payload.message) {
@@ -84,7 +91,7 @@ export function ConsultTab() {
       }
     };
 
-    void listen<EngineEvent>("pkb-engine-event", handler).then((fn) => {
+    void listen<unknown>("pkb-engine-event", handler).then((fn) => {
       if (disposed) {
         fn();
         return;

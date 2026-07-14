@@ -28,15 +28,17 @@ def test_orphan_engine_wrappers() -> None:
 
     assert "export async function narrativeCompile" in engine
     assert "export async function knowledgeFetchPending" in engine
-    assert '"narrative.compile"' in engine
-    assert '"knowledge.fetch_pending"' in engine
+    assert '"narrative_compile"' in engine
+    assert '"knowledge_fetch_pending"' in engine
+    assert '"narrative.compile"' not in engine
+    assert '"knowledge.fetch_pending"' not in engine
 
     for cmd in (
-        '"profile.source_code"',
-        '"oracle.payload"',
-        '"oracle.report"',
-        '"twin.forecast"',
-        '"tensor.rebuild"',
+        '"profile_source_code"',
+        '"oracle_payload"',
+        '"oracle_report"',
+        '"twin_forecast"',
+        '"tensor_rebuild"',
     ):
         assert cmd in engine, f"missing command string: {cmd}"
 

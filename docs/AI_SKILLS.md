@@ -1265,7 +1265,7 @@ persist/load 両方から呼ぶ一元化 (W-42)。欠測軸は「(前回デー�
   は無改造で温存。
 - `ImportTab.tsx`: `importingRef` を完全撤廃。`handleLine`/`handleIcs`/
   `handleApple`/`handleConfirmOther` の各ハンドラが `cid.begin()`/
-  `cid.end()` を持つ。`handleConfirmOther` はループ内の複数 `pkbInvoke` を
+  `cid.end()` を持つ。`handleConfirmOther` はループ内の複数IPC呼出しを
   **1つの `myCid`** で束ねた (「取込確定」1クリック = 1論理リクエストという
   設計判断。SPEC に明記はないが §9.3 の「1コンポーネント=1論理リクエスト」
   の精神と整合)。`mountedRef` は W-46 と役割が重なるが、unmount後も
@@ -1475,7 +1475,8 @@ processed}`) に厳密に一致させ、`data/raw` は意図通り対象外と�
 **実変更点 (フロントエンド)**:
 - `lib/types.ts`: `EsView` interface 新設。
 - `lib/engine.ts`: `esView(): Promise<EsView>` 新設
-  (`pkbInvoke("es.view")`。状態取得の純クエリのため cid 引数なし)。
+  (実装当時は汎用IPC経由。FSA-2026-07-13-03で明示command + runtime parserへ移行済み。
+  状態取得の純クエリのため cid 引数なし)。
 - `components/ImportTab.tsx`:
   - `esActive` state 新設。初期ロード (`refreshStats` と並行) で
     `refreshEsActive()` を呼ぶ。`mountedRef` ガード踏襲。
@@ -2269,8 +2270,10 @@ known-answer 校正 — fixture-blindness 規律)。**着手順序は PHANTOM �
 ### 16.4 Runtime Boundary Validation for IPC (STEP 5 As-Built)
 
 - Tauri IPC 経由の外部 JSON に対する **TypeScript の型アサーション (`as` キャスト /
-  `pkbInvoke<T>()` の generic) を runtime 検証の代用にするな**。実行時境界に厳格な型ガード
-  パーサーを配置し、`pkbInvoke<unknown>(...)` → `parse...(raw)` の順で通せ。
+  `invoke<T>()` の generic) を runtime 検証の代用にするな**。renderer から呼べるのは
+  `engine.ts` が所有する有限個の明示 command だけとし、`invoke<unknown>(explicitCommand, ...)`
+  → command 固有の `parse...(raw)` の順で通せ。任意の backend command 名を受ける
+  `pkbInvoke` wrapper、generic cast、parser を通らない返却は禁止する。
 - パーサーは backend validator の**鏡像**とせよ: exact key 集合、Enum allowlist、
   `Number.isSafeInteger` + 非負、strict 文字列、hex 形式、固定 schema / lane 順 / budget、
   会計 (要素和・レーン別再計算)。extra key / `undefined` / NaN / Infinity / bool / float を
@@ -2302,6 +2305,26 @@ known-answer 校正 — fixture-blindness 規律)。**着手順序は PHANTOM �
   メッセージ内容から推測するな（操作開始/status event/成功 → info、catch 固定文言 → error）。
 - error state へ payload / path / query / filename を運ぶな。backend raw error を消すために
   IPC schema や `engine_stdio` を勝手に変えるな（Finding 12 との責務分離）。
+
+### 16.4.2 WebView / Tauri IPC Isolation (INC-WEBVIEW-IPC-01 / FSA-2026-07-13-03)
+
+- production CSP は `default-src 'self'` を基礎とし、外部 `connect-src`、remote image、
+  media、object、frame、child、worker、form、base URL を許可しない。development の例外は
+  `localhost:1420` の HTTP/WebSocket に限定し、production CSP へ混ぜるな。
+- main WebView は Rust が構築し、exact origin allowlist を `on_navigation` で検証する。
+  credential、非既定port、prefix/suffix一致を拒否し、new-window と download は常に deny する。
+- capability は必要な event/window 操作だけを列挙する。`core:default`、window/webview 作成権限、
+  remote capability を付与するな。設定ファイルだけに依存せず、Rust runtime policy と契約テストを
+  二重化する。
+- Rust command は機能単位の明示関数とし、request は `#[serde(deny_unknown_fields)]` の閉じた型、
+  literal enum、有限値、長さ・件数・one-of・相互依存を command dispatch 前に検証する。
+  renderer から `cmd: String` や任意 `serde_json::Value` を受け取る汎用commandは禁止する。
+- frontend の応答と event は必ず `unknown` で受け、exact-key runtime parser を通してから state へ
+  入れる。command応答のparse失敗は呼出側の固定UIエラーへ遷移する。非同期eventのparse失敗は
+  stateを一切変更せず破棄する。どちらも違反値を例外文言へ含めない。
+- 本節は renderer/command/schema のblast radiusを所有する。Rust stdio transport の最大byte、
+  deadline、JSON depth、response `id`/`cid`照合は FSA-2026-07-13-12 の責務であり、未解決のまま
+  本節のGREENへ混同してはならない。
 
 ### 16.5 Persistence Failure Containment (INC-PHASE4A-05)
 

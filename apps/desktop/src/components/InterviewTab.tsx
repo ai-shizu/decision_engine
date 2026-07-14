@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { consult, narrativeCompile, type NarrativeCompileResult } from "../lib/engine";
+import { parseEngineEvent } from "../lib/parseEngineResponse";
 import type {
   EngineEvent,
   GdPersona,
@@ -256,7 +257,13 @@ export function InterviewTab() {
   }
 
   useEffect(() => {
-    const unlisten = listen<EngineEvent>("pkb-engine-event", ({ payload }) => {
+    const unlisten = listen<unknown>("pkb-engine-event", ({ payload: raw }) => {
+      let payload: EngineEvent;
+      try {
+        payload = parseEngineEvent(raw);
+      } catch {
+        return;
+      }
       if (!cid.accepts(payload)) return;
       if (payload.event === "status" && payload.message) {
         setStatusKind("info");

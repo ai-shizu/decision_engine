@@ -30,10 +30,12 @@ def test_probe_engine_wrappers() -> None:
     for fn in ("sourceCode", "probeStatus", "probeNext", "probeAnswer"):
         assert f"export async function {fn}" in engine
 
-    assert '"profile.source_code"' in engine
-    assert '"probe.status"' in engine
-    assert '"probe.next"' in engine
-    assert '"probe.answer"' in engine
+    assert '"profile_source_code"' in engine
+    assert '"probe_status"' in engine
+    assert '"probe_next"' in engine
+    assert '"probe_answer"' in engine
+    assert '"profile.source_code"' not in engine
+    assert '"probe.status"' not in engine
 
     assert "session_id: sessionId" in engine
     assert "question_id: questionId" in engine

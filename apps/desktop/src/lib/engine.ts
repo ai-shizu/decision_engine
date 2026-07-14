@@ -1,115 +1,177 @@
 import { invoke } from "@tauri-apps/api/core";
-import { readTextLenient } from "./textDecode";
 import type { ContextManifestResponseV1 } from "./manifest";
-import { parseContextManifestResponseV1 } from "./parseManifest";
 import { parseConsultResponse, type ConsultResponse } from "./parseConsultResponse";
+import {
+  parseBoolean,
+  parseCalendarEventDatesResult,
+  parseCalendarSyncResult,
+  parseClassifyResult,
+  parseDocumentImportResult,
+  parseEngineHealth,
+  parseEsView,
+  parseImportStats,
+  parseKnowledgeFetchSummary,
+  parseLineImportResult,
+  parseNarrativeCompileResult,
+  parseOraclePayload,
+  parseOracleReport,
+  parseProbeAnswerResult,
+  parseProbeQuestion,
+  parseProbeStatus,
+  parseProfilerResult,
+  parseRecordData,
+  parseRecordSaveResult,
+  parseSavedResult,
+  parseSettingsData,
+  parseSourceCodeView,
+  parseTensorRebuildResult,
+  parseTwinForecast,
+  type CalendarSyncResult,
+  type DocumentImportResult,
+  type KnowledgeFetchSummary,
+  type LineImportResult,
+  type NarrativeCompileResult,
+  type OraclePayload,
+  type OracleReportResult,
+  type ProfilerResult,
+  type TwinForecast,
+} from "./parseEngineResponse";
+import { parseContextManifestResponseV1 } from "./parseManifest";
+import { readTextLenient } from "./textDecode";
 import type {
   ClassifyResult,
   EsView,
   InterviewConfig,
+  ProbeAnswerResult,
+  ProbeQuestionView,
+  ProbeStatus,
   RecordData,
   SettingsData,
   SourceCodeView,
   SourceStat,
-  ProbeAnswerResult,
-  ProbeQuestionView,
-  ProbeStatus,
 } from "./types";
 
-/**
- * SPEC_FOXTROT_UI.md §9 (Rev.10): cid はリクエストエンベロープの独立引数
- * として渡す (params には混ぜない = F-13 準拠)。省略時は Rust 側で
- * null (cid 不要なコマンド、例: health) として扱われる。
- */
-export async function pkbInvoke<T = unknown>(
-  cmd: string,
-  params?: Record<string, unknown>,
+
+type EngineIpcCommand =
+  | "engine_health"
+  | "record_load"
+  | "record_save"
+  | "calendar_event_dates"
+  | "import_stats"
+  | "es_view"
+  | "consult"
+  | "calendar_sync_ics"
+  | "calendar_sync_apple"
+  | "import_line_single"
+  | "import_line_batch"
+  | "import_classify"
+  | "import_document"
+  | "settings_get"
+  | "settings_save_fixed"
+  | "settings_run_profiler"
+  | "oracle_payload"
+  | "oracle_report"
+  | "twin_forecast"
+  | "tensor_rebuild"
+  | "profile_source_code"
+  | "narrative_compile"
+  | "knowledge_fetch_pending"
+  | "probe_status"
+  | "probe_next"
+  | "probe_answer"
+  | "context_manifest_latest";
+
+
+async function invokeEngine(
+  command: EngineIpcCommand,
+  request?: Record<string, unknown>,
   cid?: number,
-): Promise<T> {
-  return invoke<T>("pkb_invoke", { cmd, params: params ?? null, cid: cid ?? null });
+): Promise<unknown> {
+  if (request === undefined) return invoke<unknown>(command);
+  return invoke<unknown>(command, { request, cid: cid ?? null });
 }
+
 
 export async function engineReady(): Promise<boolean> {
-  return invoke<boolean>("pkb_engine_ready");
+  return parseBoolean(await invoke<unknown>("engine_ready"));
 }
 
-export async function engineHealth(): Promise<{ status: string; offline: boolean }> {
-  return pkbInvoke("health");
+
+export async function engineHealth(): Promise<{ status: "ok"; offline: true }> {
+  return parseEngineHealth(await invokeEngine("engine_health"));
 }
+
 
 export async function loadRecord(date: string): Promise<RecordData> {
-  return pkbInvoke("record.load", { date });
+  return parseRecordData(await invokeEngine("record_load", { date }));
 }
+
 
 export async function saveRecord(
   date: string,
   events: RecordData["events"],
   transactions: RecordData["transactions"],
   diary: string,
-): Promise<{ saved: boolean; index_rebuilt?: boolean }> {
-  return pkbInvoke("record.save", { date, events, transactions, diary });
+): Promise<{ saved: true; index_rebuilt: boolean }> {
+  const result = parseRecordSaveResult(
+    await invokeEngine("record_save", { date, events, transactions, diary }),
+  );
+  return { saved: result.saved, index_rebuilt: result.index_rebuilt };
 }
+
 
 export async function calendarEventDates(): Promise<string[]> {
-  const res = await pkbInvoke<{ dates: string[] }>("calendar.event_dates");
-  return res.dates;
+  return parseCalendarEventDatesResult(await invokeEngine("calendar_event_dates")).dates;
 }
 
-/** F2 (SPEC_FOXTROT_UI.md §2.2.1 裁定4): IMPORT SourceTable 用の軽量 stat */
+
 export async function importStats(): Promise<Record<string, SourceStat>> {
-  return pkbInvoke("import.stats");
+  return parseImportStats(await invokeEngine("import_stats"));
 }
 
-/** F-16 (SPEC_FOXTROT_UI.md §10.2): 保持ES (active_es.md) の View。
- * 状態取得の純クエリのため cid は不要。 */
+
 export async function esView(): Promise<EsView> {
-  return pkbInvoke("es.view");
+  return parseEsView(await invokeEngine("es_view"));
 }
+
 
 export interface ConsultOptions {
   mode?: "consult" | "interview_sim" | "es_review" | "gd_sim" | "romance_analysis";
   personas?: { name: string; trait: string }[];
-  /** AI 表示 → ユーザー送信までの経過秒 (面接/GD の思考速度評価用) */
   response_time_sec?: number;
-  /** F4a: interview_sim のセッション設定 (開始ターンのみ送信すれば十分) */
   config?: InterviewConfig;
 }
 
-// Re-exported for existing import sites (ConsultTab.tsx, RomanceAnalysisPanel.tsx
-// import RomanceAnalysisResult from "../lib/engine") — canonical declaration now
-// lives in parseConsultResponse.ts alongside its runtime validator.
+
 export type { RomanceAnalysisResult } from "./parseConsultResponse";
 
-/**
- * Audit finding remediation (interview_report.v1 tensor_profile): the raw
- * IPC result is routed through pkbInvoke<unknown> and validated by
- * parseConsultResponse() before reaching React. A generic-cast
- * `pkbInvoke<T>("consult", ...)` must not be reintroduced here — that is
- * exactly the pattern that silently dropped tensor_profile in the first
- * place (docs/AUDIT_FINDINGS_2026-07-11.md).
- */
+
 export async function consult(
   query: string,
   opts: ConsultOptions = {},
   cid?: number,
 ): Promise<ConsultResponse> {
-  const raw = await pkbInvoke<unknown>("consult", { query, ...opts }, cid);
+  const raw = await invokeEngine("consult", { query, ...opts }, cid);
   return parseConsultResponse(raw);
 }
+
 
 export async function syncIcsContent(
   content: string,
   mode: "append" | "overwrite",
   cid?: number,
-): Promise<Record<string, unknown>> {
-  return pkbInvoke("calendar.sync", { source: "ics", mode, ics_content: content }, cid);
+): Promise<CalendarSyncResult> {
+  return parseCalendarSyncResult(
+    await invokeEngine("calendar_sync_ics", { mode, ics_content: content }, cid),
+  );
 }
+
 
 export async function syncIcsFiles(
   files: File[],
   mode: "append" | "overwrite",
   cid?: number,
-): Promise<{ message?: string }> {
+): Promise<CalendarSyncResult | { message: string }> {
   if (files.length === 0) return { message: "ファイルが選択されていません" };
   if (files.length === 1) {
     const content = await readTextLenient(files[0]);
@@ -118,138 +180,106 @@ export async function syncIcsFiles(
   const ics_files = await Promise.all(
     files.map(async (file) => ({ content: await readTextLenient(file), filename: file.name })),
   );
-  return pkbInvoke("calendar.sync", { source: "ics", mode, ics_files }, cid);
+  return parseCalendarSyncResult(
+    await invokeEngine("calendar_sync_ics", { mode, ics_files }, cid),
+  );
 }
+
 
 export async function syncAppleCalendar(
   mode: "append" | "overwrite",
   cid?: number,
-): Promise<Record<string, unknown>> {
-  return pkbInvoke("calendar.sync", { source: "apple", mode }, cid);
+): Promise<CalendarSyncResult> {
+  return parseCalendarSyncResult(
+    await invokeEngine("calendar_sync_apple", { mode }, cid),
+  );
 }
 
-export async function importLineFile(
-  file: File,
+
+export async function importLineContent(
+  content: string,
+  filename: string,
   cid?: number,
-): Promise<{ message?: string; ok?: boolean }> {
-  const content = await readTextLenient(file);
-  return pkbInvoke("import.line", { content, filename: file.name }, cid);
+): Promise<LineImportResult> {
+  return parseLineImportResult(
+    await invokeEngine("import_line_single", { content, filename }, cid),
+  );
 }
+
+
+export async function importLineFile(file: File, cid?: number): Promise<LineImportResult> {
+  return importLineContent(await readTextLenient(file), file.name, cid);
+}
+
 
 export async function importLineFiles(
   files: File[],
   cid?: number,
-): Promise<{ message?: string; ok?: boolean }> {
+): Promise<LineImportResult | { message: string }> {
   if (files.length === 0) return { message: "ファイルが選択されていません" };
   if (files.length === 1) return importLineFile(files[0], cid);
   const batch = await Promise.all(
     files.map(async (file) => ({ content: await readTextLenient(file), filename: file.name })),
   );
-  return pkbInvoke("import.line", { files: batch }, cid);
+  return parseLineImportResult(await invokeEngine("import_line_batch", { files: batch }, cid));
 }
 
-/** F2-EXT (SPEC_FOXTROT_UI.md §2.2.2): 読み取り専用の分類。書き込みなし。 */
+
 export async function classifyDocument(file: File): Promise<ClassifyResult> {
   const content = await readTextLenient(file);
-  const result = await pkbInvoke<ClassifyResult>("import.classify", {
-    content,
-    filename: file.name,
-  });
+  const result = parseClassifyResult(
+    await invokeEngine("import_classify", { content, filename: file.name }),
+  );
   return { ...result, content };
 }
 
-/** F2-EXT: dest はユーザーが確定した "es" | "knowledge" のみ。 */
+
 export async function importDocument(
   content: string,
   filename: string,
   dest: "es" | "knowledge",
   cid?: number,
-): Promise<{
-  imported: boolean;
-  skipped: boolean;
-  dest: string;
-  path?: string;
-  message?: string;
-  index_rebuilt?: boolean;
-}> {
-  return pkbInvoke("import.document", { content, filename, dest }, cid);
+): Promise<DocumentImportResult> {
+  return parseDocumentImportResult(
+    await invokeEngine("import_document", { content, filename, dest }, cid),
+  );
 }
+
 
 export async function loadSettings(): Promise<SettingsData> {
-  return pkbInvoke("settings.get");
+  return parseSettingsData(await invokeEngine("settings_get"));
 }
 
-export async function saveFixedAttributes(
-  attributes: Record<string, string>,
-): Promise<void> {
-  await pkbInvoke("settings.save_fixed", { attributes });
+
+export async function saveFixedAttributes(attributes: Record<string, string>): Promise<void> {
+  parseSavedResult(await invokeEngine("settings_save_fixed", { attributes }));
 }
 
-export async function runProfiler(): Promise<{ ok: boolean; message: string }> {
-  return pkbInvoke("settings.run_profiler");
+
+export async function runProfiler(): Promise<ProfilerResult> {
+  return parseProfilerResult(await invokeEngine("settings_run_profiler"));
 }
 
-// ---------------------------------------------------------------- Target Echo (E4)
-// oracle.payload は無菌 JSON のみ (LLM 呼び出しなし)。oracle.report は言語化込み
-// (7B の生成を待つ)。UI の数値表示は必ず oraclePayload() を使うこと — 7B の
-// 生成待ちで PROFILE ペインの表示が遅延するのは不合格 (SPEC_ECHO §5.10.5)。
-export interface OraclePayload {
-  schema: string;
-  generated: string;
-  scope: { kind: "global" | "dyad"; alias: string | null };
-  sufficiency: {
-    days_observed: number;
-    coverage: number;
-    dead_lanes: string[];
-    twin_bss: number;
-    n_lapse_test: number;
-    gate_passed: boolean;
-  };
-  state: {
-    r_now: number | null;
-    r_trend_7d: number | null;
-    oii_ema: number | null;
-    oii_streak_days: number;
-  };
-  couplings: {
-    src: string;
-    dst: string;
-    lag_days: number;
-    rho: number;
-    n_eff: number;
-    null_q99: number;
-    sig: boolean;
-  }[];
-  forecast: {
-    horizon_days: number;
-    r_q10: number[];
-    r_q50: number[];
-    r_q90: number[];
-    p_lapse: number[];
-    critical_days: string[];
-  };
-  findings: { rule_id: string; severity: number; metrics: Record<string, number> }[];
-  interventions: {
-    bank_id: string;
-    trigger_rule: string;
-    target_lane: number;
-    params: Record<string, number>;
-  }[];
-}
 
 export async function oraclePayload(
   scope: "global" | "dyad" = "global",
   alias?: string,
 ): Promise<OraclePayload> {
-  return pkbInvoke("oracle.payload", { scope, alias: alias ?? null });
+  return parseOraclePayload(
+    await invokeEngine("oracle_payload", { scope, alias: alias ?? null }),
+  );
 }
+
 
 export async function oracleReport(
   scope: "global" | "dyad" = "global",
   alias?: string,
-): Promise<{ payload: OraclePayload; analysis: string }> {
-  return pkbInvoke("oracle.report", { scope, alias: alias ?? null });
+): Promise<OracleReportResult> {
+  return parseOracleReport(
+    await invokeEngine("oracle_report", { scope, alias: alias ?? null }),
+  );
 }
+
 
 export interface TwinScenario {
   horizon_days: number;
@@ -258,70 +288,49 @@ export interface TwinScenario {
   interview_turns?: number | null;
 }
 
-export interface TwinForecast {
-  gate_passed: boolean;
-  reason?: string;
-  horizon_days?: number;
-  r_q10?: number[];
-  r_q50?: number[];
-  r_q90?: number[];
-  p_lapse?: (number | null)[];
-  critical_days?: string[];
-}
 
 export async function twinForecast(
   scenario: TwinScenario,
   scope: "global" | "dyad" = "global",
   alias?: string,
 ): Promise<TwinForecast> {
-  return pkbInvoke("twin.forecast", { scenario, scope, alias: alias ?? null });
+  return parseTwinForecast(
+    await invokeEngine("twin_forecast", { scenario, scope, alias: alias ?? null }),
+  );
 }
+
 
 export async function tensorRebuild(): Promise<{ rebuilt: boolean; rows: number }> {
-  return pkbInvoke("tensor.rebuild");
+  return parseTensorRebuildResult(await invokeEngine("tensor_rebuild"));
 }
+
 
 export async function sourceCode(): Promise<SourceCodeView> {
-  return pkbInvoke("profile.source_code");
+  return parseSourceCodeView(await invokeEngine("profile_source_code"));
 }
 
-export interface NarrativeCompileResult {
-  ok: boolean;
-  es_text?: string;
-  recruiters_eye?: string;
-  claims?: unknown[];
-  compiled_from?: string;
-  target_domain?: string;
-  draft_path?: string;
-  reason?: string;
+
+export async function narrativeCompile(targetDomain?: string): Promise<NarrativeCompileResult> {
+  return parseNarrativeCompileResult(
+    await invokeEngine("narrative_compile", { target_domain: targetDomain ?? null }),
+  );
 }
 
-export async function narrativeCompile(
-  targetDomain?: string,
-): Promise<NarrativeCompileResult> {
-  return pkbInvoke("narrative.compile", { target_domain: targetDomain ?? null });
-}
-
-export interface KnowledgeFetchSummary {
-  processed: number;
-  pending: number;
-  online_allowed: boolean;
-  index_rebuilt?: boolean;
-  message?: string;
-  [key: string]: unknown;
-}
 
 export async function knowledgeFetchPending(): Promise<KnowledgeFetchSummary> {
-  return pkbInvoke("knowledge.fetch_pending");
+  return parseKnowledgeFetchSummary(await invokeEngine("knowledge_fetch_pending"));
 }
+
 
 export async function probeStatus(today: string): Promise<ProbeStatus> {
-  return pkbInvoke("probe.status", { today });
+  return parseProbeStatus(await invokeEngine("probe_status", { today }));
 }
 
+
 export async function probeNext(today: string): Promise<ProbeQuestionView> {
-  return pkbInvoke("probe.next", { today });
+  return parseProbeQuestion(await invokeEngine("probe_next", { today }));
 }
+
 
 export async function probeAnswer(
   sessionId: string,
@@ -329,15 +338,30 @@ export async function probeAnswer(
   answer: string,
   today: string,
 ): Promise<ProbeAnswerResult> {
-  return pkbInvoke("probe.answer", {
-    session_id: sessionId,
-    question_id: questionId,
-    answer,
-    today,
-  });
+  return parseProbeAnswerResult(
+    await invokeEngine("probe_answer", {
+      session_id: sessionId,
+      question_id: questionId,
+      answer,
+      today,
+    }),
+  );
 }
 
+
 export async function latestContextManifest(): Promise<ContextManifestResponseV1> {
-  const raw = await pkbInvoke<unknown>("context.manifest.latest");
-  return parseContextManifestResponseV1(raw);
+  return parseContextManifestResponseV1(await invokeEngine("context_manifest_latest"));
 }
+
+
+export type {
+  CalendarSyncResult,
+  DocumentImportResult,
+  KnowledgeFetchSummary,
+  LineImportResult,
+  NarrativeCompileResult,
+  OraclePayload,
+  OracleReportResult,
+  ProfilerResult,
+  TwinForecast,
+};

@@ -4,16 +4,17 @@ import {
   classifyDocument,
   esView,
   importDocument,
+  importLineContent,
   importLineFiles,
   importStats,
   knowledgeFetchPending,
   loadSettings,
-  pkbInvoke,
   syncAppleCalendar,
   syncIcsContent,
   syncIcsFiles,
   type KnowledgeFetchSummary,
 } from "../lib/engine";
+import { parseEngineEvent } from "../lib/parseEngineResponse";
 import type { ClassifyResult, EngineEvent, EsView, SourceStat } from "../lib/types";
 import { uiErrorMessage } from "../lib/uiErrorMessages";
 import { useCorrelationId } from "../lib/useCorrelationId";
@@ -127,7 +128,13 @@ export function ImportTab() {
   // W-22: 解除関数を確実に return する。W-28/W-45〜W-49: 自分の in-flight
   // cid のイベントのみ処理する。
   useEffect(() => {
-    const unlisten = listen<EngineEvent>("pkb-engine-event", ({ payload }) => {
+    const unlisten = listen<unknown>("pkb-engine-event", ({ payload: raw }) => {
+      let payload: EngineEvent;
+      try {
+        payload = parseEngineEvent(raw);
+      } catch {
+        return;
+      }
       if (!cid.accepts(payload)) return;
       if (payload.event === "status" && payload.message) {
         pushImportLog(payload.message);
@@ -151,7 +158,7 @@ export function ImportTab() {
     try {
       const res = await importLineFiles(list, myCid);
       const msg = res.message ?? `${list.length} 件の LINE 履歴を取り込みました`;
-      pushImportLog(res.ok === false ? `取り込み失敗: ${msg}` : msg);
+      pushImportLog("ok" in res && res.ok === false ? `取り込み失敗: ${msg}` : msg);
     } catch {
       pushImportLog(uiErrorMessage("LINE_IMPORT"));
     } finally {
@@ -233,7 +240,7 @@ export function ImportTab() {
     if (!items.length) return;
     setBusy(true);
     // バッチ全体を1論理リクエストとして扱う (§9.3: 1コンポーネント=1論理
-    // リクエスト)。ループ内の各 pkbInvoke は同一 myCid を運ぶ。
+    // リクエスト)。ループ内の各明示commandは同一 myCid を運ぶ。
     const myCid = cid.begin();
     try {
       for (const item of items) {
@@ -245,11 +252,7 @@ export function ImportTab() {
             continue;
           }
           if (result.type === "line") {
-            const res = await pkbInvoke<{ message?: string; ok?: boolean }>(
-              "import.line",
-              { content, filename: file.name },
-              myCid,
-            );
+            const res = await importLineContent(content, file.name, myCid);
             pushImportLog(res.message ?? `${file.name} を LINE として取り込みました`);
             continue;
           }

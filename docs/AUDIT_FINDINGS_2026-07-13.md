@@ -63,7 +63,7 @@
 
 - **ID**: `FSA-2026-07-13-03`
 - **重要度**: `CRITICAL`
-- **状態**: `UNRESOLVED`
+- **状態**: `RESOLVED`
 - **症状（攻撃ベクトル）**: XSS、依存汚染、WebView navigationの逸脱が一度成立すると、rendererは汎用`pkb_invoke`経由でbackendデータを読み出し、画像、beacon、fetch、formなどを用いて外部へ送出できる。現時点で直接HTML sinkが見つからないことは、将来の侵害時のblast radiusを制限しない。
 - **根本原因**: `tauri.conf.json`のCSPが`null`である。Rust IPCは`cmd: String`を受ける単一汎用commandで、frontendの`pkbInvoke<T>`はruntime validationなしに結果を型castする。renderer権限とbackend commandが機能単位に分離されておらず、外部navigation/new-window/remote resourceのdenyも不変条件化されていない。
 - **実コード証拠**:
@@ -72,6 +72,9 @@
   - `apps/desktop/src/lib/engine.ts:24-30`
   - `apps/desktop/src-tauri/capabilities/default.json`
 - **必須是正措置**: `default-src 'self'`を基礎とし、外部`connect-src`、`img-src`、`media-src`、`frame-src`、`form-action`、`object-src`をdenyする厳格CSPを導入する。navigationとnew-windowをallowlist化する。Rust側を型付きの明示commandへ分割し、各commandの入力、出力、権限scopeをstrict schemaで検証する。frontendが侵害されても外部送出と全backend読出しを同時取得できない権限分離をOS境界まで含めて構築する。
+- **解決日**: 2026-07-14
+- **解決記録**: production/dev CSPを分離し、productionはself/ipc以外の外部resource・navigation・new-window・downloadをdenyした。main WebViewはRustで手動構築し、exact origin allowlistを適用した。`core:default`とwindow/webview作成権限を除去し、renderer向け汎用`pkb_invoke(cmd, Value)`を28個の明示Tauri commandへ置換した。各requestは`deny_unknown_fields`付き閉型とsemantic validatorを通る。frontendは全command応答とengine eventを`unknown`で受け、command固有のstrict runtime parserを通した後だけstateへ入れる。
+- **検証証拠**: 静的契約は実装前10 RED / 2 GREENから12/12 GREEN、Rust IPC契約4/4、TypeScript runtime boundary契約は11件GREEN後にnested evidence/claimの未検証を追加REDで検出・是正し12/12 GREEN、既存boundaryを含む120/120 GREEN。FSA-2026-07-13-12が所有するRust stdioの最大byte・deadline・response id/cid照合は本Findingの解決範囲に含めず、未解決状態を維持する。
 
 ---
 

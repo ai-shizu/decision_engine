@@ -242,6 +242,33 @@ This ledger is a mandatory pre-read before architecture blueprinting, implementa
   * macOS build signs the sidecar with `sidecar-entitlements.plist` (`app-sandbox + inherit`) and CI re-extracts app/helper entitlements, rejecting either network entitlement. Sandboxed production disables raw Calendar SQLite import and retains local ICS import.
 * **PREVENTION INSTRUCTION (今後のメタ・プロンプトに組み込むべき防衛命令)**:
   * `socket`, `urllib`, HTTP endpoints, host/port settings, listener reuse, `--rpc`, remote model options, or prompt temp files in Python production are release blockers.
-  * Changes to prompt transport require RED contracts for argv secrecy, pipe ownership, remote-client rejection, AF_INET/AF_INET6 denial, child lifecycle, and an actual local-runtime smoke probe.
+* Changes to prompt transport require RED contracts for argv secrecy, pipe ownership, remote-client rejection, AF_INET/AF_INET6 denial, child lifecycle, and an actual local-runtime smoke probe.
+
+---
+
+## INCIDENT: `INC-WEBVIEW-IPC-01`
+* **DATE**: 2026-07-14
+* **MODULE**: Tauri WebView / renderer IPC boundary (`FSA-2026-07-13-03`)
+* **SYMPTOM (症状)**:
+  * CSP was null, navigation/new-window/download were not an explicit deny boundary, and the default capability granted broader core access than the renderer required.
+  * One generic `pkb_invoke(cmd: String, params: Value)` exposed the complete Python command namespace to any compromised renderer.
+  * `pkbInvoke<T>` treated a compile-time cast as runtime validation, so malformed or substituted backend payloads could enter React state.
+* **ROOT CAUSE (エージェントの思考エラー)**:
+  * Bundled local assets were mistaken for a trusted renderer. XSS and dependency compromise were excluded from the capability model instead of having their blast radius bounded.
+  * Backend command routing and frontend convenience wrappers were allowed to erase command-specific schemas.
+* **ARCHITECTURAL RULING (絶対裁定)**:
+  * Production CSP permits only packaged self resources plus Tauri IPC transport; remote image/media/object/frame/worker/form/base destinations are denied. Dev-server HTTP/WebSocket exceptions exist only in `devCsp`.
+  * Rust creates the main WebView and accepts only exact packaged origins (plus exact localhost dev origin in debug builds). Credentials, nondefault ports, external navigation, new windows, and downloads are rejected.
+  * Renderer capabilities are allowlisted to the minimum event/window operations. `core:default` and window/webview creation are denied.
+  * Renderer IPC consists only of explicit Tauri commands. Requests use closed `deny_unknown_fields` structures and semantic validation before mapping to fixed Python commands; arbitrary renderer-provided command names and params are prohibited.
+  * Frontend responses and engine events enter as `unknown` and must pass exact-key runtime parsers before state mutation. Invalid command responses reach fixed UI error handling; invalid asynchronous events are discarded without state mutation. Parser errors never include the violating value.
+  * Rust stdio framing limits, deadline, depth, and response `id`/`cid` binding remain separately owned by `FSA-2026-07-13-12`; this incident must not claim those guarantees.
+* **VERIFICATION**:
+  * RED: WebView/IPC static contracts failed 10/12; Rust explicit-command contract did not compile; TypeScript boundary compilation failed because no response parser owner existed.
+  * GREEN: static contracts 12/12, Rust IPC contracts 4/4, TypeScript IPC response contracts 12/12 (including nested evidence/claim rejection), and all boundary suites 120/120.
+  * TypeScript typecheck, production Vite build, Rust tests/build/check, full Python suite, and diff hygiene are mandatory before closure.
+* **PREVENTION INSTRUCTION (今後のメタ・プロンプトに組み込むべき防衛命令)**:
+  * Any reintroduction of `csp: null`, `core:default`, renderer-created WebViews, generic command strings, frontend generic result casts, or unparsed event payloads is a release blocker.
+  * New IPC operations require a Rust closed request schema, fixed Python mapping, frontend `unknown` parser, RED boundary fixtures, and a least-privilege capability review.
 
 ---

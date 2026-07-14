@@ -130,7 +130,12 @@ export interface SourceCodeView {
   axes: Record<string, {
     score: number | null;
     confidence: number;
-    evidence: unknown[];
+    evidence: {
+      kind: string;
+      date: string;
+      quote: string;
+      value: number | null;
+    }[];
     updated: string;
   }>;
   progress?: number;
