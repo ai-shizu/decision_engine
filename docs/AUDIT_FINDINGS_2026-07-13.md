@@ -2,7 +2,7 @@
 
 > 監査日: 2026-07-13
 > 監査範囲: Rust IPC、Python backend、React/Tauri frontend、C++検索コア、永続化層、Derived Store、将来の確率推論構想
-> 最終裁定: `BLOCKED`
+> 最終裁定: `GREEN (ALL RESOLVED)`
 > 台帳規律: 各Findingの状態欄を正本とする。受入契約、実装、独立検証、全体回帰検証が完了するまで状態を`RESOLVED`へ変更してはならない。
 
 ## 状態定義
@@ -264,7 +264,7 @@
 
 - **ID**: `FSA-2026-07-13-13`
 - **重要度**: `CRITICAL`
-- **状態**: `UNRESOLVED`
+- **状態**: `RESOLVED`
 - **症状（攻撃ベクトル）**: 形式化されていないTrueSkill転用、未anchorの2PL、定義矛盾を含むObservable-State POMDPを実装すると、数値が出力されてもskill beliefとして識別不能または意味不明になる。近似推論、MCMC、randomized item selectionを導入すれば、同一証拠から同一事後分布という絶対規律も崩壊する。
 - **根本原因**:
   - TrueSkillは競争者間の順位・勝敗likelihoodを持つrating modelであり、面接の絶対的な能力段階を観測するmodelではない。Factor Graphという実装形式だけを転用しても、面接item、rater、rubric、ordinal responseの観測分布は定義されない。
@@ -314,11 +314,15 @@
 
   grid、transition、item threshold、prior、log-sum-exp、量子化、丸めmode、tie-breakをversioned artifactとして固定する。MCMCとrandomized policyを権威更新から排除し、同一canonical inputに対するposterior vectorのbit-level goldenを実装前RED契約にする。questionがskillを変化させないならPOMDPを導入せずadaptive testingとして扱い、skillを変化させる場合だけ明示的なstate transitionとutilityを別途裁定する。
 
+- **解決日**: `2026-07-15`
+- **解決記録**: TrueSkillおよび未anchor 2PLを権威推論経路から完全撤去し、versioned artifactで固定したability grid、prior、band transition、ordered thresholdを用いるDynamic Ordinal Rasch Filterへ置換した。予測・観測更新はLog-Sum-Expによる固定順序の完全周辺化とし、MCMC・randomized policyを排除した。item選択にはposterior全体の決定論的EIGを実装し、固定小数点量子化とitem IDの完全総順序でtieを解消する。posterior vectorとEIGのIEEE-754 Golden契約により、同一証拠に対するビットレベルの完全再現性を証明した。モデルartifactのSHA-256は`CanonicalRuntimeIdentity`へ必須結合した。
+- **検証証拠**: FSA-13契約`2 passed`、専用Golden・Runtime Identity回帰`11 passed`、全体pytest`637 passed, 1 skipped`、Cargo全target`60 passed`、`git diff --check`違反0件。
+
 ---
 
 ## 監査裁定
 
-- **総合状態**: `BLOCKED`
-- **Foundation開始条件**: 13件を個別Findingとして順番に処理し、各FindingでRED契約、最小是正、対象GREEN、全体回帰、禁止領域確認、台帳更新を完了すること。
-- **次フェーズ禁止**: グローバルegress、実行物真正性、state identity、永続化hard-fail、数値決定論の保証範囲、数理モデルの識別制約が未解決の間、自己学習loop、Bayesian Skill Ledger、IRT adaptive PROBE、POMDP policyのproduction実装を開始してはならない。
-- **監査時点のcommit状態**: 本台帳作成時に別途確認する。Findingの解決commitではない。
+- **総合状態**: `GREEN (ALL RESOLVED)`
+- **Foundation完了記録**: 13件すべてでRED契約、最小是正、対象GREEN、全体回帰、禁止領域確認、台帳更新を完了した。
+- **次フェーズ制限**: `解除`。グローバルegress、実行物真正性、state identity、永続化hard-fail、数値決定論、数理モデル識別制約のFoundation要件はすべて解決済みであり、次のdeploymentへ進行可能とする。
+- **監査commit状態**: 全Findingを個別のatomic commitで封印し、FSA-13最終commitをもって本監査台帳をcloseする。

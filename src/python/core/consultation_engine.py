@@ -58,6 +58,7 @@ from .profile_store import (
     save_fixed_attributes,
 )
 from . import lsm_index
+from .dynamic_ordinal_rasch import artifact_sha256 as ordinal_rasch_artifact_sha256
 from .search_daemon import SearchDaemonClient, SearchDaemonError
 from .score_ranking import RankingAnomalyError, rank_hits, score_order_key
 from . import pipeline  # noqa: E402
@@ -1015,6 +1016,7 @@ class ConsultationEngine:
             json_schema=_VISIBLE_TEXT_SCHEMA,
             generation_params=generation_params(),
             numeric_runtime_version=numeric_runtime_version(),
+            ordinal_rasch_artifact_hash=ordinal_rasch_artifact_sha256(),
         )
 
     def _initialize_session_identity(

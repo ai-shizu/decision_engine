@@ -71,6 +71,7 @@ VPY="$VENV_DIR/bin/python"
     --hidden-import core.profile_store \
     --hidden-import numpy \
     --collect-submodules core \
+    --collect-data core \
     --noconfirm \
     "$RUN_ENGINE"
 

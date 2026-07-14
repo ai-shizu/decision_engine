@@ -26,6 +26,7 @@ _RUNTIME_COMPONENT_KEYS = frozenset(
         "json_schema",
         "generation_params",
         "numeric_runtime_version",
+        "ordinal_rasch_artifact_hash",
     }
 )
 
@@ -112,6 +113,10 @@ class CanonicalRuntimeIdentity:
             "generation_params": components["generation_params"],
             "numeric_runtime_version": _nonempty_text(
                 components["numeric_runtime_version"], "numeric_runtime_version"
+            ),
+            "ordinal_rasch_artifact_hash": _sha256_digest(
+                components["ordinal_rasch_artifact_hash"],
+                "ordinal_rasch_artifact_hash",
             ),
         }
         if type(payload["json_schema"]) is not dict or not payload["json_schema"]:

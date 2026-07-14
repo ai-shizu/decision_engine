@@ -44,6 +44,7 @@ Write-Host "Entry : $RunEngine"
     --hidden-import core.profile_store `
     --hidden-import numpy `
     --collect-submodules core `
+    --collect-data core `
     $RunEngine
 
 $arch = if ($env:PROCESSOR_ARCHITECTURE -match "ARM") { "aarch64" } else { "x86_64" }

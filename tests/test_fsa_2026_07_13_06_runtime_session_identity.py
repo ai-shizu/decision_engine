@@ -43,6 +43,7 @@ _RUNTIME_COMPONENTS = {
         "max_tokens": 512,
     },
     "numeric_runtime_version": "python-3.12.10|numpy-2.2.6|openblas-0.3.29",
+    "ordinal_rasch_artifact_hash": "55" * 32,
 }
 
 
@@ -109,6 +110,7 @@ def test_canonical_runtime_identity_binds_every_required_component() -> None:
         "json_schema": {"type": "object", "additionalProperties": False},
         "generation_params": {"temperature": 0.2, "max_tokens": 256},
         "numeric_runtime_version": "python-3.12.11|numpy-2.3.0|openblas-0.3.30",
+        "ordinal_rasch_artifact_hash": "66" * 32,
     }
     for field, changed_value in variants.items():
         changed = _canonical_runtime_identity(**{field: changed_value})
