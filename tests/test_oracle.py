@@ -116,7 +116,7 @@ def test_build_oracle_payload_end_to_end_real_tensor() -> None:
     assert payload["scope"] == {"kind": "global", "alias": None}
     assert payload["sufficiency"]["days_observed"] == 28
 
-    dyad_payload = oracle.build_oracle_payload("dyad", alias="C-abcd1234")
+    dyad_payload = oracle.build_oracle_payload("dyad", alias="C-" + "ab" * 32)
     assert dyad_payload["scope"]["kind"] == "dyad"
     assert not dyad_payload["sufficiency"]["gate_passed"]
     print("  build_oracle_payload end-to-end with real tensor (E4) OK")

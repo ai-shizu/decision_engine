@@ -22,6 +22,7 @@ from . import apple_calendar_sync
 from . import calendar_manager as cal
 from . import calendar_sync
 from . import finance_manager as fin
+from .canonicalization import canonicalize_text
 from .consultation_engine import (
     ConsultationEngine,
     FIXED_ATTRIBUTE_FIELDS,
@@ -30,6 +31,7 @@ from .consultation_engine import (
     load_user_profile,
     save_fixed_attributes,
 )
+from .durable_persistence import durable_atomic_write_text
 from .paths import (
     ACTIVE_ES,
     CALENDAR_JSON,
@@ -554,12 +556,16 @@ def _import_es_document(content: str, *, status: StatusCallback | None = None) -
     単一性を保証する)。
     """
     ES_DIR.mkdir(parents=True, exist_ok=True)
-    digest = hashlib.blake2b(content.encode("utf-8"), digest_size=16).hexdigest()
+    canonical_content = canonicalize_text(content)
+    digest = hashlib.blake2b(
+        canonical_content.encode("utf-8"), digest_size=16).hexdigest()
     if ACTIVE_ES.exists():
         try:
             existing_digest = hashlib.blake2b(
-                ACTIVE_ES.read_bytes(), digest_size=16).hexdigest()
-        except OSError:
+                canonicalize_text(ACTIVE_ES.read_text(encoding="utf-8")).encode("utf-8"),
+                digest_size=16,
+            ).hexdigest()
+        except (OSError, UnicodeDecodeError):
             existing_digest = None
         if existing_digest == digest:
             if status:
@@ -572,7 +578,7 @@ def _import_es_document(content: str, *, status: StatusCallback | None = None) -
     # write_bytes (write_text ではない): Windows の text モードは "\n"→"\r\n"
     # 変換を行い、read_bytes() ベースの上記ハッシュ比較と食い違って冪等性
     # 判定が壊れる (既知の罠 — import_document 本流と同じ理由)。
-    ACTIVE_ES.write_bytes(content.encode("utf-8"))
+    durable_atomic_write_text(ACTIVE_ES, canonical_content)
 
     if status:
         status("追記完了")
@@ -634,13 +640,18 @@ def import_document(
     target_dir.mkdir(parents=True, exist_ok=True)
 
     # 冪等性 (T-20 の直接適用): 同一内容が既に存在すれば skip。
-    digest = hashlib.blake2b(content.encode("utf-8"), digest_size=16).hexdigest()
+    canonical_content = canonicalize_text(content)
+    digest = hashlib.blake2b(
+        canonical_content.encode("utf-8"), digest_size=16).hexdigest()
     for existing in target_dir.iterdir():
         if not existing.is_file():
             continue
         try:
-            existing_digest = hashlib.blake2b(existing.read_bytes(), digest_size=16).hexdigest()
-        except OSError:
+            existing_digest = hashlib.blake2b(
+                canonicalize_text(existing.read_text(encoding="utf-8")).encode("utf-8"),
+                digest_size=16,
+            ).hexdigest()
+        except (OSError, UnicodeDecodeError):
             continue
         if existing_digest == digest:
             if status:
@@ -658,7 +669,7 @@ def import_document(
     # write_bytes (write_text ではない): Windows の text モードは "\n"→"\r\n"
     # 変換を行い、read_bytes() ベースの上記ハッシュ比較と食い違って冪等性
     # 判定が壊れる (実測で踏んだ罠)。
-    target_path.write_bytes(content.encode("utf-8"))
+    durable_atomic_write_text(target_path, canonical_content)
 
     if status:
         status("追記完了")
@@ -745,7 +756,9 @@ def _third_party_aliases(line_telemetry: dict) -> dict[str, str]:
         return aliases
     for dyad in line_telemetry.get("dyads", []) or []:
         name = str(dyad.get("contact_name", "") or "")
-        alias = str(dyad.get("contact_alias", "") or "")
+        alias = str(
+            dyad.get("contact_short_id", dyad.get("contact_alias", "")) or ""
+        )
         if name and alias:
             aliases[name] = alias
     return aliases

@@ -4,6 +4,8 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass, replace
 import hashlib
 
+from .canonicalization import canonical_json_bytes
+
 
 @dataclass(frozen=True)
 class HistoricalNode:
@@ -25,7 +27,11 @@ class HistoricalNode:
 
 
 def _node_id(date_range: str, fact_text: str, source: str) -> str:
-    payload = f"{date_range}\0{fact_text}\0{source}".encode("utf-8")
+    payload = b"decision-engine/historical-node/v2\0" + canonical_json_bytes({
+        "date_range": date_range,
+        "fact_text": fact_text,
+        "source": source,
+    })
     return "hn-" + hashlib.blake2b(payload, digest_size=6).hexdigest()
 
 

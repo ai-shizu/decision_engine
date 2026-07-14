@@ -11,7 +11,9 @@ from dataclasses import dataclass
 from enum import StrEnum
 from typing import Any, Literal
 
+from .canonicalization import canonicalize_json, canonicalize_text
 from .runtime_identity import validate_runtime_digest
+from .secure_identity import validate_contact_identity
 from .state_chain import (
     genesis_parent_hash,
     state_payload_mac,
@@ -26,7 +28,6 @@ TOTAL_BUDGET_CHARS = 12_000
 
 _HEX32 = re.compile(r"^[0-9a-f]{32}$")
 _HEX64 = re.compile(r"^[0-9a-f]{64}$")
-_CONTACT_ALIAS_RE = re.compile(r"^C-[0-9a-f]{8}$")
 
 FIXED_INTERNAL_ALIASES = frozenset({"candidate", "面接官", "参加者", "メンター"})
 
@@ -175,7 +176,11 @@ def _strict_tuple(
 
 
 def is_verified_contact_alias(alias: str) -> bool:
-    return bool(_CONTACT_ALIAS_RE.fullmatch(alias))
+    try:
+        validate_contact_identity(alias)
+        return True
+    except ValueError:
+        return False
 
 
 def safe_manifest_speaker_alias(alias: str | None) -> str | None:
@@ -189,20 +194,16 @@ def safe_manifest_speaker_alias(alias: str | None) -> str | None:
 
 
 def compute_content_hash(text: str) -> str:
-    from .session_memory import normalize_text
-
-    payload = normalize_text(text).encode("utf-8")
+    payload = canonicalize_text(text).encode("utf-8")
     return hashlib.sha256(payload).hexdigest()[:32]
 
 
 def compute_context_hash(context: str) -> str:
-    return hashlib.sha256(context.encode("utf-8")).hexdigest()[:32]
+    return hashlib.sha256(canonicalize_text(context).encode("utf-8")).hexdigest()[:32]
 
 
 def compute_query_hash(query: str) -> str:
-    from .session_memory import normalize_text
-
-    payload = normalize_text(query).encode("utf-8")
+    payload = canonicalize_text(query).encode("utf-8")
     return hashlib.sha256(payload).hexdigest()[:32]
 
 
@@ -743,7 +744,7 @@ def canonical_manifest_json(manifest: RetrievalManifestV1) -> str:
     manifest = validate_manifest(manifest)
     payload = _manifest_payload_dict_from_manifest(manifest)
     payload["manifest_id"] = ""
-    return json.dumps(payload, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
+    return canonicalize_json(payload)
 
 
 def compute_manifest_id(manifest: RetrievalManifestV1) -> str:
@@ -1020,20 +1021,14 @@ def save_retrieval_manifest(manifest: RetrievalManifestV1) -> None:
             if existing_manifest.manifest_id != manifest.manifest_id:
                 raise ValueError("existing manifest_id mismatch")
         else:
-            payload = json.dumps(
-                manifest_to_dict(manifest),
-                ensure_ascii=False,
-                indent=2,
-            )
+            payload = canonicalize_json(manifest_to_dict(manifest))
             _atomic_write_text(path, payload + "\n")
-        latest_payload = json.dumps(
+        latest_payload = canonicalize_json(
             {
                 "manifest_id": manifest.manifest_id,
                 "session_genesis_id": manifest.session_genesis_id,
                 "sequence_number": manifest.sequence_number,
-            },
-            ensure_ascii=False,
-            indent=2,
+            }
         )
         _atomic_write_text(
             paths.LATEST_RETRIEVAL_MANIFEST,

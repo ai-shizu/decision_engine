@@ -26,6 +26,7 @@ import json
 import re
 from datetime import datetime
 
+from .canonicalization import canonical_json_bytes, canonicalize_json
 from .durable_persistence import (
     PersistenceReadError,
     durable_atomic_write_text,
@@ -257,18 +258,12 @@ def persist_report(report: dict, genre: str) -> str:
     INTERVIEW_RECORDS_DIR.mkdir(parents=True, exist_ok=True)
     ts = datetime.now().strftime("%Y%m%dT%H%M%S")
     slug = _genre_slug(genre)
-    canonical = json.dumps(
-        report,
-        sort_keys=True,
-        ensure_ascii=False,
-        separators=(",", ":"),
-        allow_nan=False,
-    ).encode("utf-8")
+    canonical = canonical_json_bytes(report)
     content_id = hashlib.sha256(canonical).hexdigest()
     path = INTERVIEW_RECORDS_DIR / f"interview_{ts}_{content_id}_{slug}.json"
     durable_atomic_write_text(
         path,
-        json.dumps(report, ensure_ascii=False, indent=2, allow_nan=False),
+        canonicalize_json(report),
     )
     return str(path)
 

@@ -9,6 +9,7 @@ import unicodedata
 from dataclasses import dataclass, replace
 from typing import Any, Literal
 
+from .canonicalization import canonical_json_bytes
 from .retrieval_manifest import (
     CandidateStatus,
     ContextLane,
@@ -70,7 +71,10 @@ CANDIDATE_ALIASES = frozenset({"candidate", "候補者"})
 
 
 def normalize_text(text: str) -> str:
-    return unicodedata.normalize("NFC", text or "")
+    return unicodedata.normalize(
+        "NFC",
+        (text or "").replace("\r\n", "\n").replace("\r", "\n"),
+    )
 
 
 def char_count(text: str) -> int:
@@ -120,7 +124,11 @@ class WorkingMemoryV1:
 
 
 def stable_turn_id(session_id: str, turn_index: int, alias: str) -> str:
-    payload = f"{session_id}:{turn_index}:{alias}".encode("utf-8")
+    payload = b"decision-engine/turn-id/v2\0" + canonical_json_bytes({
+        "alias": alias,
+        "session_id": session_id,
+        "turn_index": turn_index,
+    })
     return hashlib.sha256(payload).hexdigest()[:32]
 
 
@@ -174,10 +182,16 @@ def _split_sentences(text: str) -> list[str]:
 
 
 def _atom_id(kind: MemoryKind, canonical_text: str, source: TranscriptRef) -> str:
-    payload = (
-        f"{kind}|{canonical_text}|{source.turn_id}|"
-        f"{source.turn_index}|{source.speaker_alias}|{source.quote}"
-    ).encode("utf-8")
+    payload = b"decision-engine/memory-atom/v2\0" + canonical_json_bytes({
+        "canonical_text": canonical_text,
+        "kind": kind,
+        "source": {
+            "quote": source.quote,
+            "speaker_alias": source.speaker_alias,
+            "turn_id": source.turn_id,
+            "turn_index": source.turn_index,
+        },
+    })
     return hashlib.sha256(payload).hexdigest()[:32]
 
 

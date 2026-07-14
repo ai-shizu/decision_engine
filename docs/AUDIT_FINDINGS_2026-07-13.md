@@ -219,7 +219,7 @@
 
 - **ID**: `FSA-2026-07-13-11`
 - **重要度**: `WARNING`
-- **状態**: `UNRESOLVED`
+- **状態**: `RESOLVED`
 - **症状（攻撃ベクトル）**: 視覚的に同じNFC/NFD文字列、改行表現、結合文字がstoreごとに異なるhash、ID、dedup結果を生む。LINE contact aliasは32-bit空間しかなく、異なる人物が同じaliasへ衝突して証拠やdyad状態を混同し得る。
 - **根本原因**: normalize処理が各storeで統一されず、raw UTF-8、NFC済み文字列、JSON serializationが混在する。LINE aliasは`digest_size=4`のBLAKE2bとlocal saltを使用し、collision検出やkey identityを持たない。birthday boundによる衝突確率は次で近似される。
 
@@ -235,6 +235,9 @@
   - `src/python/core/lsm_index.py:52-62`
   - `src/python/core/tensor_store.py:122-127`
 - **必須是正措置**: hash-before-constructionの共通canonicalization仕様を作り、Unicode NFC、line ending、whitespace、JSON exact encoding、number representation、domain separatorを固定する。人物aliasはOS保護鍵によるHMACまたはkeyed BLAKE2の128-bit以上へ移行し、key ID、collision検出、migration、salt/key消失時のhard-failを定義する。表示用短縮値と永続identityを分離する。
+- **解決日**: 2026-07-15
+- **解決記録**: Hash-before-constructionの共通正規化を導入し、Unicode NFC、改行・空白、JSONのキー順・ASCII escape・separator・有限数値表現を固定した。LINE人物aliasはOS保護鍵由来のHMAC-SHA256による永続Identityへ移行し、128-bit以上のMAC強度、衝突検出、鍵消失・破損時のHard-failを確立した。権威的な永続Identityと表示専用Short IDを分離し、照合には永続Identityのみを使用する。
+- **検証証拠**: FSA-11契約テスト`2 passed`、全体pytest`632 passed, 1 skipped`、Cargo全target`57 passed`、`compileall`成功、`git diff --check`違反0件。
 
 ---
 

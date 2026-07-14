@@ -38,6 +38,7 @@ from pathlib import Path
 
 import numpy as np
 
+from .canonicalization import canonicalize_text
 from .offline_runtime import enforce_offline_environment
 from .paths import (
     DIARY_BIN,
@@ -129,6 +130,7 @@ class HashedNgramEmbedder:
     def encode(self, texts: list[str], **_) -> np.ndarray:
         out = np.zeros((len(texts), DIM), dtype=np.float32)
         for row, t in enumerate(texts):
+            t = canonicalize_text(t)
             s = f"^{t}$"
             for i in range(len(s) - 2):
                 h = hashlib.blake2b(s[i : i + 3].encode("utf-8"), digest_size=8).digest()

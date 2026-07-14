@@ -24,7 +24,6 @@ from __future__ import annotations
 
 import hashlib
 import hmac
-import json
 import mmap
 import struct
 from datetime import date as _date, timedelta
@@ -32,6 +31,7 @@ from pathlib import Path
 
 import numpy as np
 
+from .canonicalization import canonical_json_bytes
 from .durable_persistence import durable_atomic_write
 # 呼び出し側 (oracle.py/facade.py) が `tensor_store.TENSOR_GLOBAL_BIN` /
 # `tensor_store.tensor_dyad_bin` として参照する再エクスポート。
@@ -154,13 +154,7 @@ def content_hash64(
         },
         "numeric_runtime": numeric_runtime_version(),
     }
-    blob = json.dumps(
-        identity,
-        ensure_ascii=False,
-        sort_keys=True,
-        separators=(",", ":"),
-        allow_nan=False,
-    ).encode("utf-8")
+    blob = canonical_json_bytes(identity)
     digest = hashlib.blake2b(
         blob,
         digest_size=8,

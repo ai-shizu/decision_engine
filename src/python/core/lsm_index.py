@@ -30,6 +30,7 @@ from pathlib import Path
 import numpy as np
 
 from . import pipeline
+from .canonicalization import canonicalize_json, canonicalize_text
 from .durable_persistence import (
     durable_atomic_write,
     durable_atomic_write_text,
@@ -80,7 +81,8 @@ def content_hash(chunk: dict) -> str:
     構造的に起きない。
     """
     text = f"{chunk.get('title', '')}\n{chunk.get('text', '')}"
-    return "blake2b:" + hashlib.blake2b(text.encode("utf-8"), digest_size=16).hexdigest()
+    canonical = canonicalize_text(text).encode("utf-8")
+    return "blake2b:" + hashlib.blake2b(canonical, digest_size=16).hexdigest()
 
 
 # ---------------------------------------------------------------- マニフェスト I/O
@@ -244,13 +246,7 @@ def atomic_save_manifest(manifest: dict) -> None:
     _preflight_manifest(manifest)
     durable_atomic_write_text(
         LSM_MANIFEST,
-        json.dumps(
-            manifest,
-            ensure_ascii=False,
-            indent=2,
-            sort_keys=True,
-            allow_nan=False,
-        ),
+        canonicalize_json(manifest),
     )
 
 
@@ -270,7 +266,7 @@ def _save_meta(meta: dict, chunks_by_id: dict[int, dict]) -> None:
     meta["chunks"] = [chunks_by_id[i] for i in sorted(chunks_by_id)]
     meta["num_vectors"] = len(chunks_by_id)
     meta["lsm"] = True
-    serialized = json.dumps(meta, ensure_ascii=False, indent=2)
+    serialized = canonicalize_json(meta)
     size = len(serialized.encode("utf-8"))
     if size > _META_SIZE_LIMIT_BYTES:
         raise RuntimeError(

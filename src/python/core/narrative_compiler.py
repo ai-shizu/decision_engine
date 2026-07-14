@@ -34,6 +34,7 @@ import hashlib
 import json
 import re
 
+from .canonicalization import canonical_json_bytes
 from .paths import DEEP_PROFILE, ES_DIR
 
 MAX_MATERIAL_ITEMS = 5
@@ -170,8 +171,13 @@ def compile_narrative(engine, target_domain: str | None = None,
     recruiters_eye = _generate_clean(engine, eye_system, eye_prompt)
 
     compiled_from = hashlib.blake2b(
-        (json.dumps(material, ensure_ascii=False, sort_keys=True) + target_domain)
-        .encode("utf-8"), digest_size=8).hexdigest()
+        b"decision-engine/narrative-compiler/v2\0"
+        + canonical_json_bytes({
+            "material": material,
+            "target_domain": target_domain,
+        }),
+        digest_size=8,
+    ).hexdigest()
 
     result = {
         "ok": bool(claims), "es_text": es_text, "claims": claims,

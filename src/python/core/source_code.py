@@ -114,7 +114,9 @@ def _known_names(line_telemetry: dict | None) -> dict[str, str]:
         return names
     for dyad in line_telemetry.get("dyads", []) or []:
         name = str(dyad.get("contact_name", "") or "")
-        alias = str(dyad.get("contact_alias", "") or "")
+        alias = str(
+            dyad.get("contact_short_id", dyad.get("contact_alias", "")) or ""
+        )
         if name and alias:
             names[name] = alias
     return names
@@ -288,7 +290,11 @@ def _interpersonal_axes(line_telemetry: dict | None, names: dict[str, str], upda
     else:
         raw_axes = None
     axes = raw_axes if isinstance(raw_axes, dict) else compute_interpersonal_axes(dyads)
-    aliases = [str(d.get("contact_alias", "")) for d in dyads if d.get("contact_alias")]
+    aliases = [
+        str(d.get("contact_short_id", d.get("contact_alias", "")))
+        for d in dyads
+        if d.get("contact_short_id") or d.get("contact_alias")
+    ]
 
     out: dict[str, Axis] = {}
     for name in ("friction_response", "latency_asymmetry", "protocol_plasticity"):
@@ -298,7 +304,7 @@ def _interpersonal_axes(line_telemetry: dict | None, names: dict[str, str], upda
         evidence: list[EvidenceRef] = []
         if score is not None:
             for alias in aliases[:5]:
-                evidence.append(EvidenceRef("line", updated, f"contact_alias={alias}", None))
+                evidence.append(EvidenceRef("line", updated, f"contact_short_id={alias}", None))
         out[name] = _axis(score, confidence, evidence, updated)
     return out
 

@@ -4,10 +4,11 @@
 from __future__ import annotations
 
 import hashlib
-import json
 from dataclasses import dataclass
 from decimal import Decimal, ROUND_HALF_UP
 from typing import Any, Literal
+
+from .canonicalization import canonical_json_bytes
 
 DimensionId = Literal[
     "problem_structuring",
@@ -142,7 +143,7 @@ def _round2(value: float) -> float:
 
 
 def transcript_hash(turns: list[dict]) -> str:
-    payload = json.dumps(turns, ensure_ascii=False, sort_keys=True).encode("utf-8")
+    payload = canonical_json_bytes(turns)
     return hashlib.blake2b(payload, digest_size=16).hexdigest()
 
 
@@ -173,7 +174,7 @@ def _require_str(name: str, value: object) -> str:
 
 
 def _evidence_id(item: dict) -> str:
-    payload = json.dumps(item, ensure_ascii=False, sort_keys=True).encode("utf-8")
+    payload = canonical_json_bytes(item)
     return hashlib.blake2b(payload, digest_size=16).hexdigest()
 
 

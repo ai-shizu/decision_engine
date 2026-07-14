@@ -75,7 +75,8 @@ def _line_telemetry_fixture() -> dict:
     return {
         "dyads": [
             {
-                "contact_alias": "C-a1b2c3d4",
+                "contact_alias": "C-" + "a1b2c3d4" * 8,
+                "contact_short_id": "C~a1b2c3d4a1b2",
                 "contact_name": "山田太郎",
                 "exchanges": 30,
                 "friction_responses": {"avoid": 1, "appease": 1, "repair": 2, "escalate": 0},
@@ -84,7 +85,8 @@ def _line_telemetry_fixture() -> dict:
                 "formality_index": 0.25,
             },
             {
-                "contact_alias": "C-e5f6a7b8",
+                "contact_alias": "C-" + "e5f6a7b8" * 8,
+                "contact_short_id": "C~e5f6a7b8e5f6",
                 "contact_name": "佐藤花子",
                 "exchanges": 28,
                 "friction_responses": {"avoid": 0, "appease": 0, "repair": 3, "escalate": 1},
@@ -93,7 +95,8 @@ def _line_telemetry_fixture() -> dict:
                 "formality_index": 0.75,
             },
             {
-                "contact_alias": "C-c9d0e1f2",
+                "contact_alias": "C-" + "c9d0e1f2" * 8,
+                "contact_short_id": "C~c9d0e1f2c9d0",
                 "contact_name": "鈴木一郎",
                 "exchanges": 24,
                 "friction_responses": {"avoid": 1, "appease": 0, "repair": 1, "escalate": 0},
@@ -209,7 +212,7 @@ def test_no_third_party_realname() -> None:
     assert "山田太郎" not in payload
     assert "佐藤花子" not in payload
     assert "鈴木一郎" not in payload
-    assert "C-a1b2c3d4" in payload
+    assert "C~a1b2c3d4a1b2" in payload
 
 
 def test_quote_length_cap() -> None:

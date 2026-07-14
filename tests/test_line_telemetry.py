@@ -55,14 +55,14 @@ def _msg(contact: str, date: str, time: str, is_self: bool, text: str) -> dict:
 
 # ---------------------------------------------------------------- 第三者最小化
 def test_alias_irreversible_and_stable() -> None:
-    salt = os.urandom(16)
-    a1 = lt.contact_alias("山田太郎", salt)
-    a2 = lt.contact_alias("山田太郎", salt)
-    a3 = lt.contact_alias("山田太郎", os.urandom(16))
-    assert a1 == a2, "同一 salt なら安定した alias"
-    assert a1 != a3, "salt が違えば別 alias"
+    a1 = lt.contact_alias("山田太郎")
+    a2 = lt.contact_alias("山田太郎")
+    assert a1 == a2, "OS-protected root key produces a stable identity"
     assert "山田" not in a1 and "太郎" not in a1
-    assert a1.startswith("C-")
+    assert len(a1) == 66 and a1.startswith("C-")
+    short = lt.contact_short_id(a1)
+    assert short.startswith("C~") and len(short) == 14
+    assert short != a1
     print("  alias irreversible + stable OK")
 
 

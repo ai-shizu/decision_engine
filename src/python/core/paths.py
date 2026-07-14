@@ -55,7 +55,10 @@ TENSOR_GLOBAL_BIN = DATA_PROCESSED / "tensor_global.bin"
 
 
 def tensor_dyad_bin(alias: str) -> Path:
-    return DATA_PROCESSED / f"tensor_dyad_{alias}.bin"
+    from .secure_identity import validate_contact_identity
+
+    identity = validate_contact_identity(alias)
+    return DATA_PROCESSED / f"tensor_dyad_{identity}.bin"
 
 # ネイティブ実行ファイル名 (Windows のみ .exe)
 _EXE_SUFFIX = ".exe" if os.name == "nt" else ""

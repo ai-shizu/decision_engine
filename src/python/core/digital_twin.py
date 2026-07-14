@@ -29,13 +29,13 @@ trailing causal baseline (時刻 t は [t-BASELINE_DAYS, t) のみを参照) で
 from __future__ import annotations
 
 import hashlib
-import json
 from dataclasses import asdict, dataclass
 from datetime import date as _date, timedelta
 
 import numpy as np
 
 from . import tensor_store as ts
+from .canonicalization import canonical_json_bytes
 
 # ---------------------------------------------------------------- 定数 (凍結)
 R_FLOOR = 0.05
@@ -481,8 +481,11 @@ def fit_twin(store: ts.TensorStore) -> TwinParams:
 def _derive_seed(store: ts.TensorStore, params: TwinParams, scenario: dict) -> int:
     """§3.6 (I-17): seed は入力内容のハッシュのみ。時刻・pid・カウンタを混ぜない。"""
     material = store.content_hash64.to_bytes(8, "little", signed=False)
-    material += json.dumps(params.to_dict(), sort_keys=True, default=str).encode("utf-8")
-    material += json.dumps(scenario, sort_keys=True, default=str).encode("utf-8")
+    material += b"decision-engine/digital-twin-seed/v2\0"
+    material += canonical_json_bytes({
+        "params": params.to_dict(),
+        "scenario": scenario,
+    })
     digest = hashlib.blake2b(material, digest_size=8).digest()
     return int.from_bytes(digest, "little")
 

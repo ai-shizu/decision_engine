@@ -45,7 +45,8 @@ _STERILE_WHITELIST = re.compile(
     r"oracle_payload\.v1|"                             # schema
     r"iv-\d{3}|"                                        # bank id
     r"R-[A-Z]+-\d{2,3}|"                                # rule id
-    r"C-[0-9a-f]{4,8}|"                                 # dyad alias
+    r"C-[0-9a-f]{64}|"                                  # persistent dyad identity
+    r"C~[0-9a-f]{12}|"                                  # display-only short id
     r"\d{4}-\d{2}-\d{2}|"                               # ISO date
     r"null_insufficient|"                               # reason 定数
     + "|".join(re.escape(k) for k in tensor_store.FEATURES) +   # feature id

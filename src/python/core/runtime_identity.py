@@ -13,6 +13,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
+from .canonicalization import canonical_json_bytes, canonicalize_text
 
 _HEX64 = re.compile(r"^[0-9a-f]{64}$")
 _HEX128 = re.compile(r"^[0-9a-f]{128}$")
@@ -32,7 +33,10 @@ _RUNTIME_COMPONENT_KEYS = frozenset(
 def _nonempty_text(value: Any, field: str) -> str:
     if type(value) is not str or not value.strip():
         raise ValueError(f"{field} must be non-empty str")
-    return value
+    canonical = canonicalize_text(value)
+    if not canonical:
+        raise ValueError(f"{field} must be non-empty str")
+    return canonical
 
 
 def _sha256_digest(value: Any, field: str) -> str:
@@ -73,16 +77,9 @@ def _validate_json_value(value: Any, path: str) -> None:
 def _canonical_json_bytes(payload: dict[str, Any]) -> bytes:
     _validate_json_value(payload, "identity")
     try:
-        encoded = json.dumps(
-            payload,
-            sort_keys=True,
-            ensure_ascii=False,
-            separators=(",", ":"),
-            allow_nan=False,
-        )
+        return canonical_json_bytes(payload)
     except (TypeError, ValueError) as exc:
         raise ValueError("identity must be canonical JSON") from exc
-    return encoded.encode("utf-8")
 
 
 @dataclass(frozen=True)

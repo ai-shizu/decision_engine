@@ -61,39 +61,39 @@ from core.state_chain import genesis_parent_hash  # noqa: E402
 # Frozen from commit 412c1c2 (pre-Phase-4-A HEAD) via legacy selection algorithm.
 _GOLDEN_COMMIT = "412c1c2d9e02accb726909500faef75a5fe1d3c5"
 _GOLDEN_SESSION = "phase4a-golden-session"
-_GOLDEN_CONTEXT_HASH = "57f4be9d0852b5b2f81f99dc7292f72e"
+_GOLDEN_CONTEXT_HASH = "7220eb5c503e05bc6736432be7f8b1d2"
 _GOLDEN_WM_IDS = (
-    "51d90bc6ca4cec8be24213ddf0021653",
-    "eada6cd4ddba92d9cf41395d2fd11320",
-    "d871636b195bf02aeabeaf79ecd49b01",
-    "28a157725ebdf7206afe1eb86a6e32e7",
-    "ccd06394e287c4ad9072f63b5ed5dc0c",
-    "c79af90df3db7dd33c0062d5fa49d1eb",
-    "7dff50886fe09192b7bb2a0f8ea2eb38",
-    "81bc00fdfa3e470f5c4e0da6dd583472",
-    "7526dc003173a88ef2cfd02e2ff0a2ca",
-    "c5ee8df34eebfc6c6b9de94bbd07d3e7",
-    "f457b0d97a4031fef39d187e65db6640",
-    "369f47bf887b15cd8553e238e53d9c33",
-    "eca5442abdb679e9f46bb78a2526d139",
-    "62e5cbfdcd78eb20427c90e586670470",
-    "ed142608b74f44bf4ae863b3a254a5fe",
-    "16c5d28fe370c73a8bad1ae843312e29",
-    "96a752f2dc0b89224866f744d33d6da2",
-    "b69cd2d49bd64fbae59d5cc2910ba64c",
-    "c14a84b2b305be2edc5291ebbe5ddec9",
-    "a1dc0d652eb9651ebadee4cfe6576caa",
-    "37e57eeaa7e3c29f01847cb78a5dc05a",
-    "f101bd980033bf84e1008ae49e3c27d1",
+    "a558f6690145aa5007e290d2fc0daaa9",
+    "6e0a43e811fc4ec62b0122fd34bf4a05",
+    "6a441026783d84a949023fb35d47b0df",
+    "1b70b4706b2ba80ae8caea0ccff27f71",
+    "7f1bda2832210c1e5b4e576e113dace0",
+    "577d5b6f093269d91a654ff1f6c02cdc",
+    "5f82d40c08f031d3230d3b66dce9dc74",
+    "9720bba823cbb6808f44dedcd9515a27",
+    "6aed60b25384527a1dc4381e83cc0346",
+    "0b3305b28467535371ac445fd2773d73",
+    "10967903cdcdfa0275e94b91cbffd4e2",
+    "61130ddcc29f24345d31844e60750cce",
+    "065e210cb38475307147c63d2e5c1eb7",
+    "060f0c37be3ff558c745d0fec41db3ac",
+    "9ebd22faae4832590b1655af14f681fa",
+    "cbb2245651e7f3a13501aaa8bc391d79",
+    "348c4dc99e8662a050b70021de3d3597",
+    "98d80e3e01775dcfc20d5ffcbfc76fcb",
+    "1c084c9f9e409dec4e383fadd34d4dc7",
+    "249b36b561535fea6b25cc18680c7a26",
+    "5213f1a32797883cc7040a5e9cc47bfa",
+    "4ddbd0200731386ca31c568da5c4c777",
 )
 _CONTRACT_SESSION = "phase4a-contract-session"
-_CONTRACT_CONTEXT_HASH = "5ae6745882825c9e9243c2943eb736b9"
+_CONTRACT_CONTEXT_HASH = "ee906ffab603c17eb226efb1b0722d8a"
 _CONTRACT_WM_IDS = (
-    "40c34fa939aa842b7cec85fc478891da",
-    "ca519d2f7244ea468177269bd8744499",
-    "9a6a236cb94c4d30cfc92d1a2e620f23",
-    "2cfbcf41d87773d7f2de81235a90dec5",
-    "a87217290d96beaabe49f9ff33277f37",
+    "987bcf99c2c36c4fc73eb0854b95e933",
+    "e3e2e21448f612ad82feba0849319bdc",
+    "53c68d0cc1f66b5bc68c27dcb19df63c",
+    "1c3d3cf88f72a45387e1daf1d0dc716f",
+    "7cbcf92b8a7d6e1893c4bca8019eaad0",
 )
 _CONTRACT_TRANSCRIPT = [
     ("面接官", "turn-000-statement about problem 0 and data 0%"),
@@ -974,7 +974,8 @@ def test_latest_read_does_not_sanitize_invalid_alias(
 
 
 def test_from_dict_accepts_verified_contact_alias() -> None:
-    cand = _minimal_candidate(speaker_alias="C-01234567")
+    alias = "C-" + "01" * 32
+    cand = _minimal_candidate(speaker_alias=alias)
     lanes = (
         _minimal_lane(used_chars=1, formatting_chars=0, accepted_count=1),
         _minimal_lane(lane=ContextLane.RECENT_TRANSCRIPT, budget_chars=3600),
@@ -994,7 +995,7 @@ def test_from_dict_accepts_verified_contact_alias() -> None:
         lane_usage=lanes,
     )
     round_tripped = manifest_from_dict(manifest_to_dict(manifest))
-    assert round_tripped.candidates[0].speaker_alias == "C-01234567"
+    assert round_tripped.candidates[0].speaker_alias == alias
 
 
 def test_from_dict_accepts_fixed_internal_alias() -> None:

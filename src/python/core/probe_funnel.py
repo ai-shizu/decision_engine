@@ -9,6 +9,7 @@ import os
 from pathlib import Path
 from typing import Any
 
+from .canonicalization import canonicalize_text
 from .paths import DATA_PROCESSED
 from .probe_engine import HistoricalNode, create_historical_node
 from .source_code import HumanSourceCode
@@ -220,7 +221,11 @@ def sanitize_probe_text(text: str, third_party_aliases: dict[str, str]) -> str:
 
 
 def _blake6(payload: str) -> str:
-    return hashlib.blake2b(payload.encode("utf-8"), digest_size=6).hexdigest()
+    canonical = canonicalize_text(payload).encode("utf-8")
+    return hashlib.blake2b(
+        b"decision-engine/probe-id/v2\0" + canonical,
+        digest_size=6,
+    ).hexdigest()
 
 
 def _session_id(today: str, axis: str, stage: str, session_count: int) -> str:

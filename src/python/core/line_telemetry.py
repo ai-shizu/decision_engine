@@ -29,7 +29,14 @@ import re
 from datetime import datetime, timedelta
 
 from .data_merger import _parse_dt, normalize_date
+from .canonicalization import canonicalize_json, canonicalize_text
+from .durable_persistence import durable_atomic_write_text, read_json_file
 from .paths import DATA_PROCESSED, LINE_HISTORY
+from .secure_identity import (
+    contact_short_id as _contact_short_id,
+    keyed_text_identity,
+    validate_contact_identity,
+)
 
 # ---------------------------------------------------------------- 時間閾値
 BURST_GAP = timedelta(minutes=30)          # 同一発話者の連続メッセージを1バーストにまとめる間隔
@@ -40,7 +47,7 @@ LATENCY_OUTLIER_HOURS = 48                 # これを超える遅延はレイ�
 MIN_EXCHANGES = 20                         # 軸を確定させる最低の応答ペア数 (confidence ゲート)
 
 TELEMETRY_PATH = DATA_PROCESSED / "line_telemetry.json"
-_SALT_PATH = DATA_PROCESSED / "line_telemetry_salt.bin"
+TELEMETRY_FORMAT = "line_telemetry.v2"
 
 # ---------------------------------------------------------------- 語彙表
 # gap_analysis.py の GUILT_MARKERS/PRODUCTIVITY_MARKERS と同じ配置規約 (平文リスト)。
@@ -63,20 +70,21 @@ SOCIAL_POSITIONING_THEME = "対人関係・役割認識"
 
 
 # ---------------------------------------------------------------- 第三者最小化 (I-15)
-def _load_salt() -> bytes:
-    """salt は一方向 alias 生成専用。実名との対応表は一切保存しない
-    (salt を知っていても alias → 実名へは戻せない — blake2b は不可逆)。"""
-    if _SALT_PATH.exists():
-        return _SALT_PATH.read_bytes()
-    salt = os.urandom(16)
-    _SALT_PATH.parent.mkdir(parents=True, exist_ok=True)
-    _SALT_PATH.write_bytes(salt)
-    return salt
+class AliasCollisionError(RuntimeError):
+    """Distinct canonical contacts produced one persistent identity."""
 
 
-def contact_alias(contact: str, salt: bytes) -> str:
-    h = hashlib.blake2b(contact.encode("utf-8"), digest_size=4, salt=salt[:16].ljust(16, b"\0"))
-    return "C-" + h.hexdigest()
+def contact_alias(contact: str) -> str:
+    """Return the authoritative 256-bit keyed identity for one contact."""
+    digest = keyed_text_identity(
+        contact,
+        domain=b"decision-engine/line-contact-identity/v2",
+    )
+    return "C-" + digest.hex()
+
+
+def contact_short_id(identity: str) -> str:
+    return _contact_short_id(identity)
 
 
 # ---------------------------------------------------------------- バースト抽出
@@ -90,10 +98,11 @@ def _bursts_by_contact(line_messages: list[dict]) -> dict[str, list[dict]]:
     grouped: dict[str, list[dict]] = {}
     for m in line_messages:
         d = normalize_date(m.get("date") or "")
-        if not d or not m.get("time"):
+        contact = canonicalize_text(str(m.get("contact", "")))
+        if not d or not m.get("time") or not contact:
             continue
-        grouped.setdefault(m["contact"], []).append(
-            {**m, "date": d, "dt": _parse_dt(d, m["time"])})
+        grouped.setdefault(contact, []).append(
+            {**m, "contact": contact, "date": d, "dt": _parse_dt(d, m["time"])})
 
     out: dict[str, list[dict]] = {}
     for contact, msgs in grouped.items():
@@ -195,12 +204,17 @@ def _median(values: list[float]) -> float | None:
 def compute_dyad_stats(line_messages: list[dict], *, group_contacts: set[str] | None = None
                        ) -> list[dict]:
     """dyad (1:1 トークルーム) ごとの決定論的集計を返す。グループチャットは除外 (v1)。"""
-    group_contacts = group_contacts or set()
-    salt = _load_salt()
-    by_contact = _bursts_by_contact(
-        [m for m in line_messages if m.get("contact") not in group_contacts])
+    group_contacts = {
+        canonicalize_text(str(contact)) for contact in (group_contacts or set())
+    }
+    by_contact = {
+        contact: bursts
+        for contact, bursts in _bursts_by_contact(line_messages).items()
+        if contact not in group_contacts
+    }
 
     results: list[dict] = []
+    identity_owners: dict[str, str] = {}
     for contact, bursts in by_contact.items():
         if len(bursts) < 2:
             continue
@@ -242,8 +256,14 @@ def compute_dyad_stats(line_messages: list[dict], *, group_contacts: set[str] | 
         for ev in friction_events:
             responses[ev["response"]] = responses.get(ev["response"], 0) + 1
 
+        identity = contact_alias(contact)
+        previous_owner = identity_owners.get(identity)
+        if previous_owner is not None and previous_owner != contact:
+            raise AliasCollisionError("persistent contact identity collision")
+        identity_owners[identity] = contact
         results.append({
-            "contact_alias": contact_alias(contact, salt),
+            "contact_alias": identity,
+            "contact_short_id": contact_short_id(identity),
             "exchanges": exchanges,
             "user_reply_median_min": _median(user_latencies),
             "peer_reply_median_min": peer_median,
@@ -400,7 +420,15 @@ BOUNTY_TENSION_THRESHOLD = 0.3   # この値以上の |gap| を持つギャッ�
 
 
 def _bounty_id(theme: str, gtype: str, insight: str) -> str:
-    h = hashlib.blake2b(f"{theme}|{gtype}|{insight}".encode("utf-8"), digest_size=6)
+    canonical = canonicalize_json({
+        "insight": insight,
+        "theme": theme,
+        "type": gtype,
+    }).encode("utf-8")
+    h = hashlib.blake2b(
+        b"decision-engine/bounty-id/v2\0" + canonical,
+        digest_size=6,
+    )
     return "bt-" + h.hexdigest()
 
 
@@ -473,15 +501,25 @@ def sync_line_telemetry(*, group_contacts: set[str] | None = None) -> dict:
     messages = profiler.load_line_messages()
     dyads = compute_dyad_stats(messages, group_contacts=group_contacts)
     axes = compute_interpersonal_axes(dyads)
-    payload = {"format": "line_telemetry.v1", "dyads": dyads, "interpersonal": axes}
-    TELEMETRY_PATH.parent.mkdir(parents=True, exist_ok=True)
-    tmp = TELEMETRY_PATH.with_suffix(".json.tmp")
-    tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
-    os.replace(tmp, TELEMETRY_PATH)
+    payload = {"format": TELEMETRY_FORMAT, "dyads": dyads, "interpersonal": axes}
+    durable_atomic_write_text(TELEMETRY_PATH, canonicalize_json(payload))
     return payload
 
 
 def load_line_telemetry() -> dict:
-    if TELEMETRY_PATH.exists():
-        return json.loads(TELEMETRY_PATH.read_text(encoding="utf-8"))
-    return {"format": "line_telemetry.v1", "dyads": [], "interpersonal": {}}
+    try:
+        payload = read_json_file(TELEMETRY_PATH)
+    except FileNotFoundError:
+        return {"format": TELEMETRY_FORMAT, "dyads": [], "interpersonal": {}}
+    if type(payload) is not dict or payload.get("format") != TELEMETRY_FORMAT:
+        raise ValueError("legacy or invalid LINE telemetry must be rebuilt")
+    dyads = payload.get("dyads")
+    if type(dyads) is not list:
+        raise ValueError("LINE telemetry dyads must be list")
+    for dyad in dyads:
+        if type(dyad) is not dict:
+            raise ValueError("LINE telemetry dyad must be object")
+        identity = validate_contact_identity(dyad.get("contact_alias"))
+        if dyad.get("contact_short_id") != contact_short_id(identity):
+            raise ValueError("LINE telemetry short ID mismatch")
+    return payload

@@ -5,11 +5,11 @@ from __future__ import annotations
 
 import hashlib
 import hmac
-import json
 import re
 import secrets
 from typing import Any
 
+from .canonicalization import canonical_json_bytes
 from .runtime_identity import validate_runtime_digest
 
 STATE_MAC_HEX_LENGTH = 64
@@ -55,13 +55,7 @@ def state_payload_mac(payload: dict[str, Any], session_genesis_id: str) -> str:
     canonical = dict(payload)
     canonical["manifest_id"] = ""
     try:
-        encoded = json.dumps(
-            canonical,
-            sort_keys=True,
-            ensure_ascii=False,
-            separators=(",", ":"),
-            allow_nan=False,
-        ).encode("utf-8")
+        encoded = canonical_json_bytes(canonical)
     except (TypeError, ValueError) as exc:
         raise ValueError("state payload must be canonical JSON") from exc
     return hmac.new(
