@@ -13,6 +13,7 @@ from .artifact_auth import (
     verified_artifact_paths,
     verify_artifact_path,
 )
+from .durable_persistence import PersistenceReadError, read_json_file
 from .paths import MODELS_DIR, PROJECT_ROOT as ROOT
 
 
@@ -51,19 +52,22 @@ def load_model_params() -> dict:
     params = json.loads(json.dumps(_DEFAULT_PARAMS))
     if artifact_auth_required():
         verify_artifact_path("config:model_params", MODEL_PARAMS_JSON)
-    if MODEL_PARAMS_JSON.exists():
-        try:
-            user = json.loads(MODEL_PARAMS_JSON.read_text(encoding="utf-8"))
-        except (json.JSONDecodeError, OSError):
-            return params
-        if isinstance(user, dict):
-            for key in ("roles", "policy", "runtime", "generation"):
-                section = user.get(key)
-                if isinstance(section, dict):
-                    if key == "roles":
-                        params["roles"].update(section)
-                    else:
-                        params[key].update(section)
+    try:
+        user = read_json_file(MODEL_PARAMS_JSON)
+    except FileNotFoundError:
+        return params
+    if type(user) is not dict:
+        raise PersistenceReadError("model parameters root must be an object")
+    for key in ("roles", "policy", "runtime", "generation"):
+        section = user.get(key)
+        if section is None:
+            continue
+        if type(section) is not dict:
+            raise PersistenceReadError(f"model parameters {key} must be an object")
+        if key == "roles":
+            params["roles"].update(section)
+        else:
+            params[key].update(section)
     return params
 
 

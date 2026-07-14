@@ -23,6 +23,11 @@ import statistics
 import sys
 from collections import Counter
 from datetime import datetime, date, timedelta
+from .durable_persistence import (
+    PersistenceReadError,
+    durable_atomic_write_text,
+    read_json_file,
+)
 from .paths import DEEP_PROFILE, DIARY_MD, LINE_HISTORY, PROJECT_ROOT as ROOT, USER_PROFILE
 
 DIARY = DIARY_MD
@@ -194,8 +199,7 @@ def generate_dummy_line_history(path: Path) -> None:
                 lines.append(f"{time_s}\t{sender}\t{text}")
             lines.append("")
         lines.append("")
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text("\n".join(lines), encoding="utf-8")
+    durable_atomic_write_text(path, "\n".join(lines))
     print(f"[profiler] ダミーLINE履歴を生成: {path}")
 
 
@@ -1132,16 +1136,25 @@ def update_user_profile(profile: dict) -> None:
     from .consultation_engine import FIXED_ATTRIBUTES
 
     fixed = dict(FIXED_ATTRIBUTES)
-    if USER_PROFILE_JSON.exists():
-        try:
-            prev = json.loads(USER_PROFILE_JSON.read_text(encoding="utf-8"))
-            fixed.update(prev.get("fixed_attributes", {}))
-            for key in FIXED_ATTRIBUTES:
-                legacy = prev.get("attributes", {}).get(key, "")
-                if legacy and not fixed.get(key):
-                    fixed[key] = legacy
-        except (json.JSONDecodeError, OSError):
-            pass
+    try:
+        prev = read_json_file(USER_PROFILE_JSON)
+    except FileNotFoundError:
+        prev = {}
+    if not isinstance(prev, dict):
+        raise PersistenceReadError(
+            f"JSON root must be an object: {USER_PROFILE_JSON}"
+        )
+    previous_fixed = prev.get("fixed_attributes", {})
+    legacy_attributes = prev.get("attributes", {})
+    if not isinstance(previous_fixed, dict) or not isinstance(legacy_attributes, dict):
+        raise PersistenceReadError(
+            f"profile attributes must be objects: {USER_PROFILE_JSON}"
+        )
+    fixed.update(previous_fixed)
+    for key in FIXED_ATTRIBUTES:
+        legacy = legacy_attributes.get(key, "")
+        if legacy and not fixed.get(key):
+            fixed[key] = legacy
 
     llm_abstract = ""
     if "llm_interaction_insights" in profile:
@@ -1199,9 +1212,10 @@ def update_user_profile(profile: dict) -> None:
             "session_count": profile.get("interaction_patterns", {}).get("sessions_analyzed", 0),
         },
     }
-    USER_PROFILE_JSON.parent.mkdir(parents=True, exist_ok=True)
-    USER_PROFILE_JSON.write_text(json.dumps(user, ensure_ascii=False, indent=2),
-                                 encoding="utf-8")
+    durable_atomic_write_text(
+        USER_PROFILE_JSON,
+        json.dumps(user, ensure_ascii=False, indent=2),
+    )
     print(f"[profiler] ユーザープロファイル更新: {USER_PROFILE_JSON}")
 
 
@@ -1211,22 +1225,27 @@ def main() -> None:
 
     # 生成・更新: 既存プロファイルがあれば履歴メタデータを引き継いで更新
     now = datetime.now().isoformat(timespec="seconds")
-    if PROFILE_JSON.exists():
-        try:
-            prev = json.loads(PROFILE_JSON.read_text(encoding="utf-8"))
-            profile["meta"] = {
-                "first_generated_at": prev.get("meta", {}).get("first_generated_at", now),
-                "updated_at": now,
-                "revision": prev.get("meta", {}).get("revision", 0) + 1,
-            }
-        except (json.JSONDecodeError, OSError):
-            profile["meta"] = {"first_generated_at": now, "updated_at": now, "revision": 1}
-    else:
+    try:
+        prev = read_json_file(PROFILE_JSON)
+    except FileNotFoundError:
+        prev = None
+    if prev is None:
         profile["meta"] = {"first_generated_at": now, "updated_at": now, "revision": 1}
+    else:
+        if not isinstance(prev, dict) or not isinstance(prev.get("meta", {}), dict):
+            raise PersistenceReadError(
+                f"deep profile root and meta must be objects: {PROFILE_JSON}"
+            )
+        profile["meta"] = {
+            "first_generated_at": prev.get("meta", {}).get("first_generated_at", now),
+            "updated_at": now,
+            "revision": prev.get("meta", {}).get("revision", 0) + 1,
+        }
 
-    PROFILE_JSON.parent.mkdir(parents=True, exist_ok=True)
-    PROFILE_JSON.write_text(json.dumps(profile, ensure_ascii=False, indent=2),
-                            encoding="utf-8")
+    durable_atomic_write_text(
+        PROFILE_JSON,
+        json.dumps(profile, ensure_ascii=False, indent=2),
+    )
     print(f"[profiler] 深層プロファイル出力: {PROFILE_JSON} (rev {profile['meta']['revision']})")
     update_user_profile(profile)
     top_bias = profile["cognitive_biases"][0]

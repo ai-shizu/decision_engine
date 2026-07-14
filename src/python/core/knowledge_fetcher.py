@@ -23,6 +23,11 @@ from datetime import datetime
 from pathlib import Path
 from typing import Callable
 
+from .durable_persistence import (
+    PersistenceReadError,
+    durable_atomic_write_text,
+    read_json_file,
+)
 from .paths import KNOWLEDGE_DIR
 
 FETCH_TAG_RE = re.compile(r"<fetch_query>\s*(.*?)\s*</fetch_query>", re.DOTALL)
@@ -51,19 +56,20 @@ def extract_fetch_queries(text: str) -> tuple[str, list[str]]:
 
 # ============================================================ キュー永続化
 def load_queue() -> list[dict]:
-    if not QUEUE_JSON.exists():
-        return []
     try:
-        data = json.loads(QUEUE_JSON.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, OSError):
+        data = read_json_file(QUEUE_JSON)
+    except FileNotFoundError:
         return []
-    return data if isinstance(data, list) else []
+    if type(data) is not list or any(type(entry) is not dict for entry in data):
+        raise PersistenceReadError("fetch queue must be an array of objects")
+    return data
 
 
 def _save_queue(queue: list[dict]) -> None:
-    KNOWLEDGE_DIR.mkdir(parents=True, exist_ok=True)
-    QUEUE_JSON.write_text(
-        json.dumps(queue, ensure_ascii=False, indent=2), encoding="utf-8")
+    durable_atomic_write_text(
+        QUEUE_JSON,
+        json.dumps(queue, ensure_ascii=False, indent=2),
+    )
 
 
 def queue_fetch_queries(queries: list[str]) -> int:
@@ -113,7 +119,7 @@ def ingest_results(query: str, results: list[dict]) -> Path:
         url = str(r.get("url", "")).strip()
         text = str(r.get("text", "")).strip()[:MAX_CHARS_PER_PAGE]
         lines += [f"## {title}", f"出典: {url}", "", text, ""]
-    path.write_text("\n".join(lines), encoding="utf-8")
+    durable_atomic_write_text(path, "\n".join(lines))
     return path
 
 

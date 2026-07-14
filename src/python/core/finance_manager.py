@@ -12,6 +12,11 @@ from __future__ import annotations
 
 import json
 import re
+from .durable_persistence import (
+    PersistenceReadError,
+    durable_atomic_write_text,
+    read_json_file,
+)
 from .paths import FINANCE_JSON, PROJECT_ROOT as ROOT
 
 _VALID_TYPES = frozenset({"expense", "income"})
@@ -29,33 +34,34 @@ def _ensure_raw_dir() -> None:
 def load_finance() -> dict[str, list[dict]]:
     """finance.json を読み込む。存在しなければ空 dict。"""
     _ensure_raw_dir()
-    if not FINANCE_JSON.exists():
-        return {}
     try:
-        data = json.loads(FINANCE_JSON.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, OSError):
+        data = read_json_file(FINANCE_JSON)
+    except FileNotFoundError:
         return {}
-    if not isinstance(data, dict):
-        return {}
+    if type(data) is not dict:
+        raise PersistenceReadError("finance root must be an object")
     out: dict[str, list[dict]] = {}
     for k, v in data.items():
-        if isinstance(v, list):
-            out[str(k)] = [
-                {
-                    "type": str(e.get("type", "")),
-                    "category": str(e.get("category", "")),
-                    "amount": int(e.get("amount", 0)),
-                }
-                for e in v if isinstance(e, dict)
-            ]
+        if type(v) is not list or any(type(e) is not dict for e in v):
+            raise PersistenceReadError("finance entries must be object arrays")
+        out[str(k)] = [
+            {
+                "type": str(e.get("type", "")),
+                "category": str(e.get("category", "")),
+                "amount": int(e.get("amount", 0)),
+            }
+            for e in v
+        ]
     return out
 
 
 def save_finance(data: dict[str, list[dict]]) -> None:
     """finance.json へ書き込む。"""
     _ensure_raw_dir()
-    FINANCE_JSON.write_text(
-        json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    durable_atomic_write_text(
+        FINANCE_JSON,
+        json.dumps(data, ensure_ascii=False, indent=2),
+    )
 
 
 def get_transactions_for_date(date_str: str) -> list[dict]:

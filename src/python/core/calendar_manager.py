@@ -15,6 +15,11 @@ from __future__ import annotations
 import json
 import re
 from datetime import date, timedelta
+from .durable_persistence import (
+    PersistenceReadError,
+    durable_atomic_write_text,
+    read_json_file,
+)
 from .paths import CALENDAR_JSON, DIARY_MD, PROJECT_ROOT as ROOT
 
 _DATE_HEADING = re.compile(r"^##\s+(\d{4}-\d{2}-\d{2})\s*$")
@@ -28,29 +33,30 @@ def _ensure_raw_dir() -> None:
 def load_calendar() -> dict[str, list[dict]]:
     """calendar.json を読み込む。存在しなければ空 dict。"""
     _ensure_raw_dir()
-    if not CALENDAR_JSON.exists():
-        return {}
     try:
-        data = json.loads(CALENDAR_JSON.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, OSError):
+        data = read_json_file(CALENDAR_JSON)
+    except FileNotFoundError:
         return {}
-    if not isinstance(data, dict):
-        return {}
+    if type(data) is not dict:
+        raise PersistenceReadError("calendar root must be an object")
     out: dict[str, list[dict]] = {}
     for k, v in data.items():
-        if isinstance(v, list):
-            out[str(k)] = [
-                {"time": str(e.get("time", "")), "title": str(e.get("title", ""))}
-                for e in v if isinstance(e, dict)
-            ]
+        if type(v) is not list or any(type(e) is not dict for e in v):
+            raise PersistenceReadError("calendar entries must be object arrays")
+        out[str(k)] = [
+            {"time": str(e.get("time", "")), "title": str(e.get("title", ""))}
+            for e in v
+        ]
     return out
 
 
 def save_calendar(data: dict[str, list[dict]]) -> None:
     """calendar.json へ書き込む。"""
     _ensure_raw_dir()
-    CALENDAR_JSON.write_text(
-        json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    durable_atomic_write_text(
+        CALENDAR_JSON,
+        json.dumps(data, ensure_ascii=False, indent=2),
+    )
 
 
 def dates_with_events() -> set[str]:
@@ -182,4 +188,4 @@ def save_diary_for_date(date_str: str, body: str) -> None:
         lines.append(f"## {d}")
         lines.append(sections[d])
         lines.append("")
-    DIARY_MD.write_text("\n".join(lines).rstrip() + "\n", encoding="utf-8")
+    durable_atomic_write_text(DIARY_MD, "\n".join(lines).rstrip() + "\n")

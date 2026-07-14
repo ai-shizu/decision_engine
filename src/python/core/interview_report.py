@@ -21,10 +21,16 @@ docs/SPEC_FOXTROT_UI.md §7 裁定3 の実装。「LLMは定性、コードは�
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 from datetime import datetime
 
+from .durable_persistence import (
+    PersistenceReadError,
+    durable_atomic_write_text,
+    read_json_file,
+)
 from .paths import INTERVIEW_RECORDS_DIR
 
 SCHEMA_VERSION = "interview_report.v1"
@@ -240,8 +246,8 @@ def _genre_slug(genre: str) -> str:
 
 def persist_report(report: dict, genre: str) -> str:
     """壁A: `data/records/interviews/` への永続化。専用インデックスは作らない
-    (ファイル名 = 日時+ジャンルが台帳そのもの。IMP-1 の教訓 — 台帳の複雑化を
-    避ける)。W-32: 実名・ES本文はここへ複写しない (呼び出し側の責務)。
+    (ファイル名 = 日時+content hash+ジャンルが台帳そのもの)。W-32: 実名・
+    ES本文はここへ複写しない (呼び出し側の責務)。
 
     W-40: ファイル名の埋め込みタイムスタンプ (YYYYMMDDTHHMMSS、ISO basic)
     は辞書順ソート = 時系列順が成立する。load_recent_reports 側は
@@ -251,25 +257,35 @@ def persist_report(report: dict, genre: str) -> str:
     INTERVIEW_RECORDS_DIR.mkdir(parents=True, exist_ok=True)
     ts = datetime.now().strftime("%Y%m%dT%H%M%S")
     slug = _genre_slug(genre)
-    path = INTERVIEW_RECORDS_DIR / f"interview_{ts}_{slug}.json"
-    path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
+    canonical = json.dumps(
+        report,
+        sort_keys=True,
+        ensure_ascii=False,
+        separators=(",", ":"),
+        allow_nan=False,
+    ).encode("utf-8")
+    content_id = hashlib.sha256(canonical).hexdigest()
+    path = INTERVIEW_RECORDS_DIR / f"interview_{ts}_{content_id}_{slug}.json"
+    durable_atomic_write_text(
+        path,
+        json.dumps(report, ensure_ascii=False, indent=2, allow_nan=False),
+    )
     return str(path)
 
 
 def load_recent_reports(genre: str, limit: int = 2) -> list[dict]:
     """W-40: ファイル名 (時系列順にソート可能) で古→新順に直近 limit 件を
-    返す。壊れた/スキーマ不一致の1件で全体を落とさない (W-41 の前提条件 —
-    読み込み自体が例外で死ぬと 0 件フォールバックへ正しく縮退できない)。"""
+    返す。壊れた/スキーマ不一致の記録は欠落として扱わずHard-failする。"""
     if not INTERVIEW_RECORDS_DIR.is_dir():
         return []
     slug = _genre_slug(genre)
     paths = sorted(INTERVIEW_RECORDS_DIR.glob(f"interview_*_{slug}.json"))
     out: list[dict] = []
     for p in paths[-limit:]:
-        try:
-            r = json.loads(p.read_text(encoding="utf-8"))
-        except (json.JSONDecodeError, OSError):
-            continue
-        if r.get("schema") == SCHEMA_VERSION:
-            out.append(r)
+        r = read_json_file(p)
+        if type(r) is not dict:
+            raise PersistenceReadError("interview report root must be an object")
+        if r.get("schema") != SCHEMA_VERSION:
+            raise PersistenceReadError("interview report schema mismatch")
+        out.append(r)
     return out

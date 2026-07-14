@@ -11,6 +11,11 @@ from __future__ import annotations
 
 import json
 from datetime import datetime
+from .durable_persistence import (
+    PersistenceReadError,
+    durable_atomic_write_text,
+    read_json_file,
+)
 from .paths import AI_CONSULTATIONS_JSON, PROJECT_ROOT as ROOT
 
 
@@ -21,36 +26,37 @@ def _ensure_raw_dir() -> None:
 def load_consultations() -> dict[str, list[dict]]:
     """ai_consultations.json を読み込む。存在しなければ空 dict。"""
     _ensure_raw_dir()
-    if not AI_CONSULTATIONS_JSON.exists():
-        return {}
     try:
-        data = json.loads(AI_CONSULTATIONS_JSON.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, OSError):
+        data = read_json_file(AI_CONSULTATIONS_JSON)
+    except FileNotFoundError:
         return {}
-    if not isinstance(data, dict):
-        return {}
+    if type(data) is not dict:
+        raise PersistenceReadError("consultation log root must be an object")
     out: dict[str, list[dict]] = {}
     for k, v in data.items():
-        if isinstance(v, list):
-            out[str(k)] = [
-                {
-                    "timestamp": str(e.get("timestamp", "")),
-                    "query": str(e.get("query", "")),
-                    "response": str(e.get("response", "")),
-                    # 面接・GD・ES添削での発言 = 選考用の建前人格。
-                    # gap_analysis / profiler の主観チャネルでは低ウェイト扱いされる
-                    "is_simulated_persona": bool(e.get("is_simulated_persona", False)),
-                }
-                for e in v if isinstance(e, dict)
-            ]
+        if type(v) is not list or any(type(e) is not dict for e in v):
+            raise PersistenceReadError("consultation entries must be object arrays")
+        out[str(k)] = [
+            {
+                "timestamp": str(e.get("timestamp", "")),
+                "query": str(e.get("query", "")),
+                "response": str(e.get("response", "")),
+                # 面接・GD・ES添削での発言 = 選考用の建前人格。
+                # gap_analysis / profiler の主観チャネルでは低ウェイト扱いされる
+                "is_simulated_persona": bool(e.get("is_simulated_persona", False)),
+            }
+            for e in v
+        ]
     return out
 
 
 def save_consultations(data: dict[str, list[dict]]) -> None:
     """ai_consultations.json へ書き込む。"""
     _ensure_raw_dir()
-    AI_CONSULTATIONS_JSON.write_text(
-        json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    durable_atomic_write_text(
+        AI_CONSULTATIONS_JSON,
+        json.dumps(data, ensure_ascii=False, indent=2),
+    )
 
 
 def append_consultation(query: str, response: str,

@@ -7,6 +7,11 @@ from __future__ import annotations
 import json
 import re
 
+from .durable_persistence import (
+    PersistenceReadError,
+    durable_atomic_write_text,
+    read_json_file,
+)
 from .paths import USER_PROFILE
 from .text_utils import sanitize_obj, sanitize_text
 
@@ -54,12 +59,12 @@ def load_user_profile() -> dict:
         "inferred_profile": {},
         "auto_extracted": {},
     }
-    if not USER_PROFILE.exists():
-        return empty
     try:
-        prev = json.loads(USER_PROFILE.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, OSError):
+        prev = read_json_file(USER_PROFILE)
+    except FileNotFoundError:
         return empty
+    if type(prev) is not dict:
+        raise PersistenceReadError("user profile root must be an object")
 
     merged = dict(prev.get("fixed_attributes", {}))
     merged.update(prev.get("attributes", {}))
@@ -91,9 +96,9 @@ def save_fixed_attributes(attrs: dict) -> None:
         raise ValueError("誕生日は YYYY-MM-DD 形式で入力してください")
     profile["fixed_attributes"].update(cleaned)
     USER_PROFILE.parent.mkdir(parents=True, exist_ok=True)
-    USER_PROFILE.write_text(
+    durable_atomic_write_text(
+        USER_PROFILE,
         json.dumps(sanitize_obj(profile), ensure_ascii=False, indent=2),
-        encoding="utf-8",
     )
 
 

@@ -160,7 +160,7 @@
 
 - **ID**: `FSA-2026-07-13-08`
 - **重要度**: `CRITICAL`
-- **状態**: `UNRESOLVED`
+- **状態**: `RESOLVED`
 - **症状（攻撃ベクトル）**: JSON破損、途中書込、部分的なfilesystem障害が発生すると、loaderが破損を空dictまたはdefault状態へ変換する。その後の通常保存が破損前の原bytesを上書きし、回復可能だったユーザーデータを物理的に消去する。Interview reportは同一秒・同一genreでfilenameが衝突し、破損reportは履歴から黙って除外される。
 - **根本原因**: 複数storeが`JSONDecodeError`と`OSError`を「データなし」と同一視する。direct `write_text`が多く、durable atomic replace、file/dir fsync、single-writer lock、typed persistence error、bytes保持規律が統一されていない。読み込み失敗時のrepair権限と通常更新権限が分離されていない。
 - **実コード証拠**:
@@ -171,6 +171,8 @@
   - `src/python/core/profiler.py:1213-1228`
   - `src/python/core/interview_report.py:419-440`
 - **必須是正措置**: absent、corrupt、permission、I/O failureをtyped resultとして分離し、corrupt bytesを不変のままhard-failする。全権威storeへsame-directory temporary file、exclusive/no-follow open、flush、file fsync、atomic replace、parent-directory fsync、single-writer lockingを適用する。repairは明示的な別操作とし、backup/quarantine、利用者確認、監査recordなしに実行してはならない。report IDはcontent/session identityを含む衝突不能な値へ変更する。
+- **解決記録**: JSON不在だけを新規状態として扱い、破損、権限、I/O障害をtyped errorでHard-failすることでサイレント修復を完全撤去した。same-directoryのexclusive/no-follow一時ファイル、flush、file fsync、atomic replace、可能な環境でのparent-directory fsyncを行うDurable Atomic Writeを全対象storeへ適用した。Interview reportのファイル名へcanonical contentのSHA-256を結合し、秒精度ファイル名による衝突と破壊的上書きを排除した。
+- **検証証拠**: FSA-08契約テスト`11 passed`、全体pytest`622 passed, 1 skipped`、Cargo全target`57 passed`、`git diff --check`違反0件。破損bytes不変、replace失敗時の原本保持、一時ファイル掃除、file fsync先行、同一秒の異内容report分離を固定した。
 
 ---
 
