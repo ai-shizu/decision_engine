@@ -821,6 +821,7 @@ export function InterviewTab() {
       {report && (
         <div className="term-panel mission-result-panel">
           <p className="term-header">MISSION_RESULT</p>
+          <p className="hint">AI評価候補（非測定・履歴更新に不使用）</p>
           {report.metrics.length === 0 ? (
             <p className="hint">(有効な評価軸を取得できませんでした。上の講評本文を参照してください)</p>
           ) : (

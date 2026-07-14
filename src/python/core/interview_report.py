@@ -110,12 +110,12 @@ def _metrics_prompt(transcript_text: str, summary: str, retry: bool) -> str:
     return prompt
 
 
-def _combined_report_schema() -> dict:
+def _metrics_schema() -> dict:
     axis_list = list(AXIS_WHITELIST)
     return {
         "type": "object",
         "additionalProperties": False,
-        "required": ["metrics", "evidence"],
+        "required": ["metrics"],
         "properties": {
             "metrics": {
                 "type": "array",
@@ -130,106 +130,8 @@ def _combined_report_schema() -> dict:
                     },
                 },
             },
-            "evidence": TENSOR_EVIDENCE_SCHEMA_ITEMS(),
         },
     }
-
-
-def TENSOR_EVIDENCE_SCHEMA_ITEMS() -> dict:
-    from .tensor_profile import CANONICAL_DIMENSION_IDS, INDICATOR_IDS
-
-    indicator_enums = sorted(
-        {ind for triple in INDICATOR_IDS.values() for ind in triple}
-    )
-    return {
-        "type": "array",
-        "items": {
-            "type": "object",
-            "additionalProperties": False,
-            "required": [
-                "dimension_id",
-                "indicator_id",
-                "level",
-                "turn_id",
-                "turn_index",
-                "speaker_alias",
-                "quote",
-            ],
-            "properties": {
-                "dimension_id": {
-                    "type": "string",
-                    "enum": list(CANONICAL_DIMENSION_IDS),
-                },
-                "indicator_id": {"type": "string", "enum": indicator_enums},
-                "level": {"type": "integer", "minimum": 0, "maximum": 4},
-                "turn_id": {"type": "string"},
-                "turn_index": {"type": "integer", "minimum": 0},
-                "speaker_alias": {"type": "string"},
-                "quote": {"type": "string", "maxLength": 120},
-            },
-        },
-    }
-
-
-def _tensor_rubric_prompt_section() -> str:
-    from .tensor_profile import CANONICAL_DIMENSION_IDS, INDICATOR_IDS
-
-    lines = [
-        "6次元テンソル証拠ルール:",
-        "- dimension_id は次の canonical 6軸のみ:",
-    ]
-    for dim_id in CANONICAL_DIMENSION_IDS:
-        indicators = ", ".join(INDICATOR_IDS[dim_id])
-        lines.append(f"  - {dim_id}: indicators = {indicators}")
-    lines.extend(
-        [
-            "- rubric level は整数 0〜4 (0=矛盾, 1=不十分, 2=部分, 3=明確, 4=一貫)",
-            "- 有効 score には同一 dimension で2種類以上の indicator と"
-            " 2つ以上の candidate turn が必要",
-            "- quote は提示本文の完全一致部分文字列 (最大120文字)",
-            "- turn_id / turn_index / speaker_alias は提示メタデータをそのままコピー",
-            "- 候補者以外・講評・mentor・system の発言を evidence に使わない",
-        ]
-    )
-    return "\n".join(lines)
-
-
-def _combined_metrics_prompt(
-    transcript_text: str,
-    summary: str,
-    retry: bool,
-    *,
-    turn_metadata_block: str | None = None,
-    evidence_retry: bool = False,
-) -> str:
-    axis_list = "、".join(AXIS_WHITELIST)
-    transcript_section = turn_metadata_block or transcript_text or "(発言なし)"
-    prompt = (
-        f"# 議論トランスクリプト (検証対象 turns)\n{transcript_section}\n\n"
-        f"# 講評\n{summary}\n\n"
-        f"{_tensor_rubric_prompt_section()}\n\n"
-        "上記を踏まえ、候補者を次の4軸と6次元テンソル証拠で評価し、"
-        "JSON のみを出力せよ (前後に説明文・コードブロック記号を書かない):\n"
-        '{"metrics": [{"axis": "<'
-        f"{axis_list} のいずれか1つ>"
-        '", "score": <0から100の整数>, "evidence": "<議論からの短い引用>"}, ...], '
-        '"evidence": [{"dimension_id": "<canonical6軸>", "indicator_id": "<indicator>", '
-        '"level": <0-4>, "turn_id": "<提示turn_id>", "turn_index": <提示turn_index>, '
-        '"speaker_alias": "candidate", "quote": "<完全一致引用>"}]}\n'
-        f"{axis_list} の4軸すべてを1つずつ出力し、各軸に議論からの"
-        "具体的な引用 (evidence) を必ず付けること。"
-    )
-    if retry or evidence_retry:
-        prompt += (
-            "\n\n(前回の出力は無効でした。指定の JSON 形式のみを、"
-            f"{axis_list} の4軸すべてに evidence 付きで出力し直してください)"
-        )
-    if evidence_retry:
-        prompt += (
-            "\n前回の evidence はスキーマまたは参照整合性違反でした。"
-            "提示 turn_id/turn_index/speaker_alias/quote を厳守してください。"
-        )
-    return prompt
 
 
 def _generate_structured_text(engine, system: str, user: str, schema: dict) -> str:
@@ -237,40 +139,6 @@ def _generate_structured_text(engine, system: str, user: str, schema: dict) -> s
     if hasattr(backend, "generate_structured"):
         return backend.generate_structured(system, user, schema)
     return backend.generate(system, user)
-
-
-def _build_tensor_profile(
-    engine,
-    transcript_pairs: list[tuple[str, str]] | None,
-    session_id: str | None,
-    proposals: list[dict] | None,
-) -> dict | None:
-    if not transcript_pairs:
-        return None
-    from .session_memory import transcript_turns_from_pairs
-    from .tensor_profile import (
-        aggregate_profile,
-        degenerate_profile,
-        profile_to_dict,
-        report_tensor_field,
-        transcript_hash,
-    )
-
-    sid = session_id or "session"
-    turns = transcript_turns_from_pairs(transcript_pairs, sid)
-    th = transcript_hash(turns)
-    model_hash = getattr(engine.backend, "name", "backend")
-    prompt_version = "tensor_profile.v1"
-    if not proposals:
-        profile = degenerate_profile(sid, th, model_hash, prompt_version)
-    else:
-        try:
-            profile = aggregate_profile(
-                sid, th, model_hash, prompt_version, turns, proposals
-            )
-        except ValueError:
-            profile = degenerate_profile(sid, th, model_hash, prompt_version)
-    return report_tensor_field(profile)
 
 
 def _parse_structured_response(text: str) -> dict | None:
@@ -330,50 +198,23 @@ def generate_report(engine, system: str, transcript_text: str, summary: str,
             engine, system, transcript_text, summary, config, latencies, max_retries
         )
 
-    from .session_memory import format_turns_for_evidence_prompt, transcript_turns_from_pairs
-    from .tensor_profile import aggregate_profile, degenerate_profile, parse_and_validate_proposals, report_tensor_field, transcript_hash
+    from .session_memory import transcript_turns_from_pairs
+    from .tensor_profile import authoritative_profile, report_tensor_field
 
     sid = session_id or "session"
     turns = transcript_turns_from_pairs(transcript_pairs, sid)
-    turn_block = format_turns_for_evidence_prompt(turns)
 
     metrics: list[dict] = []
-    tensor_proposals: list[dict] | None = None
     attempts = 0
-    schema = _combined_report_schema()
-    evidence_retry = False
+    schema = _metrics_schema()
     success = False
     while not success and attempts <= max_retries:
-        prompt = _combined_metrics_prompt(
-            transcript_text,
-            summary,
-            retry=attempts > 0 and not evidence_retry,
-            turn_metadata_block=turn_block,
-            evidence_retry=evidence_retry,
-        )
+        prompt = _metrics_prompt(transcript_text, summary, retry=attempts > 0)
         text = _generate_structured_text(engine, system, prompt, schema)
         parsed = _parse_structured_response(text)
         metrics = _parse_metrics(parsed)
-        proposals: list[dict] | None = None
-        if isinstance(parsed, dict) and isinstance(parsed.get("evidence"), list):
-            try:
-                proposals = parse_and_validate_proposals(
-                    {"evidence": parsed.get("evidence")},
-                    turns,
-                    allow_duplicate_dimensions=True,
-                )
-            except ValueError:
-                proposals = None
-                evidence_retry = True
         metrics_ok = len(metrics) >= len(AXIS_WHITELIST)
-        evidence_ok = proposals is not None and len(proposals) > 0
-        if metrics_ok and evidence_ok:
-            tensor_proposals = proposals
-            success = True
-        else:
-            if not evidence_ok:
-                evidence_retry = True
-            tensor_proposals = None
+        success = metrics_ok
         attempts += 1
 
     report = {
@@ -385,15 +226,7 @@ def generate_report(engine, system: str, transcript_text: str, summary: str,
         "latency": synthesize_latency(latencies),
         "simulated": True,
     }
-    th = transcript_hash(turns)
-    model_hash = getattr(engine.backend, "name", "backend")
-    prompt_version = "tensor_profile.v1"
-    if tensor_proposals:
-        profile = aggregate_profile(
-            sid, th, model_hash, prompt_version, turns, tensor_proposals
-        )
-    else:
-        profile = degenerate_profile(sid, th, model_hash, prompt_version)
+    profile = authoritative_profile(sid, turns)
     report["tensor_profile"] = report_tensor_field(profile)
     return report
 
@@ -440,44 +273,3 @@ def load_recent_reports(genre: str, limit: int = 2) -> list[dict]:
         if r.get("schema") == SCHEMA_VERSION:
             out.append(r)
     return out
-
-
-def compute_growth_context(genre: str) -> str:
-    """F4c (SPEC_FOXTROT_UI.md §8 裁定1): 直近2件から決定論的差分要約を
-    合成する。壁Bの構造的ガード — 戻り値は AXIS_WHITELIST の固定ラベルと
-    整数スコアのみで構成され、evidence/summary (LLM生成の自由テキスト、
-    幻覚すれば日常データを含みうる) を一切含まない。これにより注入文字列は
-    日常/gapリークを構造的に運べない。
-
-    W-41: 0件は完全沈黙 (空文字・注入なし)。1件はデルタを出さず最重点課題軸
-    のみ (1点に推移は無い — 「+0」の捏造は F-14 違反)。
-    W-43: 欠測軸は 0 ではなく「データ無」注記で扱う (score 0 は実測された
-    落第点、欠測は別物 — I-18 のマスク意味論の面接版)。
-    """
-    reports = load_recent_reports(genre, limit=2)
-    if not reports:
-        return ""
-
-    def axis_scores(r: dict) -> dict[str, int]:
-        return {m["axis"]: m["score"] for m in r.get("metrics", [])}
-
-    newest = axis_scores(reports[-1])
-    if not newest:
-        return ""  # 最新レポートが全軸欠測 (退化レポート) なら注入するものが無い
-    focus = min(newest, key=lambda a: newest[a])
-
-    lines: list[str] = []
-    if len(reports) >= 2:
-        older = axis_scores(reports[-2])
-        parts = []
-        for axis in AXIS_WHITELIST:
-            if axis in newest and axis in older:
-                d = newest[axis] - older[axis]
-                parts.append(f"{axis} {older[axis]}→{newest[axis]} ({d:+d})")
-            elif axis in newest:
-                parts.append(f"{axis} {newest[axis]} (前回データ無)")
-        lines.append(" / ".join(parts))
-    else:
-        lines.append(" / ".join(f"{a} {newest[a]}" for a in AXIS_WHITELIST if a in newest))
-    lines.append(f"最重点課題軸: {focus} ({newest[focus]})")
-    return "\n".join(lines)

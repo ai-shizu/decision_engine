@@ -299,3 +299,26 @@ This ledger is a mandatory pre-read before architecture blueprinting, implementa
   * Never add a production public-key override, unsigned compatibility fallback, mutable GitHub Action tag, unhashed pip dependency, pre-codesign sidecar hash, or unsigned SBOM.
 
 ---
+
+## INCIDENT: `INC-LLM-AUTHORITY-01`
+* **DATE**: 2026-07-14
+* **MODULE**: interview report / 6D tensor authority boundary (`FSA-2026-07-13-05`)
+* **SYMPTOM (症状)**:
+  * Two schema-valid LLM evidence sets for the same transcript produced different authoritative 6D scores, confidence, and evidence.
+  * Persisted LLM-generated four-axis metrics were summarized as factual growth and injected into later Interview/GD system prompts.
+* **ROOT CAUSE (エージェントの思考エラー)**:
+  * Shape validation and a deterministic aggregation formula were mistaken for deterministic, authoritative observation. A deterministic reducer cannot remove nondeterminism or fabrication from its inputs.
+  * Display-oriented model proposals were persisted without a one-way authority boundary, then silently promoted into future-session facts.
+* **ARCHITECTURAL RULING (絶対裁定)**:
+  * No LLM output field may enter authoritative 6D state or any deterministic profile/state update. Seed, temperature, strict JSON, retries, and model identity do not confer authority.
+  * `interview_report` must not request tensor evidence from the LLM or import/call `aggregate_profile` or `parse_and_validate_proposals`. Only `authoritative_profile()` may construct report 6D state, and it must accept no LLM output.
+  * Until a complete code-derived rubric observer exists, every authoritative 6D dimension is N/A: score `None`, confidence `0.0`, and empty evidence. Missing observation must never be represented as zero or an LLM fallback.
+  * LLM four-axis metrics are display-only proposals labeled as non-measurements. They may not be reused by `compute_growth_context`, injected into later prompts, or treated as historical facts. The growth-context API and template remain retired.
+* **VERIFICATION**:
+  * RED: divergent valid LLM outputs changed the 6D profile; the report schema requested tensor evidence; and the production AST contained a direct LLM-to-aggregation call path.
+  * GREEN: FSA-05 boundary contracts 5/5 and the affected Tensor/integration set 75/75. Contracts require invariant N/A output, no tensor evidence schema/prompt, no aggregation call path, no future-session metric reinjection, and an explicit non-authoritative UI label.
+* **PREVENTION INSTRUCTION (今後のメタ・プロンプトに組み込むべき防衛命令)**:
+  * Never reconnect report-generation LLM output to `aggregate_profile`, 6D evidence, growth history, or later system prompts.
+  * New authoritative dimensions require a deterministic code observer, explicit missingness semantics, evidence provenance, and divergent-LLM-output invariance tests before state mutation is permitted.
+
+---

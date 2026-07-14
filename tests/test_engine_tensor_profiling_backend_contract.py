@@ -355,7 +355,7 @@ def test_prompt_includes_real_turn_metadata() -> None:
             assert turn["text"] in block
 
 
-def test_e2e_non_degenerate_profile_from_prompt_ids() -> None:
+def test_e2e_llm_evidence_is_not_authoritative_tensor_input() -> None:
     pairs = [
         ("面接官", "質問"),
         ("候補者", "目的を明確にし構造化します。"),
@@ -423,11 +423,15 @@ def test_e2e_non_degenerate_profile_from_prompt_ids() -> None:
         transcript_pairs=pairs,
         session_id="sess-e2e",
     )
-    assert turns[1]["turn_id"] in backend.calls[0][1]
-    assert any(d.get("score") is not None for d in report["tensor_profile"]["dimensions"])
+    assert turns[1]["turn_id"] not in backend.calls[0][1]
+    assert "dimension_id" not in backend.calls[0][1]
+    for dim in report["tensor_profile"]["dimensions"]:
+        assert dim["score"] is None
+        assert dim["confidence"] == 0.0
+        assert dim["evidence"] == []
 
 
-def test_invalid_evidence_retries_then_accepts_valid() -> None:
+def test_llm_tensor_evidence_does_not_trigger_retry_or_state_update() -> None:
     pairs = [
         ("候補者", "目的を明確にし構造化します。"),
         ("面接官", "続けて"),
@@ -500,12 +504,11 @@ def test_invalid_evidence_retries_then_accepts_valid() -> None:
         transcript_pairs=pairs,
         session_id="sess-retry",
     )
-    assert len(backend.calls) == 2
-    assert "スキーマまたは参照整合性違反" in backend.calls[1][1]
-    assert any(d.get("score") is not None for d in report["tensor_profile"]["dimensions"])
+    assert len(backend.calls) == 1
     for dim in report["tensor_profile"]["dimensions"]:
-        for ev in dim.get("evidence", []):
-            assert ev.get("turn_id") != "fake-turn-id"
+        assert dim["score"] is None
+        assert dim["confidence"] == 0.0
+        assert dim["evidence"] == []
 
 
 def test_redactor_incremental_no_full_raw_buffer() -> None:

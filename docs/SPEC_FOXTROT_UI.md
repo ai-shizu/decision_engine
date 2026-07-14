@@ -42,6 +42,10 @@
 #   process ロックを全期間保持)。§9 に相関ID復元 (cid エンベロープ方式・3層最小変更・
 #   useCorrelationId フック) と W-45〜W-49 を追加。並行実行本体 (エンジン多重化) は
 #   §9.4 Target Golf として青写真のみ (YAGNI・本Rev では建てない)。
+# Rev.12 (2026-07-14): FSA-2026-07-13-05のセキュリティ裁定。LLM生成metrics/
+#   evidenceを権威6Dまたは将来セッションの事実へ昇格していたF4c/F-19を失効。
+#   `compute_growth_context`と`_GROWTH_CONTEXT_TEMPLATE`を撤去し、成績表は
+#   非測定の表示候補としてのみ保存・表示する。競合時は§11 Rev.12が全旧裁定に勝つ。
 # Rev.8 (2026-07-08): F3 完遂を受けた F3.5 (ストリーミングのスロットリング)
 #   および F4 (面接シミュレータ進化: コンフィギュレータ/成績表/継続学習)
 #   着工前裁定。憲法照合で2件の衝突を検出し壁A (成績表=建前人格の隔離。
@@ -1800,6 +1804,27 @@ W-52 (感想戦の聖域漏れ禁止): _debrief_turn に gap/oracle を注入し
   新型:     InterviewConfig.stance / EsView
 ================================================================================
 ```
+
+---
+
+# §11【Rev.12 セキュリティ裁定】FSA-05: LLM提案と権威状態の完全分離
+
+本節は§7/§8/§10.5のF4c/F-19成長注入裁定を明示的に上書きする。旧記述は当時の
+設計・as-built監査履歴として残すが、再実装してはならない。
+
+1. LLM生成の4軸metricsとevidenceは、strict schemaを通過しても非測定の表示候補で
+   あり、権威6D、profile、tensor、gap、将来セッションのsystem promptへ入力しない。
+2. `interview_report.generate_report()`はLLMへ6D evidenceを要求せず、
+   `aggregate_profile()` / `parse_and_validate_proposals()`をproduction call pathへ
+   接続しない。6DはLLM出力を引数に持たない`authoritative_profile()`だけが構築する。
+3. コード由来の決定論的rubric観測器が無い間、権威6Dは全次元N/Aとする。欠測を
+   score `0`またはLLM fallbackで埋めてはならない。
+4. `compute_growth_context()`、`_GROWTH_CONTEXT_TEMPLATE`、Interview/GD開始時の
+   成長注入は廃止する。保存済み成績表はMISSION_RESULT表示にのみ使用でき、
+   「事実としての推移」へ再解釈してはならない。
+5. 回帰ゲートは`tests/test_fsa_2026_07_13_05_llm_authority_boundary.py`とする。
+   異なる妥当LLM出力で権威6Dが完全一致すること、schema/promptとASTに再接続経路が
+   無いこと、UIが非権威性を明示することを同時に満たさなければならない。
 
 ---
 *装飾は 1 ピクセルも要らない (AI_SKILLS §3.4)。ハッカーが信頼するのは、

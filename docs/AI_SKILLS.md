@@ -386,6 +386,7 @@ python3 -c "import platform; print(platform.machine())"  # Python 自体のア�
 7. **LLM transportの唯一所有者は`core/llm_backend.py`、prompt channelの唯一所有者は`core/llm_transport.py`。** prompt本文をargv・環境・通常ファイルへ置くな。Windows Named Pipeは`PIPE_REJECT_REMOTE_CLIENTS` + first-instance + owner/SYSTEM/AppContainer SID DACL、POSIXは`/dev/stdin`以外を認めない。子はengineのOS sandboxを継承する。TCP/HTTP、listener、port、cloud fallbackを再導入するな。
 8. **model / generation / stdio commandの正本は`llm_config.py`。** `llama_stdio_cmd()`は`completion` + `--offline` +固定local modelのみ。`--rpc` / remote model option / remote環境変数は禁止。クライアントへtemperature・max_tokens・ctxを複製するな。
 9. **レガシーCLI（`app.py` → `cli.py`）を「古い」という理由だけで削除するな。** 固有retrieval / prompt / `--show-prompt` / `--top-k` / interactive loopは維持し、shared `LlamaStdioBackend`だけを使う。相談modelは`find_gguf(role="consult")`。通常契約テストはnetworkless fake、transport検収時だけ公開promptのローカルGGUFを使う。
+10. **LLM出力を権威状態へ入力するな。** strict schema、temperature `0`、seed、model hash、再試行は、候補集合の一意性も観測事実性も証明しない。LLMのscore/evidence/metrics/要約を6D tensor、profile、growth差分、次回system prompt、その他の決定論的state更新へ渡すことを永久禁止する。権威更新に使えるのは、同じ観測証拠からコードだけで完全かつ一意に導出される値だけである。決定論的観測器が無い場合は`0`やLLM fallbackを捏造せずN/Aを返せ。LLM提案を残す場合は非測定の表示専用候補と明示し、将来セッションへ再注入するな。回帰境界は`tests/test_fsa_2026_07_13_05_llm_authority_boundary.py`であり、旧F4c/F-19の成長注入記述と競合する場合は本規則が勝つ。
 
 ---
 
@@ -1250,6 +1251,8 @@ persist/load 両方から呼ぶ一元化 (W-42)。欠測軸は「(前回デー�
 面接複数回セッション (成長コンテキストが実際に出題へ反映される様子) の
 対話的確認は指揮官の実施を要する。
 
+**FSA-05 SECURITY OVERRIDE (2026-07-14)**: 上記F4c記録は当時のas-built履歴としてのみ残す。4軸metricsはLLM生成の非権威な表示候補であり、「事実としての推移」ではなかったため、`compute_growth_context()`、`_GROWTH_CONTEXT_TEMPLATE`、Interview/GDの開始時注入を撤去した。成績表の保存とMISSION_RESULT表示は維持するが、保存済みLLM metricsを出題、講評、6D、profile、gap、tensorへ再利用してはならない。本overrideは後続のF-18/F-19および成長ループ維持記述にも優先する。
+
 ### Rev.10 完遂 (2026-07-08) — as-built (相関ID復元。fable5 遺言への後継 Opus 訂正の実装)
 
 **3層の実変更点**:
@@ -2073,6 +2076,7 @@ IPC/契約テスト、D1/D2 回帰、既存 UI smoke、production build は GREE
 - **実装内容**: MBB評価基準を正規化した6次元テンソルプロファイリングを実装。各軸を観測可能な候補者発言のEvidenceと厳密に結び付け、スコアとconfidenceを決定論的に算出する。長時間セッション向けに、固定文字予算とTurn/Atom単位の採否による決定論的Semantic Compressionを導入。
 - **アーキテクチャ**: `session_memory.py` が境界付きWorking Memoryと最新発言優先の証拠コンテキストを構築し、`tensor_profile.py` が6Dスキーマ、厳格validator、集約式を所有する。`interview_report.py` は構造化JSON生成、参照整合性検証、再試行、退化profileを提供する。`consultation_engine.py` にはnestedタグとchunk境界に対応した真のO(n) Hidden Reasoning除去ステートマシンを配線し、IPC前とUI側の二重防衛を完成させた。不正・未知Evidenceを拒否してハルシネーション由来の値を採用せず、既存`oracle.py`の無菌性と`interview_report.v1`の後方互換を維持。
 - **検証結果**: Python関連全回帰114件、TypeScript型検査、Vite本番ビルド、`git diff --check`がすべてPASS。frontend、package files、`data/`、既存D1/D2/PROBEコアへの無関係な変更なし。
+- **FSA-05訂正 (2026-07-14)**: schema検証済みであってもLLM evidenceは観測事実でも決定論的入力でもないため、`interview_report`から6D集計への配線を撤去した。validator/集約式は純関数契約として残すがproduction report生成からは到達不能とする。権威6DはLLM出力を受け取らない`authoritative_profile()`だけが所有し、コード由来rubric観測器が存在しない現状は全次元N/Aである。旧記述のうちLLM evidence採用を前提とする部分は本訂正により失効する。
 
 ### Project Calculus Phase 3-A - AS-BUILT
 - **状態**: 完了 (GREEN) — 歴史記録。Finding 9 (2026-07-12) で PROFILE 恒久モックを退役。

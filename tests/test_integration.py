@@ -648,11 +648,8 @@ def test_all_interview_modes_persist() -> None:
     print("  interview_sim / gd_sim symmetric learning-loop persistence (F-19) OK")
 
 
-def test_gd_growth_injected() -> None:
-    """F-19: 過去の GD 成績 (group_discussion genre) が永続化されていれば、
-    次回 GD 開始時に成長コンテキストが system へ注入される (interview_sim と
-    対称の W-44 一発注入)。壁B: growth 文字列は AXIS ラベル+数値のみで、
-    gap_insights 由来の自由テキストは一切混入しない。"""
+def test_gd_llm_metric_history_is_not_injected() -> None:
+    """FSA-05: LLM metric proposals are display-only, never future facts."""
     _write_report_at(
         INTERVIEW_RECORDS_DIR / f"interview_20260501T000000_{GD_GENRE}.json",
         {"論理性": 40, "技術力": 45, "構成力": 50, "具体性": 35})
@@ -666,10 +663,10 @@ def test_gd_growth_injected() -> None:
     eng.consult("開始", mode="gd_sim")
 
     sys1, user1 = fake.calls[0]
-    assert "訓練継続コンテキスト" in sys1, "GD 開始に成長コンテキストが注入されていない"
-    assert "最重点課題軸" in sys1
+    assert "訓練継続コンテキスト" not in sys1
+    assert "最重点課題軸" not in sys1
     _assert_no_gap_leak(sys1, user1)
-    print("  GD growth context injected without wall-B leak (F-19) OK")
+    print("  GD LLM metric history is not injected (FSA-05) OK")
 
 
 # ---------------------------------------------------------------- F-20 感想戦 (Debrief)
@@ -1102,36 +1099,15 @@ def test_load_recent_reports_sorts_by_filename_not_mtime() -> None:
     print("  load_recent_reports sorts by filename, not mtime (W-40) OK")
 
 
-def test_compute_growth_context_fallbacks() -> None:
-    """W-41: 0件は完全沈黙 (空文字)。1件はデルタなしで焦点軸のみ。
-    2件目からデルタ ("旧→新 (符号付き差分)") が出る。"""
+def test_llm_growth_context_api_is_retired() -> None:
+    """FSA-05: no API may promote LLM metric proposals into state."""
     from core import interview_report
 
-    assert interview_report.compute_growth_context("no_such_genre_xyz") == ""
-
-    genre = "growthfallback"
-    _write_report_at(
-        INTERVIEW_RECORDS_DIR / f"interview_20260201T000000_{genre}.json",
-        {"論理性": 60, "技術力": 50, "構成力": 70, "具体性": 65},
-    )
-    ctx1 = interview_report.compute_growth_context(genre)
-    assert "→" not in ctx1, f"1件しかないのにデルタを出した: {ctx1}"
-    assert "最重点課題軸: 技術力 (50)" in ctx1, ctx1
-
-    _write_report_at(
-        INTERVIEW_RECORDS_DIR / f"interview_20260202T000000_{genre}.json",
-        {"論理性": 70, "技術力": 45, "構成力": 70, "具体性": 68},
-    )
-    ctx2 = interview_report.compute_growth_context(genre)
-    assert "論理性 60→70 (+10)" in ctx2, ctx2
-    assert "技術力 50→45 (-5)" in ctx2, ctx2
-    assert "最重点課題軸: 技術力 (45)" in ctx2, ctx2
-    print("  compute_growth_context 0/1/2-report fallbacks (W-41) OK")
+    assert not hasattr(interview_report, "compute_growth_context")
 
 
-def test_growth_context_missing_axis_not_treated_as_zero() -> None:
-    """W-43: 退化レポート (軸欠測) が履歴に混じっても、欠測軸は 0 ではなく
-    「前回データ無」と注記される — 架空の大幅スコア低下を捏造しない。"""
+def test_metric_proposal_history_preserves_missing_axis_without_inference() -> None:
+    """Display-only history preserves raw absence and derives no score."""
     from core import interview_report
 
     genre = "missingaxis"
@@ -1143,18 +1119,14 @@ def test_growth_context_missing_axis_not_treated_as_zero() -> None:
         INTERVIEW_RECORDS_DIR / f"interview_20260302T000000_{genre}.json",
         {"論理性": 62, "技術力": 55, "構成力": 68, "具体性": 66},
     )
-    ctx = interview_report.compute_growth_context(genre)
-    assert "技術力 55 (前回データ無)" in ctx, ctx
-    assert "技術力 0→55" not in ctx, "欠測軸が0と誤読され架空の推移が捏造された"
-    print("  growth context treats missing axis as absent, not zero (W-43) OK")
+    reports = interview_report.load_recent_reports(genre, limit=2)
+    older_axes = {metric["axis"] for metric in reports[0]["metrics"]}
+    assert "技術力" not in older_axes
+    assert not hasattr(interview_report, "compute_growth_context")
 
 
-def test_growth_context_injected_without_gap_leak() -> None:
-    """壁B: 成長コンテキストは面接開始プロンプトへ注入されるが、
-    gap_insights/Echo 等の日常プロファイル由来マーカーは一切混入しない
-    (_assert_no_gap_leak を注入後の system にも適用)。"""
-    from core import interview_report
-
+def test_interview_llm_metric_history_is_not_injected() -> None:
+    """FSA-05: interview mode also keeps metric proposals display-only."""
     genre = "growthinject"
     _write_report_at(
         INTERVIEW_RECORDS_DIR / f"interview_20260401T000000_{genre}.json",
@@ -1166,10 +1138,10 @@ def test_growth_context_injected_without_gap_leak() -> None:
     eng.consult("開始", mode="interview_sim", config={"genre": genre})
 
     system, user = backend.calls[0]
-    assert "訓練継続コンテキスト" in system, "成長コンテキストが注入されていない"
-    assert "最重点課題軸" in system
+    assert "訓練継続コンテキスト" not in system
+    assert "最重点課題軸" not in system
     _assert_no_gap_leak(system, user)
-    print("  growth context injection carries no gap leak (wall B) OK")
+    print("  interview LLM metric history is not injected (FSA-05) OK")
 
 
 def test_simulated_persona_isolation() -> None:

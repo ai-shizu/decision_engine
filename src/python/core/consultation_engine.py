@@ -237,25 +237,9 @@ def _format_latency_section(latencies: list[dict]) -> str:
 
 
 def _interview_genre(cfg: dict, case: dict | None) -> str:
-    """F4c (SPEC_FOXTROT_UI.md §8 裁定2): セッション開始時と講評フェーズで
-    同一の genre 導出を使う。ここが分岐すると load_recent_reports/
-    persist_report が別の genre を見ることになり、成長コンテキストの
-    読み書きが食い違う (W-42 の鏡像)。"""
+    """Use one genre identity for report persistence across all paths."""
     return str(cfg.get("genre") or "").strip() or (case["format"] if case else "es_interview")
 
-
-# F4c (SPEC_FOXTROT_UI.md §8 裁定2): 極小トークン注入テンプレート。壁B —
-# growth 文字列は AXIS_WHITELIST ラベルと整数スコアのみで合成されており
-# (interview_report.compute_growth_context)、evidence/summary 由来の自由
-# テキストを一切含まない。ここに直接自由テキストを埋め込む変更はするな。
-_GROWTH_CONTEXT_TEMPLATE = (
-    "\n\n# 訓練継続コンテキスト (この候補者の過去成績。本人には非開示)\n"
-    "あなたはこの候補者を過去に面接している。下記は事実としての推移である:\n"
-    "{growth}\n"
-    "最重点課題軸を今回の出題と追撃で重点的に検証せよ。"
-    "ただし成績を候補者に読み上げるな — 知っている前提で、弱点を突く問いに"
-    "反映するだけにせよ。"
-)
 
 # ============================================================ カオス GD シミュレーター
 GD_OUTPUT_FORMAT_INSTRUCTION = (
@@ -1097,10 +1081,6 @@ class ConsultationEngine:
                     + _stance_clause(cfg)
                     + _custom_theme_system_clause(custom_theme)
                 )
-                genre = _interview_genre(cfg, case)
-                growth = _ireport.compute_growth_context(genre)
-                if growth:
-                    system = system + _GROWTH_CONTEXT_TEMPLATE.format(growth=growth)
                 self._interview_state = {
                     "case": case, "es": None, "system": system,
                     "transcript": [], "latencies": [], "config": cfg}
@@ -1118,13 +1098,6 @@ class ConsultationEngine:
                     # F-18: stance は config から読む (既定 adversarial)。
                     system = build_interviewer_persona(
                         es, stance=str(cfg.get("stance") or "adversarial"))
-                    # F4c: 成長コンテキストはセッション開始時に1回だけ読む (W-44
-                    # — ターン毎の再走査禁止。以後は _interview_state["system"]
-                    # に焼き込まれた文字列がそのまま使い回される)。
-                    genre = _interview_genre(cfg, None)
-                    growth = _ireport.compute_growth_context(genre)
-                    if growth:
-                        system = system + _GROWTH_CONTEXT_TEMPLATE.format(growth=growth)
                     self._interview_state = {
                         "case": None, "es": es, "system": system,
                         "transcript": [], "latencies": [], "config": cfg}
@@ -1166,12 +1139,6 @@ class ConsultationEngine:
                             "候補者への最初の出題を行え。テーマを提示し、"
                             "最初に確認すべき前提を1つだけ問うこと。"
                         )
-                    # F4c: config駆動・bank駆動どちらも同一の注入点を通す (W-44:
-                    # セッション開始時に1回だけ)。
-                    genre = _interview_genre(cfg, case)
-                    growth = _ireport.compute_growth_context(genre)
-                    if growth:
-                        system = system + _GROWTH_CONTEXT_TEMPLATE.format(growth=growth)
                     self._interview_state = {
                         "case": case, "es": None, "system": system,
                         "transcript": [], "latencies": [], "config": cfg}
@@ -1395,13 +1362,6 @@ class ConsultationEngine:
                     self._gd_cursor += 1
                     topic_hint = f"GD テーマ: {theme}"
                 state_config = {"genre": GD_GENRE}
-            # F-19 (SPEC_FOXTROT_UI.md §10.5): interview_sim と対称の成長注入。
-            # セッション開始時に1回だけ読む (W-44 — ターン毎の再走査禁止)。
-            # 壁B: growth は AXIS_WHITELIST ラベル+整数のみで合成済み
-            # (evidence/summary 由来の自由テキストを含まない構造的ガード)。
-            growth = _ireport.compute_growth_context(GD_GENRE)
-            if growth:
-                system = system + _GROWTH_CONTEXT_TEMPLATE.format(growth=growth)
             self._gd_state = {
                 "topic_hint": topic_hint, "system": system,
                 "personas": list(personas or [])[:MAX_GD_PERSONAS],

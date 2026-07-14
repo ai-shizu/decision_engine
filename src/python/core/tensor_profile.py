@@ -375,6 +375,21 @@ def degenerate_profile(
     )
 
 
+def authoritative_profile(session_id: str, turns: list[dict]) -> TensorProfile6D:
+    """Build authority state without accepting model output as an input.
+
+    No deterministic rubric observer exists yet, so the complete authoritative
+    observation set is empty. Publishing N/A is preferable to converting a
+    stochastic model proposal into measured state.
+    """
+    return degenerate_profile(
+        session_id,
+        transcript_hash(turns),
+        "no-llm-authority",
+        "tensor_profile.code_only.v1",
+    )
+
+
 def profile_to_dict(profile: TensorProfile6D) -> dict:
     return {
         "schema": profile.schema,

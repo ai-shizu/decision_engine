@@ -105,16 +105,19 @@
 
 - **ID**: `FSA-2026-07-13-05`
 - **重要度**: `CRITICAL`
-- **状態**: `UNRESOLVED`
+- **状態**: `RESOLVED`
 - **症状（攻撃ベクトル）**: 同一transcript、同一事前状態、同一model名でも、LLMが異なる妥当候補を返すと6D tensor profileのscore、confidence、evidenceが変化する。structured generation失敗時の通常生成fallbackも、非決定的な候補集合を権威状態へ流入させる。
 - **根本原因**: generation設定が`temperature=0.6`でseedを結合していない。structured pathの`temperature=0`もbit-level determinismを保証せず、例外時には通常`generate()`へfallbackする。Pythonのschema検証は候補の形状とallowlistを確認するが、候補集合の一意性を導出しない。採用されたLLM提案が決定論的集計へ直接入力されるため、下流計算だけが決定的でも全体は決定的にならない。
-- **実コード証拠**:
+- **実コード証拠（是正後）**:
   - `src/python/core/llm_config.py:54-55`
   - `src/python/core/llm_backend.py:97-112`
   - `src/python/core/llm_backend.py:141-170`
-  - `src/python/core/interview_report.py:340-396`
-  - `src/python/core/tensor_profile.py:180-348`
+  - `src/python/core/interview_report.py:188-231`
+  - `src/python/core/tensor_profile.py:351-390`
 - **必須是正措置**: LLM提案を権威状態から分離し、同じ証拠から完全かつ一意に導出される決定論的候補集合だけをstate更新へ使用する。LLMを残す場合は提案を非権威の補助表示に限定するか、exact runtime/model/prompt/config/input/output artifactを固定して再生可能な採否台帳へ結合する。seed固定のみを是正完了条件にしてはならない。
+- **解決日**: `2026-07-14`
+- **解決記録**: `interview_report.generate_report()` のLLM schema/promptから6D evidence要求を除去し、`aggregate_profile()` / `parse_and_validate_proposals()` へのproduction call pathを切断した。6DはLLM出力を引数に持たない`tensor_profile.authoritative_profile()`だけが構築する。決定論的rubric観測器が未実装の現段階では、全次元をscore `None` / confidence `0.0` / evidence空のN/Aとしてfail-closedする。LLM生成の4軸metricsはUIで「AI評価候補（非測定・履歴更新に不使用）」と明示する表示専用データに降格し、`compute_growth_context()` / `_GROWTH_CONTEXT_TEMPLATE`およびInterview/GD開始時の再注入経路を撤去した。
+- **検証証拠**: 初期REDは「異なる妥当LLM出力で6Dが変化する」「LLM schemaが6D evidenceを要求する」「production call graphがLLM提案を集計へ渡す」の3/3。拡張GREENはFSA-05専用5/5、Tensor契約とintegrationを含む関連75/75。異なるLLM出力で同一N/A profile、schema/promptから6D語彙不在、AST上の集計call path不在、成長再注入API不在、UI非権威ラベルを固定した。
 
 ---
 

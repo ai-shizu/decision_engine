@@ -303,10 +303,6 @@ impl EngineManager {
         self.boot()
     }
 
-    pub async fn restart(self: &Arc<Self>) -> Result<(), String> {
-        self.restart_blocking()
-    }
-
     pub async fn invoke(
         self: &Arc<Self>,
         cmd: &str,
