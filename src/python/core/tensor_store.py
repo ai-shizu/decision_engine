@@ -23,25 +23,27 @@ release_tensor_mapping() で自プロセス内の open ハンドルを解放す�
 from __future__ import annotations
 
 import hashlib
+import hmac
 import json
 import mmap
-import os
 import struct
 from datetime import date as _date, timedelta
 from pathlib import Path
 
 import numpy as np
 
+from .durable_persistence import durable_atomic_write
 # 呼び出し側 (oracle.py/facade.py) が `tensor_store.TENSOR_GLOBAL_BIN` /
 # `tensor_store.tensor_dyad_bin` として参照する再エクスポート。
 from .paths import TENSOR_GLOBAL_BIN, tensor_dyad_bin  # noqa: F401
+from .runtime_identity import numeric_runtime_version
 
 # ---------------------------------------------------------------- レイアウト定義 (凍結)
 TENSOR_MAGIC = b"PKBTEN01"
 KTEN_FEAT = 32
 
-_HEADER_FMT = "<8sIIIIiIQ24x"   # magic, version, n_rows, n_features, row_stride,
-                               # epoch_day, flags, content_hash64, reserved[24]
+_HEADER_FMT = "<8sIIIIiIQ16s8x"  # fixed fields, canonical identity,
+                                  # payload hash128, reserved[8]
 _ROW_FMT = "<iI32f"            # day_index, valid_mask, f[32]
 
 HEADER_SIZE = struct.calcsize(_HEADER_FMT)
@@ -56,6 +58,8 @@ ROW_DTYPE = np.dtype([("day", "<i4"), ("mask", "<u4"), ("f", "<f4", (KTEN_FEAT,)
 assert ROW_DTYPE.itemsize == ROW_SIZE, ROW_DTYPE.itemsize
 
 FLAG_DYAD_SCOPE = 1 << 0
+TENSOR_FORMAT_VERSION = 1
+FEATURE_CODE_VERSION = "tensor-features.v2"
 
 # ---------------------------------------------------------------- 特徴量レジストリ (§5.2)
 # レーン番号は永久凍結。付番の再利用禁止 (拡張は Architect's Note を要する)。
@@ -119,12 +123,78 @@ def release_tensor_mapping(path: Path) -> None:
 
 
 # ---------------------------------------------------------------- 鮮度判定
-def content_hash64(daily: list[dict]) -> int:
-    """入力スナップショットの鮮度判定鍵。blake2b 先頭 8 バイトを符号なし64bit整数へ
-    (Charlie の content_hash と同じ正規化 JSON 規約)。"""
-    blob = json.dumps(daily, ensure_ascii=False, sort_keys=True).encode("utf-8")
-    digest = hashlib.blake2b(blob, digest_size=8).digest()
+def content_hash64(
+    daily: list[dict],
+    dyads: list | None = None,
+    *,
+    line_messages: list[dict] | None = None,
+    group_contacts: set[str] | None = None,
+    contact: str | None = None,
+    scope: str = "global",
+    alias: str | None = None,
+) -> int:
+    """Canonical identity for every input and runtime that shapes a tensor."""
+    identity = {
+        "schema": "pkb.tensor.identity.v2",
+        "inputs": {
+            "daily": daily,
+            "dyads": dyads,
+            "line_messages": line_messages,
+            "group_contacts": sorted(group_contacts) if group_contacts is not None else None,
+            "contact": contact,
+            "scope": scope,
+            "alias": alias,
+        },
+        "feature_contract": {
+            "version": FEATURE_CODE_VERSION,
+            "format_version": TENSOR_FORMAT_VERSION,
+            "features": FEATURES,
+            "active_features": N_ACTIVE_FEATURES,
+            "private_event_nominal_hours": PRIVATE_EVENT_NOMINAL_HOURS,
+        },
+        "numeric_runtime": numeric_runtime_version(),
+    }
+    blob = json.dumps(
+        identity,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        allow_nan=False,
+    ).encode("utf-8")
+    digest = hashlib.blake2b(
+        blob,
+        digest_size=8,
+        person=b"PKBTEN-ID-v2",
+    ).digest()
     return int.from_bytes(digest, "little")
+
+
+def _tensor_payload_hash(
+    *,
+    version: int,
+    n_rows: int,
+    n_features: int,
+    row_stride: int,
+    epoch_day: int,
+    flags: int,
+    identity: int,
+    payload: bytes,
+) -> bytes:
+    metadata = struct.pack(
+        "<IIIIiIQ",
+        version,
+        n_rows,
+        n_features,
+        row_stride,
+        epoch_day,
+        flags,
+        identity,
+    )
+    return hashlib.blake2b(
+        metadata + payload,
+        digest_size=16,
+        person=b"PKBTEN-PAY-v1",
+    ).digest()
 
 
 def _to_epoch_day(d: _date) -> int:
@@ -152,12 +222,12 @@ class TensorStore:
         self._mm = mmap.mmap(self._file.fileno(), 0, access=mmap.ACCESS_READ)
 
         header = self._mm[:HEADER_SIZE]
-        magic, version, n_rows, n_features, row_stride, epoch_day, flags, chash = \
+        magic, version, n_rows, n_features, row_stride, epoch_day, flags, chash, phash = \
             struct.unpack(_HEADER_FMT, header)
 
         if magic != TENSOR_MAGIC:
             self._fail_close(f"{self.path}: magic 不一致 {magic!r}")
-        if version != 1:
+        if version != TENSOR_FORMAT_VERSION:
             self._fail_close(f"{self.path}: 未対応バージョン {version}")
         if row_stride != ROW_SIZE:
             # W-4: row_stride は必ずヘッダから読み、現行コードの前提と照合する。
@@ -171,6 +241,20 @@ class TensorStore:
             self._fail_close(
                 f"{self.path}: file_size={size} != header 由来の期待値 "
                 f"{expected_size} (n_rows={n_rows}) — 切詰め/破損")
+
+        payload = self._mm[HEADER_SIZE:]
+        actual_phash = _tensor_payload_hash(
+            version=version,
+            n_rows=n_rows,
+            n_features=n_features,
+            row_stride=row_stride,
+            epoch_day=epoch_day,
+            flags=flags,
+            identity=chash,
+            payload=payload,
+        )
+        if not hmac.compare_digest(phash, actual_phash):
+            self._fail_close(f"{self.path}: tensor payload hash mismatch")
 
         rows = np.frombuffer(self._mm, dtype=ROW_DTYPE, count=n_rows, offset=HEADER_SIZE)
         if rows.flags.writeable:
@@ -195,6 +279,7 @@ class TensorStore:
         self.epoch_day = epoch_day
         self.flags = flags
         self.content_hash64 = chash
+        self.payload_hash128 = phash.hex()
         self._rows = rows
         _OPEN[str(self.path.resolve())] = self
 
@@ -570,22 +655,45 @@ def build_tensor(daily: list[dict], dyads: list | None, out_path: Path,
     rows["mask"] = mask_u32
     rows["f"] = np.where(valid, values, 0.0).astype(np.float32)   # 欠測値スロットは 0.0 (I-18)
 
+    epoch_day = _to_epoch_day(first_d)
+    flags = FLAG_DYAD_SCOPE if scope == "dyad" else 0
+    identity = content_hash64(
+        daily,
+        dyads,
+        line_messages=line_messages,
+        group_contacts=group_contacts,
+        contact=contact,
+        scope=scope,
+        alias=alias,
+    )
+    payload = rows.tobytes()
+    payload_hash = _tensor_payload_hash(
+        version=TENSOR_FORMAT_VERSION,
+        n_rows=n_rows,
+        n_features=N_ACTIVE_FEATURES,
+        row_stride=ROW_SIZE,
+        epoch_day=epoch_day,
+        flags=flags,
+        identity=identity,
+        payload=payload,
+    )
     header = struct.pack(
-        _HEADER_FMT, TENSOR_MAGIC, 1, n_rows, N_ACTIVE_FEATURES, ROW_SIZE,
-        _to_epoch_day(first_d), FLAG_DYAD_SCOPE if scope == "dyad" else 0,
-        content_hash64(daily))
+        _HEADER_FMT,
+        TENSOR_MAGIC,
+        TENSOR_FORMAT_VERSION,
+        n_rows,
+        N_ACTIVE_FEATURES,
+        ROW_SIZE,
+        epoch_day,
+        flags,
+        identity,
+        payload_hash,
+    )
 
-    tmp = out_path.with_suffix(out_path.suffix + ".tmp")
     try:
-        out_path.parent.mkdir(parents=True, exist_ok=True)
-        with open(tmp, "wb") as f:
-            f.write(header)
-            f.write(rows.tobytes())
-        os.replace(tmp, out_path)
+        durable_atomic_write(out_path, header + payload)
     except OSError as exc:
         raise TensorStoreError(
             f"{out_path}: 書き込み失敗 (mmap 保持中のハンドルが残っている可能性 — "
             f"release_tensor_mapping を先に呼んだか確認せよ): {exc}") from exc
-    finally:
-        tmp.unlink(missing_ok=True)
     return out_path

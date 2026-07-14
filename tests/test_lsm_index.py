@@ -272,15 +272,34 @@ def test_search_lsm_date_dedup() -> None:
             return self.per_segment.get(Path(bin_path).name, [])[:top_k]
 
     manifest = {
-        "format": "pkbseg.v1", "embedder_id": "fake#384", "next_chunk_id": 4,
-        "segments": [{"file": "vectors.seg-000001.bin", "live": 1, "dead": 1},
-                     {"file": "vectors.seg-000002.bin", "live": 1, "dead": 0}],
+        "format": lsm_index.MANIFEST_FORMAT,
+        "embedder_id": "fake#384",
+        "next_chunk_id": 4,
+        "segments": [],
         "days": {},
     }
     _reset_project("dummy")
-    lsm_index.atomic_save_manifest(manifest)
     (PROCESSED / "vectors.seg-000001.bin").write_bytes(b"\x00")
     (PROCESSED / "vectors.seg-000002.bin").write_bytes(b"\x00")
+    manifest["segments"] = [
+        {
+            "file": "vectors.seg-000001.bin",
+            "live": 1,
+            "dead": 1,
+            "payload_hash": lsm_index.segment_payload_hash(
+                PROCESSED / "vectors.seg-000001.bin"
+            ),
+        },
+        {
+            "file": "vectors.seg-000002.bin",
+            "live": 1,
+            "dead": 0,
+            "payload_hash": lsm_index.segment_payload_hash(
+                PROCESSED / "vectors.seg-000002.bin"
+            ),
+        },
+    ]
+    lsm_index.atomic_save_manifest(manifest)
 
     # クラッシュ窓の再現: 同一日付が旧セグメント (低スコア・本来は墓標対象) と
     # 新セグメント (高スコア) の両方から返る

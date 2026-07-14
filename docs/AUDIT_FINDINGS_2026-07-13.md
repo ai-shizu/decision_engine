@@ -180,7 +180,7 @@
 
 - **ID**: `FSA-2026-07-13-09`
 - **重要度**: `CRITICAL`
-- **状態**: `UNRESOLVED`
+- **状態**: `RESOLVED`
 - **症状（攻撃ベクトル）**: 改変されたLSM manifestに`../`、absolute path、未知segment名を挿入すると、検索、compaction、unlinkがowned directory外へ到達し得る。manifestが参照するsegmentが欠落していても検索は黙って`continue`し、同じ入力から異なる証拠集合を返す。Tensor Storeでは`daily`が同じなら、異なるdyad、LINE message、scopeから構築したtensorが同一`content_hash64`を持つ。
 - **根本原因**: LSM manifestにexact schema、owned basename allowlist、segment payload hash、path containment、全参照のpreflightがない。missing segmentをhard-failせず証拠 omissionとして扱う。Tensor headerのidentityが`daily`だけをhashし、`dyads`、`line_messages`、`group_contacts`、`contact`、`scope`、`alias`、feature/runtime versionを結合していない。readerもpayload全体のhashを再計算しない。
 - **実コード証拠**:
@@ -191,6 +191,8 @@
   - `src/python/core/tensor_store.py:142-198`
   - `src/python/core/tensor_store.py:421-584`
 - **必須是正措置**: manifestをexact-key strict schemaで検証し、segment名をowned basename patternへ限定する。全segmentをpath containment、symlink拒否、size、header、payload hash、ID結合までpreflightしてから利用または削除する。欠損・不一致は証拠集合を返す前にhard-failする。Tensor identityは全canonical input、feature code、scope、numeric runtimeを含むmanifest hashとpayload hashへ変更し、readerが双方を再検証する。
+- **解決記録**: LSM manifestをexact schemaへ更新し、owned basename、direct-child containment、symlink拒否、欠損、全segmentのBLAKE2b payload hashを利用・merge・削除前に一括preflightするfail-closed境界を導入した。Tensor `content_hash64`へdaily、dyads、LINE入力、scope、alias、feature contract、numeric runtimeをcanonical結合し、header identityと全row bytesを束ねたpayload hashをReaderで再検証する。
+- **検証証拠**: FSA-09契約テスト`5 passed`、LSM/Tensor関連`36 passed`、全体pytest`627 passed, 1 skipped`、Cargo全target`57 passed`、`git diff --check`違反0件。path traversal、missing segment、payload 1-byte改変、Tensor identity衝突、Tensor row 1-byte改変をHard-fail化した。
 
 ---
 

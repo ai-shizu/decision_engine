@@ -21,14 +21,20 @@ DailyContext インデックスの再構築を O(全履歴) から O(変更日�
 from __future__ import annotations
 
 import hashlib
+import hmac
 import json
-import os
+import re
 import struct
 from pathlib import Path
 
 import numpy as np
 
 from . import pipeline
+from .durable_persistence import (
+    durable_atomic_write,
+    durable_atomic_write_text,
+    read_json_file,
+)
 from .paths import DIARY_BIN, DIARY_META, LSM_MANIFEST, PROCESSED
 
 DIM = pipeline.DIM
@@ -39,6 +45,20 @@ _TOMB = struct.pack("<i", -1)
 
 # セグメント内オフセット定数 (FileHeader 32B + data[384][4] の後に chunk_ids[4])
 _IDS_OFFSET_IN_BLOCK = DIM * LANES * 4   # 6144
+
+MANIFEST_FORMAT = "pkbseg.v2"
+_MANIFEST_KEYS = frozenset({"format", "embedder_id", "next_chunk_id", "segments", "days"})
+_SEGMENT_KEYS = frozenset({"file", "live", "dead", "payload_hash"})
+_DAY_KEYS = frozenset({
+    "chunk_id", "segment", "index_in_segment", "tomb_offset", "content_hash",
+})
+_SEGMENT_NAME = re.compile(r"\Avectors\.seg-[0-9]{6}\.bin\Z")
+_PAYLOAD_HASH = re.compile(r"\Ablake2b-256:[0-9a-f]{64}\Z")
+_CONTENT_HASH = re.compile(r"\Ablake2b:[0-9a-f]{32}\Z")
+
+
+class DerivedStoreIntegrityError(ValueError):
+    """An LSM manifest or one of its owned segment payloads is untrusted."""
 
 
 # ---------------------------------------------------------------- embedder_id
@@ -64,8 +84,103 @@ def content_hash(chunk: dict) -> str:
 
 # ---------------------------------------------------------------- マニフェスト I/O
 def _empty_manifest(eid: str) -> dict:
-    return {"format": "pkbseg.v1", "embedder_id": eid, "next_chunk_id": 0,
+    return {"format": MANIFEST_FORMAT, "embedder_id": eid, "next_chunk_id": 0,
              "segments": [], "days": {}}
+
+
+def segment_payload_hash(path: Path) -> str:
+    """Return the manifest hash for one physical segment payload."""
+    digest = hashlib.blake2b(digest_size=32)
+    try:
+        with Path(path).open("rb") as handle:
+            while chunk := handle.read(1024 * 1024):
+                digest.update(chunk)
+    except OSError as exc:
+        raise DerivedStoreIntegrityError("segment payload cannot be read") from exc
+    return "blake2b-256:" + digest.hexdigest()
+
+
+def _owned_segment_path(name: str, *, require_exists: bool = True) -> Path:
+    if type(name) is not str or not _SEGMENT_NAME.fullmatch(name):
+        raise DerivedStoreIntegrityError("segment basename is not owned")
+    relative = Path(name)
+    if relative.is_absolute() or relative.name != name:
+        raise DerivedStoreIntegrityError("segment path must be a direct child basename")
+
+    try:
+        owned_root = PROCESSED.resolve(strict=True)
+    except OSError as exc:
+        raise DerivedStoreIntegrityError("owned segment directory is unavailable") from exc
+    candidate = PROCESSED / name
+    if candidate.is_symlink():
+        raise DerivedStoreIntegrityError("segment symlinks are forbidden")
+    try:
+        resolved = candidate.resolve(strict=require_exists)
+    except (OSError, RuntimeError) as exc:
+        raise DerivedStoreIntegrityError("declared segment is missing") from exc
+    if resolved.parent != owned_root or not resolved.is_relative_to(owned_root):
+        raise DerivedStoreIntegrityError("segment path escapes the owned directory")
+    if require_exists and not resolved.is_file():
+        raise DerivedStoreIntegrityError("declared segment is not a regular file")
+    return resolved
+
+
+def _strict_nonnegative_int(value, field: str) -> int:
+    if type(value) is not int or value < 0:
+        raise DerivedStoreIntegrityError(f"{field} must be a non-negative integer")
+    return value
+
+
+def _preflight_manifest(manifest: dict) -> dict[str, Path]:
+    """Validate every manifest reference before any segment is consumed."""
+    if type(manifest) is not dict or set(manifest) != _MANIFEST_KEYS:
+        raise DerivedStoreIntegrityError("manifest schema keys are invalid")
+    if manifest.get("format") != MANIFEST_FORMAT:
+        raise DerivedStoreIntegrityError("manifest format is unsupported")
+    if type(manifest.get("embedder_id")) is not str or not manifest["embedder_id"]:
+        raise DerivedStoreIntegrityError("manifest embedder_id is invalid")
+    _strict_nonnegative_int(manifest.get("next_chunk_id"), "next_chunk_id")
+    segments = manifest.get("segments")
+    days = manifest.get("days")
+    if type(segments) is not list or type(days) is not dict:
+        raise DerivedStoreIntegrityError("manifest collections are invalid")
+
+    paths: dict[str, Path] = {}
+    for segment in segments:
+        if type(segment) is not dict or set(segment) != _SEGMENT_KEYS:
+            raise DerivedStoreIntegrityError("segment record schema is invalid")
+        name = segment.get("file")
+        if type(name) is not str:
+            raise DerivedStoreIntegrityError("segment basename is invalid")
+        if name in paths:
+            raise DerivedStoreIntegrityError("duplicate segment basename")
+        _strict_nonnegative_int(segment.get("live"), "segment.live")
+        _strict_nonnegative_int(segment.get("dead"), "segment.dead")
+        recorded_hash = segment.get("payload_hash")
+        if type(recorded_hash) is not str or not _PAYLOAD_HASH.fullmatch(recorded_hash):
+            raise DerivedStoreIntegrityError("segment payload_hash is invalid")
+        path = _owned_segment_path(name)
+        actual_hash = segment_payload_hash(path)
+        if not hmac.compare_digest(recorded_hash, actual_hash):
+            raise DerivedStoreIntegrityError("segment payload hash mismatch")
+        paths[name] = path
+
+    for date_key, record in days.items():
+        if type(date_key) is not str or type(record) is not dict or set(record) != _DAY_KEYS:
+            raise DerivedStoreIntegrityError("day record schema is invalid")
+        if record.get("segment") not in paths:
+            raise DerivedStoreIntegrityError("day record references an unknown segment")
+        chunk_id = _strict_nonnegative_int(record.get("chunk_id"), "day.chunk_id")
+        index = _strict_nonnegative_int(
+            record.get("index_in_segment"), "day.index_in_segment"
+        )
+        tomb_offset = _strict_nonnegative_int(record.get("tomb_offset"), "day.tomb_offset")
+        if chunk_id >= manifest["next_chunk_id"] or tomb_offset != _tomb_offset(index):
+            raise DerivedStoreIntegrityError("day record identity or offset is invalid")
+        chash = record.get("content_hash")
+        if type(chash) is not str or not _CONTENT_HASH.fullmatch(chash):
+            raise DerivedStoreIntegrityError("day content_hash is invalid")
+    return paths
 
 
 def _tomb_offset(index_in_segment: int) -> int:
@@ -92,7 +207,7 @@ def _bootstrap_from_legacy(eid: str) -> dict:
     seg_name = "vectors.seg-000001.bin"
     seg_path = PROCESSED / seg_name
     if not seg_path.exists():
-        seg_path.write_bytes(DIARY_BIN.read_bytes())
+        durable_atomic_write(seg_path, DIARY_BIN.read_bytes())
 
     ids = sorted(c["id"] for c in chunks)
     days: dict[str, dict] = {}
@@ -103,29 +218,39 @@ def _bootstrap_from_legacy(eid: str) -> dict:
             "tomb_offset": _tomb_offset(idx), "content_hash": content_hash(c),
         }
     return {
-        "format": "pkbseg.v1", "embedder_id": eid,
+        "format": MANIFEST_FORMAT, "embedder_id": eid,
         "next_chunk_id": max(ids) + 1,
-        "segments": [{"file": seg_name, "live": len(chunks), "dead": 0}],
+        "segments": [{
+            "file": seg_name,
+            "live": len(chunks),
+            "dead": 0,
+            "payload_hash": segment_payload_hash(seg_path),
+        }],
         "days": days,
     }
 
 
 def load_manifest(eid: str) -> dict:
-    if LSM_MANIFEST.exists():
-        m = json.loads(LSM_MANIFEST.read_text(encoding="utf-8"))
-        if m.get("embedder_id") == eid:
-            return m
-        # 埋め込み空間の不一致 (I-6): 全再構築を強制する空マニフェストを返す。
-        # 呼び出し側 (sync_diary_index_lsm) がこれを見て全日付を「変更」として扱う。
-        return _empty_manifest(eid)
-    return _bootstrap_from_legacy(eid)
+    try:
+        manifest = read_json_file(LSM_MANIFEST)
+    except FileNotFoundError:
+        manifest = _bootstrap_from_legacy(eid)
+    _preflight_manifest(manifest)
+    return manifest
 
 
 def atomic_save_manifest(manifest: dict) -> None:
-    LSM_MANIFEST.parent.mkdir(parents=True, exist_ok=True)
-    tmp = LSM_MANIFEST.with_suffix(".json.tmp")
-    tmp.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
-    os.replace(tmp, LSM_MANIFEST)
+    _preflight_manifest(manifest)
+    durable_atomic_write_text(
+        LSM_MANIFEST,
+        json.dumps(
+            manifest,
+            ensure_ascii=False,
+            indent=2,
+            sort_keys=True,
+            allow_nan=False,
+        ),
+    )
 
 
 # ---------------------------------------------------------------- 共有 metadata.json
@@ -153,10 +278,7 @@ def _save_meta(meta: dict, chunks_by_id: dict[int, dict]) -> None:
             "書き込みを中止した。台帳の異常肥大 (import 重複・セッション橋渡し"
             "の増幅など) を疑え。詳細は docs/AI_SKILLS.md §14 (IMP-1) を参照。"
         )
-    DIARY_META.parent.mkdir(parents=True, exist_ok=True)
-    tmp = DIARY_META.with_suffix(".json.tmp")
-    tmp.write_text(serialized, encoding="utf-8")
-    os.replace(tmp, DIARY_META)
+    durable_atomic_write_text(DIARY_META, serialized)
 
 
 # ---------------------------------------------------------------- 墓標
@@ -211,6 +333,7 @@ def maybe_compact(manifest: dict, *, release_fn=None, max_segments: int = 8,
     (デーモンが mmap 保持中のファイルは Windows で削除できない — remap
     してからでないと unlink は PermissionError の時限爆弾になる。§2.1.5 手順4)。
     """
+    verified_paths = _preflight_manifest(manifest)
     segs = manifest["segments"]
     needs = len(segs) > max_segments or any(
         s["dead"] / max(s["live"] + s["dead"], 1) > dead_ratio for s in segs)
@@ -230,7 +353,7 @@ def maybe_compact(manifest: dict, *, release_fn=None, max_segments: int = 8,
         dates = live_by_segment.get(seg["file"], [])
         if not dates:
             continue
-        raw = (PROCESSED / seg["file"]).read_bytes()
+        raw = verified_paths[seg["file"]].read_bytes()
         _, dim, lanes, _nvec, nblk, blk_b, _ = struct.unpack("<8sIIIIII", raw[:32])
         blocks = np.frombuffer(raw[32:], dtype=np.uint8).reshape(nblk, blk_b)
         data = blocks[:, :dim * lanes * 4].copy().view(np.float32).reshape(nblk, dim, lanes)
@@ -255,7 +378,7 @@ def maybe_compact(manifest: dict, *, release_fn=None, max_segments: int = 8,
     global_ids = flat.reshape(local_ids.shape)
 
     new_seg_name = _next_segment_name(manifest)
-    new_seg_path = PROCESSED / new_seg_name
+    new_seg_path = _owned_segment_path(new_seg_name, require_exists=False)
     pipeline.write_binary(aosoa, global_ids, len(entries), new_seg_path)
 
     for i, (date, cid) in enumerate(entries):
@@ -265,10 +388,15 @@ def maybe_compact(manifest: dict, *, release_fn=None, max_segments: int = 8,
             "content_hash": manifest["days"][date]["content_hash"],
         }
     manifest["segments"] = [s for s in segs if s["file"] not in old_segment_names]
-    manifest["segments"].append({"file": new_seg_name, "live": len(entries), "dead": 0})
+    manifest["segments"].append({
+        "file": new_seg_name,
+        "live": len(entries),
+        "dead": 0,
+        "payload_hash": segment_payload_hash(new_seg_path),
+    })
 
     for name in old_segment_names:
-        p = PROCESSED / name
+        p = verified_paths[name]
         if release_fn is not None:
             release_fn(p)          # remap してから削除 (Windows PermissionError 回避)
         p.unlink(missing_ok=True)
@@ -300,8 +428,9 @@ def sync_diary_index_lsm(engine, force: bool = False) -> bool:
     manifest = load_manifest(eid)
     if manifest["embedder_id"] != eid:
         # 埋め込み空間の不一致 (不変条件 I-6): 全再構築を強制する。
-        for seg in manifest.get("segments", []):
-            engine._release_index_mapping(PROCESSED / seg["file"])
+        verified_paths = _preflight_manifest(manifest)
+        for seg in manifest["segments"]:
+            engine._release_index_mapping(verified_paths[seg["file"]])
         manifest = _empty_manifest(eid)
         force = True
         needs_persist = True
@@ -351,11 +480,15 @@ def sync_diary_index_lsm(engine, force: bool = False) -> bool:
             nc["id"] = start_id + i
             new_chunks.append(nc)
         new_seg_name = _next_segment_name(manifest)
-        new_seg_path = PROCESSED / new_seg_name
+        new_seg_path = _owned_segment_path(new_seg_name, require_exists=False)
         index_map = write_segment(new_chunks, vectors, start_id, new_seg_path)
         manifest["next_chunk_id"] = start_id + len(new_chunks)
-        manifest["segments"].append(
-            {"file": new_seg_name, "live": len(new_chunks), "dead": 0})
+        manifest["segments"].append({
+            "file": new_seg_name,
+            "live": len(new_chunks),
+            "dead": 0,
+            "payload_hash": segment_payload_hash(new_seg_path),
+        })
         for i, (c, h) in enumerate(changed):
             idx = index_map[c["date"]]
             manifest["days"][c["date"]] = {
@@ -378,14 +511,18 @@ def sync_diary_index_lsm(engine, force: bool = False) -> bool:
     # 2. 墓標書き (manifest 確定後。ここでクラッシュしても旧エントリが manifest
     #    上は既に非生存なので、検索側の日付デデュープが重複を吸収する)
     dead_bump: dict[str, int] = {}
+    verified_paths = _preflight_manifest(manifest)
     for rec in to_tombstone:
-        tombstone(PROCESSED / rec["segment"], rec["tomb_offset"])
+        tombstone(verified_paths[rec["segment"]], rec["tomb_offset"])
         dead_bump[rec["segment"]] = dead_bump.get(rec["segment"], 0) + 1
     if dead_bump:
         for seg in manifest["segments"]:
             if seg["file"] in dead_bump:
                 seg["live"] -= dead_bump[seg["file"]]
                 seg["dead"] += dead_bump[seg["file"]]
+                seg["payload_hash"] = segment_payload_hash(
+                    verified_paths[seg["file"]]
+                )
         atomic_save_manifest(manifest)
 
     # 3. remap: 墓標を書いた旧セグメント + 新セグメント (デーモンの mmap 解放)
@@ -393,7 +530,7 @@ def sync_diary_index_lsm(engine, force: bool = False) -> bool:
     if new_seg_name:
         touched.add(new_seg_name)
     for seg_name in touched:
-        engine._release_index_mapping(PROCESSED / seg_name)
+        engine._release_index_mapping(_owned_segment_path(seg_name))
 
     # 4. コンパクション判定 (best-effort。旧セグメント unlink 前に remap を挟む)
     if maybe_compact(manifest,
@@ -412,11 +549,12 @@ def search_lsm(engine, qvec, top_k: int = 3) -> list[dict]:
     """
     eid = embedder_id(engine.embedder)
     manifest = load_manifest(eid)
+    if manifest["embedder_id"] != eid:
+        raise DerivedStoreIntegrityError("manifest embedder identity mismatch")
+    verified_paths = _preflight_manifest(manifest)
     hits: list[dict] = []
-    for seg in manifest.get("segments", []):
-        seg_path = PROCESSED / seg["file"]
-        if not seg_path.exists():
-            continue
+    for seg in manifest["segments"]:
+        seg_path = verified_paths[seg["file"]]
         hits.extend(engine.search_index(seg_path, DIARY_META, qvec, top_k))
     # 日付デデュープ: 同一日付の重複ヒットは score 最大の 1 件のみ残す
     # (クラッシュ窓 §2.1.3 と、墓標書き遅延の両方をここで吸収する)

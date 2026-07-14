@@ -139,7 +139,7 @@ constexpr uint32_t kTenFeat = 32;
 constexpr char     kTensorMagic[8] = {'P','K','B','T','E','N','0','1'};
 
 #pragma pack(push, 1)
-struct TensorHeader {            // 64 bytes — Python "<8sIIIIiIQ24x"
+struct TensorHeader {            // 64 bytes — Python "<8sIIIIiIQ16s8x"
     char     magic[8];           // "PKBTEN01"
     uint32_t version;            // = 1
     uint32_t n_rows;             // 日数 (密。row i = epoch_day + i 日)
@@ -147,8 +147,9 @@ struct TensorHeader {            // 64 bytes — Python "<8sIIIIiIQ24x"
     uint32_t row_stride;         // = sizeof(TensorRow) = 136 (読み手は必ずこれを使う)
     int32_t  epoch_day;          // row 0 の日付 (1970-01-01 からの日数, ローカル暦日)
     uint32_t flags;              // bit0: dyad スコープ / 他ビット予約 (0)
-    uint64_t content_hash64;     // 入力スナップショット blake2b 先頭 8B (鮮度判定)
-    uint8_t  reserved[24];       // 0 埋め
+    uint64_t content_hash64;     // 全canonical input + feature/runtime identity
+    uint8_t  payload_hash128[16];// header identity + 全row bytes のBLAKE2b-128
+    uint8_t  reserved[8];        // 0 埋め
 };
 
 struct TensorRow {               // 136 bytes — Python "<iI32f"
@@ -166,6 +167,7 @@ static_assert(offsetof(TensorHeader, row_stride)    == 20, "TensorHeader.row_str
 static_assert(offsetof(TensorHeader, epoch_day)     == 24, "TensorHeader.epoch_day offset");
 static_assert(offsetof(TensorHeader, flags)         == 28, "TensorHeader.flags offset");
 static_assert(offsetof(TensorHeader, content_hash64)== 32, "TensorHeader.hash offset");
+static_assert(offsetof(TensorHeader, payload_hash128)==40, "TensorHeader.payload hash offset");
 static_assert(sizeof(TensorRow) == 136,                 "TensorRow layout mismatch");
 static_assert(offsetof(TensorRow, f) == 8,              "TensorRow.f offset");
 static_assert(sizeof(TensorRow) % 8 == 0,               "TensorRow 8-byte alignment");
