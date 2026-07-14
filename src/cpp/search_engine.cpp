@@ -35,10 +35,13 @@
 #include <cstdio>
 #include <cstring>
 #include <algorithm>
+#include <atomic>
+#include <cmath>
 #include <chrono>
 #include <iostream>
 #include <map>
 #include <memory>
+#include <stdexcept>
 #include <string>
 #include <type_traits>
 #include <vector>
@@ -261,8 +264,28 @@ struct MappedFile {
 // ---------------------------------------------------------------- Top-K (固定長・挿入ソート)
 struct Hit {
     float   score;
+    int64_t score_q;
     int32_t chunk_id;
 };
+
+static constexpr double kScoreScale = 1000000.0;
+
+static bool try_quantize_score(float score, int64_t* score_q) noexcept {
+    if (!std::isfinite(score)) return false;
+    const double scaled = static_cast<double>(score) * kScoreScale;
+    const double rounded = std::floor(scaled + 0.5);
+    if (rounded < -9223372036854775808.0 ||
+        rounded >= 9223372036854775808.0) {
+        return false;
+    }
+    *score_q = static_cast<int64_t>(rounded);
+    return true;
+}
+
+static bool hit_is_better(const Hit& lhs, const Hit& rhs) noexcept {
+    if (lhs.score_q != rhs.score_q) return lhs.score_q > rhs.score_q;
+    return lhs.chunk_id < rhs.chunk_id;
+}
 
 struct TopK {
     std::vector<Hit> hits;   // score 降順を維持
@@ -270,20 +293,18 @@ struct TopK {
 
     explicit TopK(size_t k_) : k(k_) { hits.reserve(k_ + 1); }
 
-    float threshold() const {
-        return hits.size() < k ? -1e30f : hits.back().score;
-    }
-
-    void push(float score, int32_t id) {
-        if (hits.size() >= k && score <= hits.back().score) return;
-        auto pos = std::upper_bound(hits.begin(), hits.end(), score,
-                                    [](float s, const Hit& h) { return s > h.score; });
-        hits.insert(pos, {score, id});
+    void push(float score, int64_t score_q, int32_t id) {
+        if (k == 0) return;
+        const Hit candidate{score, score_q, id};
+        if (hits.size() >= k && !hit_is_better(candidate, hits.back())) return;
+        const auto pos = std::lower_bound(
+            hits.begin(), hits.end(), candidate, hit_is_better);
+        hits.insert(pos, candidate);
         if (hits.size() > k) hits.pop_back();
     }
 
     void merge(const TopK& other) {
-        for (const Hit& h : other.hits) push(h.score, h.chunk_id);
+        for (const Hit& h : other.hits) push(h.score, h.score_q, h.chunk_id);
     }
 };
 
@@ -318,6 +339,7 @@ static inline void block_dot4(const VectorBlock& blk, const float* query, float 
 static TopK search(const VectorBlock* blocks, int64_t num_blocks,
                    const float* query, size_t k) {
     TopK global(k);
+    std::atomic<bool> invalid_score{false};
 
 #ifdef _OPENMP
     const int nthreads = omp_get_max_threads();
@@ -332,7 +354,13 @@ static TopK search(const VectorBlock* blocks, int64_t num_blocks,
             block_dot4(blocks[b], query, s);
             for (uint32_t l = 0; l < kLanes; ++l) {
                 const int32_t id = blocks[b].chunk_ids[l];
-                if (id >= 0 && s[l] > local.threshold()) local.push(s[l], id);
+                if (id < 0) continue;
+                int64_t score_q = 0;
+                if (!try_quantize_score(s[l], &score_q)) {
+                    invalid_score.store(true, std::memory_order_relaxed);
+                    continue;
+                }
+                local.push(s[l], score_q, id);
             }
         }
     }
@@ -343,10 +371,19 @@ static TopK search(const VectorBlock* blocks, int64_t num_blocks,
         block_dot4(blocks[b], query, s);
         for (uint32_t l = 0; l < kLanes; ++l) {
             const int32_t id = blocks[b].chunk_ids[l];
-            if (id >= 0 && s[l] > global.threshold()) global.push(s[l], id);
+            if (id < 0) continue;
+            int64_t score_q = 0;
+            if (!try_quantize_score(s[l], &score_q)) {
+                invalid_score.store(true, std::memory_order_relaxed);
+                continue;
+            }
+            global.push(s[l], score_q, id);
         }
     }
 #endif
+    if (invalid_score.load(std::memory_order_relaxed)) {
+        throw std::runtime_error("non-finite or out-of-range search score");
+    }
     return global;
 }
 
@@ -593,7 +630,13 @@ static void handle_search(const std::string& line, ScratchBuffer* scr, IndexCach
     std::memcpy(query, scr->query, sizeof(query));
 
     const auto t0 = std::chrono::steady_clock::now();
-    TopK result = search(idx->blocks, idx->hdr->num_blocks, query, k);
+    TopK result(k);
+    try {
+        result = search(idx->blocks, idx->hdr->num_blocks, query, k);
+    } catch (const std::exception& exc) {
+        respond_error(true, seq, exc.what());
+        return;
+    }
     const auto t1 = std::chrono::steady_clock::now();
 
     for (uint32_t i = 0; i < kScratchMaxK; ++i)
@@ -727,19 +770,25 @@ int main(int argc, char** argv) {
                 hdr->num_vectors, hdr->num_blocks, mf.size);
 
     // --- ウォームアップ + 計測
-    TopK result = search(blocks, hdr->num_blocks, query, top_k);
     constexpr int kIters = 100;
-    const auto t0 = std::chrono::steady_clock::now();
-    for (int i = 0; i < kIters; ++i)
+    TopK result(top_k);
+    double us = 0.0;
+    try {
         result = search(blocks, hdr->num_blocks, query, top_k);
-    const auto t1 = std::chrono::steady_clock::now();
-    const double us =
-        std::chrono::duration<double, std::micro>(t1 - t0).count() / kIters;
+        const auto t0 = std::chrono::steady_clock::now();
+        for (int i = 0; i < kIters; ++i)
+            result = search(blocks, hdr->num_blocks, query, top_k);
+        const auto t1 = std::chrono::steady_clock::now();
+        us = std::chrono::duration<double, std::micro>(t1 - t0).count() / kIters;
+    } catch (const std::exception& exc) {
+        std::fprintf(stderr, "error: search failed: %s\n", exc.what());
+        return 1;
+    }
 
     std::printf("latency: %.1f us/query (avg of %d)\n\n", us, kIters);
     std::printf("Top-%zu results (cosine):\n", top_k);
     for (size_t i = 0; i < result.hits.size(); ++i)
-        std::printf("  #%zu  chunk_id=%-4d  score=%.4f\n",
+        std::printf("  #%zu  chunk_id=%-4d  score=%.9g\n",
                     i + 1, result.hits[i].chunk_id, result.hits[i].score);
     std::printf("\n(chunk_id は data/processed/metadata.json の chunks[].id に対応)\n");
     return 0;

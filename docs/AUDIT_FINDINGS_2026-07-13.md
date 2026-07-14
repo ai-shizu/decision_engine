@@ -200,7 +200,7 @@
 
 - **ID**: `FSA-2026-07-13-10`
 - **重要度**: `CRITICAL`
-- **状態**: `UNRESOLVED`
+- **状態**: `RESOLVED`
 - **症状（攻撃ベクトル）**: 同じvectorとqueryでも、NEON FMA、scalar accumulation、OpenMP thread数、merge順、NumPy/BLAS buildの違いにより最下位bitと同点判定が変化する。同score時にchunk IDなどの総順序がなく、top-kの採否がplatform、CPU、thread数、library buildによって変わる。証拠集合が変われば後段のmanifestと意思決定も変わる。
 - **根本原因**: C++ TopKがscoreだけを比較し、NEON FMAとscalar pathで異なる演算順を許容する。OpenMPの実行条件をruntime identityへ結合していない。Python fallbackはscoreだけによる`np.argsort`とsortを用い、tie-breakを規定していない。量子化単位、丸めmode、NaN/Inf、overflow、accumulation orderの仕様がない。
 - **実コード証拠**:
@@ -210,6 +210,8 @@
   - `src/python/core/digital_twin.py:338-360`
   - `src/python/core/digital_twin.py:531-570`
 - **必須是正措置**: 決定論の保証範囲を「同一build・CPU・runtime」へ限定するか、cross-platform保証が必要ならscoreを規定精度のfixed-pointまたは明示量子化値へ変換する。丸めmode、飽和規則、NaN/Inf拒否、accumulation orderを固定し、順位を`(-score_q, chunk_id)`などの完全な総順序にする。SIMD/scalar、thread数、Python/C++で同じgolden bit patternとtie distributionを検証する。
+- **解決記録**: C++/Pythonの全検索経路でNaN/InfをHard-failし、スコアを共通式`floor(score * 10^6 + 0.5)`で明示的な固定小数点整数へ量子化した。順位を`(-score_q, chunk_id)`の完全総順序へ統一し、NEON/OpenMPとNumPy fallbackの挙動を等価化した。
+- **検証証拠**: FSA-10契約テスト`3 passed`、全体pytest`630 passed, 1 skipped`、Cargo全target`57 passed`、ARM64/OpenMP C++ build警告・エラー0件、`git diff --check`違反0件。
 
 ---
 

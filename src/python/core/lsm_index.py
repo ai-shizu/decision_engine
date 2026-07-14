@@ -36,6 +36,7 @@ from .durable_persistence import (
     read_json_file,
 )
 from .paths import DIARY_BIN, DIARY_META, LSM_MANIFEST, PROCESSED
+from .score_ranking import score_order_key
 
 DIM = pipeline.DIM
 LANES = pipeline.LANES
@@ -563,7 +564,13 @@ def search_lsm(engine, qvec, top_k: int = 3) -> list[dict]:
         d = h.get("date")
         if d is None:
             continue
-        if d not in best or h["score"] > best[d]["score"]:
+        hit_key = score_order_key(h["score"], h.get("id", h.get("chunk_id", -1)))
+        if d not in best or hit_key < score_order_key(
+                best[d]["score"], best[d].get("id", best[d].get("chunk_id", -1))):
             best[d] = h
-    ranked = sorted(best.values(), key=lambda h: -h["score"])
+    ranked = sorted(
+        best.values(),
+        key=lambda h: score_order_key(
+            h["score"], h.get("id", h.get("chunk_id", -1))),
+    )
     return ranked[:top_k]

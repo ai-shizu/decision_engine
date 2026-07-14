@@ -59,6 +59,7 @@ from .profile_store import (
 )
 from . import lsm_index
 from .search_daemon import SearchDaemonClient, SearchDaemonError
+from .score_ranking import RankingAnomalyError, rank_hits, score_order_key
 from . import pipeline  # noqa: E402
 from .llm_config import find_gguf, generation_params  # noqa: E402
 from .llm_backend import LlamaStdioBackend, _prompt_bytes  # noqa: E402
@@ -718,7 +719,9 @@ class ConsultationEngine:
                     [str(SEARCH_EXE), str(bin_path), str(tmp), str(top_k)],
                     capture_output=True, text=True, timeout=60,
                     encoding="utf-8", errors="replace")
-                for m in re.finditer(r"chunk_id=(\d+)\s+score=([\d.\-]+)", out.stdout):
+                if out.returncode != 0 and "non-finite" in out.stderr:
+                    raise RankingAnomalyError(out.stderr.strip())
+                for m in re.finditer(r"chunk_id=(\d+)\s+score=([^\s]+)", out.stdout):
                     hits.append((int(m.group(1)), float(m.group(2))))
             finally:
                 tmp.unlink(missing_ok=True)
@@ -731,8 +734,12 @@ class ConsultationEngine:
             ids = blocks[:, dim * lanes * 4:].copy().view(np.int32).reshape(-1)
             vecs = data.transpose(0, 2, 1).reshape(-1, dim)
             scores = vecs @ qvec
-            order = [i for i in np.argsort(-scores) if ids[i] >= 0][:top_k]
-            hits = [(int(ids[i]), float(scores[i])) for i in order]
+            hits = rank_hits(
+                ((int(ids[i]), float(scores[i])) for i in range(len(ids)) if ids[i] >= 0),
+                top_k,
+            )
+        else:
+            hits = rank_hits(hits, top_k)
         return [{"score": sc, **chunks[cid]} for cid, sc in hits if cid in chunks]
 
     # 日記とLINEの両方が存在する日 = 「その日の行動ログ」として最も情報量が
@@ -752,7 +759,8 @@ class ConsultationEngine:
             full = h.get("has_diary") and h.get("has_line")
             h["is_full_day_log"] = bool(full)
             h["ranking_score"] = h["score"] * (self.FULL_DAY_LOG_BOOST if full else 1.0)
-        hits.sort(key=lambda h: -h["ranking_score"])
+        hits.sort(key=lambda h: score_order_key(
+            h["ranking_score"], h.get("id", h.get("chunk_id", -1))))
         return hits[:top_k]
 
     # ---- b. プロンプト構築 -------------------------------------------------

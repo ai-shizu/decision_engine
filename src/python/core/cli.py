@@ -62,6 +62,7 @@ from .llm_config import (  # noqa: E402
 )
 from .llm_backend import LlamaStdioBackend  # noqa: E402
 from .pipeline import build_embedder, l2_normalize  # noqa: E402
+from .score_ranking import RankingAnomalyError, rank_hits  # noqa: E402
 
 SYSTEM_PROMPT = (
     "あなたはユーザーの思考・価値観を完全に理解する分身AIである。"
@@ -108,8 +109,11 @@ def search_topk(query_vec, top_k: int = 3) -> list[dict]:
             capture_output=True, text=True, timeout=60,
             encoding="utf-8", errors="replace",
         )
-        for m in re.finditer(r"chunk_id=(\d+)\s+score=([\d.\-]+)", out.stdout):
+        if out.returncode != 0 and "non-finite" in out.stderr:
+            raise RankingAnomalyError(out.stderr.strip())
+        for m in re.finditer(r"chunk_id=(\d+)\s+score=([^\s]+)", out.stdout):
             hits.append((int(m.group(1)), float(m.group(2))))
+        hits = rank_hits(hits, top_k)
         engine = "C++ NEON/OpenMP (search_engine.exe)"
     if not hits:  # exe不在や解析失敗時の純Pythonフォールバック
         import numpy as np
@@ -121,8 +125,10 @@ def search_topk(query_vec, top_k: int = 3) -> list[dict]:
         ids = blocks[:, 6144:].copy().view(np.int32).reshape(-1)
         vecs = data.transpose(0, 2, 1).reshape(-1, dim)
         scores = vecs @ query_vec
-        order = [i for i in np.argsort(-scores) if ids[i] >= 0][:top_k]
-        hits = [(int(ids[i]), float(scores[i])) for i in order]
+        hits = rank_hits(
+            ((int(ids[i]), float(scores[i])) for i in range(len(ids)) if ids[i] >= 0),
+            top_k,
+        )
         engine = "NumPy fallback"
 
     print(f"[app] 検索エンジン: {engine} -> Top-{len(hits)}")
