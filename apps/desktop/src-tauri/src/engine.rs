@@ -1,25 +1,36 @@
-use std::io::{BufRead, BufReader, ErrorKind, Read, Write};
+use std::io::{ErrorKind, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::mpsc::{self, RecvTimeoutError};
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
+use std::time::Duration;
 
 use serde_json::{json, Value};
 use tauri::{AppHandle, Emitter};
 
 #[cfg(not(debug_assertions))]
 use crate::artifact_auth::{verify_production_artifacts, ProductionAttestation};
-use crate::os_sandbox::ChildControl;
 #[cfg(not(debug_assertions))]
 use crate::os_sandbox::spawn_kernel_sandboxed;
-use crate::paths::{ensure_data_layout, project_root};
+use crate::os_sandbox::ChildControl;
 #[cfg(not(debug_assertions))]
 use crate::paths::bundled_engine_path;
+use crate::paths::{ensure_data_layout, project_root};
 #[cfg(debug_assertions)]
 use crate::paths::{find_python_executable, run_engine_script};
 
 static REQ_COUNTER: AtomicU64 = AtomicU64::new(1);
+
+pub(crate) const IPC_MAX_RESPONSE_LINE_BYTES: usize = 1024 * 1024;
+pub(crate) const IPC_MAX_REQUEST_LINE_BYTES: usize = 8 * 1024 * 1024;
+pub(crate) const IPC_MAX_JSON_DEPTH: usize = 64;
+pub(crate) const IPC_MAX_MESSAGES_PER_REQUEST: usize = 1024;
+#[cfg(not(test))]
+pub(crate) const IPC_IO_DEADLINE: Duration = Duration::from_secs(30);
+#[cfg(test)]
+pub(crate) const IPC_IO_DEADLINE: Duration = Duration::from_millis(100);
 
 // ---------------------------------------------------------------------------
 // Typed errors / policy (§2.2) — policy gating wired in STEP 4
@@ -30,6 +41,8 @@ pub(crate) enum TransportFailure {
     Write,
     Flush,
     Read,
+    ReadTimeout,
+    WriteTimeout,
     Eof,
     EngineExited,
 }
@@ -38,6 +51,9 @@ pub(crate) enum TransportFailure {
 pub(crate) enum ProtocolFailure {
     InvalidUtf8,
     InvalidJson,
+    LineTooLarge,
+    JsonDepthExceeded,
+    TooManyMessages,
     MalformedResponse,
 }
 
@@ -67,8 +83,7 @@ const MSG_OUTCOME_UNKNOWN: &str =
     "エンジンとの通信が途切れました。処理が完了している可能性があります。状態を確認してから再実行してください。";
 const MSG_ENGINE_UNAVAILABLE: &str =
     "PKB エンジンを再起動できませんでした。アプリを再起動してください。";
-const MSG_RETRY_FAILED: &str =
-    "エンジンとの通信に失敗しました。もう一度お試しください。";
+const MSG_RETRY_FAILED: &str = "エンジンとの通信に失敗しました。もう一度お試しください。";
 
 pub(crate) fn replay_policy(cmd: &str) -> ReplayPolicy {
     match cmd {
@@ -88,10 +103,7 @@ pub(crate) fn replay_policy(cmd: &str) -> ReplayPolicy {
     }
 }
 
-pub(crate) fn recovery_action(
-    err: &InvokeError,
-    policy: ReplayPolicy,
-) -> RecoveryAction {
+pub(crate) fn recovery_action(err: &InvokeError, policy: ReplayPolicy) -> RecoveryAction {
     match err {
         InvokeError::Remote(_) | InvokeError::NotReady => RecoveryAction::FailFast,
         InvokeError::Transport(_) | InvokeError::Protocol(_) => match policy {
@@ -120,54 +132,164 @@ pub(crate) type EventSink = Box<dyn Fn(&Value) + Send + Sync>;
 
 struct ProcessConnection {
     child: Box<dyn ChildControl>,
-    stdin: Box<dyn Write + Send>,
-    stdout: BufReader<Box<dyn Read + Send>>,
+    stdin_tx: Option<mpsc::Sender<WriteRequest>>,
+    stdout_rx: mpsc::Receiver<Result<String, InvokeError>>,
+    stdin_worker: Option<JoinHandle<()>>,
+    stdout_worker: Option<JoinHandle<()>>,
     stderr_worker: Option<JoinHandle<()>>,
 }
 
+struct WriteRequest {
+    payload: Vec<u8>,
+    result_tx: mpsc::SyncSender<Result<(), TransportFailure>>,
+}
+
+fn spawn_stdin_worker(
+    mut stdin: Box<dyn Write + Send>,
+) -> (mpsc::Sender<WriteRequest>, JoinHandle<()>) {
+    let (tx, rx) = mpsc::channel::<WriteRequest>();
+    let worker = thread::spawn(move || {
+        while let Ok(request) = rx.recv() {
+            let result = stdin
+                .write_all(&request.payload)
+                .map_err(|_| TransportFailure::Write)
+                .and_then(|_| stdin.flush().map_err(|_| TransportFailure::Flush));
+            let failed = result.is_err();
+            let _ = request.result_tx.send(result);
+            if failed {
+                break;
+            }
+        }
+    });
+    (tx, worker)
+}
+
+fn spawn_stdout_worker(
+    mut stdout: Box<dyn Read + Send>,
+) -> (mpsc::Receiver<Result<String, InvokeError>>, JoinHandle<()>) {
+    let (tx, rx) = mpsc::channel::<Result<String, InvokeError>>();
+    let worker = thread::spawn(move || {
+        let mut pending = Vec::with_capacity(8192);
+        let mut chunk = [0u8; 8192];
+        loop {
+            let read = match stdout.read(&mut chunk) {
+                Ok(0) => {
+                    let _ = tx.send(Err(InvokeError::Transport(TransportFailure::Eof)));
+                    break;
+                }
+                Ok(read) => read,
+                Err(error) if error.kind() == ErrorKind::Interrupted => continue,
+                Err(_) => {
+                    let _ = tx.send(Err(InvokeError::Transport(TransportFailure::Read)));
+                    break;
+                }
+            };
+
+            for &byte in &chunk[..read] {
+                if byte == b'\n' {
+                    let line_bytes = std::mem::take(&mut pending);
+                    match String::from_utf8(line_bytes) {
+                        Ok(line) => {
+                            if tx.send(Ok(line)).is_err() {
+                                return;
+                            }
+                        }
+                        Err(_) => {
+                            let _ =
+                                tx.send(Err(InvokeError::Protocol(ProtocolFailure::InvalidUtf8)));
+                            return;
+                        }
+                    }
+                    pending = Vec::with_capacity(8192);
+                    continue;
+                }
+
+                if pending.len() >= IPC_MAX_RESPONSE_LINE_BYTES {
+                    let _ = tx.send(Err(InvokeError::Protocol(ProtocolFailure::LineTooLarge)));
+                    return;
+                }
+                pending.push(byte);
+            }
+        }
+    });
+    (rx, worker)
+}
+
 impl ProcessConnection {
-    fn join_stderr_worker(&mut self) {
-        if let Some(handle) = self.stderr_worker.take() {
-            // Worker panic must not poison the engine process.
-            let _ = handle.join();
+    fn new(
+        child: Box<dyn ChildControl>,
+        stdin: Box<dyn Write + Send>,
+        stdout: Box<dyn Read + Send>,
+        stderr_worker: JoinHandle<()>,
+    ) -> Self {
+        let (stdin_tx, stdin_worker) = spawn_stdin_worker(stdin);
+        let (stdout_rx, stdout_worker) = spawn_stdout_worker(stdout);
+        Self {
+            child,
+            stdin_tx: Some(stdin_tx),
+            stdout_rx,
+            stdin_worker: Some(stdin_worker),
+            stdout_worker: Some(stdout_worker),
+            stderr_worker: Some(stderr_worker),
+        }
+    }
+
+    fn terminate(&mut self) {
+        self.stdin_tx.take();
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+        for worker in [
+            &mut self.stdin_worker,
+            &mut self.stdout_worker,
+            &mut self.stderr_worker,
+        ] {
+            if let Some(handle) = worker.take() {
+                let _ = handle.join();
+            }
         }
     }
 }
 
 impl Drop for ProcessConnection {
     fn drop(&mut self) {
-        let _ = self.child.kill();
-        let _ = self.child.wait();
-        self.join_stderr_worker();
+        self.terminate();
     }
 }
 
 impl EngineConnection for ProcessConnection {
     fn send_line(&mut self, line: &str) -> Result<(), TransportFailure> {
-        if let Err(_e) = self.stdin.write_all(line.as_bytes()) {
+        if line.len() > IPC_MAX_REQUEST_LINE_BYTES {
             return Err(TransportFailure::Write);
         }
-        if let Err(_e) = self.stdin.flush() {
-            return Err(TransportFailure::Flush);
+        let (result_tx, result_rx) = mpsc::sync_channel(1);
+        let request = WriteRequest {
+            payload: line.as_bytes().to_vec(),
+            result_tx,
+        };
+        self.stdin_tx
+            .as_ref()
+            .ok_or(TransportFailure::Write)?
+            .send(request)
+            .map_err(|_| TransportFailure::Write)?;
+        match result_rx.recv_timeout(IPC_IO_DEADLINE) {
+            Ok(result) => result,
+            Err(RecvTimeoutError::Timeout) => Err(TransportFailure::WriteTimeout),
+            Err(RecvTimeoutError::Disconnected) => Err(TransportFailure::Write),
         }
-        Ok(())
     }
 
     fn recv_line(&mut self) -> Result<String, InvokeError> {
-        let mut line = String::new();
-        match self.stdout.read_line(&mut line) {
-            Ok(0) => Err(InvokeError::Transport(TransportFailure::Eof)),
-            Ok(_) => {
-                if line.trim().is_empty() {
-                    Err(InvokeError::Transport(TransportFailure::Eof))
-                } else {
-                    Ok(line)
-                }
+        match self.stdout_rx.recv_timeout(IPC_IO_DEADLINE) {
+            Ok(Ok(line)) if line.trim().is_empty() => {
+                Err(InvokeError::Transport(TransportFailure::Eof))
             }
-            Err(e) if e.kind() == ErrorKind::InvalidData => {
-                Err(InvokeError::Protocol(ProtocolFailure::InvalidUtf8))
+            Ok(result) => result,
+            Err(RecvTimeoutError::Timeout) => {
+                Err(InvokeError::Transport(TransportFailure::ReadTimeout))
             }
-            Err(_) => Err(InvokeError::Transport(TransportFailure::Read)),
+            Err(RecvTimeoutError::Disconnected) => {
+                Err(InvokeError::Transport(TransportFailure::Read))
+            }
         }
     }
 
@@ -180,9 +302,7 @@ impl EngineConnection for ProcessConnection {
     }
 
     fn kill(&mut self) {
-        let _ = self.child.kill();
-        let _ = self.child.wait();
-        self.join_stderr_worker();
+        self.terminate();
     }
 }
 
@@ -195,7 +315,9 @@ impl EngineConnector for ProcessConnector {
         EngineManager::log(&format!("data root: {}", root.display()));
         let mut conn = spawn_configured_engine(&root)?;
 
-        let ready_line = conn.recv_line().map_err(|e| format!("エンジン ready 読取失敗: {e:?}"))?;
+        let ready_line = conn
+            .recv_line()
+            .map_err(|e| format!("エンジン ready 読取失敗: {e:?}"))?;
         let ready: Value = serde_json::from_str(&ready_line)
             .map_err(|e| format!("エンジン ready 解析失敗: {e} — {ready_line}"))?;
         if ready.get("event").and_then(|v| v.as_str()) != Some("ready") {
@@ -309,7 +431,11 @@ impl EngineManager {
         params: Value,
         cid: Option<u64>,
     ) -> Result<Value, String> {
-        self.invoke_blocking(cmd, params, cid)
+        let manager = Arc::clone(self);
+        let command = cmd.to_string();
+        tauri::async_runtime::spawn_blocking(move || manager.invoke_blocking(&command, params, cid))
+            .await
+            .map_err(|_| MSG_ENGINE_UNAVAILABLE.to_string())?
     }
 
     /// Transport/Protocol → `recovery_action` (RestartOnly | RestartThenRetryOnce).
@@ -390,6 +516,7 @@ impl EngineManager {
         }
 
         // Final response ({"ok": ...}); forward intermediate event lines.
+        let mut message_count = 0usize;
         loop {
             let response_line = match conn.recv_line() {
                 Ok(line) => line,
@@ -404,6 +531,17 @@ impl EngineManager {
                 }
             };
 
+            if response_line.len() > IPC_MAX_RESPONSE_LINE_BYTES {
+                *self.ready.lock().unwrap() = false;
+                return Err(InvokeError::Protocol(ProtocolFailure::LineTooLarge));
+            }
+
+            message_count += 1;
+            if message_count > IPC_MAX_MESSAGES_PER_REQUEST {
+                *self.ready.lock().unwrap() = false;
+                return Err(InvokeError::Protocol(ProtocolFailure::TooManyMessages));
+            }
+
             let response: Value = match serde_json::from_str(&response_line) {
                 Ok(v) => v,
                 Err(_) => {
@@ -411,6 +549,22 @@ impl EngineManager {
                     return Err(InvokeError::Protocol(ProtocolFailure::InvalidJson));
                 }
             };
+
+            if json_depth(&response) > IPC_MAX_JSON_DEPTH {
+                *self.ready.lock().unwrap() = false;
+                return Err(InvokeError::Protocol(ProtocolFailure::JsonDepthExceeded));
+            }
+
+            let response_id = response.get("id").and_then(Value::as_u64);
+            let response_cid = response.get("cid");
+            let cid_matches = match cid {
+                Some(expected) => response_cid.and_then(Value::as_u64) == Some(expected),
+                None => response_cid == Some(&Value::Null),
+            };
+            if response_id != Some(id) || !cid_matches {
+                Self::log("IPC correlation mismatch; dropped unverified response");
+                continue;
+            }
 
             if response.get("ok").is_none() && response.get("event").is_some() {
                 self.forward_event(&response);
@@ -422,7 +576,11 @@ impl EngineManager {
                 return Err(InvokeError::Protocol(ProtocolFailure::MalformedResponse));
             }
 
-            if !response.get("ok").and_then(|v| v.as_bool()).unwrap_or(false) {
+            if !response
+                .get("ok")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false)
+            {
                 let err = response
                     .get("error")
                     .and_then(|v| v.as_str())
@@ -433,6 +591,14 @@ impl EngineManager {
 
             return Ok(response.get("result").cloned().unwrap_or(Value::Null));
         }
+    }
+}
+
+fn json_depth(value: &Value) -> usize {
+    match value {
+        Value::Array(items) => 1 + items.iter().map(json_depth).max().unwrap_or(0),
+        Value::Object(fields) => 1 + fields.values().map(json_depth).max().unwrap_or(0),
+        _ => 1,
     }
 }
 
@@ -451,9 +617,7 @@ fn spawn_configured_engine(root: &Path) -> Result<ProcessConnection, String> {
             script.display()
         ));
     }
-    EngineManager::log(
-        "UNSAFE DEVELOPMENT ENGINE: system Python has no kernel sandbox guarantee",
-    );
+    EngineManager::log("UNSAFE DEVELOPMENT ENGINE: system Python has no kernel sandbox guarantee");
     spawn_python_engine(root, &script)
 }
 
@@ -578,9 +742,7 @@ fn configure_offline_child_environment(cmd: &mut Command, root: &Path) {
 
 #[cfg(debug_assertions)]
 fn spawn_process(mut cmd: Command, root: &Path) -> Result<ProcessConnection, String> {
-    let mut child = cmd
-        .spawn()
-        .map_err(|e| format!("エンジン起動失敗: {e}"))?;
+    let mut child = cmd.spawn().map_err(|e| format!("エンジン起動失敗: {e}"))?;
     let stdin = child
         .stdin
         .take()
@@ -601,12 +763,12 @@ fn spawn_process(mut cmd: Command, root: &Path) -> Result<ProcessConnection, Str
         }));
     });
 
-    Ok(ProcessConnection {
-        child: Box::new(child),
-        stdin: Box::new(stdin),
-        stdout: BufReader::new(Box::new(stdout)),
-        stderr_worker: Some(stderr_worker),
-    })
+    Ok(ProcessConnection::new(
+        Box::new(child),
+        Box::new(stdin),
+        Box::new(stdout),
+        stderr_worker,
+    ))
 }
 
 #[cfg(not(debug_assertions))]
@@ -624,12 +786,7 @@ fn spawn_connection(
         }));
     });
 
-    Ok(ProcessConnection {
-        child,
-        stdin,
-        stdout: BufReader::new(stdout),
-        stderr_worker: Some(stderr_worker),
-    })
+    Ok(ProcessConnection::new(child, stdin, stdout, stderr_worker))
 }
 
 // ---------------------------------------------------------------------------

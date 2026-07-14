@@ -245,7 +245,7 @@
 
 - **ID**: `FSA-2026-07-13-12`
 - **重要度**: `WARNING`
-- **状態**: `UNRESOLVED`
+- **状態**: `RESOLVED`
 - **症状（攻撃ベクトル）**: compromisedまたは故障したPython engineが改行なしの巨大応答を返すと、Rustは無制限にmemoryを確保し得る。応答が来なければconnection mutexを保持したまま永久停止する。古い応答や異なるrequestの応答でも、`id`/`cid`を照合しないため現在の呼出結果として受理し得る。frontendでは一部command以外がruntime validationなしでReact stateへ入る。
 - **根本原因**: Rust transportが`BufRead::read_line`を直接使用し、最大byte、read deadline、event数、JSON depth、response schemaを規定していない。最終応答は`ok`の有無を中心に判定し、要求した`id`/`cid`との完全一致を検査しない。TSのgeneric `pkbInvoke<T>`が静的型をruntime保証と誤認させ、strict parserの適用範囲がconsult/manifest周辺に限られている。
 - **実コード証拠**:
@@ -254,6 +254,9 @@
   - `src/python/engine_stdio.py:204-225`
   - `apps/desktop/src/lib/engine.ts:24-30`
 - **必須是正措置**: request/response/eventへexact schema、最大line bytes、最大JSON depth、最大event数、read/write deadlineを設定する。応答の`id`と`cid`を要求値へ必須結合し、不一致をprotocol failureとしてengineを隔離する。blocking I/OをTauri async runtimeから専用workerへ分離する。すべてのTS IPC wrapperを`unknown`受領とcommand固有strict parserへ統一し、missing/extra/wrong-typeをhard-failする。
+- **解決日**: 2026-07-15
+- **解決記録**: Rust IPCへ上限付きbuffer（response 1 MiB、request 8 MiB）、JSON深度・message数上限、read/write deadlineを導入し、stdioを専用reader/writer workerへ分離した。Tauri commandは`spawn_blocking`経由とし、`id`/`cid`不一致応答をdropして正しい相関応答だけを採用する。Python成功・失敗envelopeも`id`/`cid`を必須echoする。TypeScriptは全IPC commandを`unknown`で受け、Zod等と同等のcommand固有Strict Parserを必須引数とする中央helperへ統一し、未検証値を返せない構造にした。
+- **検証証拠**: FSA-12 Rust契約`3 passed`、TypeScript runtime boundary`121 passed`、frontend production build成功、全体pytest`633 passed, 1 skipped`、Cargo全target`60 passed`、Rustfmt・`git diff --check`違反0件。
 
 ---
 

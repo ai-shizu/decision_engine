@@ -19,6 +19,7 @@ use super::*;
 #[allow(dead_code)]
 enum RecvStep {
     Line(String),
+    RawLine(String),
     FailTransport(TransportFailure),
     FailProtocolUtf8,
     Block(mpsc::Receiver<()>),
@@ -30,25 +31,37 @@ struct FakeConnection {
     sent: Arc<Mutex<Vec<String>>>,
     alive: bool,
     killed: Arc<AtomicBool>,
+    last_request: Option<Value>,
 }
 
 impl EngineConnection for FakeConnection {
     fn send_line(&mut self, line: &str) -> Result<(), TransportFailure> {
         self.sent.lock().unwrap().push(line.to_string());
+        self.last_request = serde_json::from_str(line).ok();
         self.send_results.pop_front().unwrap_or(Ok(()))
     }
 
     fn recv_line(&mut self) -> Result<String, InvokeError> {
         match self.recv_script.pop_front() {
-            Some(RecvStep::Line(s)) => Ok(s),
+            Some(RecvStep::Line(s)) => Ok(self.correlate(s)),
+            Some(RecvStep::RawLine(s)) => Ok(s),
             Some(RecvStep::FailTransport(t)) => Err(InvokeError::Transport(t)),
             Some(RecvStep::FailProtocolUtf8) => {
                 Err(InvokeError::Protocol(ProtocolFailure::InvalidUtf8))
             }
             Some(RecvStep::Block(rx)) => {
-                let _ = rx.recv();
+                match rx.recv_timeout(IPC_IO_DEADLINE) {
+                    Ok(()) => {}
+                    Err(mpsc::RecvTimeoutError::Timeout) => {
+                        return Err(InvokeError::Transport(TransportFailure::ReadTimeout));
+                    }
+                    Err(mpsc::RecvTimeoutError::Disconnected) => {
+                        return Err(InvokeError::Transport(TransportFailure::Eof));
+                    }
+                }
                 match self.recv_script.pop_front() {
-                    Some(RecvStep::Line(s)) => Ok(s),
+                    Some(RecvStep::Line(s)) => Ok(self.correlate(s)),
+                    Some(RecvStep::RawLine(s)) => Ok(s),
                     Some(RecvStep::FailTransport(t)) => Err(InvokeError::Transport(t)),
                     Some(RecvStep::FailProtocolUtf8) => {
                         Err(InvokeError::Protocol(ProtocolFailure::InvalidUtf8))
@@ -70,6 +83,29 @@ impl EngineConnection for FakeConnection {
     fn kill(&mut self) {
         self.killed.store(true, Ordering::SeqCst);
         self.alive = false;
+    }
+}
+
+impl FakeConnection {
+    fn correlate(&self, line: String) -> String {
+        let Some(request) = self.last_request.as_ref() else {
+            return line;
+        };
+        let Ok(mut response) = serde_json::from_str::<Value>(&line) else {
+            return line;
+        };
+        let Some(fields) = response.as_object_mut() else {
+            return line;
+        };
+        fields.insert(
+            "id".to_string(),
+            request.get("id").cloned().unwrap_or(Value::Null),
+        );
+        fields.insert(
+            "cid".to_string(),
+            request.get("cid").cloned().unwrap_or(Value::Null),
+        );
+        response.to_string()
     }
 }
 
@@ -149,6 +185,7 @@ fn make_conn(
         sent,
         alive: true,
         killed,
+        last_request: None,
     }
 }
 
@@ -413,10 +450,7 @@ fn retry_safe_second_failure_no_third_attempt() {
         Arc::clone(&sent),
         Arc::clone(&killed),
     );
-    let mgr = boot_with(
-        vec![Ok(conn1), Ok(conn2), Ok(conn3)],
-        Arc::clone(&connects),
-    );
+    let mgr = boot_with(vec![Ok(conn1), Ok(conn2), Ok(conn3)], Arc::clone(&connects));
     let err = mgr
         .invoke_blocking("record.load", json!({"date": "2026-07-12"}), None)
         .expect_err("must fail");
@@ -730,9 +764,7 @@ fn invoke_sync_has_no_allow_restart_param() {
     let mgr = boot_with(vec![Ok(conn1)], Arc::clone(&connects));
     let params = json!({"date": "2026-07-12"});
     // 3-arg invoke_sync: compile success is the proof (_allow_restart gone)
-    let ok = mgr
-        .invoke_sync("record.load", &params, None)
-        .expect("ok");
+    let ok = mgr.invoke_sync("record.load", &params, None).expect("ok");
     assert_eq!(ok, json!({}));
 }
 
@@ -824,9 +856,7 @@ fn cid_stamped_on_request_envelope() {
         Arc::clone(&killed2),
     );
     let mgr2 = boot_with(vec![Ok(conn2)], Arc::clone(&connects2));
-    let _ = mgr2
-        .invoke_blocking("health", json!({}), None)
-        .expect("ok");
+    let _ = mgr2.invoke_blocking("health", json!({}), None).expect("ok");
     let line2 = sent2.lock().unwrap()[0].clone();
     let v2 = parse_sent(&line2);
     assert_eq!(v2.get("cid"), Some(&Value::Null));
@@ -883,6 +913,135 @@ fn requests_serialized_under_connection_lock() {
     t1.join().expect("t1");
     t2.join().expect("t2");
     assert_eq!(sent.lock().unwrap().len(), 2);
+}
+
+// ---------------------------------------------------------------------------
+// FSA-2026-07-13-12 STEP 1: bounded/deadline/correlation RED contracts
+// ---------------------------------------------------------------------------
+
+#[test]
+fn fsa_2026_07_13_12_oversized_response_must_be_rejected() {
+    const CONTRACT_MAX_RESPONSE_BYTES: usize = 1024 * 1024;
+
+    let mut unterminated_wire = vec![b'x'; CONTRACT_MAX_RESPONSE_BYTES + 1];
+    unterminated_wire.push(b'\n');
+    let (reader_rx, reader_worker) = spawn_stdout_worker(Box::new(Cursor::new(unterminated_wire)));
+    let reader_result = reader_rx
+        .recv_timeout(Duration::from_secs(1))
+        .expect("bounded reader must report the over-limit line");
+    assert_eq!(
+        reader_result,
+        Err(InvokeError::Protocol(ProtocolFailure::LineTooLarge))
+    );
+    reader_worker.join().expect("bounded reader worker");
+
+    let sent = Arc::new(Mutex::new(Vec::new()));
+    let killed = Arc::new(AtomicBool::new(false));
+    let connects = Arc::new(AtomicUsize::new(0));
+    let oversized = "x".repeat(CONTRACT_MAX_RESPONSE_BYTES + 1);
+    let response = json!({
+        "id": 0,
+        "cid": 12,
+        "ok": true,
+        "result": { "blob": oversized },
+    })
+    .to_string();
+    let conn = make_conn(
+        vec![RecvStep::Line(response)],
+        vec![],
+        Arc::clone(&sent),
+        Arc::clone(&killed),
+    );
+    let mgr = boot_with(vec![Ok(conn)], connects);
+
+    let result = mgr.invoke_sync("health", &json!({}), Some(12));
+    assert!(
+        result.is_err(),
+        "an over-limit response was accepted and fully materialized"
+    );
+}
+
+#[test]
+fn fsa_2026_07_13_12_silent_backend_must_hit_read_deadline() {
+    const CONTRACT_DEADLINE: Duration = Duration::from_millis(200);
+
+    let sent = Arc::new(Mutex::new(Vec::new()));
+    let killed = Arc::new(AtomicBool::new(false));
+    let connects = Arc::new(AtomicUsize::new(0));
+    let (release_tx, release_rx) = mpsc::channel();
+    let conn = make_conn(
+        vec![RecvStep::Block(release_rx)],
+        vec![],
+        Arc::clone(&sent),
+        Arc::clone(&killed),
+    );
+    let mgr = boot_with(vec![Ok(conn)], connects);
+    let worker_mgr = Arc::clone(&mgr);
+    let (done_tx, done_rx) = mpsc::channel();
+    let worker = thread::spawn(move || {
+        let result = worker_mgr.invoke_sync("health", &json!({}), Some(12));
+        let _ = done_tx.send(result);
+    });
+
+    let observed = done_rx.recv_timeout(CONTRACT_DEADLINE);
+    drop(release_tx);
+    let _ = worker.join();
+
+    assert!(
+        observed.is_ok(),
+        "silent backend kept the IPC request blocked beyond its deadline"
+    );
+    assert!(
+        observed.unwrap().is_err(),
+        "deadline expiry must hard-fail the request"
+    );
+}
+
+#[test]
+fn fsa_2026_07_13_12_mismatched_id_and_cid_must_be_rejected() {
+    let sent = Arc::new(Mutex::new(Vec::new()));
+    let killed = Arc::new(AtomicBool::new(false));
+    let connects = Arc::new(AtomicUsize::new(0));
+    let spoofed = json!({
+        "id": 0,
+        "cid": 999,
+        "ok": true,
+        "result": { "status": "spoofed" },
+    })
+    .to_string();
+    let conn = make_conn(
+        vec![RecvStep::RawLine(spoofed)],
+        vec![],
+        Arc::clone(&sent),
+        Arc::clone(&killed),
+    );
+    let mgr = boot_with(vec![Ok(conn)], connects);
+
+    let result = mgr.invoke_sync("health", &json!({}), Some(100));
+    assert!(
+        result.is_err(),
+        "response with an unknown request id/cid was accepted"
+    );
+
+    let sent2 = Arc::new(Mutex::new(Vec::new()));
+    let killed2 = Arc::new(AtomicBool::new(false));
+    let connects2 = Arc::new(AtomicUsize::new(0));
+    let spoofed_then_valid = make_conn(
+        vec![
+            RecvStep::RawLine(
+                json!({ "id": 0, "cid": 999, "ok": true, "result": "spoofed" }).to_string(),
+            ),
+            RecvStep::Line(okline(0)),
+        ],
+        vec![],
+        Arc::clone(&sent2),
+        Arc::clone(&killed2),
+    );
+    let mgr2 = boot_with(vec![Ok(spoofed_then_valid)], connects2);
+    let accepted = mgr2
+        .invoke_sync("health", &json!({}), Some(100))
+        .expect("valid correlated response after spoof must be accepted");
+    assert_eq!(accepted, json!({}));
 }
 
 #[test]
@@ -1046,9 +1205,7 @@ fn elog_tiny_policy_fills_until_cap_then_rotates() {
     let root = elog_temp_root();
     let policy = tiny_policy();
     // Two diags fit in 80 with header; third forces rotate.
-    let input = format!(
-        "{ENGINE_DIAG_LINE}\n{ENGINE_DIAG_LINE}\n{ENGINE_DIAG_LINE}\n"
-    );
+    let input = format!("{ENGINE_DIAG_LINE}\n{ENGINE_DIAG_LINE}\n{ENGINE_DIAG_LINE}\n");
     collect_engine_stderr(&root, Cursor::new(input.into_bytes()), policy);
     let current = read_log(&root, "engine.log");
     let backup1 = read_log(&root, "engine.log.1");

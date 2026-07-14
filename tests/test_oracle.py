@@ -201,6 +201,7 @@ def test_cid_stamped_on_all_events_single_path() -> None:
         assert payload.get("cid") == 42, f"cid が全イベントへ刻印されていない: {payload}"
     final = emitted[-1]
     assert final.get("id") == 1
+    assert final.get("cid") == 42
     assert final.get("ok") is True
     assert "event" not in final, "最終応答はイベント行ではない (forward_event 対象外)"
     print("  cid stamped on all events via single emit_event path (W-48) OK")
@@ -246,6 +247,8 @@ def test_cid_distinguishes_sequential_requests() -> None:
     assert status_events[1]["cid"] == 20
     assert status_events[0]["cid"] != status_events[1]["cid"], \
         "超過リクエストの cid が混線している (W-45 の前提が崩れる)"
+    final_responses = [p for p in emitted if "ok" in p]
+    assert [p.get("cid") for p in final_responses] == [10, 20]
     print("  sequential requests carry distinct cid, no cross-contamination (W-45 basis) OK")
 
 
@@ -277,5 +280,35 @@ def test_cid_absent_request_emits_null_cid() -> None:
     status_events = [p for p in emitted if p.get("event") == "status"]
     assert len(status_events) == 1
     assert status_events[0].get("cid") is None
+    final_responses = [p for p in emitted if "ok" in p]
+    assert len(final_responses) == 1
+    assert final_responses[0].get("cid") is None
     print("  cid-less request emits null cid without crashing OK")
+
+
+def test_cid_is_preserved_on_error_response() -> None:
+    emitted: list[dict] = []
+    original_emit = engine_stdio._emit
+    original_dispatch = engine_stdio.dispatch
+    engine_stdio._emit = lambda payload: emitted.append(payload)
+
+    def failing_dispatch(cmd, params, emit=None):
+        raise ValueError("expected failure")
+
+    engine_stdio.dispatch = failing_dispatch
+    original_stdin = sys.stdin
+    sys.stdin = io.StringIO(
+        json.dumps({"id": 77, "cid": 88, "cmd": "consult", "params": {}}) + "\n"
+    )
+    try:
+        engine_stdio.main()
+    finally:
+        sys.stdin = original_stdin
+        engine_stdio.dispatch = original_dispatch
+        engine_stdio._emit = original_emit
+
+    final = emitted[-1]
+    assert final.get("id") == 77
+    assert final.get("cid") == 88
+    assert final.get("ok") is False
 

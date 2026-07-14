@@ -173,10 +173,13 @@ def test_07_frontend_has_no_generic_command_or_typed_invoke_cast() -> None:
     assert "invoke<unknown>" in engine
     assert "parseEngineResponse" in engine
 
-    invoked = set(re.findall(r'invokeEngine\("([a-z0-9_]+)"', engine))
-    assert invoked == EXPOSED_COMMANDS - {"engine_ready"}
-    assert 'invokeEngine("engine_ready"' not in engine
-    assert 'invoke<unknown>("engine_ready"' in engine
+    parsed_calls = re.findall(
+        r'invokeEngine\s*\(\s*"([a-z0-9_]+)"\s*,\s*(parse[A-Za-z0-9_]+)',
+        engine,
+    )
+    assert {command for command, _parser in parsed_calls} == EXPOSED_COMMANDS
+    assert all(parser.startswith("parse") for _command, parser in parsed_calls)
+    assert not re.search(r'invoke\s*<\s*unknown\s*>\s*\(\s*"', engine)
 
 
 def test_08_tauri_invoke_has_one_frontend_owner() -> None:

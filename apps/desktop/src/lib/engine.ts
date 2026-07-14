@@ -53,6 +53,7 @@ import type {
 
 
 type EngineIpcCommand =
+  | "engine_ready"
   | "engine_health"
   | "record_load"
   | "record_save"
@@ -82,28 +83,34 @@ type EngineIpcCommand =
   | "context_manifest_latest";
 
 
-async function invokeEngine(
+type RuntimeParser<T> = (value: unknown) => T;
+
+
+async function invokeEngine<T>(
   command: EngineIpcCommand,
+  parser: RuntimeParser<T>,
   request?: Record<string, unknown>,
   cid?: number,
-): Promise<unknown> {
-  if (request === undefined) return invoke<unknown>(command);
-  return invoke<unknown>(command, { request, cid: cid ?? null });
+): Promise<T> {
+  const raw = request === undefined
+    ? await invoke<unknown>(command)
+    : await invoke<unknown>(command, { request, cid: cid ?? null });
+  return parser(raw);
 }
 
 
 export async function engineReady(): Promise<boolean> {
-  return parseBoolean(await invoke<unknown>("engine_ready"));
+  return invokeEngine("engine_ready", parseBoolean);
 }
 
 
 export async function engineHealth(): Promise<{ status: "ok"; offline: true }> {
-  return parseEngineHealth(await invokeEngine("engine_health"));
+  return invokeEngine("engine_health", parseEngineHealth);
 }
 
 
 export async function loadRecord(date: string): Promise<RecordData> {
-  return parseRecordData(await invokeEngine("record_load", { date }));
+  return invokeEngine("record_load", parseRecordData, { date });
 }
 
 
@@ -113,25 +120,30 @@ export async function saveRecord(
   transactions: RecordData["transactions"],
   diary: string,
 ): Promise<{ saved: true; index_rebuilt: boolean }> {
-  const result = parseRecordSaveResult(
-    await invokeEngine("record_save", { date, events, transactions, diary }),
+  const result = await invokeEngine(
+    "record_save",
+    parseRecordSaveResult,
+    { date, events, transactions, diary },
   );
   return { saved: result.saved, index_rebuilt: result.index_rebuilt };
 }
 
 
 export async function calendarEventDates(): Promise<string[]> {
-  return parseCalendarEventDatesResult(await invokeEngine("calendar_event_dates")).dates;
+  return (await invokeEngine(
+    "calendar_event_dates",
+    parseCalendarEventDatesResult,
+  )).dates;
 }
 
 
 export async function importStats(): Promise<Record<string, SourceStat>> {
-  return parseImportStats(await invokeEngine("import_stats"));
+  return invokeEngine("import_stats", parseImportStats);
 }
 
 
 export async function esView(): Promise<EsView> {
-  return parseEsView(await invokeEngine("es_view"));
+  return invokeEngine("es_view", parseEsView);
 }
 
 
@@ -151,8 +163,7 @@ export async function consult(
   opts: ConsultOptions = {},
   cid?: number,
 ): Promise<ConsultResponse> {
-  const raw = await invokeEngine("consult", { query, ...opts }, cid);
-  return parseConsultResponse(raw);
+  return invokeEngine("consult", parseConsultResponse, { query, ...opts }, cid);
 }
 
 
@@ -161,8 +172,11 @@ export async function syncIcsContent(
   mode: "append" | "overwrite",
   cid?: number,
 ): Promise<CalendarSyncResult> {
-  return parseCalendarSyncResult(
-    await invokeEngine("calendar_sync_ics", { mode, ics_content: content }, cid),
+  return invokeEngine(
+    "calendar_sync_ics",
+    parseCalendarSyncResult,
+    { mode, ics_content: content },
+    cid,
   );
 }
 
@@ -180,8 +194,11 @@ export async function syncIcsFiles(
   const ics_files = await Promise.all(
     files.map(async (file) => ({ content: await readTextLenient(file), filename: file.name })),
   );
-  return parseCalendarSyncResult(
-    await invokeEngine("calendar_sync_ics", { mode, ics_files }, cid),
+  return invokeEngine(
+    "calendar_sync_ics",
+    parseCalendarSyncResult,
+    { mode, ics_files },
+    cid,
   );
 }
 
@@ -190,8 +207,11 @@ export async function syncAppleCalendar(
   mode: "append" | "overwrite",
   cid?: number,
 ): Promise<CalendarSyncResult> {
-  return parseCalendarSyncResult(
-    await invokeEngine("calendar_sync_apple", { mode }, cid),
+  return invokeEngine(
+    "calendar_sync_apple",
+    parseCalendarSyncResult,
+    { mode },
+    cid,
   );
 }
 
@@ -201,8 +221,11 @@ export async function importLineContent(
   filename: string,
   cid?: number,
 ): Promise<LineImportResult> {
-  return parseLineImportResult(
-    await invokeEngine("import_line_single", { content, filename }, cid),
+  return invokeEngine(
+    "import_line_single",
+    parseLineImportResult,
+    { content, filename },
+    cid,
   );
 }
 
@@ -221,14 +244,16 @@ export async function importLineFiles(
   const batch = await Promise.all(
     files.map(async (file) => ({ content: await readTextLenient(file), filename: file.name })),
   );
-  return parseLineImportResult(await invokeEngine("import_line_batch", { files: batch }, cid));
+  return invokeEngine("import_line_batch", parseLineImportResult, { files: batch }, cid);
 }
 
 
 export async function classifyDocument(file: File): Promise<ClassifyResult> {
   const content = await readTextLenient(file);
-  const result = parseClassifyResult(
-    await invokeEngine("import_classify", { content, filename: file.name }),
+  const result = await invokeEngine(
+    "import_classify",
+    parseClassifyResult,
+    { content, filename: file.name },
   );
   return { ...result, content };
 }
@@ -240,24 +265,27 @@ export async function importDocument(
   dest: "es" | "knowledge",
   cid?: number,
 ): Promise<DocumentImportResult> {
-  return parseDocumentImportResult(
-    await invokeEngine("import_document", { content, filename, dest }, cid),
+  return invokeEngine(
+    "import_document",
+    parseDocumentImportResult,
+    { content, filename, dest },
+    cid,
   );
 }
 
 
 export async function loadSettings(): Promise<SettingsData> {
-  return parseSettingsData(await invokeEngine("settings_get"));
+  return invokeEngine("settings_get", parseSettingsData);
 }
 
 
 export async function saveFixedAttributes(attributes: Record<string, string>): Promise<void> {
-  parseSavedResult(await invokeEngine("settings_save_fixed", { attributes }));
+  await invokeEngine("settings_save_fixed", parseSavedResult, { attributes });
 }
 
 
 export async function runProfiler(): Promise<ProfilerResult> {
-  return parseProfilerResult(await invokeEngine("settings_run_profiler"));
+  return invokeEngine("settings_run_profiler", parseProfilerResult);
 }
 
 
@@ -265,8 +293,10 @@ export async function oraclePayload(
   scope: "global" | "dyad" = "global",
   alias?: string,
 ): Promise<OraclePayload> {
-  return parseOraclePayload(
-    await invokeEngine("oracle_payload", { scope, alias: alias ?? null }),
+  return invokeEngine(
+    "oracle_payload",
+    parseOraclePayload,
+    { scope, alias: alias ?? null },
   );
 }
 
@@ -275,8 +305,10 @@ export async function oracleReport(
   scope: "global" | "dyad" = "global",
   alias?: string,
 ): Promise<OracleReportResult> {
-  return parseOracleReport(
-    await invokeEngine("oracle_report", { scope, alias: alias ?? null }),
+  return invokeEngine(
+    "oracle_report",
+    parseOracleReport,
+    { scope, alias: alias ?? null },
   );
 }
 
@@ -294,41 +326,45 @@ export async function twinForecast(
   scope: "global" | "dyad" = "global",
   alias?: string,
 ): Promise<TwinForecast> {
-  return parseTwinForecast(
-    await invokeEngine("twin_forecast", { scenario, scope, alias: alias ?? null }),
+  return invokeEngine(
+    "twin_forecast",
+    parseTwinForecast,
+    { scenario, scope, alias: alias ?? null },
   );
 }
 
 
 export async function tensorRebuild(): Promise<{ rebuilt: boolean; rows: number }> {
-  return parseTensorRebuildResult(await invokeEngine("tensor_rebuild"));
+  return invokeEngine("tensor_rebuild", parseTensorRebuildResult);
 }
 
 
 export async function sourceCode(): Promise<SourceCodeView> {
-  return parseSourceCodeView(await invokeEngine("profile_source_code"));
+  return invokeEngine("profile_source_code", parseSourceCodeView);
 }
 
 
 export async function narrativeCompile(targetDomain?: string): Promise<NarrativeCompileResult> {
-  return parseNarrativeCompileResult(
-    await invokeEngine("narrative_compile", { target_domain: targetDomain ?? null }),
+  return invokeEngine(
+    "narrative_compile",
+    parseNarrativeCompileResult,
+    { target_domain: targetDomain ?? null },
   );
 }
 
 
 export async function knowledgeFetchPending(): Promise<KnowledgeFetchSummary> {
-  return parseKnowledgeFetchSummary(await invokeEngine("knowledge_fetch_pending"));
+  return invokeEngine("knowledge_fetch_pending", parseKnowledgeFetchSummary);
 }
 
 
 export async function probeStatus(today: string): Promise<ProbeStatus> {
-  return parseProbeStatus(await invokeEngine("probe_status", { today }));
+  return invokeEngine("probe_status", parseProbeStatus, { today });
 }
 
 
 export async function probeNext(today: string): Promise<ProbeQuestionView> {
-  return parseProbeQuestion(await invokeEngine("probe_next", { today }));
+  return invokeEngine("probe_next", parseProbeQuestion, { today });
 }
 
 
@@ -338,19 +374,24 @@ export async function probeAnswer(
   answer: string,
   today: string,
 ): Promise<ProbeAnswerResult> {
-  return parseProbeAnswerResult(
-    await invokeEngine("probe_answer", {
+  return invokeEngine(
+    "probe_answer",
+    parseProbeAnswerResult,
+    {
       session_id: sessionId,
       question_id: questionId,
       answer,
       today,
-    }),
+    },
   );
 }
 
 
 export async function latestContextManifest(): Promise<ContextManifestResponseV1> {
-  return parseContextManifestResponseV1(await invokeEngine("context_manifest_latest"));
+  return invokeEngine(
+    "context_manifest_latest",
+    parseContextManifestResponseV1,
+  );
 }
 
 

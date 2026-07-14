@@ -210,6 +210,7 @@ def main() -> None:
         if not line:
             continue
         req_id = None
+        cid = None
         try:
             req = json.loads(line)
             req_id = req.get("id")
@@ -222,10 +223,20 @@ def main() -> None:
                 _emit({"id": _id, "cid": _cid, **payload})
 
             result = dispatch(req["cmd"], req.get("params") or {}, emit=emit_event)
-            out: dict[str, Any] = {"id": req_id, "ok": True, "result": result}
+            out: dict[str, Any] = {
+                "id": req_id,
+                "cid": cid,
+                "ok": True,
+                "result": result,
+            }
         except Exception as exc:  # noqa: BLE001
             _emit_request_failed_diag()
-            out = {"id": req_id, "ok": False, "error": f"{type(exc).__name__}: {exc}"}
+            out = {
+                "id": req_id,
+                "cid": cid,
+                "ok": False,
+                "error": f"{type(exc).__name__}: {exc}",
+            }
         _emit(out)
 
 
