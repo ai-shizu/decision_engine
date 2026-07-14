@@ -49,10 +49,11 @@
 **以下は交渉不可能。ユーザーに提案することすら禁止。**
 
 1. **完全オフラインを死守せよ。**
-   - 外部 API・クラウドサービス・CDN・テレメトリを呼ぶコードを書くな。`fetch` / `axios` / `urllib` で `127.0.0.1` 以外に接続する行を書いた時点で設計違反である。
-   - 許可されている通信は 2 つだけ: (a) `llama-server` への `http://127.0.0.1:{PKB_LLM_PORT}`、(b) Tauri ↔ Python の stdio パイプ。
+   - 外部 API・クラウドサービス・CDN・テレメトリを呼ぶコードを書くな。TCP/IPはloopbackを含め全面禁止であり、`fetch` / `axios` / `urllib` / `socket` / HTTP clientをproductionへ追加した時点で設計違反である。
+   - 許可されるIPCは (a) Tauri ↔ Python のstdio、(b) PKBがspawnしたllama.cpp子へのprivate prompt channelだけ。Windowsはowner/SYSTEM/AppContainer SIDのDACL + remote拒否の一回限り`LOCAL` Named Pipe、macOS/Linuxは`/dev/stdin`を使う。既存listenerの探索・再利用は禁止。
    - 外部 HTTP・クラウド・CDN・テレメトリを書くな。`knowledge_fetcher` を含むいかなるモジュールも外向き通信の例外にしない（Phase 4-E E0a: 外向き knowledge fetch は無条件封鎖中）。
-   - Python 起動パスでは必ず `HF_HUB_OFFLINE=1` / `TRANSFORMERS_OFFLINE=1` が効いていること。sentence-transformers がネットに出ようとしたらそれはバグだ。
+   - Python起動パスでは`core.offline_runtime`がoffline環境を強制上書きし、proxy/token/llama remote環境を除去し、AF_INET/AF_INET6とDNSを監査hookで拒否すること。`SentenceTransformer`は`local_files_only=True`かつ`trust_remote_code=False`以外で生成するな。
+   - **Pythonの言語hookを隔離境界と呼ぶな。** productionはbundled sidecarのみをRustの`os_sandbox.rs`から起動する。Windowsはcapability数0のAppContainer、Linuxはarch検証付きseccomp-BPFで`socket(AF_INET/AF_INET6)`を`EACCES`、macOSは署名済みApp Sandbox（network entitlementなし）を必須とする。適用失敗時の通常起動は禁止。System Pythonは`PKB_UNSAFE_DEV_ENGINE=1`を明示したdebug buildだけの非保証モードである。
    - npm パッケージを追加する時、ランタイムで外部通信するもの（アナリティクス、フォント CDN、自動アップデータ）は選ぶな。
 
 2. **個人データを絶対に流出させるな。**
@@ -78,7 +79,7 @@
 4. **記録と分析を分離せよ。**
    - RECORD 保存・カレンダー同期で profiler を走らせるな（`sync_diary_index()` のみ）。
    - profiler の自動実行は LINE 取込 (`import.line`) のみ。他で走らせたければユーザーに聞く前に HANDOFF を読み直せ。
-   - 埋め込みモデル・llama-server は初回 consult / profiler まで起動しない（遅延初期化）。起動を早めるな。
+   - 埋め込みモデル・llama.cpp子プロセスは初回 consult / profiler まで起動しない（遅延初期化）。起動を早めるな。
 
 ---
 
@@ -117,7 +118,7 @@
 |---|---|---|
 | `LNK4272: library machine type 'x64' conflicts with target machine type 'ARM64'` | x64 の .lib/.dll をリンクしている | 依存を ARM64 版に差し替える。無ければソースビルド |
 | pip パッケージの import で `ImportError: DLL load failed` | x64 wheel が入った | `python -c "import platform; print(platform.machine())"` が `ARM64` の Python を使え。`pip debug --verbose` で対応 wheel タグ確認 |
-| llama-server が起動しない/異常に遅い | x64 エミュレーション実行 | `tools/llama-arm64/` の ARM64 native ビルドを使う |
+| llama.cpp子が起動しない/異常に遅い | x64 エミュレーション実行 | `tools/llama-arm64/` の ARM64 native ビルドを使う |
 | C++ ビルド失敗 | MSVC x64 ツールチェーン | `build.ps1` を使う（llvm-mingw clang++ + OpenMP、ARM64 NEON 前提） |
 
 **デバッグコマンド（迷ったら上から順に実行）:**
@@ -152,9 +153,9 @@ python -m pytest tests/test_ui_smoke.py -q
 - `pkb-desktop.exe` 直接起動は黒画面になる。**必ず `apps/desktop/dev.cmd`** で起動せよ。
 - JS の `new Date().toISOString()` は **UTC**。JST では 0:00〜8:59 に日付が 1 日ずれる。日付文字列は必ず `dateUtils.todayIso()` / `toIsoDate()`（ローカル時刻ベース）を使え。`toISOString().slice(0,10)` を書いたら即修正対象。
 - Textual のカレンダー日ボタンに `id` を付けるな（DuplicateIds でクラッシュ）。
-- 7B モデルの初回ロードは 2〜3 分かかる。タイムアウトを短くするな（`llm_config.model_startup_timeout()` を使え）。
+- 7B モデルの初回ロードは 2〜3 分かかる。`LlamaStdioBackend`の固定timeoutを根拠なく短くするな。
 - **スキーマ移行時は grep で全参照を潰せ。** 過去に `fixed_attributes` の `age` → `birthday` 移行で TUI とテストに古い `#fixed-age` 参照が残り、SETTINGS タブが実行時クラッシュした。フィールド名・cmd 名・イベント名を変えたら `rg <旧名>` をリポジトリ全体に必ず実行し、ヒット 0 を確認してから完了と言え。
-- llama-server のライフサイクル: 自分が spawn したプロセスだけを stop 対象にする（既存サーバー再利用時は殺さない）。`atexit` 登録済み。ゾンビを残す変更をするな。
+- llama.cppのライフサイクル: 推論ごとに新しい所有子をspawnし、そのPIDだけをstop対象にする。listener探索・外部プロセス再利用・三回目の再送を追加するな。`atexit`登録済み。ゾンビを残す変更をするな。
 
 ---
 
@@ -250,8 +251,8 @@ cargo check
 - Sidecar は **`pkb-engine`（stdio JSON エンジン、エントリ `run_engine.py`）** である。FastAPI / HTTP サーバーは存在しないし、設計原則（完全オフライン）により**今後も導入禁止**。「pkb-api」という名前が指示に出てきたらそれは古い/誤った情報であり、`pkb-engine` に読み替えろ。
 - `externalBin: ["binaries/pkb-engine"]` は**二重化不要**。Tauri が target triple を自動付与して解決する: Windows は `pkb-engine-aarch64-pc-windows-msvc.exe`、macOS は `pkb-engine-aarch64-apple-darwin` / `pkb-engine-x86_64-apple-darwin`。**やることは正しいファイル名でバイナリを置くことだけ**（Windows: `scripts/build-engine.ps1`、macOS: `scripts/build-sidecar.sh`）。ファイルが無いと `tauri build` はその場で失敗する。
 - プラットフォーム差分は `tauri.conf.json` 本体ではなく **`tauri.macos.conf.json`**（自動マージされる platform-specific config）に書く。Windows の挙動を変えずに macOS を足すのが原則。
-- データルート: Windows `%LOCALAPPDATA%\PKB` / macOS `~/Library/Application Support/PKB`（`src-tauri/src/paths.rs::user_data_root()` の cfg 分岐）。パスを変えるならここ**だけ**を変えろ。
-- ネイティブ実行ファイル名は Python 側で `core/paths.py` の `SEARCH_EXE` / `LLAMA_SERVER_EXE` に集約済み（Windows のみ `.exe`）。**`"xxx.exe"` という文字列リテラルを新たに書いた時点で不合格。**
+- データルート: Windows `%LOCALAPPDATA%\PKB` / macOS production `~/Library/Containers/com.ai-shizu.pkb/Data/Library/Application Support/PKB` / macOS非sandbox dev `~/Library/Application Support/PKB`（`src-tauri/src/paths.rs::user_data_root()` の cfg 分岐）。releaseは`PKB_PROJECT_ROOT`とrepo探索を無視する。パスを変えるならここ**だけ**を変えろ。
+- ネイティブ実行ファイル名は Python 側で `core/paths.py` の `SEARCH_EXE` / `LLAMA_CLI_EXE` に集約済み（Windows のみ `.exe`）。**`"xxx.exe"` という文字列リテラルを新たに書いた時点で不合格。**
 
 ### 4.1 GitHub Actions — Mac 用 (aarch64 / x86_64) ビルド構成
 
@@ -305,7 +306,7 @@ Tauri v2 は**環境変数が設定されているだけ**で署名→公証→�
   - 証明書は必ず **Developer ID Application**（App Store 用の "Apple Distribution" とは別物。間違えると公証は通るが Gatekeeper に弾かれる）。
   - `APPLE_PASSWORD` は Apple ID のログインパスワードではない。**App 用パスワード**を発行して使え。
   - 公証には **Hardened Runtime 必須** — `tauri.macos.conf.json` の `"hardenedRuntime": true` を消すな。
-  - PyInstaller 製 sidecar は自己解凍で dylib を展開するため、entitlements の `com.apple.security.cs.allow-unsigned-executable-memory` と `com.apple.security.cs.disable-library-validation`（`src-tauri/entitlements.plist`）を消すな。消すと**署名済みビルドだけがクラッシュ**し、未署名の dev ビルドでは再現しない地獄のバグになる。
+  - 親アプリは`com.apple.security.app-sandbox=true`を必須とし、`com.apple.security.network.client/server`を一切持たせない。PyInstaller製sidecarは`sidecar-entitlements.plist`の`app-sandbox + inherit`だけで別途署名し、CIで実体から再抽出して検証する。親のHardened Runtime例外（`allow-unsigned-executable-memory` / `disable-library-validation`）と子の継承entitlementを混同するな。
   - env 未設定なら Tauri は ad-hoc 署名でビルドを完走させる（CI の PR ビルドはこれで良い）。「secrets が無いから」とワークフローを分岐で複雑化するな。
 - **手動での公証確認コマンド**（失敗調査時に上から順に）:
 
@@ -320,13 +321,12 @@ xcrun stapler validate PKB.dmg                   # ステープル確認 (オフ
 
 ### 4.3 軽量モデルへの厳命 — 自己チェックリスト
 
-**A. プライバシー権限（カレンダー DB）— 「権限リクエストの入れ忘れ」の正体を理解しろ:**
+**A. App Sandboxとカレンダー取込:**
 
-1. PKB は EventKit API ではなく **Calendar.app の SQLite を直接読む**（`core/apple_calendar_sync.py`）。この方式に entitlement や Info.plist の usage description は**存在しない** — 必要なのはユーザーが手動で与える **フルディスクアクセス**（システム設定 > プライバシーとセキュリティ）である。プログラムから要求する API は無い。
-2. したがってお前の仕事は「権限を要求するコード」を書くことではなく、**拒否された時のエラーメッセージにフルディスクアクセスへの誘導を必ず含める**こと（実装済み: `apple_calendar_sync.FULL_DISK_ACCESS_HINT`。この文言を消したら不合格）。
-3. TCC に拒否されると DB ファイルは「存在しない」ように見える（`is_file()` が False）。「ファイルが無い」と「権限が無い」をユーザー向けに区別できない前提でメッセージを書け。
-4. もし将来 EventKit へ移行するなら、その時初めて `NSCalendarsFullAccessUsageDescription`（Info.plist）+ `com.apple.security.personal-information.calendars` が必要になる。**SQLite 直読みのまま entitlement だけ足すな**（無意味な権限は審査・信頼の両面で有害）。
-5. App Sandbox は**有効化するな**。ローカルファイル直読み（データルート・モデル・カレンダー DB）の設計と根本的に非互換である。
+1. productionのApp Sandboxは**必須**であり、network client/server entitlementは追加禁止。`entitlements.plist`、`sidecar-entitlements.plist`、`build-sidecar.sh`、macOS CIの4点を同時に検証する。
+2. App SandboxとCalendar.app SQLiteの任意パス直読みは非互換である。production UIではApple DB直読を利用可能と表示せず、ユーザーがCalendarから書き出したICSのローカル取込だけを正規経路とする。
+3. `FULL_DISK_ACCESS_HINT`とSQLite parserは非sandbox開発・既存単体テスト用として残すが、release機能であると説明してはならない。App Sandboxを外す回避策は禁止。
+4. 将来直接同期を復活させるなら、SQLite直読ではなくEventKit + usage description +最小entitlementを別Findingで設計・検収する。
 
 **B. アーキテクチャ不一致 — ビルドのたびに機械的に検証しろ（目視判断禁止）:**
 
@@ -347,7 +347,7 @@ python3 -c "import platform; print(platform.machine())"  # Python 自体のア�
 
 **C. macOS 移植で踏みがちな地雷（このリポジトリで実際に対処済みのもの）:**
 
-- [ ] `.exe` ハードコード → `core/paths.py` の `SEARCH_EXE` / `LLAMA_SERVER_EXE` を使ったか
+- [ ] `.exe` ハードコード → `core/paths.py` の `SEARCH_EXE` / `LLAMA_CLI_EXE` を使ったか
 - [ ] `beforeBuildCommand` が PowerShell のまま → macOS 差分は `tauri.macos.conf.json` で bash スクリプトに上書き済み。Windows 側 conf を書き換えるな
 - [ ] シェルスクリプトの改行が CRLF になっていないか（Git for Windows で編集した .sh は要注意。`bash: /bin/bash^M` エラーの原因。`.gitattributes` か `git config core.autocrlf` で LF を保証しろ）
 - [ ] データルートの分岐（`paths.rs`）を触った後、**Windows / macOS / Linux の 3 分岐全部**が `cargo check` を通るか（cfg ブロックは書いた環境でしかコンパイル検証されないことを忘れるな）
@@ -356,7 +356,7 @@ python3 -c "import platform; print(platform.machine())"  # Python 自体のア�
 
 ## 5. モデル戦略 (LLM Selection Policy)
 
-**単一の真実は `config/model_params.json`。** モデル名・量子化・サーバー引数・生成パラメータをコードにハードコードするな。読み込みは `core/llm_config.py` に集約されており、優先順位は **環境変数 > config/model_params.json > 組み込みデフォルト** である。
+**単一の真実は `config/model_params.json`。** モデル名・量子化・runtime引数・生成パラメータをコードにハードコードするな。読み込みは `core/llm_config.py` に集約されており、優先順位は **環境変数 > config/model_params.json > 組み込みデフォルト** である。
 
 | 役割 | モデル | 理由 |
 |---|---|---|
@@ -371,9 +371,9 @@ python3 -c "import platform; print(platform.machine())"  # Python 自体のア�
 4. **DeepSeek-R1 系は `<think>…</think>` を出力する。** `consult()` が最終応答から除去済み（`consultation_engine.py`）。ストリーミング中は思考過程が見えるが、最終置換でクリーンになる仕様。この除去を消すと保存ログと DailyContext が思考過程で汚染される。
 5. 生成パラメータ（temperature / max_tokens）は `generation_params()` 経由で取れ。`0.6` や `900` を直書きするな。
 6. モデルは `models/` に手動配置（gitignore 済み）。**ダウンロードを自動化するコードを書くな** — オフライン原則違反である。
-7. **llama-server HTTP クライアントの唯一所有者は `core/llm_backend.py`。** `/health` と `/v1/chat/completions`（非ストリーム・SSE・structured・KV slot 連携・process lifecycle）を他モジュールへ再実装するな。`consultation_engine` と `cli` は `from .llm_backend import LlamaServerBackend` のみ。host は固定 `127.0.0.1` — remote host 化・cloud fallback・`requests`/`httpx` 追加禁止。
-8. **model / generation / server command の正本は引き続き `llm_config.py`。** クライアントへ温度・max_tokens・ctx を複製するな。CLI 固有 `LlamaCliBackend` も `generation_params()` と `LLAMA_CTX` を使え。
-9. **レガシー CLI（`app.py` → `cli.py`）を「古い」という理由だけで削除するな。** Finding 14 が解消したのは transport 所有権だけ。固有 retrieval / prompt / `--show-prompt` / `--top-k` / interactive loop は維持。相談経路の model は `find_gguf(role="consult")`。クライアント契約テストに実 server・外部 network を使うな（`tests/test_llm_client_single_owner.py` = networkless fake）。
+7. **LLM transportの唯一所有者は`core/llm_backend.py`、prompt channelの唯一所有者は`core/llm_transport.py`。** prompt本文をargv・環境・通常ファイルへ置くな。Windows Named Pipeは`PIPE_REJECT_REMOTE_CLIENTS` + first-instance + owner/SYSTEM/AppContainer SID DACL、POSIXは`/dev/stdin`以外を認めない。子はengineのOS sandboxを継承する。TCP/HTTP、listener、port、cloud fallbackを再導入するな。
+8. **model / generation / stdio commandの正本は`llm_config.py`。** `llama_stdio_cmd()`は`completion` + `--offline` +固定local modelのみ。`--rpc` / remote model option / remote環境変数は禁止。クライアントへtemperature・max_tokens・ctxを複製するな。
+9. **レガシーCLI（`app.py` → `cli.py`）を「古い」という理由だけで削除するな。** 固有retrieval / prompt / `--show-prompt` / `--top-k` / interactive loopは維持し、shared `LlamaStdioBackend`だけを使う。相談modelは`find_gguf(role="consult")`。通常契約テストはnetworkless fake、transport検収時だけ公開promptのローカルGGUFを使う。
 
 ---
 
@@ -500,29 +500,20 @@ Phase 4-E **E0a EMERGENCY EGRESS LOCKDOWN** により、外向き knowledge fetc
 
 ---
 
-## 8. Target Alpha: KV キャッシュのプレフィックス・ピニング (`core/kv_cache.py`)
+## 8. Target Alpha: KV slot cache — RETIRED by FSA-2026-07-13-01/02
 
-consult プロンプトの静的部分 (プロファイル群) の KV テンソルを llama-server のスロット save/restore でディスク永続化し、TTFT から静的 prefill を消す機構。**「プロファイルを LLM の KV テンソルにコンパイルして成果物として持つ」**という設計であり、以下の不変条件を破ると静かに (エラーなく・ただ遅く) 死ぬ。
+旧HTTP serverのslot save/restoreは、loopback listenerとprompt送信を必要とするため
+2026-07-14のCommander裁定で廃止した。`core/kv_cache.py`、slot API、port設定、
+`data/processed/kv_slots/`のproduction参照は削除済み。性能上の理由で復活させてはならない。
 
-### 8.1 アーキテクチャの不変条件 (絶対に壊すな)
+維持する契約はpromptの論理構造だけである。`build_static_prefix()`を先、
+`build_dynamic_suffix()`（検索hit + Future Context +相談文）を後に連結し、動的情報を
+静的側へ混入させない。これは`test_prompt_static_dynamic_split`が検証する。
 
-1. **プロンプトの静的→動的の順序は絶対に変えるな。** KV 再利用は「共通トークン接頭辞」でのみ機能する。`build_static_prefix()`（プロファイル4セクション）が必ず先頭、`build_dynamic_suffix()`（検索ヒット + Future Context + 相談文）が必ず後ろ。セクションを 1 つでも入れ替えたり動的情報を静的側に挿すと、**キャッシュは毎回先頭からミスするがエラーは出ない** — 発見が最も遅れる種類の退化である。`test_kv_prefix_cache` が「連結のバイト同一性」「相談文が静的側に無いこと」「Future Context が動的側に有ること」をガードしている。
-2. **Future Context（カレンダー30日）は動的側。** 「プロファイルっぽいから」と静的側に移すと日付が変わるたびハッシュが変わり、キャッシュが毎日全滅する。静的側に置いてよいのは「プロファイルファイル由来のテキストのみ」。
-3. **ハッシュは SYSTEM_PROMPT + 静的プレフィックスの両方を含む**（`kv_cache.prefix_hash`）。チャットテンプレートは system と user 先頭を連結してトークン化するため、SYSTEM_PROMPT の 1 文字変更でも KV は無効 — 片方だけハッシュする「最適化」をするな。
-4. **キャッシュは best-effort。** `ensure_prefix` / `commit_prefix` のいかなる失敗（接続不能・500・ファイル欠損）も consult を失敗させてはならない。キャッシュ機構の例外を上に投げるコードはバグである。
-5. **保存は「ハッシュ変化時の初回のみ」**（`commit_prefix` の state 照合）。毎生成後に保存すると、数百 MB になり得るスロットファイルを毎回書き直すファイルチャーンになる。サーバー稼働中の 2 回目以降は `cache_prompt` のメモリ内再利用で足り、restore はサーバー再起動後にだけ必要。
-6. **パージは決定論的に。** 新ハッシュの保存成功時に旧 `pkb-prefix-*.bin` を全削除（`purge_stale`）。KV ファイルは巨大なので「念のため残す」は許されない。`data/processed/kv_slots/` は gitignore 圏内。
-
-### 8.2 今回踏んだ罠 (次の実装者への警告)
-
-- **`--slot-save-path` を旧 llama-server に盲目的に渡すと、サーバーの起動自体が失敗し consult が全滅する。** 対策として `llm_config.server_supports_slot_save()` が `--help` 出力をプローブして対応時のみフラグを付与する（結果は exe パス毎にキャッシュ、`PKB_KV_CACHE=0` で強制無効）。**このプローブを「たぶん対応してるから」と削った瞬間、ユーザーの llama.cpp 更新忘れが致命傷になる。**
-- **スロット API 非対応 (404/501) は 1 回で恒久無効化**（`_disabled`）。毎 consult で 404 を叩き続けるな。一方 **500 や接続失敗は一時障害なので無効化しない** — この非対称は意図的。
-- **部分的な deep_profile で `_profile_section()` が KeyError で死ぬ潜在バグ**を本実装のテストが暴いた（`p["value_hierarchy"]` 直接参照）。プロンプト構築セクションは**全キーを `.get()` で防御的に読む**こと。プロンプト構築の失敗 = consult 全体の失敗である。
-- llama-server の生成リクエストには `id_slot`（復元したスロット番号）と `cache_prompt: true` の**両方**を付けること。restore してもリクエストが別スロットに載れば無意味。
-
-### 8.3 検証の作法
-
-スロット API はテスト環境に無いため、`SlotCacheClient(http_post=...)` の**依存注入**でフェイクトランスポートを差す（knowledge_fetcher と同じ確立済みパターン）。実サーバーでの効果測定は: 同一相談を 2 回投げ、llama-server ログの `prompt eval` トークン数が 2 回目に動的サフィックス分まで縮むことを確認する。
+推論は毎回、PKBがspawnした新しい`llama.cpp completion`子へ送る。Windowsでは
+owner-only Named Pipe、macOS/Linuxでは`/dev/stdin`を`--file`へ指定し、prompt本文を
+argv・環境・通常ファイルへ保存しない。旧KV最適化を再検討する場合も、TCP/HTTPや
+共有listenerを使わない別FindingとしてRED契約と指揮官裁定を先に得ること。
 
 ---
 

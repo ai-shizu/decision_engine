@@ -1,186 +1,293 @@
 # -*- coding: utf-8 -*-
-"""
-llama-server (127.0.0.1) HTTP クライアント — 唯一の所有者。
-
-/health と /v1/chat/completions の実装は本モジュールのみ。
-model / generation / server command の正本は llm_config.py。
-consultation_engine と cli は本クラスを import するだけとする。
-"""
-
+"""Single owner for local LLM inference over parent-owned anonymous stdio."""
 from __future__ import annotations
 
-import json
+import atexit
+import codecs
+import re
 import subprocess
-import sys
-import time
+import threading
 from pathlib import Path
+from typing import Callable
 
-from .llm_config import generation_params, llama_server_cmd, model_startup_timeout
+from .llm_config import generation_params, llama_stdio_cmd
+from .llm_transport import PromptChannel, secure_prompt_channel
+from .offline_runtime import enforce_offline_environment, offline_subprocess_environment
 
 
-class LlamaServerBackend:
-    """llama-server (127.0.0.1) 経由の推論。プロセス・通信ともに完全ローカル。
+LLM_FAILURE_MESSAGE = "Local LLM subprocess failed."
+LLM_TIMEOUT_MESSAGE = "Local LLM subprocess timed out."
+DEFAULT_TIMEOUT_S = 1200
 
-    ライフサイクル管理:
-      - 自分が spawn したサーバープロセスのみを終了対象とする
-        (既存サーバーを再利用した場合は他所有プロセスを殺さない)
-      - stop() は Terminate → 5秒待機 → Kill の段階的終了
-      - インスタンス生成時に atexit へ登録し、TUI/CLI がどのような経路で
-        終了してもゾンビプロセスを残さない
-    """
 
-    name = "llama-server (127.0.0.1, ARM64 native)"
+def _prompt_bytes(system: str, user: str) -> bytes:
+    prompt = (
+        "<|im_start|>system\n"
+        f"{system}\n"
+        "<|im_end|>\n"
+        "<|im_start|>user\n"
+        f"{user}\n"
+        "<|im_end|>\n"
+        "<|im_start|>assistant\n"
+    )
+    return prompt.encode("utf-8")
 
-    def __init__(self, exe: Path, model: Path, port: int):
-        self.exe, self.model, self.port = exe, model, port
-        self.proc: subprocess.Popen | None = None
-        self._slot_cache = None  # KV プレフィックス・ピニング (遅延生成)
-        import atexit
+
+def _clean_output(raw: bytes | str) -> str:
+    text = raw if isinstance(raw, str) else raw.decode("utf-8", errors="replace")
+    text = re.sub(r"\x1b\[[0-?]*[ -/]*[@-~]", "", text)
+    text = text.replace("Exiting...", "")
+    text = re.sub(r"(?:\r?\n)?\[end of text\]\s*$", "", text)
+    return text.strip()
+
+
+class LlamaStdioBackend:
+    """Spawn one owned llama-cli child per inference and communicate by pipes."""
+
+    name = "llama.cpp (owned anonymous stdio)"
+
+    def __init__(
+        self,
+        exe: Path,
+        model: Path,
+        *,
+        process_factory: Callable[..., object] | None = None,
+        prompt_channel_factory: Callable[[bytes], PromptChannel] | None = None,
+        timeout_s: int = DEFAULT_TIMEOUT_S,
+    ) -> None:
+        self.exe = exe
+        self.model = model
+        self.timeout_s = timeout_s
+        self._process_factory = process_factory or subprocess.Popen
+        self._prompt_channel_factory = prompt_channel_factory or secure_prompt_channel
+        self._invoke_lock = threading.Lock()
+        self._state_lock = threading.Lock()
+        self._proc: object | None = None
+        enforce_offline_environment()
         atexit.register(self.stop)
 
-    def _port_open(self) -> bool:
-        import socket
-        with socket.socket() as s:
-            s.settimeout(0.3)
-            return s.connect_ex(("127.0.0.1", self.port)) == 0
+    def _spawn(self, command: list[str], stdin: object) -> object:
+        enforce_offline_environment()
+        proc = self._process_factory(
+            command,
+            stdin=stdin,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            shell=False,
+            close_fds=True,
+            env=offline_subprocess_environment(),
+        )
+        with self._state_lock:
+            self._proc = proc
+        return proc
 
-    def start(self, timeout_s: int | None = None) -> None:
-        import urllib.request
-        if timeout_s is None:
-            timeout_s = model_startup_timeout(self.model)
-        if self.proc is not None and self.proc.poll() is None:
-            return  # 自前サーバーが稼働中
-        if self._port_open():
-            return  # 既存サーバーを再利用 (所有権なし → stop対象外)
-        self.proc = subprocess.Popen(
-            llama_server_cmd(self.exe, self.model, self.port),
-            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        deadline = time.time() + timeout_s
-        while time.time() < deadline:
-            try:
-                with urllib.request.urlopen(
-                        f"http://127.0.0.1:{self.port}/health", timeout=2) as r:
-                    if json.load(r).get("status") == "ok":
-                        return
-            except OSError:
-                time.sleep(1.0)
-        self.stop()
-        raise RuntimeError("llama-server の起動がタイムアウトしました")
+    def _clear_process(self, proc: object) -> None:
+        with self._state_lock:
+            if self._proc is proc:
+                self._proc = None
 
-    def _slot_cache_client(self):
-        """KV スロットキャッシュのクライアント (遅延生成・サーバー非対応なら不使用)。"""
-        from .llm_config import server_supports_slot_save
-        if self._slot_cache is None and server_supports_slot_save(self.exe):
-            from .kv_cache import SlotCacheClient
-            self._slot_cache = SlotCacheClient(self.port)
-        return self._slot_cache
+    @staticmethod
+    def _returncode(proc: object) -> int | None:
+        return getattr(proc, "returncode", None)
 
-    def generate(self, system: str, user: str, max_tokens: int | None = None,
-                 on_token=None, prefix_hash: str | None = None) -> str:
-        """on_token が渡された場合は SSE ストリーミングでトークン毎に呼ぶ。
-
-        prefix_hash を渡すと KV プレフィックス・ピニングが有効化される:
-        生成前にディスクからスロット復元を試み、生成後 (初回のみ) 保存する。
-        キャッシュ操作の失敗は無視される (best-effort — 生成は必ず続行)。
-        温度・トークン上限は config/model_params.json (generation) で管理。"""
-        import urllib.request
-        self.start()
-        slot_client = self._slot_cache_client() if prefix_hash else None
-        if slot_client is not None:
-            try:
-                outcome = slot_client.ensure_prefix(prefix_hash)
-                print(f"[kv_cache] prefix {prefix_hash[:8]}: {outcome}",
-                      file=sys.stderr)
-            except Exception:  # noqa: BLE001 — キャッシュ不調で生成を止めない
-                slot_client = None
-        gen = generation_params()
-        body: dict = {
-            "messages": [{"role": "system", "content": system},
-                         {"role": "user", "content": user}],
-            "max_tokens": max_tokens if max_tokens is not None else gen["max_tokens"],
-            "temperature": gen["temperature"],
-            "stream": on_token is not None,
-        }
-        if prefix_hash is not None:
-            from .kv_cache import SLOT_ID
-            body["id_slot"] = SLOT_ID       # 復元したスロットで生成する
-            body["cache_prompt"] = True     # 共通トークン接頭辞の再利用を明示
-        payload = json.dumps(body).encode("utf-8")
-        req = urllib.request.Request(
-            f"http://127.0.0.1:{self.port}/v1/chat/completions",
-            data=payload, headers={"Content-Type": "application/json"})
-        with urllib.request.urlopen(req, timeout=600) as r:
-            if on_token is None:
-                answer = json.load(r)["choices"][0]["message"]["content"].strip()
-            else:
-                parts: list[str] = []
-                for raw in r:  # SSE: "data: {...}\n" 行を逐次読む
-                    line = raw.decode("utf-8", errors="replace").strip()
-                    if not line.startswith("data:"):
-                        continue
-                    data = line[len("data:"):].strip()
-                    if data == "[DONE]":
-                        break
-                    try:
-                        delta = json.loads(data)["choices"][0].get("delta", {})
-                    except (json.JSONDecodeError, KeyError, IndexError):
-                        continue
-                    piece = delta.get("content")
-                    if piece:
-                        parts.append(piece)
-                        on_token(piece)
-                answer = "".join(parts).strip()
-        # 生成成功後にのみ保存 (プレフィックスの KV が確実に温まっている状態)
-        if slot_client is not None:
-            try:
-                slot_client.commit_prefix(prefix_hash)
-            except Exception:  # noqa: BLE001 — 保存失敗は高速化の機会損失に過ぎない
-                pass
-        return answer
-
-    def generate_structured(self, system: str, user: str, json_schema: dict,
-                            max_tokens: int | None = None) -> str:
-        """Non-streaming JSON-only generation with OpenAI-compatible schema hint."""
-        import urllib.request
-        self.start()
-        gen = generation_params()
-        body: dict = {
-            "messages": [{"role": "system", "content": system},
-                         {"role": "user", "content": user}],
-            "max_tokens": max_tokens if max_tokens is not None else gen["max_tokens"],
-            "temperature": 0,
-            "stream": False,
-            "response_format": {
-                "type": "json_schema",
-                "json_schema": {
-                    "name": "structured_output",
-                    "strict": True,
-                    "schema": json_schema,
-                },
-            },
-        }
-        payload = json.dumps(body).encode("utf-8")
-        req = urllib.request.Request(
-            f"http://127.0.0.1:{self.port}/v1/chat/completions",
-            data=payload, headers={"Content-Type": "application/json"})
-        try:
-            with urllib.request.urlopen(req, timeout=600) as r:
-                answer = json.load(r)["choices"][0]["message"]["content"].strip()
-        except Exception:
-            answer = self.generate(system, user, max_tokens=max_tokens, on_token=None)
-        return answer
-
-    def stop(self) -> None:
-        """自分が起動したサーバーを確実に終了させる (Terminate → Kill)。"""
-        proc, self.proc = self.proc, None
-        if proc is None or proc.poll() is not None:
+    @staticmethod
+    def _terminate_process(proc: object) -> None:
+        poll = getattr(proc, "poll", None)
+        if callable(poll) and poll() is not None:
             return
-        proc.terminate()
-        try:
-            proc.wait(timeout=5)
-        except subprocess.TimeoutExpired:
-            proc.kill()
+        terminate = getattr(proc, "terminate", None)
+        if callable(terminate):
+            terminate()
+        wait = getattr(proc, "wait", None)
+        if callable(wait):
             try:
-                proc.wait(timeout=5)
+                wait(timeout=5)
+                return
             except subprocess.TimeoutExpired:
                 pass
+        kill = getattr(proc, "kill", None)
+        if callable(kill):
+            kill()
+        if callable(wait):
+            try:
+                wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                pass
+
+    def _communicate(
+        self,
+        proc: object,
+        input_bytes: bytes | None,
+    ) -> bytes | str:
+        communicate = getattr(proc, "communicate")
+        try:
+            stdout, _ = communicate(input=input_bytes, timeout=self.timeout_s)
+        except subprocess.TimeoutExpired as exc:
+            self._terminate_process(proc)
+            raise RuntimeError(LLM_TIMEOUT_MESSAGE) from exc
+        if self._returncode(proc) not in (0, None):
+            raise RuntimeError(LLM_FAILURE_MESSAGE)
+        return stdout
+
+    def _stream(
+        self,
+        proc: object,
+        input_bytes: bytes | None,
+        on_token: Callable[[str], None],
+    ) -> str:
+        stdin = getattr(proc, "stdin", None)
+        stdout = getattr(proc, "stdout", None)
+        wait = getattr(proc, "wait", None)
+        if (
+            stdout is None
+            or not callable(wait)
+            or (input_bytes is not None and stdin is None)
+        ):
+            raw = self._communicate(proc, input_bytes)
+            answer = _clean_output(raw)
+            if answer:
+                on_token(answer)
+            return answer
+
+        timed_out = threading.Event()
+
+        def expire() -> None:
+            timed_out.set()
+            self._terminate_process(proc)
+
+        timer = threading.Timer(self.timeout_s, expire)
+        timer.daemon = True
+        timer.start()
+        decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
+        parts: list[str] = []
+        callback_tail = ""
+
+        def emit_safe(piece: str) -> None:
+            nonlocal callback_tail
+            callback_tail += piece
+            if len(callback_tail) > 64:
+                ready, callback_tail = callback_tail[:-64], callback_tail[-64:]
+                if ready:
+                    on_token(ready)
+
+        try:
+            if input_bytes is not None:
+                stdin.write(input_bytes)
+                stdin.close()
+            while True:
+                chunk = stdout.read(4096)
+                if not chunk:
+                    break
+                piece = decoder.decode(chunk)
+                if piece:
+                    parts.append(piece)
+                    emit_safe(piece)
+            tail = decoder.decode(b"", final=True)
+            if tail:
+                parts.append(tail)
+                emit_safe(tail)
+            wait()
+        except OSError as exc:
+            if timed_out.is_set():
+                raise RuntimeError(LLM_TIMEOUT_MESSAGE) from exc
+            self._terminate_process(proc)
+            raise RuntimeError(LLM_FAILURE_MESSAGE) from exc
+        finally:
+            timer.cancel()
+        if timed_out.is_set():
+            raise RuntimeError(LLM_TIMEOUT_MESSAGE)
+        if self._returncode(proc) not in (0, None):
+            raise RuntimeError(LLM_FAILURE_MESSAGE)
+        clean_tail = _clean_output(callback_tail)
+        if clean_tail:
+            on_token(clean_tail)
+        return _clean_output("".join(parts))
+
+    def _execute(
+        self,
+        system: str,
+        user: str,
+        *,
+        max_tokens: int,
+        temperature: float,
+        json_schema: dict | None,
+        on_token: Callable[[str], None] | None,
+    ) -> str:
+        prompt = _prompt_bytes(system, user)
+        channel = self._prompt_channel_factory(prompt)
+        command = llama_stdio_cmd(
+            self.exe,
+            self.model,
+            prompt_file=channel.source,
+            max_tokens=max_tokens,
+            temperature=temperature,
+            json_schema=json_schema,
+        )
+        with self._invoke_lock:
+            proc: object | None = None
+            try:
+                proc = self._spawn(command, channel.stdin)
+                channel.bind_client(getattr(proc, "pid", None))
+                channel.start()
+                if on_token is None:
+                    answer = _clean_output(
+                        self._communicate(proc, channel.input_bytes)
+                    )
+                else:
+                    answer = self._stream(proc, channel.input_bytes, on_token)
+                channel.finish(self.timeout_s)
+                return answer
+            except OSError as exc:
+                if proc is not None:
+                    self._terminate_process(proc)
+                raise RuntimeError(LLM_FAILURE_MESSAGE) from exc
+            finally:
+                channel.close()
+                if proc is not None:
+                    self._clear_process(proc)
+
+    def generate(
+        self,
+        system: str,
+        user: str,
+        max_tokens: int | None = None,
+        on_token: Callable[[str], None] | None = None,
+    ) -> str:
+        gen = generation_params()
+        return self._execute(
+            system,
+            user,
+            max_tokens=max_tokens if max_tokens is not None else gen["max_tokens"],
+            temperature=gen["temperature"],
+            json_schema=None,
+            on_token=on_token,
+        )
+
+    def generate_structured(
+        self,
+        system: str,
+        user: str,
+        json_schema: dict,
+        max_tokens: int | None = None,
+    ) -> str:
+        gen = generation_params()
+        try:
+            return self._execute(
+                system,
+                user,
+                max_tokens=(
+                    max_tokens if max_tokens is not None else gen["max_tokens"]
+                ),
+                temperature=0.0,
+                json_schema=json_schema,
+                on_token=None,
+            )
+        except RuntimeError:
+            return self.generate(system, user, max_tokens=max_tokens, on_token=None)
+
+    def stop(self) -> None:
+        with self._state_lock:
+            proc = self._proc
+            self._proc = None
+        if proc is not None:
+            self._terminate_process(proc)

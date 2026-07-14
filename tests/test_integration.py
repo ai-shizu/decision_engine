@@ -789,14 +789,9 @@ def test_puppeteer_injects_whitelisted_text_only() -> None:
     print("  puppeteer injects whitelisted bank text only OK")
 
 
-# ============================================================ Target Alpha: KV プレフィックス・ピニング
-def test_kv_prefix_cache() -> None:
-    from core import kv_cache
-    from core.consultation_engine import SYSTEM_PROMPT
-    from core.paths import KV_SLOTS_DIR
-
+# ============================================================ Target Alpha: prompt split
+def test_prompt_static_dynamic_split() -> None:
     _write_phase3_assets()  # F-15 (Sandbox): 静的プレフィックスに gap を載せる
-    # ---- (1) プロンプト分割の不変条件 ----
     eng = ConsultationEngine()
     static = eng.build_static_prefix()
     hits = [{"title": "2026-06-01", "score": 0.9, "text": "検索ヒット本文",
@@ -810,65 +805,14 @@ def test_kv_prefix_cache() -> None:
     assert "これはテスト相談です" not in static and "検索ヒット本文" not in static
     assert "Future Context" in dynamic and "Future Context" not in static
 
-    # ---- (2) 決定論的ハッシュとプロファイル更新による失効 ----
-    h1 = kv_cache.prefix_hash(SYSTEM_PROMPT, static)
-    assert h1 == kv_cache.prefix_hash(SYSTEM_PROMPT, static), "ハッシュが非決定的"
+    # A profile update must be reflected when the static prefix is rebuilt.
     profile = json.loads(DEEP_PROFILE.read_text(encoding="utf-8"))
     profile["gap_analysis"]["gaps"][0]["insight"] += " (プロファイル更新)"
     DEEP_PROFILE.write_text(json.dumps(profile, ensure_ascii=False),
                             encoding="utf-8")
     static2 = eng.build_static_prefix()
-    h2 = kv_cache.prefix_hash(SYSTEM_PROMPT, static2)
-    assert h2 != h1, "プロファイル更新でハッシュが変わらない (パージ不能)"
-
-    # ---- (3) スロット状態機械 (fake HTTP transport / 通信なし) ----
-    calls: list[tuple[str, dict]] = []
-
-    def ok_post(url: str, payload: dict):
-        calls.append((url, payload))
-        return 200, {"success": True}
-
-    c1 = kv_cache.SlotCacheClient(port=19999, http_post=ok_post)
-    assert c1.ensure_prefix(h1) == "cold" and not calls, "cold で通信が発生"
-    assert c1.commit_prefix(h1) is True
-    assert "action=save" in calls[-1][0]
-    assert calls[-1][1]["filename"] == kv_cache.slot_filename(h1)
-    assert kv_cache.load_state()["hash"] == h1
-    # サーバーが書くはずのスロットファイルを擬似作成
-    (KV_SLOTS_DIR / kv_cache.slot_filename(h1)).write_bytes(b"kv")
-
-    assert c1.ensure_prefix(h1) == "hit", "同一プロセス内の再利用が hit にならない"
-    n_calls = len(calls)
-    assert c1.commit_prefix(h1) is True and len(calls) == n_calls, \
-        "永続化済みハッシュを再保存した (ファイルチャーン)"
-
-    c2 = kv_cache.SlotCacheClient(port=19999, http_post=ok_post)
-    assert c2.ensure_prefix(h1) == "restored", "サーバー再起動相当で復元されない"
-    assert "action=restore" in calls[-1][0]
-
-    # ハッシュ変化 → 新規保存 + 旧ファイルの決定論的パージ
-    assert c2.ensure_prefix(h2) == "cold"
-    assert c2.commit_prefix(h2) is True
-    assert kv_cache.load_state()["hash"] == h2
-    assert not (KV_SLOTS_DIR / kv_cache.slot_filename(h1)).exists(), \
-        "旧ハッシュのスロットファイルが残留"
-
-    # 失敗時の優雅な劣化: 500 は無効化しない / 404 は以後無効化
-    def err500(url, payload):
-        return 500, {}
-
-    (KV_SLOTS_DIR / kv_cache.slot_filename(h2)).write_bytes(b"kv")
-    c3 = kv_cache.SlotCacheClient(port=19999, http_post=err500)
-    assert c3.ensure_prefix(h2) == "cold" and not c3._disabled
-
-    def err404(url, payload):
-        return 404, {}
-
-    c4 = kv_cache.SlotCacheClient(port=19999, http_post=err404)
-    assert c4.ensure_prefix(h2) == "cold" and c4._disabled
-    assert c4.ensure_prefix(h2) == "disabled"
-    assert c4.commit_prefix(h2) is False
-    print("  KV prefix cache OK")
+    assert static2 != static, "プロファイル更新が静的prefixへ反映されない"
+    print("  prompt static/dynamic split OK")
 
 
 # ============================================================ フェーズ4: レイテンシ / 動的ペルソナ / 建前隔離

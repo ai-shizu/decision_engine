@@ -1,6 +1,6 @@
 use std::io::{BufRead, BufReader, ErrorKind, Read, Write};
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Stdio};
+use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
@@ -8,9 +8,14 @@ use std::thread::{self, JoinHandle};
 use serde_json::{json, Value};
 use tauri::{AppHandle, Emitter};
 
-use crate::paths::{
-    bundled_engine_path, ensure_data_layout, find_python_executable, project_root, run_engine_script,
-};
+use crate::os_sandbox::ChildControl;
+#[cfg(not(debug_assertions))]
+use crate::os_sandbox::spawn_kernel_sandboxed;
+use crate::paths::{ensure_data_layout, project_root};
+#[cfg(not(debug_assertions))]
+use crate::paths::bundled_engine_path;
+#[cfg(debug_assertions)]
+use crate::paths::{find_python_executable, run_engine_script};
 
 static REQ_COUNTER: AtomicU64 = AtomicU64::new(1);
 
@@ -112,9 +117,9 @@ pub(crate) trait EngineConnector: Send + Sync {
 pub(crate) type EventSink = Box<dyn Fn(&Value) + Send + Sync>;
 
 struct ProcessConnection {
-    child: Child,
-    stdin: std::process::ChildStdin,
-    stdout: BufReader<std::process::ChildStdout>,
+    child: Box<dyn ChildControl>,
+    stdin: Box<dyn Write + Send>,
+    stdout: BufReader<Box<dyn Read + Send>>,
     stderr_worker: Option<JoinHandle<()>>,
 }
 
@@ -185,30 +190,8 @@ impl EngineConnector for ProcessConnector {
     fn connect(&self) -> Result<Box<dyn EngineConnection>, String> {
         let root = project_root();
         ensure_data_layout(&root);
-        let script = run_engine_script();
-
         EngineManager::log(&format!("data root: {}", root.display()));
-
-        let mut conn = if cfg!(debug_assertions) {
-            if !script.is_file() {
-                return Err(format!(
-                    "run_engine.py が見つかりません: {}",
-                    script.display()
-                ));
-            }
-            EngineManager::log("dev: Python エンジンを起動");
-            spawn_python_engine(&root, &script)?
-        } else if let Some(path) = bundled_engine_path() {
-            EngineManager::log(&format!("release: {}", path.display()));
-            spawn_bundled_engine(&path, &root)?
-        } else if script.is_file() {
-            EngineManager::log("release: 同梱エンジンなし — Python フォールバック");
-            spawn_python_engine(&root, &script)?
-        } else {
-            return Err(
-                "PKB エンジンが見つかりません。build.cmd で再ビルドしてください。".to_string(),
-            );
-        };
+        let mut conn = spawn_configured_engine(&root)?;
 
         let ready_line = conn.recv_line().map_err(|e| format!("エンジン ready 読取失敗: {e:?}"))?;
         let ready: Value = serde_json::from_str(&ready_line)
@@ -455,6 +438,37 @@ impl EngineManager {
     }
 }
 
+#[cfg(debug_assertions)]
+fn spawn_configured_engine(root: &Path) -> Result<ProcessConnection, String> {
+    if std::env::var("PKB_UNSAFE_DEV_ENGINE").as_deref() != Ok("1") {
+        return Err(
+            "System Python engine is disabled. Set PKB_UNSAFE_DEV_ENGINE=1 only for explicit insecure development."
+                .to_string(),
+        );
+    }
+    let script = run_engine_script();
+    if !script.is_file() {
+        return Err(format!(
+            "run_engine.py が見つかりません: {}",
+            script.display()
+        ));
+    }
+    EngineManager::log(
+        "UNSAFE DEVELOPMENT ENGINE: system Python has no kernel sandbox guarantee",
+    );
+    spawn_python_engine(root, &script)
+}
+
+#[cfg(not(debug_assertions))]
+fn spawn_configured_engine(root: &Path) -> Result<ProcessConnection, String> {
+    let path = bundled_engine_path().ok_or_else(|| {
+        "Bundled PKB engine is required in production; fallback is forbidden.".to_string()
+    })?;
+    EngineManager::log(&format!("release: {}", path.display()));
+    spawn_bundled_engine(&path, root)
+}
+
+#[cfg(debug_assertions)]
 fn spawn_python_engine(
     root: &std::path::Path,
     script: &std::path::Path,
@@ -463,6 +477,7 @@ fn spawn_python_engine(
         .ok_or_else(|| "Python が見つかりません。PKB_PYTHON を設定してください。".to_string())?;
 
     let mut cmd = Command::new(&python);
+    configure_offline_child_environment(&mut cmd, root);
     cmd.arg("-u")
         .arg("-X")
         .arg("utf8")
@@ -470,8 +485,6 @@ fn spawn_python_engine(
         .env("PYTHONUNBUFFERED", "1")
         .env("PYTHONUTF8", "1")
         .env("PYTHONIOENCODING", "utf-8")
-        .env("PKB_ENGINE", "1")
-        .env("PKB_PROJECT_ROOT", root.to_string_lossy().to_string())
         .current_dir(root.join("src").join("python"))
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -487,14 +500,14 @@ fn spawn_python_engine(
     spawn_process(cmd, root)
 }
 
+#[cfg(not(debug_assertions))]
 fn spawn_bundled_engine(
     path: &std::path::Path,
     root: &std::path::Path,
 ) -> Result<ProcessConnection, String> {
     let mut cmd = Command::new(path);
+    configure_offline_child_environment(&mut cmd, root);
     cmd.env("PYTHONUTF8", "1")
-        .env("PKB_ENGINE", "1")
-        .env("PKB_PROJECT_ROOT", root.to_string_lossy().to_string())
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
@@ -506,9 +519,56 @@ fn spawn_bundled_engine(
         cmd.creation_flags(CREATE_NO_WINDOW);
     }
 
-    spawn_process(cmd, root)
+    let spawned = spawn_kernel_sandboxed(cmd, root)
+        .map_err(|e| format!("PKB engine kernel sandbox unavailable: {e}"))?;
+    spawn_connection(
+        spawned.child,
+        spawned.stdin,
+        spawned.stdout,
+        spawned.stderr,
+        root,
+    )
 }
 
+fn configure_offline_child_environment(cmd: &mut Command, root: &Path) {
+    const SAFE_HOST_ENV: &[&str] = &[
+        "APPDATA",
+        "HOME",
+        "HOMEDRIVE",
+        "HOMEPATH",
+        "LANG",
+        "LC_ALL",
+        "LC_CTYPE",
+        "LOCALAPPDATA",
+        "PROGRAMDATA",
+        "SystemRoot",
+        "TEMP",
+        "TMP",
+        "TMPDIR",
+        "TZ",
+        "USERPROFILE",
+        "WINDIR",
+    ];
+
+    cmd.env_clear();
+    for key in SAFE_HOST_ENV {
+        if let Some(value) = std::env::var_os(key) {
+            cmd.env(key, value);
+        }
+    }
+    cmd.env("HF_HUB_OFFLINE", "1")
+        .env("TRANSFORMERS_OFFLINE", "1")
+        .env("HF_DATASETS_OFFLINE", "1")
+        .env("HF_HUB_DISABLE_TELEMETRY", "1")
+        .env("DO_NOT_TRACK", "1")
+        .env("LLAMA_ARG_OFFLINE", "1")
+        .env("NO_PROXY", "*")
+        .env("no_proxy", "*")
+        .env("PKB_ENGINE", "1")
+        .env("PKB_PROJECT_ROOT", root.to_string_lossy().to_string());
+}
+
+#[cfg(debug_assertions)]
 fn spawn_process(mut cmd: Command, root: &Path) -> Result<ProcessConnection, String> {
     let mut child = cmd
         .spawn()
@@ -526,6 +586,29 @@ fn spawn_process(mut cmd: Command, root: &Path) -> Result<ProcessConnection, Str
         .take()
         .ok_or_else(|| "stderr pipe を取得できません".to_string())?;
 
+    let log_root = root.to_path_buf();
+    let stderr_worker = thread::spawn(move || {
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            collect_engine_stderr(&log_root, stderr, EngineLogPolicy::production());
+        }));
+    });
+
+    Ok(ProcessConnection {
+        child: Box::new(child),
+        stdin: Box::new(stdin),
+        stdout: BufReader::new(Box::new(stdout)),
+        stderr_worker: Some(stderr_worker),
+    })
+}
+
+#[cfg(not(debug_assertions))]
+fn spawn_connection(
+    child: Box<dyn ChildControl>,
+    stdin: Box<dyn Write + Send>,
+    stdout: Box<dyn Read + Send>,
+    stderr: Box<dyn Read + Send>,
+    root: &Path,
+) -> Result<ProcessConnection, String> {
     let log_root = root.to_path_buf();
     let stderr_worker = thread::spawn(move || {
         let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {

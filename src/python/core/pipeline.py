@@ -36,6 +36,7 @@ from datetime import date, timedelta
 
 import numpy as np
 
+from .offline_runtime import enforce_offline_environment
 from .paths import (
     DIARY_BIN,
     DIARY_META,
@@ -135,12 +136,17 @@ class HashedNgramEmbedder:
 
 
 def build_embedder():
+    enforce_offline_environment()
     """本番: SentenceTransformers / 不可時: フォールバックを返す。"""
     try:
         from sentence_transformers import SentenceTransformer
 
         model_name = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
-        model = SentenceTransformer(model_name)
+        model = SentenceTransformer(
+            model_name,
+            local_files_only=True,
+            trust_remote_code=False,
+        )
         test = model.encode(["dim check"])
         if test.shape[-1] != DIM:
             raise RuntimeError(f"次元不一致: {test.shape[-1]} != {DIM}")

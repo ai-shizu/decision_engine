@@ -21,6 +21,10 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(ROOT / "src" / "python"))
 
+from core.offline_runtime import enforce_offline_environment  # noqa: E402
+
+enforce_offline_environment()
+
 from textual import events, on, work  # noqa: E402
 from textual.app import App, ComposeResult  # noqa: E402
 from textual.containers import Grid, Horizontal, Vertical, VerticalScroll  # noqa: E402

@@ -29,8 +29,9 @@
 
 ## 1. The Constitution (絶対憲法 — 交渉不可)
 
-1. **完全オフライン**: 許可通信は 127.0.0.1 llama-server と Rust↔Python stdio のみ
-   (唯一の例外 knowledge_fetcher は 4 条件下)。
+1. **完全オフライン**: TCP/IPはloopbackを含め全面禁止。許可IPCはRust↔Python stdioと、
+   PKB所有のllama.cpp子へ接続するWindows Named Pipe / POSIX `/dev/stdin`のみ。
+   `knowledge_fetcher`を含む外向き通信例外はE0aで撤廃済み。
 2. **感情推定の排除・物理量の絶対視**: 発見は決定論、LLM は言語化のみ。レイテンシ・
    頻度・金額・文字数という嘘をつかない物理量だけで殴る。
 3. **情報の非対称性 (聖域)**: gap/テレメトリ/Bounty/**Echo 全出力 (oracle_payload/

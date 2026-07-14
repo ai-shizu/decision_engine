@@ -193,6 +193,7 @@ This ledger is a mandatory pre-read before architecture blueprinting, implementa
 
 ## INCIDENT: `INC-LLM-CLIENT-01`
 * **DATE**: 2026-07-12
+* **STATUS**: Historical ruling superseded by `INC-LLM-TRANSPORT-02` on 2026-07-14. The duplication diagnosis remains valid; its HTTP/port/KV remedy must not be restored.
 * **MODULE**: llama-server HTTP client (Finding 14) / `core/llm_backend.py`
 * **SYMPTOM (症状)**:
   * `consultation_engine.py` と `cli.py` がそれぞれ `LlamaServerBackend` を持ち、`/health`・`/v1/chat/completions`・process lifecycle を二重実装していた。
@@ -211,5 +212,36 @@ This ledger is a mandatory pre-read before architecture blueprinting, implementa
 * **PREVENTION INSTRUCTION (今後のメタ・プロンプトに組み込むべき防衛命令)**:
   * `/health` や `/v1/chat/completions` を `llm_backend.py` 以外へ書くな。新規呼び出しは shared class を import せよ。
   * CLI を触るときは「入口互換」と「transport 所有」を分離せよ。prompt/retrieval 統合や CLI 削除を Finding 14 の延長でやるな。
+
+---
+
+## INCIDENT: `INC-LLM-TRANSPORT-02`
+* **DATE**: 2026-07-14
+* **MODULE**: Python process boundary / local LLM transport (`FSA-2026-07-13-01/02`)
+* **SYMPTOM (症状)**:
+  * `SentenceTransformer` could resolve a missing model remotely because local-only flags and forced offline environment were absent.
+  * PKB reused any process listening on the fixed loopback port and sent private prompts after only a health response. PID, parentage, executable identity, and nonce were not verified.
+  * Proxy, Hub token, llama remote model, and RPC environment variables could be inherited by Python or native children.
+* **ROOT CAUSE (エージェントの思考エラー)**:
+  * Loopback was treated as a trust boundary even though it is a shared TCP namespace.
+  * An environment default was mistaken for capability removal, and single code ownership was mistaken for process identity.
+  * KV slot performance work coupled authoritative prompt transport to an unauthenticated HTTP server.
+* **ARCHITECTURAL RULING (絶対裁定)**:
+  * Python production owns no TCP/HTTP client. `core.offline_runtime` overwrites offline variables, removes proxy/token/llama remote settings, sets `NO_PROXY=*`, and rejects ordinary IPv4/IPv6 socket construction and DNS as defense in depth. **The Python audit hook is not the security boundary.**
+  * Production starts only the bundled sidecar through `src-tauri/src/os_sandbox.rs`: Windows zero-capability AppContainer, Linux arch-checked seccomp-BPF denying `socket(AF_INET/AF_INET6)`, macOS signed App Sandbox without network client/server entitlement. Sandbox construction failure aborts application startup; no normal launch path exists. System Python is restricted to debug builds with `PKB_UNSAFE_DEV_ENGINE=1` and an explicit insecure warning.
+  * `SentenceTransformer` is constructed only with `local_files_only=True` and `trust_remote_code=False`.
+  * `core/llm_backend.py::LlamaStdioBackend` is the sole inference owner. Every inference spawns one fresh, self-owned `llama.cpp completion` child; no listener discovery, health probe, external process reuse, retry, or network port exists.
+  * Prompt bytes may travel only through `core/llm_transport.py`: Windows uses a one-use AppContainer-local Named Pipe with 128-bit nonce, `PIPE_REJECT_REMOTE_CLIENTS`, first-instance enforcement, owner/SYSTEM/AppContainer SID DACL, and exact client PID binding; POSIX uses `/dev/stdin`. argv contains only the channel name, never prompt text. Ordinary prompt files are prohibited.
+  * llama remote/RPC arguments and inherited remote environment variables are prohibited. `--offline` and `LLAMA_ARG_OFFLINE=1` are both mandatory. Child stderr is discarded so model paths or runtime diagnostics cannot enter persistent logs.
+  * HTTP KV slot persistence and `core/kv_cache.py` are retired. The static/dynamic prompt split remains, but performance does not justify restoring TCP.
+* **VERIFICATION**:
+  * RED: six revised FSA transport contracts failed under the HTTP implementation.
+  * GREEN: FSA-01/02, single-owner, and integration contracts passed 60/60.
+  * Windows ARM64 real-runtime probe opened the protected Named Pipe, consumed a public prompt, and returned `OK` from a local GGUF with exit 0; no network or temporary prompt file was used.
+  * Kernel RED proved that a Python audit hook can be bypassed through native Winsock. GREEN launches a minimal native probe through the production Rust launcher, verifies `TokenIsAppContainer=1` and zero token capabilities, then confirms that direct C ABI IPv4/IPv6 connections reach neither live loopback listener. Rust lifecycle tests remain GREEN.
+  * macOS build signs the sidecar with `sidecar-entitlements.plist` (`app-sandbox + inherit`) and CI re-extracts app/helper entitlements, rejecting either network entitlement. Sandboxed production disables raw Calendar SQLite import and retains local ICS import.
+* **PREVENTION INSTRUCTION (今後のメタ・プロンプトに組み込むべき防衛命令)**:
+  * `socket`, `urllib`, HTTP endpoints, host/port settings, listener reuse, `--rpc`, remote model options, or prompt temp files in Python production are release blockers.
+  * Changes to prompt transport require RED contracts for argv secrecy, pipe ownership, remote-client rejection, AF_INET/AF_INET6 denial, child lifecycle, and an actual local-runtime smoke probe.
 
 ---

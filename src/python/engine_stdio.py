@@ -14,6 +14,10 @@ _PYTHON_ROOT = Path(__file__).resolve().parent
 if str(_PYTHON_ROOT) not in sys.path:
     sys.path.insert(0, str(_PYTHON_ROOT))
 
+from core.offline_runtime import enforce_offline_environment
+
+enforce_offline_environment()
+
 # Exact sterile diagnostic persisted by the Rust engine-log allowlist (Finding 12).
 _PKB_DIAG_REQUEST_FAILED = "[PKB_DIAG_V1] REQUEST_FAILED"
 

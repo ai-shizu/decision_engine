@@ -31,7 +31,7 @@
 > **実装状態の宣言 (再実装禁止リスト・Rev.5 2026-07-09 更新)**:
 > - Target Alpha (KVプレフィックス・ピニング) — **実装済み** (`core/kv_cache.py`, AI_SKILLS §8)
 > - Target Bravo Step 1/2 (mmapゼロコピーIPC + 本体配線) — **実装済み** (commit `ffb1fbd`, AI_SKILLS §9)
-> - Target Charlie (LSM化 + llama-server資産活用) — **実装済み** (`core/lsm_index.py`, AI_SKILLS §10)
+> - Target Charlie (LSM化) — **実装済み** (`core/lsm_index.py`, AI_SKILLS §10)。旧llama-server案はFSA-01/02で廃止
 > - Target Delta-LINE (対人プロトコル・テレメトリ DL1/DL2) — **実装済み** (`core/line_telemetry.py`, AI_SKILLS §11)
 > - Target Delta D3 (PUPPETEER + NARRATIVE COMPILER) — **実装済み** (`core/question_bank.py` / `core/narrative_compiler.py`, AI_SKILLS §11.4/§11.5)
 > - Target Delta **D1/D2** (5軸 HumanSourceCode / PROBE ファネル / HistoricalNode) — **本書 §3.1-3.8 が設計。未実装** (次の着工対象)
@@ -133,7 +133,7 @@ OS がオープン中のため Windows では削除に失敗し自然にスキ�
 
 ---
 
-# §2【Target Charlie】LSM 化と llama-server 遊休資産の活用
+# §2【Target Charlie】LSM 化（旧network server案は廃止）
 
 ## 2.1 PKBVEC01 の LSM 化 — 「pkbseg.v1」設計
 
@@ -290,43 +290,18 @@ compact(manifest):
 - knowledge index は当面 LSM 化しない (ファイル数が少なく更新頻度が低い)。
   日記側で実証してから同型展開する。
 
-## 2.2 llama-server 遊休資産の活用
+## 2.2 旧llama-server資産活用案 — RETIRED
 
-### 2.2.1 (a) 埋め込みの GGUF 化 — torch 依存の排除
+FSA-2026-07-13-01/02と2026-07-14 Commander裁定により、loopbackを含むTCP/IP、
+HTTP embedding endpoint、port分離、共有listener、KV slot APIの全案を廃止した。
+`core/kv_cache.py`も削除済み。本節の旧案を実装してはならない。
 
-目的: PyInstaller sidecar から sentence-transformers/torch (数百MB + 起動ペナルティ)
-を追放し、既にバンドル済みの llama-server に埋め込みも担わせる。
+現行embeddingは`SentenceTransformer(local_files_only=True, trust_remote_code=False)`から
+決定論的`HashedNgramEmbedder`へのlocal-only fallbackである。将来GGUF embeddingへ
+移行する場合は、Windows Named Pipe / POSIX stdioだけを用いる別Findingとして
+RED契約と指揮官裁定を先に得ること。
 
-```
-構成:
-  config/model_params.json に role "embed" を追加:
-    {"preferred": ["multilingual-e5-small*.gguf"], "port_env": "PKB_EMBED_PORT",
-     "server_args": ["--embeddings"], "dim": 384}
-  ※ multilingual-e5-small = 384 次元 (PKBVEC01 の dim と一致。これが選定理由。
-     bge-m3 等の 1024 次元モデルは PKBVEC01 を壊すため選定禁止)
-
-  core/embed_client.py (新規):
-    class GgufEmbedder:
-        name: str                        # embedder_id に使う
-        def encode(self, texts: list[str], **_) -> np.ndarray   # (N, 384)
-    - POST http://127.0.0.1:{port}/v1/embeddings (OAI互換) を第一候補、
-      404 なら旧 /embedding へフォールバック (server_supports_slot_save と同じ
-      「プローブして恒久記憶」パターンを踏襲)
-    - e5 系は "query: " / "passage: " プレフィックスが必須。クエリ埋め込みと
-      文書埋め込みでプレフィックスを分ける。この知識は GgufEmbedder の内部に
-      閉じ込め、呼び出し側に漏らすな (罠 T-4)
-    - 返却ベクトルは必ず自前で l2_normalize (サーバー側の正規化有無に依存しない)
-
-  フォールバック連鎖 (build_embedder を三段化 — Bravo と同じ思想):
-    GgufEmbedder (embed用llama-server) → SentenceTransformer → HashedNgramEmbedder
-```
-
-**絶対条件**: embed 用サーバーは consult 用サーバーと**別プロセス・別ポート**。
-同一プロセスに同居させると、埋め込みリクエストがスロットの KV 状態と干渉し、
-Target Alpha のプレフィックス・ピニングを静かに壊す (§8 の「静かに死ぬ系」)。
-ライフサイクルは LlamaServerBackend と同じ Terminate→Kill + atexit を流用。
-
-### 2.2.2 埋め込み空間の同一性 (最重要不変条件 I-6)
+### 2.2.1 埋め込み空間の同一性 (最重要不変条件 I-6)
 
 **embedder を切り替えた瞬間、既存の全ベクトルはゴミになる。** 空間の異なる
 ベクトル同士の内積は「エラーの出ない乱数」であり、検索品質がサイレントに死ぬ。
@@ -335,12 +310,6 @@ Target Alpha のプレフィックス・ピニングを静かに壊す (§8 の�
   唯一のケース)。
 - クエリ埋め込みと文書埋め込みは常に同一 embedder。片方だけ GGUF 化して
   「動いているように見える」状態が最悪 (罠 T-5)。
-
-### 2.2.3 (b) KV プレフィックス・ピニング — 実装済み。触るな
-
-Target Alpha として `core/kv_cache.py` に実装済み (AI_SKILLS §8)。本書での追加は
-1 点のみ: **embed 用サーバーには slot save/restore を絶対に適用しない**
-(`--slot-save-path` は consult サーバー専用。embed サーバーの起動引数に混ぜるな)。
 
 ---
 
@@ -988,7 +957,7 @@ LINE 全ログ ──▶ [チャネル3: 決定論集計] ──▶ DyadStats (a
 
 ## 5.1 継承不変条件 (AI_SKILLS より。違反 = 即レビュー落ち)
 
-- I-0: 完全オフライン。Delta の全機能は 127.0.0.1 とローカルファイルのみで完結する。
+- I-0: 完全オフライン。Deltaの全機能はlocal fileと所有子へのprivate IPCだけで完結し、loopbackを含むTCP/IPを使わない。
 - I-1: core/ の決定論ロジックは stdlib のみ。発見=決定論 / 言語化=LLM の分業。
 - I-2: Python エンジンの stdout はプロトコル専用線。全ファイル I/O に encoding="utf-8"。
 - I-3: 遅延初期化 (embed サーバーも初回埋め込みまで起動しない)。RECORD 保存で

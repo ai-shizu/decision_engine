@@ -20,7 +20,7 @@ def get_settings() -> dict:
         "fixed_fields": [{"key": k, "label": label} for k, label in FIXED_ATTRIBUTE_FIELDS],
         "fixed_attributes": profile.get("fixed_attributes", {}),
         "profile_summary": format_user_profile_summary(),
-        "apple_calendar_available": apple_calendar_sync.is_macos(),
+        "apple_calendar_available": apple_calendar_sync.direct_calendar_access_available(),
     })
 
 

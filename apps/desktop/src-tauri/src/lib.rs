@@ -1,5 +1,7 @@
 mod commands;
 mod engine;
+#[doc(hidden)]
+pub mod os_sandbox;
 mod paths;
 
 use std::sync::Arc;
@@ -21,13 +23,8 @@ pub fn run() {
         .setup(move |app| {
             let handle = app.handle().clone();
             let manager = Arc::clone(&engine);
-
-            tauri::async_runtime::spawn(async move {
-                if let Err(err) = manager.start(handle).await {
-                    eprintln!("PKB engine startup failed: {err}");
-                }
-            });
-
+            tauri::async_runtime::block_on(manager.start(handle))
+                .map_err(std::io::Error::other)?;
             Ok(())
         })
         .build(tauri::generate_context!())

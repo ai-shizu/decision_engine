@@ -86,6 +86,25 @@ jobs:
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: npx tauri build --target ${{ matrix.target }}
 
+      - name: Verify App Sandbox and embedded executable entitlements
+        run: |
+          APP="$(find "apps/desktop/src-tauri/target/${{ matrix.target }}/release/bundle/macos" -maxdepth 1 -name '*.app' -type d -print -quit)"
+          test -n "$APP"
+          codesign --verify --deep --strict --verbose=2 "$APP"
+          APP_ENTITLEMENTS="$(codesign -d --entitlements :- "$APP" 2>&1)"
+          printf '%s\n' "$APP_ENTITLEMENTS" | grep -q 'com.apple.security.app-sandbox'
+          if printf '%s\n' "$APP_ENTITLEMENTS" | grep -q 'com.apple.security.network.client'; then exit 1; fi
+          if printf '%s\n' "$APP_ENTITLEMENTS" | grep -q 'com.apple.security.network.server'; then exit 1; fi
+          SIDECAR="$(find "$APP/Contents" -type f -name 'pkb-engine-*' -print -quit)"
+          test -n "$SIDECAR"
+          codesign --verify --strict --verbose=2 "$SIDECAR"
+          SIDECAR_ENTITLEMENTS="$(codesign -d --entitlements :- "$SIDECAR" 2>&1)"
+          printf '%s\n' "$SIDECAR_ENTITLEMENTS" | grep -q 'sidecar-entitlements.plist\|com.apple.security.app-sandbox'
+          printf '%s\n' "$SIDECAR_ENTITLEMENTS" | grep -q 'com.apple.security.inherit'
+          if printf '%s\n' "$SIDECAR_ENTITLEMENTS" | grep -q 'com.apple.security.network.client'; then exit 1; fi
+          if printf '%s\n' "$SIDECAR_ENTITLEMENTS" | grep -q 'com.apple.security.network.server'; then exit 1; fi
+          echo PKB_MACOS_SANDBOX_VERIFIED
+
       - uses: actions/upload-artifact@v4
         with:
           name: pkb-macos-${{ matrix.target }}

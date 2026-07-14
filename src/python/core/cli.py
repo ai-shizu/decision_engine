@@ -12,8 +12,8 @@
   c. 「現状分析」「価値観との整合性」「必要なスキルギャップ」「次の一手」の
      4セクションで回答を生成
 
-を行う。全処理は完全オフライン。LLM推論は 127.0.0.1 上の llama.cpp
-(llama-server / llama cli) のみを使用し、外部APIは一切叩かない。
+を行う。全処理は完全オフライン。LLM推論は親プロセスが所有する匿名stdio上の
+llama.cpp子プロセスのみを使用し、TCP/IPや外部APIは一切使用しない。
 
 使い方:
   python src/python/app.py "相談内容"
@@ -25,17 +25,18 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 
 # 完全オフライン保証: 埋め込みモデルはローカルキャッシュのみ使用し、
 # HF Hub への接続を一切行わない (キャッシュ未取得時はフォールバック埋め込みに移行)
-os.environ.setdefault("HF_HUB_OFFLINE", "1")
-os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
 import re
 import subprocess
 import sys
 import time
 from pathlib import Path
+
+from .offline_runtime import enforce_offline_environment
+
+enforce_offline_environment()
 
 from .paths import (
     BUILD_DIR,
@@ -57,11 +58,8 @@ LAST_ANSWER_MD = DATA_PROCESSED / "last_consultation.md"
 
 from .llm_config import (  # noqa: E402
     find_gguf,
-    generation_params,
-    LLAMA_CTX,
-    SERVER_PORT,
 )
-from .llm_backend import LlamaServerBackend  # noqa: E402
+from .llm_backend import LlamaStdioBackend  # noqa: E402
 from .pipeline import build_embedder, l2_normalize  # noqa: E402
 
 SYSTEM_PROMPT = (
@@ -198,49 +196,6 @@ def build_user_prompt(query: str, profile: dict, chunks: list[dict]) -> str:
 {OUTPUT_FRAMEWORK}"""
 
 
-# ============================================================ ローカルLLMラッパー
-# LlamaServerBackend は core/llm_backend.py が唯一所有 (INC-LLM-CLIENT-01)。
-
-
-class LlamaCliBackend:
-    """llama.exe cli (single-turn) によるフォールバック実行。"""
-
-    name = "llama cli (single-turn)"
-
-    def __init__(self, exe: Path, model: Path):
-        self.exe, self.model = exe, model
-
-    def generate(
-        self,
-        system: str,
-        user: str,
-        max_tokens: int | None = None,
-    ) -> str:
-        gen = generation_params()
-        effective_max_tokens = (
-            max_tokens if max_tokens is not None else gen["max_tokens"]
-        )
-        temperature = gen["temperature"]
-        pf = ROOT / "build" / "_app_prompt.txt"
-        pf.write_text(user, encoding="utf-8", newline="\n")
-        out = subprocess.run(
-            [str(self.exe), "cli", "-m", str(self.model), "-f", str(pf),
-             "-sys", system, "-n", str(effective_max_tokens), "-st",
-             "--no-display-prompt", "--temp", str(temperature),
-             "-c", str(LLAMA_CTX)],
-            capture_output=True, timeout=1200)
-        text = out.stdout.decode("utf-8", errors="replace")
-        # バナー・プロンプトエコー・統計行を除去して本文のみ抽出
-        text = re.sub(r"(?s)^.*?available commands:.*?(?=\n> )", "", text)
-        text = re.sub(r"(?m)^> .*$", "", text)
-        text = re.sub(r"\[ Prompt:.*?\]", "", text)
-        text = text.replace("Exiting...", "")
-        return text.strip()
-
-    def stop(self) -> None:
-        pass
-
-
 class RuleBasedBackend:
     """LLM実行環境が無い場合でも4セクション回答を返す決定論的フォールバック。"""
 
@@ -278,15 +233,11 @@ data/knowledge/ の外部知識を参照のこと (LLM無効のため自動要�
 
 
 def select_backend(profile: dict, chunks: list[dict]):
-    from .paths import LLAMA_CLI_EXE, LLAMA_SERVER_EXE
+    from .paths import LLAMA_CLI_EXE
 
     model = find_gguf(role="consult")
-    server_exe = LLAMA_SERVER_EXE
-    cli_exe = LLAMA_CLI_EXE
-    if model and server_exe.exists():
-        return LlamaServerBackend(server_exe, model, SERVER_PORT)
-    if model and cli_exe.exists():
-        return LlamaCliBackend(cli_exe, model)
+    if model and LLAMA_CLI_EXE.exists():
+        return LlamaStdioBackend(LLAMA_CLI_EXE, model)
     return RuleBasedBackend(profile, chunks)
 
 

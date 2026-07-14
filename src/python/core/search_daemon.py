@@ -88,9 +88,9 @@ class SearchDaemonClient:
 
     - exe 不在時は start() が SearchDaemonError を投げるだけで、他に副作用はない。
     - spawn を差し替えることで実プロセスなしの決定論的テストが可能
-      (SlotCacheClient(http_post=...) と同じ依存注入パターン)。
+      (transport factoryを注入する既存のテストパターン)。
     - atexit で close() を登録し、どの終了経路でもゾンビを残さない
-      (LlamaServerBackend.stop() の Terminate → Kill パターンを踏襲)。
+      (owned childの Terminate → Kill パターンを踏襲)。
     """
 
     def __init__(self, exe: Path | None = None, scratch_path: Path | None = None,

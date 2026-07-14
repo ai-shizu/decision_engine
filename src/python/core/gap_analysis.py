@@ -799,14 +799,14 @@ def llm_gap_analysis(result: dict, daily: list[dict]) -> dict | None:
 
     決定論コアが検出した数値的乖離のみを入力とし、LLM には
     「解釈と言語化」だけを担わせる (ギャップの発見自体を LLM 任せにしない)。"""
-    from . import consultation_engine as ce
+    from .llm_backend import LlamaStdioBackend
     from .llm_config import find_gguf
+    from .paths import LLAMA_CLI_EXE
 
     if not result.get("gaps"):
         return None
     model = find_gguf()
-    server = ce.LLAMA_SERVER_EXE
-    if not (model and server.exists()):
+    if not (model and LLAMA_CLI_EXE.exists()):
         print("[gap_analysis] ローカルLLM未検出 → LLM深化をスキップ")
         return None
 
@@ -832,7 +832,7 @@ def llm_gap_analysis(result: dict, daily: list[dict]) -> dict | None:
 - データ量が少ない旨の注記があれば、可能性の提示に留めること。
 - 出力は日本語の箇条書き。"""
 
-    backend = ce.LlamaServerBackend(server, model, ce.SERVER_PORT)
+    backend = LlamaStdioBackend(LLAMA_CLI_EXE, model)
     try:
         print(f"[gap_analysis] LLMでギャップ言語化を実行中… ({model.name})")
         analysis = backend.generate(system, prompt, max_tokens=900)

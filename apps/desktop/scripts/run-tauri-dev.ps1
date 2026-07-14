@@ -1,6 +1,9 @@
 $ErrorActionPreference = "Stop"
 . "$PSScriptRoot\ensure-node-path.ps1"
 
+$env:PKB_UNSAFE_DEV_ENGINE = "1"
+Write-Warning "UNSAFE DEVELOPMENT ENGINE: system Python is not a production security boundary."
+
 if (-not $env:PKB_PYTHON) {
     $candidates = @(
         "$env:LOCALAPPDATA\Programs\Python\Python312-arm64\python.exe",

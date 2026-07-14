@@ -46,8 +46,6 @@ KNOWLEDGE_META = DATA_PROCESSED / "knowledge_metadata.json"
 DEEP_PROFILE = DATA_PROCESSED / "deep_profile.json"
 USER_PROFILE = DATA_PROCESSED / "user_profile.json"
 
-# llama-server の KV キャッシュ (プレフィックス・ピニング) 永続化先
-KV_SLOTS_DIR = DATA_PROCESSED / "kv_slots"
 RETRIEVAL_MANIFESTS_DIR = DATA_PROCESSED / "retrieval_manifests"
 LATEST_RETRIEVAL_MANIFEST = RETRIEVAL_MANIFESTS_DIR / "latest.json"
 
@@ -62,7 +60,6 @@ def tensor_dyad_bin(alias: str) -> Path:
 # ネイティブ実行ファイル名 (Windows のみ .exe)
 _EXE_SUFFIX = ".exe" if os.name == "nt" else ""
 SEARCH_EXE = BUILD_DIR / f"search_engine{_EXE_SUFFIX}"
-LLAMA_SERVER_EXE = LLAMA_DIR / f"llama-server{_EXE_SUFFIX}"
 LLAMA_CLI_EXE = LLAMA_DIR / f"llama{_EXE_SUFFIX}"
 CALENDAR_IMPORT_ICS = DATA_RAW / "calendar_import.ics"
 QUERY_BIN = DATA_PROCESSED / "query.bin"

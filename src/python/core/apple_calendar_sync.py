@@ -13,6 +13,7 @@ calendar.json 形式へマージする。外部 API / ネットワーク通信�
 
 from __future__ import annotations
 
+import os
 import sqlite3
 import sys
 from datetime import date, datetime, time, timedelta
@@ -31,6 +32,10 @@ CORE_DATA_EPOCH_OFFSET = 978307200  # 1970-01-01 → 2001-01-01 (秒)
 FULL_DISK_ACCESS_HINT = (
     "システム設定 > プライバシーとセキュリティ > フルディスクアクセス で "
     "PKB (またはターミナル) を許可してから再試行してください"
+)
+APP_SANDBOX_ICS_ONLY_MESSAGE = (
+    "Apple Calendar database import is unavailable in sandboxed production. "
+    "Export an ICS file from Calendar and import it locally."
 )
 
 _EVENT_SCHEMAS: dict[str, dict[str, tuple[str, ...]]] = {
@@ -51,6 +56,10 @@ _EVENT_SCHEMAS: dict[str, dict[str, tuple[str, ...]]] = {
 
 def is_macos() -> bool:
     return sys.platform == "darwin"
+
+
+def direct_calendar_access_available() -> bool:
+    return is_macos() and "APP_SANDBOX_CONTAINER_ID" not in os.environ
 
 
 def default_calendar_db_paths() -> list[Path]:
@@ -252,6 +261,8 @@ def sync_from_apple_calendar(
     days_ahead: int = 365,
 ) -> dict[str, int | str]:
     """Apple カレンダー DB を calendar.json に反映する。"""
+    if "APP_SANDBOX_CONTAINER_ID" in os.environ:
+        raise RuntimeError(APP_SANDBOX_ICS_ONLY_MESSAGE)
     if not is_macos():
         raise RuntimeError("Apple カレンダー同期は macOS でのみ利用できます")
 

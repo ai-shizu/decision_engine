@@ -35,7 +35,7 @@
 PKB（Personal Knowledge Base）は、完全オフラインを原則とする自己エミュレーション・意思決定支援システムである。
 
 - 構成: **Tauri v2 + React + Rust + Python + C++**
-- ローカル LLM は `127.0.0.1` のみ（外部 API・CDN 禁止）
+- ローカル LLM はPKB所有子へのWindows AppContainer Named Pipe / Linux seccomp stdio / macOS App Sandbox stdioのみ（TCP/IP・外部 API・CDN禁止）
 - UI と Python は Tauri/Rust 管理の **stdio JSON IPC**
 - 個人データはローカル永続化（コミット禁止領域あり）
 - 埋め込みモデル・LLM は遅延初期化（初回 consult / profiler まで起動しない）

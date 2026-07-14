@@ -100,6 +100,28 @@ fi
 cp -f "$BUILT" "$DEST"
 chmod +x "$DEST"
 
+# A macOS helper must inherit App Sandbox and carry no network entitlement.
+if [ "$(uname -s)" = "Darwin" ]; then
+    ENTITLEMENTS="$DESKTOP_ROOT/src-tauri/sidecar-entitlements.plist"
+    SIGNING_IDENTITY="${APPLE_SIGNING_IDENTITY:--}"
+    codesign --force --options runtime --timestamp=none \
+        --sign "$SIGNING_IDENTITY" \
+        --entitlements "$ENTITLEMENTS" \
+        "$DEST"
+    codesign --verify --strict --verbose=2 "$DEST"
+    ACTUAL_ENTITLEMENTS="$(codesign -d --entitlements :- "$DEST" 2>&1)"
+    printf '%s\n' "$ACTUAL_ENTITLEMENTS" | grep -q 'com.apple.security.app-sandbox'
+    printf '%s\n' "$ACTUAL_ENTITLEMENTS" | grep -q 'com.apple.security.inherit'
+    if printf '%s\n' "$ACTUAL_ENTITLEMENTS" | grep -q 'com.apple.security.network.client'; then
+        echo "ERROR: sidecar has forbidden network client entitlement" >&2
+        exit 1
+    fi
+    if printf '%s\n' "$ACTUAL_ENTITLEMENTS" | grep -q 'com.apple.security.network.server'; then
+        echo "ERROR: sidecar has forbidden network server entitlement" >&2
+        exit 1
+    fi
+fi
+
 SIZE_BYTES="$(wc -c < "$DEST" | tr -d ' ')"
 if [ "$SIZE_BYTES" -lt 1048576 ]; then
     echo "ERROR: エンジンバイナリが小さすぎます ($SIZE_BYTES bytes)" >&2

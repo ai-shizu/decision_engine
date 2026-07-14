@@ -3,7 +3,8 @@
 Snapdragon X (Windows on ARM64) 向けに最適化された個人ナレッジベース (PKB) です。  
 日記・LINE・**予定**・家計簿・AI 相談履歴を **DailyContext** として統合し、C++ NEON ベクトル検索 + ローカル LLM (llama.cpp) で意思決定を支援します。
 
-**外部 API は使用しません** (`HF_HUB_OFFLINE=1`、推論は `127.0.0.1` の llama-server のみ)。
+**外部 API と TCP/IP は使用しません。** Python はIP socketを実行時拒否し、
+ローカル推論はPKBがspawnした`llama.cpp`子プロセスとのprivate prompt channelだけで行います。
 
 ---
 
@@ -54,7 +55,7 @@ decision_engine/
 │
 ├── build/search_engine.exe        # C++ 検索バイナリ (gitignore)
 ├── models/*.gguf                  # ローカル LLM (gitignore)
-└── tools/llama-arm64/             # llama-server (gitignore)
+└── tools/llama-arm64/             # llama.cpp runtime (gitignore)
 ```
 
 ### アーキテクチャ概要
@@ -62,7 +63,7 @@ decision_engine/
 | レイヤ | 役割 |
 |--------|------|
 | **React UI** | `apps/desktop/src/` — 4 タブ、Tauri コマンド経由でエンジン呼び出し |
-| **Rust IPC** | `src-tauri/src/engine.rs` — Python 子プロセス管理、stdio JSON |
+| **Rust IPC** | `src-tauri/src/engine.rs` / `os_sandbox.rs` — bundled Python子をOS sandbox内で管理、stdio JSON |
 | **Stdio API** | `engine_stdio.py` — コマンド dispatch (`record.*`, `consult`, `import.*` 等) |
 | **共通 Facade** | `core/facade.py` — RECORD / IMPORT / CONSULT / SETTINGS のビジネス操作 |
 | **C++ 検索** | `search_engine.exe` — PKBVEC01 AoSoA、384 次元 Top-K |
@@ -200,7 +201,7 @@ consult(query):
   embed → sync_diary_index / sync_knowledge_index
        → C++ NEON 検索 (DailyContext + 外部知識)
        → プロファイル + ヒットコンテキスト + Future Context
-       → llama-server (127.0.0.1)
+       → llama.cpp owned child (Windows Named Pipe / POSIX `/dev/stdin`)
        → 4 セクション Markdown 回答
 ```
 
@@ -214,7 +215,7 @@ curl.exe -L -o models\Qwen2.5-7B-Instruct-Q4_K_M.gguf `
 ```
 
 - 優先: `Qwen2.5-7B-Instruct-Q4_K_M.gguf` (約 4.7GB)
-- 環境変数: `PKB_LLAMA_THREADS`, `PKB_LLAMA_CTX`, `PKB_LLAMA_BATCH`, `PKB_LLM_PORT`, `PKB_MODELS_DIR`
+- 環境変数: `PKB_LLAMA_THREADS`, `PKB_LLAMA_CTX`, `PKB_LLAMA_BATCH`, `PKB_MODELS_DIR`
 
 ---
 

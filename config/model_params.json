@@ -24,8 +24,7 @@
     "min_model_bytes": 3500000000,
     "allow_small_models": false
   },
-  "server": {
-    "port": 18081,
+  "runtime": {
     "threads": 8,
     "ctx": 8192,
     "batch": 512

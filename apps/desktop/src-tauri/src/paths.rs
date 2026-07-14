@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 ///   macOS:   ~/Library/Application Support/PKB
 ///   Linux:   $XDG_DATA_HOME/PKB または ~/.local/share/PKB
 #[cfg(windows)]
+#[cfg_attr(debug_assertions, allow(dead_code))]
 pub fn user_data_root() -> PathBuf {
     if let Ok(local) = env::var("LOCALAPPDATA") {
         return PathBuf::from(local).join("PKB");
@@ -17,17 +18,30 @@ pub fn user_data_root() -> PathBuf {
 }
 
 #[cfg(target_os = "macos")]
+#[cfg_attr(debug_assertions, allow(dead_code))]
 pub fn user_data_root() -> PathBuf {
+    const APP_CONTAINER_ID: &str = "com.ai-shizu.pkb";
     if let Ok(home) = env::var("HOME") {
-        return PathBuf::from(home)
-            .join("Library")
-            .join("Application Support")
-            .join("PKB");
+        let home = PathBuf::from(home);
+        if let Ok(container_id) = env::var("APP_SANDBOX_CONTAINER_ID") {
+            if container_id == APP_CONTAINER_ID {
+                return home
+                    .join("Library")
+                    .join("Containers")
+                    .join(container_id)
+                    .join("Data")
+                    .join("Library")
+                    .join("Application Support")
+                    .join("PKB");
+            }
+        }
+        return home.join("Library").join("Application Support").join("PKB");
     }
     PathBuf::from(".")
 }
 
 #[cfg(all(unix, not(target_os = "macos")))]
+#[cfg_attr(debug_assertions, allow(dead_code))]
 pub fn user_data_root() -> PathBuf {
     if let Ok(xdg) = env::var("XDG_DATA_HOME") {
         if !xdg.is_empty() {
@@ -40,11 +54,13 @@ pub fn user_data_root() -> PathBuf {
     PathBuf::from(".")
 }
 
+#[cfg(debug_assertions)]
 fn dev_repo_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../..")
 }
 
 /// リポジトリルート / データルートを解決する。
+#[cfg(debug_assertions)]
 pub fn project_root() -> PathBuf {
     if let Ok(root) = env::var("PKB_PROJECT_ROOT") {
         let path = PathBuf::from(root);
@@ -59,25 +75,38 @@ pub fn project_root() -> PathBuf {
         return repo.canonicalize().unwrap_or(repo);
     }
 
-    if cfg!(debug_assertions) {
-        return repo;
-    }
+    repo
+}
 
+#[cfg(not(debug_assertions))]
+pub fn project_root() -> PathBuf {
     user_data_root()
 }
 
+#[cfg(debug_assertions)]
 pub fn run_engine_script() -> PathBuf {
-    project_root().join("src").join("python").join("run_engine.py")
+    project_root()
+        .join("src")
+        .join("python")
+        .join("run_engine.py")
 }
 
 /// 初回起動用に data/ 等を作成
 pub fn ensure_data_layout(root: &Path) {
-    for sub in ["data/raw", "data/processed", "data/knowledge", "build", "models", "logs"] {
+    for sub in [
+        "data/raw",
+        "data/processed",
+        "data/knowledge",
+        "build",
+        "models",
+        "logs",
+    ] {
         let _ = std::fs::create_dir_all(root.join(sub));
     }
 }
 
 /// Windows (x64/ARM64) / macOS 向け Python 実行ファイルを探す。
+#[cfg(debug_assertions)]
 pub fn find_python_executable() -> Option<PathBuf> {
     if let Ok(custom) = env::var("PKB_PYTHON") {
         let path = PathBuf::from(&custom);
@@ -103,46 +132,54 @@ pub fn find_python_executable() -> Option<PathBuf> {
     None
 }
 
-#[cfg(all(windows, target_arch = "aarch64"))]
+#[cfg(all(not(debug_assertions), windows, target_arch = "aarch64"))]
 pub fn bundled_engine_name() -> &'static str {
     "pkb-engine-aarch64-pc-windows-msvc.exe"
 }
 
-#[cfg(all(windows, target_arch = "x86_64"))]
+#[cfg(all(not(debug_assertions), windows, target_arch = "x86_64"))]
 pub fn bundled_engine_name() -> &'static str {
     "pkb-engine-x86_64-pc-windows-msvc.exe"
 }
 
-#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+#[cfg(all(not(debug_assertions), target_os = "macos", target_arch = "aarch64"))]
 pub fn bundled_engine_name() -> &'static str {
     "pkb-engine-aarch64-apple-darwin"
 }
 
-#[cfg(all(target_os = "macos", target_arch = "x86_64"))]
+#[cfg(all(not(debug_assertions), target_os = "macos", target_arch = "x86_64"))]
 pub fn bundled_engine_name() -> &'static str {
     "pkb-engine-x86_64-apple-darwin"
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(all(not(debug_assertions), target_os = "linux"))]
 pub fn bundled_engine_name() -> &'static str {
     "pkb-engine-x86_64-unknown-linux-gnu"
 }
 
+#[cfg(not(debug_assertions))]
 pub fn bundled_engine_path() -> Option<PathBuf> {
     let exe = env::current_exe().ok()?;
     let dir = exe.parent()?;
     let path = dir.join(bundled_engine_name());
-    if path.is_file() && path.metadata().map(|m| m.len() > 1024 * 1024).unwrap_or(false) {
+    if path.is_file()
+        && path
+            .metadata()
+            .map(|m| m.len() > 1024 * 1024)
+            .unwrap_or(false)
+    {
         Some(path)
     } else {
         None
     }
 }
 
+#[cfg(debug_assertions)]
 fn is_python_executable(path: &Path) -> bool {
     path.is_file()
 }
 
+#[cfg(debug_assertions)]
 fn python_names_on_path() -> &'static [&'static str] {
     if cfg!(windows) {
         &["python.exe", "python3.exe", "python", "python3"]
@@ -151,6 +188,7 @@ fn python_names_on_path() -> &'static [&'static str] {
     }
 }
 
+#[cfg(debug_assertions)]
 fn python_candidates() -> Vec<PathBuf> {
     let mut out = Vec::new();
 
@@ -176,9 +214,13 @@ fn python_candidates() -> Vec<PathBuf> {
     out
 }
 
+#[cfg(debug_assertions)]
 fn find_on_path(name: &str) -> Option<PathBuf> {
     let command = if cfg!(windows) { "where" } else { "which" };
-    let output = std::process::Command::new(command).arg(name).output().ok()?;
+    let output = std::process::Command::new(command)
+        .arg(name)
+        .output()
+        .ok()?;
     if !output.status.success() {
         return None;
     }

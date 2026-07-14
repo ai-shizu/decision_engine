@@ -29,8 +29,9 @@ import time
 from datetime import datetime
 from pathlib import Path
 
-os.environ.setdefault("HF_HUB_OFFLINE", "1")
-os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
+from .offline_runtime import enforce_offline_environment
+
+enforce_offline_environment()
 
 from .paths import (
     DEEP_PROFILE,
@@ -38,8 +39,7 @@ from .paths import (
     KNOWLEDGE_BIN,
     KNOWLEDGE_DIR,
     KNOWLEDGE_META,
-    LLAMA_DIR,
-    LLAMA_SERVER_EXE,
+    LLAMA_CLI_EXE,
     MODELS_DIR,
     PROCESSED,
     PROJECT_ROOT as ROOT,
@@ -57,12 +57,8 @@ from .profile_store import (
 from . import lsm_index
 from .search_daemon import SearchDaemonClient, SearchDaemonError
 from . import pipeline  # noqa: E402
-from .llm_config import (  # noqa: E402
-    find_gguf,
-    generation_params,
-    SERVER_PORT,
-)
-from .llm_backend import LlamaServerBackend  # noqa: E402
+from .llm_config import find_gguf  # noqa: E402
+from .llm_backend import LlamaStdioBackend  # noqa: E402
 
 SYSTEM_PROMPT = (
     "あなたはユーザーの思考・価値観を完全に理解する分身AIである。"
@@ -566,7 +562,7 @@ def _redact_answer(text: str) -> str:
 
 
 # ============================================================ LLMバックエンド
-# LlamaServerBackend の唯一の所有者は core/llm_backend.py (INC-LLM-CLIENT-01)。
+# LlamaStdioBackend is owned only by core/llm_backend.py.
 
 
 class RuleBasedBackend:
@@ -575,7 +571,7 @@ class RuleBasedBackend:
     name = "rule-based reasoner (LLMなしフォールバック)"
 
     def generate(self, system: str, user: str, max_tokens: int = 0,
-                 on_token=None, prefix_hash: str | None = None) -> str:
+                 on_token=None) -> str:
         answer = ("## 1. 現状分析\n(ローカルLLM未検出のため簡易応答)\n\n"
                   "## 2. 価値観との整合性\ndeep_profile.json の value_hierarchy を参照。\n\n"
                   "## 3. 必要なスキルギャップ\ndata/knowledge/ を参照。\n\n"
@@ -597,7 +593,7 @@ class RuleBasedBackend:
 
 # ============================================================ エンジン本体
 class ConsultationEngine:
-    """遅延初期化: 埋め込みモデル・LLMサーバーは初回相談まで起動しない。"""
+    """遅延初期化: 埋め込みモデル・LLM子プロセスは初回相談まで起動しない。"""
 
     def __init__(self):
         self._embedder = None
@@ -957,9 +953,8 @@ class ConsultationEngine:
     def backend(self):
         if self._backend is None:
             model = find_gguf(role="consult")
-            server = LLAMA_SERVER_EXE
-            if model and server.exists():
-                self._backend = LlamaServerBackend(server, model, SERVER_PORT)
+            if model and LLAMA_CLI_EXE.exists():
+                self._backend = LlamaStdioBackend(LLAMA_CLI_EXE, model)
             else:
                 self._backend = RuleBasedBackend()
         return self._backend
@@ -1015,7 +1010,6 @@ class ConsultationEngine:
         user: str,
         on_token=None,
         max_tokens: int | None = None,
-        prefix_hash: str | None = None,
     ) -> str:
         redactor = HiddenReasoningRedactor()
         wrapped = None
@@ -1029,8 +1023,6 @@ class ConsultationEngine:
             gen_kwargs["max_tokens"] = max_tokens
         if wrapped is not None:
             gen_kwargs["on_token"] = wrapped
-        if prefix_hash is not None:
-            gen_kwargs["prefix_hash"] = prefix_hash
         raw_answer = self.backend.generate(system, user, **gen_kwargs)
         if wrapped is None:
             return _redact_answer(raw_answer)
@@ -1621,18 +1613,15 @@ class ConsultationEngine:
         diary_hits = self.search_daily(qvec, top_k)
         knowledge_hits = self.search_index(KNOWLEDGE_BIN, KNOWLEDGE_META, qvec, top_k)
 
-        # KV プレフィックス・ピニング: 静的 (プロファイル) + 動的 (ヒット+相談) に
-        # 分離し、静的部分のハッシュでキャッシュの復元/保存/パージを制御する
+        # Preserve the static/dynamic split while sending the whole prompt only
+        # through the owned child's anonymous stdin.
         static_prefix = self.build_static_prefix()
         prompt = static_prefix + self.build_dynamic_suffix(
             query, diary_hits, knowledge_hits)
-        from .kv_cache import prefix_hash as _prefix_hash
-        phash = _prefix_hash(SYSTEM_PROMPT, static_prefix)
 
         say(f"ローカルLLMで推論中… ({self.backend.name})")
         t0 = time.perf_counter()
-        answer = self._generate_redacted(
-            SYSTEM_PROMPT, prompt, on_token=on_token, prefix_hash=phash)
+        answer = self._generate_redacted(SYSTEM_PROMPT, prompt, on_token=on_token)
 
         say(f"生成完了 ({time.perf_counter() - t0:.1f}s)")
 

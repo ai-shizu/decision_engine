@@ -619,12 +619,12 @@ def analyze_interaction_sessions(daily: list[dict]) -> dict:
 def llm_interaction_analysis(daily: list[dict]) -> dict | None:
     """7BクラスLLMで ConversationSession + 日記から行動心理学的深層分析。"""
     from .data_merger import collect_conversation_sessions
-    from . import consultation_engine as ce
+    from .llm_backend import LlamaStdioBackend
     from .llm_config import find_gguf
+    from .paths import LLAMA_CLI_EXE
 
     model = find_gguf()
-    server = ce.LLAMA_SERVER_EXE
-    if not (model and server.exists()):
+    if not (model and LLAMA_CLI_EXE.exists()):
         print("[profiler] ローカルLLM未検出 → LLM因果分析をスキップ")
         return None
 
@@ -719,7 +719,7 @@ def llm_interaction_analysis(daily: list[dict]) -> dict | None:
 # 対話セッション
 {session_block}{consult_section}{finance_section}"""
 
-    backend = ce.LlamaServerBackend(server, model, ce.SERVER_PORT)
+    backend = LlamaStdioBackend(LLAMA_CLI_EXE, model)
     try:
         print(f"[profiler] 7B LLMで行動心理学分析を実行中… ({model.name})")
         analysis = backend.generate(system, prompt, max_tokens=1200)

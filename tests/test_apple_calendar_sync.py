@@ -8,6 +8,8 @@ from datetime import datetime
 from pathlib import Path
 from unittest.mock import patch
 
+import pytest
+
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src" / "python"))
 
@@ -117,4 +119,12 @@ def test_sync_from_apple_calendar_roundtrip(_mock_macos):
 
 def test_is_macos_matches_platform():
     assert acs.is_macos() == (sys.platform == "darwin")
+
+
+def test_app_sandbox_disables_direct_calendar_database(monkeypatch):
+    monkeypatch.setattr(acs.sys, "platform", "darwin")
+    monkeypatch.setenv("APP_SANDBOX_CONTAINER_ID", "com.ai-shizu.pkb")
+    assert acs.direct_calendar_access_available() is False
+    with pytest.raises(RuntimeError, match="Export an ICS file"):
+        acs.sync_from_apple_calendar()
 
