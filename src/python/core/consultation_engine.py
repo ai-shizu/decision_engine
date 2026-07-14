@@ -19,14 +19,16 @@
 from __future__ import annotations
 
 import hashlib
+import inspect
 import json
 import os
 import re
+import secrets
 import struct
 import subprocess
 import sys
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 from .artifact_auth import verify_artifact_path
@@ -58,8 +60,17 @@ from .profile_store import (
 from . import lsm_index
 from .search_daemon import SearchDaemonClient, SearchDaemonError
 from . import pipeline  # noqa: E402
-from .llm_config import find_gguf  # noqa: E402
-from .llm_backend import LlamaStdioBackend  # noqa: E402
+from .llm_config import find_gguf, generation_params  # noqa: E402
+from .llm_backend import LlamaStdioBackend, _prompt_bytes  # noqa: E402
+from .runtime_identity import (  # noqa: E402
+    CanonicalRuntimeIdentity,
+    SessionGenesisIdentity,
+    explicit_absence_hash,
+    hash_file_sha256,
+    numeric_runtime_version,
+    transcript_head,
+    validate_runtime_digest,
+)
 
 SYSTEM_PROMPT = (
     "あなたはユーザーの思考・価値観を完全に理解する分身AIである。"
@@ -131,6 +142,12 @@ INTERVIEW_START_COMMANDS = ("開始", "start", "次の問題", "新しい問題"
 MANIFEST_PERSISTENCE_WARNING = (
     "コンテキスト監査記録を保存できませんでした。相談処理は継続します。"
 )
+
+_VISIBLE_TEXT_SCHEMA = {
+    "type": "string",
+    "contentMediaType": "text/markdown",
+    "x-pkb-contract": "visible-answer.v1",
+}
 _MANIFEST_PERSISTENCE_STDERR = (
     "[PKB] retrieval manifest persistence failed; continuing without manifest update"
 )
@@ -945,15 +962,95 @@ class ConsultationEngine:
                 self._backend = RuleBasedBackend()
         return self._backend
 
-    def _session_id_for_state(self, state: dict, mode: str) -> str:
-        if "session_id" not in state:
-            payload = json.dumps(
-                {"mode": mode, "config": state.get("config", {})},
-                sort_keys=True,
-                ensure_ascii=False,
+    def _backend_artifact_hashes(self) -> tuple[str, str]:
+        backend = self.backend
+        exe = getattr(backend, "exe", None)
+        model = getattr(backend, "model", None)
+        if exe is not None or model is not None:
+            if exe is None or model is None:
+                raise ValueError("runtime backend artifacts are incomplete")
+            return hash_file_sha256(model), hash_file_sha256(exe)
+
+        try:
+            implementation = inspect.getsource(type(backend)).encode("utf-8")
+        except (OSError, TypeError):
+            implementation = (
+                f"{type(backend).__module__}.{type(backend).__qualname__}:"
+                f"{getattr(backend, 'name', '')}"
             ).encode("utf-8")
-            state["session_id"] = hashlib.blake2b(payload, digest_size=8).hexdigest()
-        return state["session_id"]
+        return (
+            explicit_absence_hash("gguf", implementation),
+            explicit_absence_hash("llama-server", implementation),
+        )
+
+    def _embedding_model_version(self) -> str:
+        if self._embedder is not None:
+            name = getattr(self._embedder, "name", type(self._embedder).__name__)
+            if type(name) is not str or not name.strip():
+                raise ValueError("embedding_model_version must be non-empty str")
+            return name
+        return "not-used:bounded-transcript-context@retrieval_policy.v1"
+
+    def _runtime_identity_for_prompt(
+        self,
+        system: str,
+        user: str,
+    ) -> CanonicalRuntimeIdentity:
+        gguf_hash, llama_server_hash = self._backend_artifact_hashes()
+        complete_prompt = _prompt_bytes(system, user).decode("utf-8")
+        return CanonicalRuntimeIdentity.from_components(
+            gguf_hash=gguf_hash,
+            llama_server_hash=llama_server_hash,
+            embedding_model_version=self._embedding_model_version(),
+            prompt_text=complete_prompt,
+            json_schema=_VISIBLE_TEXT_SCHEMA,
+            generation_params=generation_params(),
+            numeric_runtime_version=numeric_runtime_version(),
+        )
+
+    def _initialize_session_identity(
+        self,
+        state: dict,
+        mode: str,
+        system: str,
+        user: str,
+    ) -> str:
+        identity = self._runtime_identity_for_prompt(system, user)
+        state["canonical_runtime_identity"] = identity.digest
+        state["session_mode"] = mode
+        return self._session_id_for_state(state, mode)
+
+    def _session_id_for_state(self, state: dict, mode: str) -> str:
+        runtime_identity = validate_runtime_digest(
+            state.get("canonical_runtime_identity")
+        )
+        state.setdefault(
+            "session_started_at",
+            datetime.now(timezone.utc)
+            .isoformat(timespec="microseconds")
+            .replace("+00:00", "Z"),
+        )
+        state.setdefault("session_nonce", secrets.token_hex(32))
+        state.setdefault("parent_state_id", None)
+        state.setdefault(
+            "initial_transcript_head",
+            transcript_head(state.get("transcript", [])),
+        )
+        genesis_mode = state.setdefault("session_mode", mode)
+        genesis = SessionGenesisIdentity.from_components(
+            mode=genesis_mode,
+            config=state.get("config", {}),
+            canonical_runtime_identity=runtime_identity,
+            session_started_at=state["session_started_at"],
+            session_nonce=state["session_nonce"],
+            parent_state_id=state["parent_state_id"],
+            initial_transcript_head=state["initial_transcript_head"],
+        )
+        existing = state.get("session_id")
+        if existing is not None and existing != genesis.digest:
+            raise ValueError("session genesis identity mismatch")
+        state["session_id"] = genesis.digest
+        return genesis.digest
 
     def _bounded_context(
         self,
@@ -977,6 +1074,7 @@ class ConsultationEngine:
             session_id=session_id,
             transcript=state["transcript"],
             current_query=query,
+            runtime_identity=state["canonical_runtime_identity"],
             current_turn_role=current_role,
             current_turn_text=current_text,
         )
@@ -1142,6 +1240,12 @@ class ConsultationEngine:
                     self._interview_state = {
                         "case": case, "es": None, "system": system,
                         "transcript": [], "latencies": [], "config": cfg}
+            self._initialize_session_identity(
+                self._interview_state,
+                "interview_sim",
+                system,
+                prompt,
+            )
             # Puppeteer (黒幕・Target Delta D3): tension の高い Bounty (矛盾) の
             # type に一致する QUESTION_BANK の質問を決定論的に選び、議論ターンへの
             # 注入キューに積む。ここで扱うのは Bounty の id/type/tension のみ —
@@ -1403,6 +1507,12 @@ class ConsultationEngine:
                     "最初の発言から議論を開始せよ。[学生B] は同調か沈黙、"
                     "[学生C] は早速話を逸らすこと。"
                 )
+            self._initialize_session_identity(
+                self._gd_state,
+                "gd_sim",
+                system,
+                prompt,
+            )
             answer = self._generate_redacted(system, prompt, on_token=on_token)
             self._gd_state["transcript"].append(("参加者", answer))
             return answer

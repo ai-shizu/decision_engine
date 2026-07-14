@@ -114,7 +114,7 @@ def _minimal_manifest(**overrides):
         query_hash="a" * 32,
         context_hash="b" * 32,
         prompt_version="pv1",
-        model_hash="",
+        runtime_identity="ab" * 64,
         used_chars=1,
         formatting_overhead_chars=0,
         candidates=(cand,),
@@ -215,6 +215,11 @@ def test_non_latest_kept_by_mtime_then_filename(tmp_path, monkeypatch) -> None:
         p = manifest_dir / f"{m.manifest_id}.json"
         if p.exists():
             os.utime(p, ns=(100, 100))
+    available_non_latest = {
+        name
+        for name in _owned_hex_names(manifest_dir)
+        if name != f"{latest.manifest_id}.json"
+    }
     paths.LATEST_RETRIEVAL_MANIFEST.write_text(
         json.dumps({"manifest_id": latest.manifest_id}, ensure_ascii=False, indent=2)
         + "\n",
@@ -229,7 +234,7 @@ def test_non_latest_kept_by_mtime_then_filename(tmp_path, monkeypatch) -> None:
         reverse=True,
     )
     expected_non_latest = sorted(
-        (f"{m.manifest_id}.json" for m in manifests if m.manifest_id != latest.manifest_id),
+        available_non_latest,
         reverse=True,
     )[:2]
     assert non_latest_kept == expected_non_latest
@@ -435,7 +440,11 @@ def test_retention_failure_isolated_in_bounded_context(
     ]
     query = "turn-005-statement about problem 5 and data 15%"
     context = engine._bounded_context(
-        {"transcript": transcript, "config": {}},
+        {
+            "transcript": transcript,
+            "config": {},
+            "canonical_runtime_identity": "ab" * 64,
+        },
         query,
         mode="interview_sim",
         status=statuses.append,

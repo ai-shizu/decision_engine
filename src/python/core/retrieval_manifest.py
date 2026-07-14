@@ -11,6 +11,8 @@ from dataclasses import dataclass
 from enum import StrEnum
 from typing import Any, Literal
 
+from .runtime_identity import validate_runtime_digest
+
 MANIFEST_SCHEMA = "retrieval_manifest.v1"
 POLICY_VERSION = "retrieval_policy.v1"
 TOTAL_BUDGET_CHARS = 12_000
@@ -145,12 +147,8 @@ def _strict_hash(value: Any, *, field: str) -> str:
     return text
 
 
-def _strict_model_hash(value: Any) -> str:
-    if type(value) is not str:
-        raise ValueError("model_hash must be str")
-    if value != "" and not _HEX32.fullmatch(value):
-        raise ValueError("model_hash must be empty or 32-char lowercase hex")
-    return value
+def _strict_runtime_identity(value: Any) -> str:
+    return validate_runtime_digest(value)
 
 
 def _strict_tuple(
@@ -307,7 +305,7 @@ class RetrievalManifestV1:
     context_hash: str
     policy_version: str
     prompt_version: str
-    model_hash: str
+    runtime_identity: str
     total_budget_chars: int
     used_chars: int
     formatting_overhead_chars: int
@@ -326,7 +324,7 @@ class RetrievalManifestV1:
         _strict_hash(self.context_hash, field="context_hash")
         _strict_str(self.policy_version, field="policy_version")
         _strict_str(self.prompt_version, field="prompt_version")
-        _strict_model_hash(self.model_hash)
+        _strict_runtime_identity(self.runtime_identity)
         _strict_int(
             self.total_budget_chars,
             field="total_budget_chars",
@@ -391,6 +389,11 @@ class RetrievalManifestV1:
         expected_id = _manifest_id_from_payload(_manifest_payload_dict_from_manifest(self))
         if self.manifest_id != expected_id:
             raise ValueError("manifest_id mismatch")
+
+    @property
+    def model_hash(self) -> str:
+        """Legacy wire-name compatibility; the value is a full runtime identity."""
+        return self.runtime_identity
 
 
 def validate_manifest(manifest: RetrievalManifestV1) -> RetrievalManifestV1:
@@ -477,7 +480,7 @@ def _manifest_payload_dict_from_manifest(manifest: RetrievalManifestV1) -> dict[
         context_hash=manifest.context_hash,
         policy_version=manifest.policy_version,
         prompt_version=manifest.prompt_version,
-        model_hash=manifest.model_hash,
+        model_hash=manifest.runtime_identity,
         total_budget_chars=manifest.total_budget_chars,
         used_chars=manifest.used_chars,
         formatting_overhead_chars=manifest.formatting_overhead_chars,
@@ -517,7 +520,7 @@ def _validate_factory_inputs(
     query_hash: str,
     context_hash: str,
     prompt_version: str,
-    model_hash: str,
+    runtime_identity: str,
     used_chars: int,
     formatting_overhead_chars: int,
     candidates: tuple[RetrievalCandidateV1, ...],
@@ -528,7 +531,7 @@ def _validate_factory_inputs(
     _strict_hash(query_hash, field="query_hash")
     _strict_hash(context_hash, field="context_hash")
     _strict_str(prompt_version, field="prompt_version")
-    _strict_model_hash(model_hash)
+    _strict_runtime_identity(runtime_identity)
     _strict_int(used_chars, field="used_chars", nonnegative=True)
     _strict_int(
         formatting_overhead_chars,
@@ -691,7 +694,7 @@ def manifest_from_dict(data: dict[str, Any]) -> RetrievalManifestV1:
         context_hash=_strict_str(data["context_hash"], field="context_hash"),
         policy_version=_strict_str(data["policy_version"], field="policy_version"),
         prompt_version=_strict_str(data["prompt_version"], field="prompt_version"),
-        model_hash=_strict_model_hash(data["model_hash"]),
+        runtime_identity=_strict_runtime_identity(data["model_hash"]),
         total_budget_chars=_strict_int(
             data["total_budget_chars"], field="total_budget_chars", nonnegative=True,
         ),
@@ -725,20 +728,26 @@ def build_retrieval_manifest(
     query_hash: str,
     context_hash: str,
     prompt_version: str,
-    model_hash: str,
+    runtime_identity: str | None = None,
+    model_hash: Any = None,
     used_chars: int,
     formatting_overhead_chars: int,
     candidates: tuple[RetrievalCandidateV1, ...],
     lane_usage: tuple[LaneUsageV1, ...],
 ) -> RetrievalManifestV1:
-    """Build a complete manifest with manifest_id computed before construction."""
+    """Build a manifest bound to a complete canonical runtime identity."""
+    if model_hash is not None:
+        raise ValueError(
+            "canonical runtime identity is required; model_hash is obsolete"
+        )
+    runtime_identity = _strict_runtime_identity(runtime_identity)
     _validate_factory_inputs(
         session_id=session_id,
         transcript_version=transcript_version,
         query_hash=query_hash,
         context_hash=context_hash,
         prompt_version=prompt_version,
-        model_hash=model_hash,
+        runtime_identity=runtime_identity,
         used_chars=used_chars,
         formatting_overhead_chars=formatting_overhead_chars,
         candidates=candidates,
@@ -752,7 +761,7 @@ def build_retrieval_manifest(
         context_hash=context_hash,
         policy_version=POLICY_VERSION,
         prompt_version=prompt_version,
-        model_hash=model_hash,
+        model_hash=runtime_identity,
         total_budget_chars=TOTAL_BUDGET_CHARS,
         used_chars=used_chars,
         formatting_overhead_chars=formatting_overhead_chars,
@@ -769,7 +778,7 @@ def build_retrieval_manifest(
         context_hash=context_hash,
         policy_version=POLICY_VERSION,
         prompt_version=prompt_version,
-        model_hash=model_hash,
+        runtime_identity=runtime_identity,
         total_budget_chars=TOTAL_BUDGET_CHARS,
         used_chars=used_chars,
         formatting_overhead_chars=formatting_overhead_chars,

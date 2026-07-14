@@ -69,6 +69,7 @@ export interface RetrievalManifestV1 {
   context_hash: string;
   policy_version: string;
   prompt_version: string;
+  /** Legacy wire key containing the full canonical runtime identity digest. */
   model_hash: string;
   total_budget_chars: number;
   used_chars: number;

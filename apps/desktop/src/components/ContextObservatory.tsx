@@ -522,7 +522,7 @@ export const CONTEXT_OBSERVATORY_PREVIEW_MANIFEST = {
   context_hash: "22222222222222222222222222222222",
   policy_version: "retrieval_policy.v1",
   prompt_version: "pv1",
-  model_hash: "",
+  model_hash: "ab".repeat(64),
   total_budget_chars: 12000,
   used_chars: 2756,
   formatting_overhead_chars: 176,

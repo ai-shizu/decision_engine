@@ -98,7 +98,7 @@ function baseManifest(): RetrievalManifestV1 {
     context_hash: "cccccccccccccccccccccccccccccccc",
     policy_version: "retrieval_policy.v1",
     prompt_version: "pv1",
-    model_hash: "",
+    model_hash: "ab".repeat(64),
     total_budget_chars: 12000,
     used_chars: 30,
     formatting_overhead_chars: 5,

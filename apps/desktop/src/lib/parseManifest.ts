@@ -19,6 +19,7 @@ export class ManifestParseError extends Error {
 }
 
 const HEX32 = /^[0-9a-f]{32}$/;
+const HEX128 = /^[0-9a-f]{128}$/;
 const CONTACT_ALIAS = /^C-[0-9a-f]{8}$/;
 
 const FIXED_INTERNAL_ALIASES = new Set([
@@ -166,11 +167,11 @@ function parseHex32(v: unknown, path: string): string {
 }
 
 function parseModelHash(v: unknown, path: string): string {
-  if (typeof v !== "string") {
-    throw new ManifestParseError(path, '"" or 32-char lowercase hex');
-  }
-  if (v !== "" && !HEX32.test(v)) {
-    throw new ManifestParseError(path, '"" or 32-char lowercase hex');
+  if (typeof v !== "string" || !HEX128.test(v)) {
+    throw new ManifestParseError(
+      path,
+      "128-char lowercase hex canonical runtime identity",
+    );
   }
   return v;
 }

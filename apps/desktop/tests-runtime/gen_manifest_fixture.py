@@ -19,6 +19,7 @@ _, _, manifest = build_bounded_context_with_manifest(
         ("candidate", "turn-001-statement about problem 1 and data 3%"),
     ],
     current_query="turn-001-statement about problem 1 and data 3%",
+    runtime_identity="ab" * 64,
 )
 payload = {"manifest": manifest_to_dict(manifest), "reason": None}
 Path(sys.argv[1]).write_text(

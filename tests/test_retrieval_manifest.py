@@ -120,6 +120,7 @@ def _contract_kwargs() -> dict:
         "session_id": _CONTRACT_SESSION,
         "transcript": list(_CONTRACT_TRANSCRIPT),
         "current_query": "turn-005-statement about problem 5 and data 15%",
+        "runtime_identity": "ab" * 64,
     }
 
 
@@ -250,7 +251,7 @@ def _minimal_manifest(**overrides) -> RetrievalManifestV1:
         query_hash="a" * 32,
         context_hash="b" * 32,
         prompt_version="pv1",
-        model_hash="",
+        runtime_identity="ab" * 64,
         used_chars=1,
         formatting_overhead_chars=0,
         candidates=(cand,),
@@ -270,7 +271,7 @@ def _manifest_constructor_kwargs(manifest: RetrievalManifestV1) -> dict:
         context_hash=manifest.context_hash,
         policy_version=manifest.policy_version,
         prompt_version=manifest.prompt_version,
-        model_hash=manifest.model_hash,
+        runtime_identity=manifest.runtime_identity,
         total_budget_chars=manifest.total_budget_chars,
         used_chars=manifest.used_chars,
         formatting_overhead_chars=manifest.formatting_overhead_chars,
@@ -351,7 +352,7 @@ def test_direct_constructor_rejects_object_lane_element() -> None:
 def test_factory_rejects_model_hash_none() -> None:
     manifest = _minimal_manifest()
     kwargs = _manifest_constructor_kwargs(manifest)
-    with pytest.raises(ValueError, match="model_hash must be str"):
+    with pytest.raises(ValueError, match="canonical runtime identity"):
         build_retrieval_manifest(
             session_id=manifest.session_id,
             transcript_version=manifest.transcript_version,
@@ -368,7 +369,7 @@ def test_factory_rejects_model_hash_none() -> None:
 
 def test_factory_rejects_model_hash_false() -> None:
     manifest = _minimal_manifest()
-    with pytest.raises(ValueError, match="model_hash must be str"):
+    with pytest.raises(ValueError, match="canonical runtime identity"):
         build_retrieval_manifest(
             session_id=manifest.session_id,
             transcript_version=manifest.transcript_version,
@@ -385,7 +386,7 @@ def test_factory_rejects_model_hash_false() -> None:
 
 def test_factory_rejects_invalid_model_hash() -> None:
     manifest = _minimal_manifest()
-    with pytest.raises(ValueError, match="model_hash must be empty or 32-char lowercase hex"):
+    with pytest.raises(ValueError, match="canonical runtime identity"):
         build_retrieval_manifest(
             session_id=manifest.session_id,
             transcript_version=manifest.transcript_version,
@@ -417,7 +418,7 @@ def test_factory_constructs_manifest_exactly_once() -> None:
             query_hash=manifest.query_hash,
             context_hash=manifest.context_hash,
             prompt_version=manifest.prompt_version,
-            model_hash=manifest.model_hash,
+            runtime_identity=manifest.runtime_identity,
             used_chars=manifest.used_chars,
             formatting_overhead_chars=manifest.formatting_overhead_chars,
             candidates=manifest.candidates,
@@ -445,7 +446,7 @@ def test_from_dict_rejects_model_hash_none() -> None:
     manifest = _minimal_manifest()
     data = manifest_to_dict(manifest)
     data["model_hash"] = None
-    with pytest.raises(ValueError, match="model_hash must be str"):
+    with pytest.raises(ValueError, match="canonical runtime identity"):
         manifest_from_dict(data)
 
 
@@ -510,7 +511,7 @@ def test_from_dict_rejects_non_dict_lane_item() -> None:
 
 
 def test_compiler_rejects_model_hash_none() -> None:
-    with pytest.raises(ValueError, match="model_hash must be str"):
+    with pytest.raises(ValueError, match="canonical runtime identity"):
         build_bounded_context_with_manifest(
             **_contract_kwargs(),
             model_hash=None,
@@ -518,7 +519,7 @@ def test_compiler_rejects_model_hash_none() -> None:
 
 
 def test_compiler_rejects_model_hash_false() -> None:
-    with pytest.raises(ValueError, match="model_hash must be str"):
+    with pytest.raises(ValueError, match="canonical runtime identity"):
         build_bounded_context_with_manifest(
             **_contract_kwargs(),
             model_hash=False,
@@ -526,7 +527,7 @@ def test_compiler_rejects_model_hash_false() -> None:
 
 
 def test_compiler_does_not_normalize_invalid_model_hash() -> None:
-    with pytest.raises(ValueError, match="model_hash must be empty or 32-char lowercase hex"):
+    with pytest.raises(ValueError, match="canonical runtime identity"):
         build_bounded_context_with_manifest(
             **_contract_kwargs(),
             model_hash="INVALID",
@@ -543,6 +544,7 @@ def test_retrieved_deduplication_does_not_refill_lower_ranked_atoms() -> None:
         session_id=_GOLDEN_SESSION,
         transcript=transcript,
         current_query=query,
+        runtime_identity="ab" * 64,
     )
     assert "# Retrieved evidence" not in context
     rv = [c for c in manifest.candidates if c.lane == ContextLane.RETRIEVED_EVIDENCE]
@@ -566,6 +568,7 @@ def test_context_matches_pre_phase4a_golden_fixture() -> None:
         session_id=_GOLDEN_SESSION,
         transcript=transcript,
         current_query=query,
+        runtime_identity="ab" * 64,
     )
     from core.retrieval_manifest import compute_context_hash
 
@@ -590,6 +593,7 @@ def test_manifest_masks_unknown_real_name_role() -> None:
         session_id="privacy-session",
         transcript=transcript,
         current_query="相談内容について話します",
+        runtime_identity="ab" * 64,
     )
     blob = json.dumps(manifest_to_dict(manifest), ensure_ascii=False)
     assert real_name not in blob
@@ -652,7 +656,7 @@ def test_manifest_rejects_duplicated_lane() -> None:
             query_hash="a" * 32,
             context_hash="b" * 32,
             prompt_version="pv1",
-            model_hash="",
+            runtime_identity="ab" * 64,
             used_chars=1,
             formatting_overhead_chars=0,
             candidates=(_minimal_candidate(),),
@@ -669,7 +673,7 @@ def test_manifest_rejects_missing_lane() -> None:
             query_hash="a" * 32,
             context_hash="b" * 32,
             prompt_version="pv1",
-            model_hash="",
+            runtime_identity="ab" * 64,
             used_chars=1,
             formatting_overhead_chars=0,
             candidates=(_minimal_candidate(),),
@@ -691,7 +695,7 @@ def test_manifest_rejects_lane_order_violation() -> None:
             query_hash="a" * 32,
             context_hash="b" * 32,
             prompt_version="pv1",
-            model_hash="",
+            runtime_identity="ab" * 64,
             used_chars=1,
             formatting_overhead_chars=0,
             candidates=(_minimal_candidate(),),
@@ -718,7 +722,7 @@ def test_manifest_rejects_lane_accepted_count_mismatch() -> None:
             query_hash="a" * 32,
             context_hash="b" * 32,
             prompt_version="pv1",
-            model_hash="",
+            runtime_identity="ab" * 64,
             used_chars=1,
             formatting_overhead_chars=0,
             candidates=(_minimal_candidate(),),
@@ -755,7 +759,7 @@ def test_manifest_rejects_model_hash_none() -> None:
     manifest = _minimal_manifest()
     data = manifest_to_dict(manifest)
     data["model_hash"] = None
-    with pytest.raises(ValueError, match="model_hash must be str"):
+    with pytest.raises(ValueError, match="canonical runtime identity"):
         manifest_from_dict(data)
 
 
@@ -914,7 +918,7 @@ def test_from_dict_accepts_verified_contact_alias() -> None:
         query_hash="a" * 32,
         context_hash="b" * 32,
         prompt_version="pv1",
-        model_hash="",
+        runtime_identity="ab" * 64,
         used_chars=1,
         formatting_overhead_chars=0,
         candidates=(cand,),
@@ -938,7 +942,7 @@ def test_from_dict_accepts_fixed_internal_alias() -> None:
         query_hash="a" * 32,
         context_hash="b" * 32,
         prompt_version="pv1",
-        model_hash="",
+        runtime_identity="ab" * 64,
         used_chars=1,
         formatting_overhead_chars=0,
         candidates=(cand,),
@@ -1017,7 +1021,7 @@ def _manifest_pair() -> tuple[RetrievalManifestV1, RetrievalManifestV1]:
         query_hash="a" * 32,
         context_hash="a" * 32,
         prompt_version="pv1",
-        model_hash="",
+        runtime_identity="ab" * 64,
         used_chars=1,
         formatting_overhead_chars=0,
         candidates=(cand,),
@@ -1029,7 +1033,7 @@ def _manifest_pair() -> tuple[RetrievalManifestV1, RetrievalManifestV1]:
         query_hash="b" * 32,
         context_hash="c" * 32,
         prompt_version="pv1",
-        model_hash="",
+        runtime_identity="ab" * 64,
         used_chars=1,
         formatting_overhead_chars=0,
         candidates=(cand,),
@@ -1166,7 +1170,11 @@ def test_actual_consultation_engine_context_path_never_calls_backend(
     )
     engine = ConsultationEngine()
     engine._backend = FailIfCalledBackend()
-    state = {"transcript": list(_CONTRACT_TRANSCRIPT), "config": {}}
+    state = {
+        "transcript": list(_CONTRACT_TRANSCRIPT),
+        "config": {},
+        "canonical_runtime_identity": "ab" * 64,
+    }
     context = engine._bounded_context(
         state,
         "turn-005-statement about problem 5 and data 15%",

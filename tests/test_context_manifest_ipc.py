@@ -75,7 +75,7 @@ def _minimal_manifest(**overrides):
         query_hash="a" * 32,
         context_hash="b" * 32,
         prompt_version="pv1",
-        model_hash="",
+        runtime_identity="ab" * 64,
         used_chars=1,
         formatting_overhead_chars=0,
         candidates=(cand,),
@@ -99,7 +99,7 @@ def _manifest_pair():
         query_hash="a" * 32,
         context_hash="a" * 32,
         prompt_version="pv1",
-        model_hash="",
+        runtime_identity="ab" * 64,
         used_chars=1,
         formatting_overhead_chars=0,
         candidates=(cand,),
@@ -111,7 +111,7 @@ def _manifest_pair():
         query_hash="b" * 32,
         context_hash="c" * 32,
         prompt_version="pv1",
-        model_hash="",
+        runtime_identity="ab" * 64,
         used_chars=1,
         formatting_overhead_chars=0,
         candidates=(cand,),
@@ -151,6 +151,7 @@ def test_context_manifest_latest_valid_manifest(tmp_path, monkeypatch) -> None:
             ("候補者", "turn-001-statement about problem 1 and data 3%"),
         ],
         current_query="turn-001-statement about problem 1 and data 3%",
+        runtime_identity="ab" * 64,
     )
     save_retrieval_manifest(manifest)
 

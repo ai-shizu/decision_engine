@@ -221,7 +221,7 @@ def test_hundred_turn_determinism_and_budget() -> None:
         session_id="sess-100",
         transcript=transcript,
         current_query=query,
-        model_hash="mh1",
+        runtime_identity="ab" * 64,
         prompt_version="pv1",
     )
     ctx1, wm1 = build_bounded_context(**kwargs)
@@ -541,6 +541,7 @@ def test_current_utterance_appears_once_in_context() -> None:
         session_id="sess-dup",
         transcript=transcript,
         current_query=utterance,
+        runtime_identity="ab" * 64,
     )
     assert ctx.count(utterance) == 1
 
@@ -552,6 +553,7 @@ def test_budget_drops_whole_units_not_mid_slice() -> None:
         session_id="sess-budget",
         transcript=transcript,
         current_query="query-" + ("Q" * 3000),
+        runtime_identity="ab" * 64,
     )
     assert char_count(ctx) <= DYNAMIC_CONTEXT_CHAR_BUDGET
     assert wm.context_chars == char_count(ctx)
@@ -714,6 +716,7 @@ def test_long_duplicate_candidate_context_not_empty() -> None:
         session_id="sess-long-dup",
         transcript=transcript,
         current_query=query,
+        runtime_identity="ab" * 64,
     )
     assert ctx != ""
     assert wm.context_chars > 0
@@ -732,6 +735,7 @@ def test_short_duplicate_candidate_appears_once() -> None:
         session_id="sess-short-dup",
         transcript=transcript,
         current_query=utterance,
+        runtime_identity="ab" * 64,
     )
     assert ctx.count(utterance) == 1
     assert "# Current turn" in ctx

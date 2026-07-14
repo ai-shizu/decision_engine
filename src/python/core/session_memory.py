@@ -7,7 +7,7 @@ import hashlib
 import re
 import unicodedata
 from dataclasses import dataclass, replace
-from typing import Literal
+from typing import Any, Literal
 
 from .retrieval_manifest import (
     CandidateStatus,
@@ -23,6 +23,10 @@ from .retrieval_manifest import (
     make_candidate_id,
     safe_manifest_speaker_alias,
 )
+from .runtime_identity import validate_runtime_digest
+
+
+_LEGACY_MODEL_HASH_UNSET = object()
 
 MemoryKind = Literal[
     "goal",
@@ -727,7 +731,7 @@ def _compile_context(
     session_id: str,
     transcript: list[tuple[str, str]],
     current_query: str,
-    model_hash: str = "",
+    runtime_identity: str,
     prompt_version: str = "pv1",
     current_turn_role: str | None = None,
     current_turn_text: str | None = None,
@@ -930,7 +934,7 @@ def _compile_context(
         query_hash=compute_query_hash(query),
         context_hash=compute_context_hash(context),
         prompt_version=prompt_version,
-        model_hash=model_hash,
+        runtime_identity=runtime_identity,
         used_chars=used_chars,
         formatting_overhead_chars=formatting_overhead,
         candidates=candidates,
@@ -944,18 +948,23 @@ def build_bounded_context(
     session_id: str,
     transcript: list[tuple[str, str]],
     current_query: str,
-    model_hash: str = "",
+    runtime_identity: str | None = None,
+    model_hash: Any = _LEGACY_MODEL_HASH_UNSET,
     prompt_version: str = "pv1",
     current_turn_role: str | None = None,
     current_turn_text: str | None = None,
 ) -> tuple[str, WorkingMemoryV1]:
     """Select prompt context under fixed budgets. Raw transcript is never edited."""
-    del model_hash
+    if model_hash is not _LEGACY_MODEL_HASH_UNSET:
+        raise ValueError(
+            "canonical runtime identity is required; model_hash is obsolete"
+        )
+    runtime_identity = validate_runtime_digest(runtime_identity)
     context, memory, _ = _compile_context(
         session_id=session_id,
         transcript=transcript,
         current_query=current_query,
-        model_hash="",
+        runtime_identity=runtime_identity,
         prompt_version=prompt_version,
         current_turn_role=current_turn_role,
         current_turn_text=current_turn_text,
@@ -968,16 +977,22 @@ def build_bounded_context_with_manifest(
     session_id: str,
     transcript: list[tuple[str, str]],
     current_query: str,
-    model_hash: str = "",
+    runtime_identity: str | None = None,
+    model_hash: Any = _LEGACY_MODEL_HASH_UNSET,
     prompt_version: str = "pv1",
     current_turn_role: str | None = None,
     current_turn_text: str | None = None,
 ) -> tuple[str, WorkingMemoryV1, RetrievalManifestV1]:
+    if model_hash is not _LEGACY_MODEL_HASH_UNSET:
+        raise ValueError(
+            "canonical runtime identity is required; model_hash is obsolete"
+        )
+    runtime_identity = validate_runtime_digest(runtime_identity)
     return _compile_context(
         session_id=session_id,
         transcript=transcript,
         current_query=current_query,
-        model_hash=model_hash,
+        runtime_identity=runtime_identity,
         prompt_version=prompt_version,
         current_turn_role=current_turn_role,
         current_turn_text=current_turn_text,

@@ -125,7 +125,7 @@
 
 - **ID**: `FSA-2026-07-13-06`
 - **重要度**: `CRITICAL`
-- **状態**: `UNRESOLVED`
+- **状態**: `RESOLVED`
 - **症状（攻撃ベクトル）**: 異なるGGUF、server binary、embedding model、prompt、generation config、numeric runtimeで生成した結果が、同一または空の`model_hash`を持つmanifestとして保存される。同じmode/configの別会話が同じ`session_id`を共有し、turn、evidence、manifestの監査鎖を別セッションへ誤結合または再利用できる。
 - **根本原因**: manifest作成時の`model_hash`既定値が空文字であり、`prompt_version`も固定文字列に留まる。`session_id`はmodeとconfigだけをBLAKE2b-8でhashし、transcript genesis、生成nonce、session開始artifactを含まない。「model version」と「session identity」の正本が定義されていない。
 - **実コード証拠**:
@@ -134,6 +134,8 @@
   - `src/python/core/retrieval_manifest.py:148-153`
   - `src/python/core/consultation_engine.py:967-1001`
 - **必須是正措置**: GGUF bytes、llama-server bytes、embedding model、prompt本文、schema、generation parameters、numeric runtime、feature code versionをcanonical runtime identityへ結合する。session genesisには高entropy IDまたは明示的なimmutable genesis recordを作成し、transcript head、runtime identity、parent stateを結合する。短縮表示用IDと暗号論的な完全identityを分離し、空hashを正常値として許可しない。
+- **解決記録**: `CanonicalRuntimeIdentity`を導入し、GGUF、llama-server、embedding model、prompt全文、schema、generation parameters、numeric runtimeをcanonical serializationとBLAKE2bで完全結合した。Session Genesisには同identity、親state、CSPRNG起動nonce、開始時刻、初期transcript headを結合し、manifestの生成・load境界では空または不正形式のhashを例外として完全にHard-fail化した。
+- **検証証拠**: FSA-06契約テスト`7 passed`、全体pytest`608 passed, 1 skipped`、Cargo`57 passed`、renderer boundary`108 passed`、desktop build成功、`git diff --check`違反0件。
 
 ---
 

@@ -79,7 +79,11 @@ def _plant_corrupt_immutable(manifest_dir: Path) -> tuple[Path, Path, bytes, byt
 
 
 def _engine_state() -> dict:
-    return {"transcript": list(_TRANSCRIPT), "config": {}}
+    return {
+        "transcript": list(_TRANSCRIPT),
+        "config": {},
+        "canonical_runtime_identity": "ab" * 64,
+    }
 
 
 def test_bounded_context_continues_when_immutable_corrupt(
@@ -369,7 +373,7 @@ def test_orphan_immutable_kept_when_latest_replace_fails(
         query_hash="a" * 32,
         context_hash="b" * 32,
         prompt_version="pv1",
-        model_hash="",
+        runtime_identity="ab" * 64,
         used_chars=1,
         formatting_overhead_chars=0,
         candidates=(cand,),
@@ -385,7 +389,7 @@ def test_orphan_immutable_kept_when_latest_replace_fails(
         query_hash="c" * 32,
         context_hash="d" * 32,
         prompt_version="pv1",
-        model_hash="",
+        runtime_identity="ab" * 64,
         used_chars=1,
         formatting_overhead_chars=0,
         candidates=(cand,),
@@ -500,7 +504,7 @@ def test_retention_corrupt_historical_isolated_without_repair(
         query_hash="a" * 32,
         context_hash="b" * 32,
         prompt_version="pv1",
-        model_hash="",
+        runtime_identity="ab" * 64,
         used_chars=1,
         formatting_overhead_chars=0,
         candidates=(cand,),
