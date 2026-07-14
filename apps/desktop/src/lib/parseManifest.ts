@@ -19,6 +19,7 @@ export class ManifestParseError extends Error {
 }
 
 const HEX32 = /^[0-9a-f]{32}$/;
+const HEX64 = /^[0-9a-f]{64}$/;
 const HEX128 = /^[0-9a-f]{128}$/;
 const CONTACT_ALIAS = /^C-[0-9a-f]{8}$/;
 
@@ -80,6 +81,9 @@ const STATUS_REASONS: Record<CandidateStatus, ReadonlySet<ReasonCode>> = {
 const MANIFEST_KEYS = [
   "schema",
   "manifest_id",
+  "parent_hash",
+  "sequence_number",
+  "session_genesis_id",
   "session_id",
   "transcript_version",
   "query_hash",
@@ -172,6 +176,13 @@ function parseModelHash(v: unknown, path: string): string {
       path,
       "128-char lowercase hex canonical runtime identity",
     );
+  }
+  return v;
+}
+
+function parseHex64(v: unknown, path: string): string {
+  if (typeof v !== "string" || !HEX64.test(v)) {
+    throw new ManifestParseError(path, "64-char lowercase hex");
   }
   return v;
 }
@@ -403,7 +414,19 @@ function parseManifest(raw: unknown, path: string): RetrievalManifestV1 {
     throw new ManifestParseError(`${path}.schema`, '"retrieval_manifest.v1"');
   }
 
-  const manifest_id = parseHex32(raw.manifest_id, `${path}.manifest_id`);
+  const manifest_id = parseHex64(raw.manifest_id, `${path}.manifest_id`);
+  const parent_hash = parseHex64(raw.parent_hash, `${path}.parent_hash`);
+  const sequence_number = parseNonNegInt(
+    raw.sequence_number,
+    `${path}.sequence_number`,
+  );
+  if (sequence_number === 0) {
+    throw new ManifestParseError(`${path}.sequence_number`, "positive safe integer");
+  }
+  const session_genesis_id = parseModelHash(
+    raw.session_genesis_id,
+    `${path}.session_genesis_id`,
+  );
   const session_id = parseStrictStr(raw.session_id, `${path}.session_id`);
   const transcript_version = parseNonNegInt(
     raw.transcript_version,
@@ -536,6 +559,9 @@ function parseManifest(raw: unknown, path: string): RetrievalManifestV1 {
   const manifest: RetrievalManifestV1 = {
     schema: "retrieval_manifest.v1",
     manifest_id,
+    parent_hash,
+    sequence_number,
+    session_genesis_id,
     session_id,
     transcript_version,
     query_hash,

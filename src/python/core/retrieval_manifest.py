@@ -12,12 +12,20 @@ from enum import StrEnum
 from typing import Any, Literal
 
 from .runtime_identity import validate_runtime_digest
+from .state_chain import (
+    genesis_parent_hash,
+    state_payload_mac,
+    validate_sequence_number,
+    validate_state_mac,
+    verify_state_payload_mac,
+)
 
 MANIFEST_SCHEMA = "retrieval_manifest.v1"
 POLICY_VERSION = "retrieval_policy.v1"
 TOTAL_BUDGET_CHARS = 12_000
 
 _HEX32 = re.compile(r"^[0-9a-f]{32}$")
+_HEX64 = re.compile(r"^[0-9a-f]{64}$")
 _CONTACT_ALIAS_RE = re.compile(r"^C-[0-9a-f]{8}$")
 
 FIXED_INTERNAL_ALIASES = frozenset({"candidate", "面接官", "参加者", "メンター"})
@@ -184,18 +192,18 @@ def compute_content_hash(text: str) -> str:
     from .session_memory import normalize_text
 
     payload = normalize_text(text).encode("utf-8")
-    return hashlib.blake2b(payload, digest_size=16).hexdigest()
+    return hashlib.sha256(payload).hexdigest()[:32]
 
 
 def compute_context_hash(context: str) -> str:
-    return hashlib.blake2b(context.encode("utf-8"), digest_size=16).hexdigest()
+    return hashlib.sha256(context.encode("utf-8")).hexdigest()[:32]
 
 
 def compute_query_hash(query: str) -> str:
     from .session_memory import normalize_text
 
     payload = normalize_text(query).encode("utf-8")
-    return hashlib.blake2b(payload, digest_size=16).hexdigest()
+    return hashlib.sha256(payload).hexdigest()[:32]
 
 
 def make_candidate_id(lane: ContextLane, document_id: str) -> str:
@@ -299,6 +307,9 @@ class LaneUsageV1:
 class RetrievalManifestV1:
     schema: Literal["retrieval_manifest.v1"]
     manifest_id: str
+    parent_hash: str
+    sequence_number: int
+    session_genesis_id: str
     session_id: str
     transcript_version: int
     query_hash: str
@@ -317,7 +328,10 @@ class RetrievalManifestV1:
             raise ValueError("schema must be str")
         if self.schema != MANIFEST_SCHEMA:
             raise ValueError("invalid schema")
-        _strict_hash(self.manifest_id, field="manifest_id")
+        validate_state_mac(self.manifest_id, field="manifest_id")
+        validate_state_mac(self.parent_hash, field="parent_hash")
+        validate_sequence_number(self.sequence_number)
+        _strict_runtime_identity(self.session_genesis_id)
         _strict_str(self.session_id, field="session_id")
         _strict_int(self.transcript_version, field="transcript_version", nonnegative=True)
         _strict_hash(self.query_hash, field="query_hash")
@@ -386,9 +400,11 @@ class RetrievalManifestV1:
             lane_included = sum(c.included_chars for c in lane_cands)
             if lane_included + lu.formatting_chars != lu.used_chars:
                 raise ValueError("lane formatting accounting mismatch")
-        expected_id = _manifest_id_from_payload(_manifest_payload_dict_from_manifest(self))
-        if self.manifest_id != expected_id:
-            raise ValueError("manifest_id mismatch")
+        verify_state_payload_mac(
+            _manifest_payload_dict_from_manifest(self),
+            session_genesis_id=self.session_genesis_id,
+            recorded_mac=self.manifest_id,
+        )
 
     @property
     def model_hash(self) -> str:
@@ -399,11 +415,11 @@ class RetrievalManifestV1:
 def validate_manifest(manifest: RetrievalManifestV1) -> RetrievalManifestV1:
     if type(manifest) is not RetrievalManifestV1:
         raise ValueError("manifest must be RetrievalManifestV1")
-    expected_id = _manifest_id_from_payload(
+    verify_state_payload_mac(
         _manifest_payload_dict_from_manifest(manifest),
+        session_genesis_id=manifest.session_genesis_id,
+        recorded_mac=manifest.manifest_id,
     )
-    if manifest.manifest_id != expected_id:
-        raise ValueError("manifest_id mismatch")
     return manifest
 
 
@@ -440,6 +456,9 @@ def _lane_usage_to_dict(l: LaneUsageV1) -> dict[str, Any]:
 def _manifest_payload_dict(
     *,
     manifest_id: str,
+    parent_hash: str,
+    sequence_number: int,
+    session_genesis_id: str,
     session_id: str,
     transcript_version: int,
     query_hash: str,
@@ -456,6 +475,9 @@ def _manifest_payload_dict(
     return {
         "schema": MANIFEST_SCHEMA,
         "manifest_id": manifest_id,
+        "parent_hash": parent_hash,
+        "sequence_number": sequence_number,
+        "session_genesis_id": session_genesis_id,
         "session_id": session_id,
         "transcript_version": transcript_version,
         "query_hash": query_hash,
@@ -474,6 +496,9 @@ def _manifest_payload_dict(
 def _manifest_payload_dict_from_manifest(manifest: RetrievalManifestV1) -> dict[str, Any]:
     return _manifest_payload_dict(
         manifest_id=manifest.manifest_id,
+        parent_hash=manifest.parent_hash,
+        sequence_number=manifest.sequence_number,
+        session_genesis_id=manifest.session_genesis_id,
         session_id=manifest.session_id,
         transcript_version=manifest.transcript_version,
         query_hash=manifest.query_hash,
@@ -490,15 +515,8 @@ def _manifest_payload_dict_from_manifest(manifest: RetrievalManifestV1) -> dict[
 
 
 def _manifest_id_from_payload(payload: dict[str, Any]) -> str:
-    canonical = dict(payload)
-    canonical["manifest_id"] = ""
-    encoded = json.dumps(
-        canonical,
-        sort_keys=True,
-        ensure_ascii=False,
-        separators=(",", ":"),
-    ).encode("utf-8")
-    return hashlib.blake2b(encoded, digest_size=16).hexdigest()
+    session_genesis_id = _strict_runtime_identity(payload.get("session_genesis_id"))
+    return state_payload_mac(payload, session_genesis_id)
 
 
 def manifest_to_dict(manifest: RetrievalManifestV1) -> dict[str, Any]:
@@ -515,6 +533,9 @@ def _require_exact_keys(data: dict[str, Any], expected: set[str], *, label: str)
 
 def _validate_factory_inputs(
     *,
+    parent_hash: str,
+    sequence_number: int,
+    session_genesis_id: str,
     session_id: str,
     transcript_version: int,
     query_hash: str,
@@ -526,6 +547,9 @@ def _validate_factory_inputs(
     candidates: tuple[RetrievalCandidateV1, ...],
     lane_usage: tuple[LaneUsageV1, ...],
 ) -> None:
+    validate_state_mac(parent_hash, field="parent_hash")
+    validate_sequence_number(sequence_number)
+    _strict_runtime_identity(session_genesis_id)
     _strict_str(session_id, field="session_id")
     _strict_int(transcript_version, field="transcript_version", nonnegative=True)
     _strict_hash(query_hash, field="query_hash")
@@ -650,6 +674,9 @@ def manifest_from_dict(data: dict[str, Any]) -> RetrievalManifestV1:
         {
             "schema",
             "manifest_id",
+            "parent_hash",
+            "sequence_number",
+            "session_genesis_id",
             "session_id",
             "transcript_version",
             "query_hash",
@@ -686,6 +713,9 @@ def manifest_from_dict(data: dict[str, Any]) -> RetrievalManifestV1:
     return RetrievalManifestV1(
         schema=MANIFEST_SCHEMA,
         manifest_id=_strict_str(data["manifest_id"], field="manifest_id"),
+        parent_hash=validate_state_mac(data["parent_hash"], field="parent_hash"),
+        sequence_number=validate_sequence_number(data["sequence_number"]),
+        session_genesis_id=_strict_runtime_identity(data["session_genesis_id"]),
         session_id=_strict_str(data["session_id"], field="session_id"),
         transcript_version=_strict_int(
             data["transcript_version"], field="transcript_version", nonnegative=True,
@@ -723,6 +753,9 @@ def compute_manifest_id(manifest: RetrievalManifestV1) -> str:
 
 def build_retrieval_manifest(
     *,
+    parent_hash: str,
+    sequence_number: int,
+    session_genesis_id: str,
     session_id: str,
     transcript_version: int,
     query_hash: str,
@@ -742,6 +775,9 @@ def build_retrieval_manifest(
         )
     runtime_identity = _strict_runtime_identity(runtime_identity)
     _validate_factory_inputs(
+        parent_hash=parent_hash,
+        sequence_number=sequence_number,
+        session_genesis_id=session_genesis_id,
         session_id=session_id,
         transcript_version=transcript_version,
         query_hash=query_hash,
@@ -755,6 +791,9 @@ def build_retrieval_manifest(
     )
     payload = _manifest_payload_dict(
         manifest_id="",
+        parent_hash=parent_hash,
+        sequence_number=sequence_number,
+        session_genesis_id=session_genesis_id,
         session_id=session_id,
         transcript_version=transcript_version,
         query_hash=query_hash,
@@ -772,6 +811,9 @@ def build_retrieval_manifest(
     return RetrievalManifestV1(
         schema=MANIFEST_SCHEMA,
         manifest_id=manifest_id,
+        parent_hash=parent_hash,
+        sequence_number=sequence_number,
+        session_genesis_id=session_genesis_id,
         session_id=session_id,
         transcript_version=transcript_version,
         query_hash=query_hash,
@@ -787,22 +829,49 @@ def build_retrieval_manifest(
     )
 
 
-def _validate_latest_pointer(latest: Any) -> str:
-    if not isinstance(latest, dict) or set(latest.keys()) != {"manifest_id"}:
+@dataclass(frozen=True)
+class StateChainExpectation:
+    session_genesis_id: str
+    sequence_number: int
+    manifest_id: str
+
+    def __post_init__(self) -> None:
+        _strict_runtime_identity(self.session_genesis_id)
+        validate_sequence_number(self.sequence_number)
+        validate_state_mac(self.manifest_id, field="manifest_id")
+
+
+_TRUSTED_STATE_HEADS: dict[str, StateChainExpectation] = {}
+
+
+def _store_key() -> str:
+    from . import paths
+
+    return str(paths.LATEST_RETRIEVAL_MANIFEST.resolve())
+
+
+def latest_state_chain_expectation() -> StateChainExpectation | None:
+    return _TRUSTED_STATE_HEADS.get(_store_key())
+
+
+def _validate_latest_pointer(latest: Any) -> StateChainExpectation:
+    expected_keys = {"manifest_id", "session_genesis_id", "sequence_number"}
+    if not isinstance(latest, dict) or set(latest.keys()) != expected_keys:
         raise ValueError("latest pointer key mismatch")
     manifest_id = latest["manifest_id"]
-    if type(manifest_id) is not str:
-        raise ValueError("manifest_id must be str")
-    if not _HEX32.fullmatch(manifest_id):
-        raise ValueError("manifest_id must be 32-char lowercase hex")
+    validate_state_mac(manifest_id, field="manifest_id")
     if "/" in manifest_id or "\\" in manifest_id or "." in manifest_id:
         raise ValueError("manifest_id must not contain path separators")
-    return manifest_id
+    return StateChainExpectation(
+        session_genesis_id=_strict_runtime_identity(latest["session_genesis_id"]),
+        sequence_number=validate_sequence_number(latest["sequence_number"]),
+        manifest_id=manifest_id,
+    )
 
 
 _PERSISTENCE_FAILED_MSG = "retrieval manifest persistence failed"
 RETRIEVAL_MANIFEST_RETENTION_LIMIT = 256
-_OWNED_MANIFEST_FILENAME = re.compile(r"^[0-9a-f]{32}\.json$")
+_OWNED_MANIFEST_FILENAME = re.compile(r"^[0-9a-f]{64}\.json$")
 
 
 def _atomic_write_text(path: Any, text: str) -> None:
@@ -822,23 +891,44 @@ def _atomic_write_text(path: Any, text: str) -> None:
         raise
 
 
-def _assert_existing_latest_integrity() -> None:
-    """Strict-validate latest pointer + payload before any write. No repair."""
+def _read_latest_authenticated() -> RetrievalManifestV1 | None:
     from . import paths
 
     if not paths.LATEST_RETRIEVAL_MANIFEST.exists():
-        return
+        return None
     latest = json.loads(
         paths.LATEST_RETRIEVAL_MANIFEST.read_text(encoding="utf-8"),
     )
-    manifest_id = _validate_latest_pointer(latest)
-    manifest_path = paths.RETRIEVAL_MANIFESTS_DIR / f"{manifest_id}.json"
+    pointer = _validate_latest_pointer(latest)
+    manifest_path = paths.RETRIEVAL_MANIFESTS_DIR / f"{pointer.manifest_id}.json"
     if not manifest_path.exists():
         raise ValueError("latest manifest file missing")
     data = json.loads(manifest_path.read_text(encoding="utf-8"))
-    existing = validate_manifest(manifest_from_dict(data))
-    if existing.manifest_id != manifest_id:
+    manifest = validate_manifest(manifest_from_dict(data))
+    if manifest.manifest_id != pointer.manifest_id:
         raise ValueError("latest pointer manifest_id mismatch")
+    if manifest.session_genesis_id != pointer.session_genesis_id:
+        raise ValueError("latest pointer session_genesis_id mismatch")
+    if manifest.sequence_number != pointer.sequence_number:
+        raise ValueError("latest pointer sequence_number mismatch")
+    return manifest
+
+
+def _assert_existing_latest_integrity() -> RetrievalManifestV1 | None:
+    """Strict-validate latest pointer + payload before any write. No repair."""
+    existing = _read_latest_authenticated()
+    if existing is None:
+        return None
+    trusted = latest_state_chain_expectation()
+    if trusted is None:
+        raise ValueError("trusted state head unavailable")
+    if existing.session_genesis_id != trusted.session_genesis_id:
+        raise ValueError("cross-session state replay detected")
+    if existing.sequence_number != trusted.sequence_number:
+        raise ValueError("state rollback sequence mismatch")
+    if existing.manifest_id != trusted.manifest_id:
+        raise ValueError("trusted state head mismatch")
+    return existing
 
 
 def _prune_retrieval_manifests(*, latest_manifest_id: str) -> None:
@@ -856,7 +946,7 @@ def _prune_retrieval_manifests(*, latest_manifest_id: str) -> None:
     limit = RETRIEVAL_MANIFEST_RETENTION_LIMIT
     if type(limit) is not int or limit < 1:
         raise ValueError("invalid retention limit")
-    if type(latest_manifest_id) is not str or not _HEX32.fullmatch(latest_manifest_id):
+    if type(latest_manifest_id) is not str or not _HEX64.fullmatch(latest_manifest_id):
         raise ValueError("invalid latest_manifest_id")
 
     directory = Path(paths.RETRIEVAL_MANIFESTS_DIR)
@@ -911,7 +1001,18 @@ def save_retrieval_manifest(manifest: RetrievalManifestV1) -> None:
     manifest = validate_manifest(manifest)
     try:
         paths.RETRIEVAL_MANIFESTS_DIR.mkdir(parents=True, exist_ok=True)
-        _assert_existing_latest_integrity()
+        current = _assert_existing_latest_integrity()
+        expected_genesis_parent = genesis_parent_hash(manifest.session_genesis_id)
+        if current is None or current.session_genesis_id != manifest.session_genesis_id:
+            if manifest.sequence_number != 1:
+                raise ValueError("new state chain must start at sequence_number 1")
+            if manifest.parent_hash != expected_genesis_parent:
+                raise ValueError("new state chain parent_hash mismatch")
+        elif current.manifest_id != manifest.manifest_id:
+            if manifest.sequence_number != current.sequence_number + 1:
+                raise ValueError("state chain sequence_number is not monotonic")
+            if manifest.parent_hash != current.manifest_id:
+                raise ValueError("state chain parent_hash mismatch")
         path = paths.RETRIEVAL_MANIFESTS_DIR / f"{manifest.manifest_id}.json"
         if path.exists():
             existing_data = json.loads(path.read_text(encoding="utf-8"))
@@ -926,7 +1027,11 @@ def save_retrieval_manifest(manifest: RetrievalManifestV1) -> None:
             )
             _atomic_write_text(path, payload + "\n")
         latest_payload = json.dumps(
-            {"manifest_id": manifest.manifest_id},
+            {
+                "manifest_id": manifest.manifest_id,
+                "session_genesis_id": manifest.session_genesis_id,
+                "sequence_number": manifest.sequence_number,
+            },
             ensure_ascii=False,
             indent=2,
         )
@@ -934,28 +1039,38 @@ def save_retrieval_manifest(manifest: RetrievalManifestV1) -> None:
             paths.LATEST_RETRIEVAL_MANIFEST,
             latest_payload + "\n",
         )
+        _TRUSTED_STATE_HEADS[_store_key()] = StateChainExpectation(
+            session_genesis_id=manifest.session_genesis_id,
+            sequence_number=manifest.sequence_number,
+            manifest_id=manifest.manifest_id,
+        )
         _prune_retrieval_manifests(latest_manifest_id=manifest.manifest_id)
     except (OSError, ValueError) as exc:
         raise RetrievalManifestPersistenceError(_PERSISTENCE_FAILED_MSG) from exc
 
 
-def load_latest_retrieval_manifest() -> RetrievalManifestV1 | None:
-    from . import paths
-
-    if not paths.LATEST_RETRIEVAL_MANIFEST.exists():
-        return None
-    latest = json.loads(
-        paths.LATEST_RETRIEVAL_MANIFEST.read_text(encoding="utf-8"),
-    )
-    manifest_id = _validate_latest_pointer(latest)
-    manifest_path = paths.RETRIEVAL_MANIFESTS_DIR / f"{manifest_id}.json"
-    if not manifest_path.exists():
-        raise ValueError("latest manifest file missing")
-    data = json.loads(manifest_path.read_text(encoding="utf-8"))
-    manifest = manifest_from_dict(data)
-    manifest = validate_manifest(manifest)
-    if manifest.manifest_id != manifest_id:
-        raise ValueError("latest pointer manifest_id mismatch")
+def load_latest_retrieval_manifest(
+    *,
+    expected_session_head: str,
+    expected_sequence_number: int,
+) -> RetrievalManifestV1 | None:
+    expected_genesis = _strict_runtime_identity(expected_session_head)
+    expected_sequence = validate_sequence_number(expected_sequence_number)
+    manifest = _read_latest_authenticated()
+    if manifest is None:
+        raise ValueError("expected state head missing")
+    if manifest.session_genesis_id != expected_genesis:
+        raise ValueError("cross-session state replay detected")
+    if manifest.sequence_number != expected_sequence:
+        raise ValueError("state rollback sequence mismatch")
+    trusted = latest_state_chain_expectation()
+    if trusted is not None:
+        if trusted.session_genesis_id != expected_genesis:
+            raise ValueError("trusted session head mismatch")
+        if trusted.sequence_number != expected_sequence:
+            raise ValueError("trusted sequence_number mismatch")
+        if trusted.manifest_id != manifest.manifest_id:
+            raise ValueError("trusted state head mismatch")
     return manifest
 
 

@@ -11,8 +11,14 @@ from core.retrieval_manifest import (  # noqa: E402
     build_bounded_context_with_manifest,
     manifest_to_dict,
 )
+from core.state_chain import genesis_parent_hash  # noqa: E402
+
+SESSION_GENESIS_ID = "cd" * 64
 
 _, _, manifest = build_bounded_context_with_manifest(
+    parent_hash=genesis_parent_hash(SESSION_GENESIS_ID),
+    sequence_number=1,
+    session_genesis_id=SESSION_GENESIS_ID,
     session_id="boundary-golden-session",
     transcript=[
         ("面接官", "turn-000-statement about problem 0 and data 0%"),

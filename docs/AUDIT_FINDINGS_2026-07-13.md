@@ -143,7 +143,7 @@
 
 - **ID**: `FSA-2026-07-13-07`
 - **重要度**: `CRITICAL`
-- **状態**: `UNRESOLVED`
+- **状態**: `RESOLVED`
 - **症状（攻撃ベクトル）**: 書込可能な主体はpayloadを改変し、その内容から新しいBLAKE2b IDを再計算してpointerも同時更新できる。また`latest.json`を過去の正当manifestへ戻すと、形式上正しいため巻戻しが受理される。正当な別session・別証拠のmanifestへ差し替えるcross-context replayも防げない。
 - **根本原因**: `manifest_id`は無鍵hashであり、真正性を提供しない。単調sequence、parent hash、expected session head、expected evidence head、OS保護鍵によるMACが存在しない。Pointer-Payload Bindingが「一方だけが壊れた場合の整合性確認」と「攻撃者に対する改変不能性」を混同している。
 - **実コード証拠**:
@@ -151,6 +151,8 @@
   - `src/python/core/retrieval_manifest.py:799-827`
   - `src/python/core/retrieval_manifest.py:907-950`
 - **必須是正措置**: OS保護鍵を用いたkeyed BLAKE2またはHMACでpayloadとdomain separatorを認証する。各recordへ単調sequence、parent MAC/hash、session genesis、runtime identity、evidence headを結合する。load時に呼出側が期待するheadと完全照合し、過去head、fork、cross-session recordをhard-failする。鍵消失、recovery、migrationの手順を明示し、サイレントな再署名を禁止する。
+- **解決記録**: 起動時にインメモリ生成するroot keyからsession別鍵を導出するHMAC-SHA256を導入し、`sequence_number`、`parent_hash`、`session_genesis_id`をpayloadへ必須結合したkeyed state chainを構築した。load時はMAC、呼出側が期待するsession genesisとsequence、インメモリの信頼済みheadを完全照合し、payload偽造、rollback、cross-session replayをHard-fail化した。
+- **検証証拠**: FSA-07契約テスト`3 passed`、全体pytest`611 passed, 1 skipped`、Cargo全target`57 passed`、renderer boundary`120 passed`、desktop build成功、`git diff --check`違反0件。
 
 ---
 

@@ -63,6 +63,9 @@ export interface LaneUsageV1 {
 export interface RetrievalManifestV1 {
   schema: "retrieval_manifest.v1";
   manifest_id: string;
+  parent_hash: string;
+  sequence_number: number;
+  session_genesis_id: string;
   session_id: string;
   transcript_version: number;
   query_hash: string;

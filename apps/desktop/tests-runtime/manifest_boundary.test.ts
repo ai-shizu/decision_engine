@@ -91,7 +91,10 @@ function cloneJson<T>(v: T): T {
 function baseManifest(): RetrievalManifestV1 {
   return {
     schema: "retrieval_manifest.v1",
-    manifest_id: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    manifest_id: "a".repeat(64),
+    parent_hash: "d".repeat(64),
+    sequence_number: 1,
+    session_genesis_id: "cd".repeat(64),
     session_id: "boundary-hand-session",
     transcript_version: 2,
     query_hash: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
@@ -375,25 +378,25 @@ test("T-10 rejects surplus/missing manifest keys", () => {
 test("T-11 rejects invalid hex hashes", () => {
   assertRejects(
     () => parseContextManifestResponseV1(withManifest((m) => {
-      m.manifest_id = "a".repeat(31);
+      m.manifest_id = "a".repeat(63);
     })),
     "manifest.manifest_id",
   );
   assertRejects(
     () => parseContextManifestResponseV1(withManifest((m) => {
-      m.manifest_id = "a".repeat(33);
+      m.manifest_id = "a".repeat(65);
     })),
     "manifest.manifest_id",
   );
   assertRejects(
     () => parseContextManifestResponseV1(withManifest((m) => {
-      m.manifest_id = "A".repeat(32);
+      m.manifest_id = "A".repeat(64);
     })),
     "manifest.manifest_id",
   );
   assertRejects(
     () => parseContextManifestResponseV1(withManifest((m) => {
-      m.manifest_id = "g".repeat(32);
+      m.manifest_id = "g".repeat(64);
     })),
     "manifest.manifest_id",
   );

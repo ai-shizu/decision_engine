@@ -2,6 +2,7 @@
 """Finding 11 — bounded retention for valid immutable retrieval manifests."""
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import sys
@@ -23,12 +24,13 @@ from core.retrieval_manifest import (  # noqa: E402
     RetrievalCandidateV1,
     RetrievalManifestPersistenceError,
     SourceType,
-    build_retrieval_manifest,
+    build_retrieval_manifest as _build_retrieval_manifest,
     compute_content_hash,
     load_latest_retrieval_manifest,
     manifest_to_dict,
     save_retrieval_manifest,
 )
+from core.state_chain import genesis_parent_hash  # noqa: E402
 
 _EXPECTED_STATUS_WARNING = (
     "コンテキスト監査記録を保存できませんでした。相談処理は継続します。"
@@ -37,6 +39,15 @@ _STDERR_WARNING = (
     "[PKB] retrieval manifest persistence failed; continuing without manifest update"
 )
 _PERSIST_MSG = "retrieval manifest persistence failed"
+
+
+def build_retrieval_manifest(**kwargs):
+    bound = dict(kwargs)
+    genesis = hashlib.sha512(bound["session_id"].encode("utf-8")).hexdigest()
+    bound.setdefault("session_genesis_id", genesis)
+    bound.setdefault("sequence_number", 1)
+    bound.setdefault("parent_hash", genesis_parent_hash(genesis))
+    return _build_retrieval_manifest(**bound)
 
 
 def _patch_store(tmp_path, monkeypatch, limit: int = 3):
@@ -131,7 +142,7 @@ def _owned_hex_names(manifest_dir: Path) -> set[str]:
             continue
         if p.name == "latest.json" or p.suffix != ".json":
             continue
-        if len(p.stem) == 32 and all(c in "0123456789abcdef" for c in p.stem):
+        if len(p.stem) == 64 and all(c in "0123456789abcdef" for c in p.stem):
             names.add(p.name)
     return names
 
@@ -171,7 +182,10 @@ def test_latest_payload_always_loadable(tmp_path, monkeypatch) -> None:
         last = _save_unique(i)
         save_retrieval_manifest(last)
         time.sleep(0.01)
-    loaded = load_latest_retrieval_manifest()
+    loaded = load_latest_retrieval_manifest(
+        expected_session_head=last.session_genesis_id,
+        expected_sequence_number=last.sequence_number,
+    )
     assert loaded is not None
     assert loaded.manifest_id == last.manifest_id
 
@@ -221,7 +235,15 @@ def test_non_latest_kept_by_mtime_then_filename(tmp_path, monkeypatch) -> None:
         if name != f"{latest.manifest_id}.json"
     }
     paths.LATEST_RETRIEVAL_MANIFEST.write_text(
-        json.dumps({"manifest_id": latest.manifest_id}, ensure_ascii=False, indent=2)
+        json.dumps(
+            {
+                "manifest_id": latest.manifest_id,
+                "session_genesis_id": latest.session_genesis_id,
+                "sequence_number": latest.sequence_number,
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
         + "\n",
         encoding="utf-8",
     )
@@ -245,7 +267,7 @@ def test_corrupt_historical_aborts_all_deletes(tmp_path, monkeypatch) -> None:
     for i in range(3):
         save_retrieval_manifest(_save_unique(i))
         time.sleep(0.01)
-    corrupt_id = "c" * 32
+    corrupt_id = "c" * 64
     corrupt_path = manifest_dir / f"{corrupt_id}.json"
     corrupt_bytes = b'{"broken": true}\n'
     corrupt_path.write_bytes(corrupt_bytes)
@@ -269,7 +291,7 @@ def test_id_mismatch_fails_before_delete(tmp_path, monkeypatch) -> None:
     save_retrieval_manifest(_save_unique(0))
     save_retrieval_manifest(_save_unique(1))
     good = _save_unique(2)
-    bad_name = "d" * 32
+    bad_name = "d" * 64
     bad_path = manifest_dir / f"{bad_name}.json"
     bad_path.write_text(
         json.dumps(manifest_to_dict(good), ensure_ascii=False, indent=2) + "\n",
@@ -290,7 +312,7 @@ def test_symlink_rejected_without_follow_or_delete(tmp_path, monkeypatch) -> Non
     manifest_dir = _patch_store(tmp_path, monkeypatch, limit=3)
     real = _save_unique(0)
     save_retrieval_manifest(real)
-    link_path = manifest_dir / f"{'e' * 32}.json"
+    link_path = manifest_dir / f"{'e' * 64}.json"
     try:
         link_path.symlink_to(manifest_dir / f"{real.manifest_id}.json")
     except OSError:
@@ -401,7 +423,7 @@ def test_prune_oserror_becomes_persistence_error(tmp_path, monkeypatch) -> None:
         if (
             self.suffix == ".json"
             and self.name != "latest.json"
-            and len(self.stem) == 32
+            and len(self.stem) == 64
             and all(c in "0123456789abcdef" for c in self.stem)
         ):
             raise OSError("simulated unlink failure")
@@ -420,7 +442,7 @@ def test_retention_failure_isolated_in_bounded_context(
 ) -> None:
     manifest_dir = _patch_store(tmp_path, monkeypatch, limit=3)
     save_retrieval_manifest(_save_unique(0))
-    corrupt_path = manifest_dir / f"{'f' * 32}.json"
+    corrupt_path = manifest_dir / f"{'f' * 64}.json"
     corrupt_path.write_bytes(b'{"broken": true}\n')
     statuses: list[str] = []
     engine = ConsultationEngine()

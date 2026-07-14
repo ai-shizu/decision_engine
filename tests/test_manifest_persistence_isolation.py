@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ast
+import hashlib
 import json
 import sys
 from pathlib import Path
@@ -22,7 +23,7 @@ from core.retrieval_manifest import (  # noqa: E402
     RetrievalCandidateV1,
     RetrievalManifestPersistenceError,
     SourceType,
-    build_retrieval_manifest,
+    build_retrieval_manifest as _build_retrieval_manifest,
     compute_content_hash,
     compute_context_hash,
     load_latest_retrieval_manifest,
@@ -30,6 +31,7 @@ from core.retrieval_manifest import (  # noqa: E402
     save_retrieval_manifest,
     validate_manifest,
 )
+from core.state_chain import genesis_parent_hash  # noqa: E402
 
 _TRANSCRIPT = [
     ("面接官", "turn-000-statement about problem 0 and data 0%"),
@@ -46,6 +48,15 @@ _EXPECTED_STATUS_WARNING = (
 _STDERR_WARNING = (
     "[PKB] retrieval manifest persistence failed; continuing without manifest update"
 )
+
+
+def build_retrieval_manifest(**kwargs):
+    bound = dict(kwargs)
+    genesis = hashlib.sha512(bound["session_id"].encode("utf-8")).hexdigest()
+    bound.setdefault("session_genesis_id", genesis)
+    bound.setdefault("sequence_number", 1)
+    bound.setdefault("parent_hash", genesis_parent_hash(genesis))
+    return _build_retrieval_manifest(**bound)
 
 
 class FailIfCalledBackend:
@@ -66,11 +77,20 @@ def _patch_store(tmp_path, monkeypatch):
 
 
 def _plant_corrupt_immutable(manifest_dir: Path) -> tuple[Path, Path, bytes, bytes]:
-    manifest_id = "c" * 32
+    manifest_id = "c" * 64
     latest_path = manifest_dir / "latest.json"
     corrupt_path = manifest_dir / f"{manifest_id}.json"
     latest_bytes = (
-        json.dumps({"manifest_id": manifest_id}, ensure_ascii=False, indent=2) + "\n"
+        json.dumps(
+            {
+                "manifest_id": manifest_id,
+                "session_genesis_id": "cd" * 64,
+                "sequence_number": 1,
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+        + "\n"
     ).encode("utf-8")
     corrupt_bytes = b'{"broken": true}\n'
     latest_path.write_bytes(latest_bytes)
@@ -191,7 +211,17 @@ def test_corrupt_immutable_and_pointer_bytes_unchanged(tmp_path, monkeypatch) ->
 def test_corrupt_pointer_not_auto_repaired(tmp_path, monkeypatch) -> None:
     manifest_dir = _patch_store(tmp_path, monkeypatch)
     latest_path = manifest_dir / "latest.json"
-    bad = (json.dumps({"manifest_id": "c" * 32, "extra": 1}) + "\n").encode("utf-8")
+    bad = (
+        json.dumps(
+            {
+                "manifest_id": "c" * 64,
+                "session_genesis_id": "cd" * 64,
+                "sequence_number": 1,
+                "extra": 1,
+            }
+        )
+        + "\n"
+    ).encode("utf-8")
     latest_path.write_bytes(bad)
     engine = ConsultationEngine()
     engine._backend = FailIfCalledBackend()
@@ -254,7 +284,10 @@ def test_successful_save_no_warnings_updates_latest(
     )
     assert statuses == []
     assert capsys.readouterr().err == ""
-    loaded = load_latest_retrieval_manifest()
+    loaded = load_latest_retrieval_manifest(
+        expected_session_head=state["session_id"],
+        expected_sequence_number=state["manifest_sequence_number"],
+    )
     assert loaded is not None
     assert loaded.context_hash == compute_context_hash(context)
     assert list(manifest_dir.glob("*.tmp")) == []
@@ -439,7 +472,6 @@ def test_retention_corrupt_historical_isolated_without_repair(
         ReasonCode,
         RetrievalCandidateV1,
         SourceType,
-        build_retrieval_manifest,
         compute_content_hash,
         save_retrieval_manifest,
     )
@@ -511,7 +543,7 @@ def test_retention_corrupt_historical_isolated_without_repair(
         lane_usage=lanes,
     )
     save_retrieval_manifest(seed)
-    corrupt_path = manifest_dir / f"{'a' * 32}.json"
+    corrupt_path = manifest_dir / f"{'a' * 64}.json"
     corrupt_bytes = b'{"broken": true}\n'
     corrupt_path.write_bytes(corrupt_bytes)
 

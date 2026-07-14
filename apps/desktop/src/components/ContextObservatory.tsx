@@ -515,7 +515,10 @@ export function ContextObservatory({
 
 export const CONTEXT_OBSERVATORY_PREVIEW_MANIFEST = {
   schema: "retrieval_manifest.v1",
-  manifest_id: "cccccccccccccccccccccccccccccccc",
+  manifest_id: "cc".repeat(32),
+  parent_hash: "dd".repeat(32),
+  sequence_number: 1,
+  session_genesis_id: "cd".repeat(64),
   session_id: "dddddddddddddddddddddddddddddddd",
   transcript_version: 6,
   query_hash: "11111111111111111111111111111111",

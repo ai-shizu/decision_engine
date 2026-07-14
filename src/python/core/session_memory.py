@@ -121,7 +121,7 @@ class WorkingMemoryV1:
 
 def stable_turn_id(session_id: str, turn_index: int, alias: str) -> str:
     payload = f"{session_id}:{turn_index}:{alias}".encode("utf-8")
-    return hashlib.blake2b(payload, digest_size=16).hexdigest()
+    return hashlib.sha256(payload).hexdigest()[:32]
 
 
 def transcript_turns_from_pairs(
@@ -178,7 +178,7 @@ def _atom_id(kind: MemoryKind, canonical_text: str, source: TranscriptRef) -> st
         f"{kind}|{canonical_text}|{source.turn_id}|"
         f"{source.turn_index}|{source.speaker_alias}|{source.quote}"
     ).encode("utf-8")
-    return hashlib.blake2b(payload, digest_size=16).hexdigest()
+    return hashlib.sha256(payload).hexdigest()[:32]
 
 
 def _subject_key(kind: MemoryKind, canonical_text: str) -> str:
@@ -728,6 +728,9 @@ def _build_lane_usage(
 
 def _compile_context(
     *,
+    parent_hash: str,
+    sequence_number: int,
+    session_genesis_id: str,
     session_id: str,
     transcript: list[tuple[str, str]],
     current_query: str,
@@ -929,6 +932,9 @@ def _compile_context(
     included_sum = sum(c.included_chars for c in candidates)
     formatting_overhead = used_chars - included_sum
     manifest = build_retrieval_manifest(
+        parent_hash=parent_hash,
+        sequence_number=sequence_number,
+        session_genesis_id=session_genesis_id,
         session_id=session_id,
         transcript_version=len(transcript),
         query_hash=compute_query_hash(query),
@@ -945,6 +951,9 @@ def _compile_context(
 
 def build_bounded_context(
     *,
+    parent_hash: str,
+    sequence_number: int,
+    session_genesis_id: str,
     session_id: str,
     transcript: list[tuple[str, str]],
     current_query: str,
@@ -961,6 +970,9 @@ def build_bounded_context(
         )
     runtime_identity = validate_runtime_digest(runtime_identity)
     context, memory, _ = _compile_context(
+        parent_hash=parent_hash,
+        sequence_number=sequence_number,
+        session_genesis_id=session_genesis_id,
         session_id=session_id,
         transcript=transcript,
         current_query=current_query,
@@ -974,6 +986,9 @@ def build_bounded_context(
 
 def build_bounded_context_with_manifest(
     *,
+    parent_hash: str,
+    sequence_number: int,
+    session_genesis_id: str,
     session_id: str,
     transcript: list[tuple[str, str]],
     current_query: str,
@@ -989,6 +1004,9 @@ def build_bounded_context_with_manifest(
         )
     runtime_identity = validate_runtime_digest(runtime_identity)
     return _compile_context(
+        parent_hash=parent_hash,
+        sequence_number=sequence_number,
+        session_genesis_id=session_genesis_id,
         session_id=session_id,
         transcript=transcript,
         current_query=current_query,

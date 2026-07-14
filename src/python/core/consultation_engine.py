@@ -71,6 +71,7 @@ from .runtime_identity import (  # noqa: E402
     transcript_head,
     validate_runtime_digest,
 )
+from .state_chain import genesis_parent_hash  # noqa: E402
 
 SYSTEM_PROMPT = (
     "あなたはユーザーの思考・価値観を完全に理解する分身AIである。"
@@ -1050,6 +1051,8 @@ class ConsultationEngine:
         if existing is not None and existing != genesis.digest:
             raise ValueError("session genesis identity mismatch")
         state["session_id"] = genesis.digest
+        state.setdefault("manifest_sequence_number", 0)
+        state.setdefault("manifest_head", genesis_parent_hash(genesis.digest))
         return genesis.digest
 
     def _bounded_context(
@@ -1070,7 +1073,12 @@ class ConsultationEngine:
         )
 
         session_id = self._session_id_for_state(state, mode)
+        sequence_number = state["manifest_sequence_number"] + 1
+        parent_hash = state["manifest_head"]
         context, working_memory, manifest = build_bounded_context_with_manifest(
+            parent_hash=parent_hash,
+            sequence_number=sequence_number,
+            session_genesis_id=session_id,
             session_id=session_id,
             transcript=state["transcript"],
             current_query=query,
@@ -1086,6 +1094,9 @@ class ConsultationEngine:
             print(_MANIFEST_PERSISTENCE_STDERR, file=sys.stderr)
             if status is not None:
                 status(MANIFEST_PERSISTENCE_WARNING)
+        else:
+            state["manifest_sequence_number"] = manifest.sequence_number
+            state["manifest_head"] = manifest.manifest_id
         return context
 
     def _generate_redacted(

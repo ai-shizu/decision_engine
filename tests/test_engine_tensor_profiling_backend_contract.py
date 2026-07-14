@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ast
+import hashlib
 import inspect
 import json
 import sys
@@ -21,11 +22,12 @@ from core.session_memory import (
     _QUERY_TRUNCATION_MARKER,
     _TURN_TRUNCATION_MARKER,
     _truncate_query_to_budget,
-    build_bounded_context,
+    build_bounded_context as _build_bounded_context,
     char_count,
     format_turns_for_evidence_prompt,
     transcript_turns_from_pairs,
 )
+from core.state_chain import genesis_parent_hash
 from core.tensor_profile import (
     CALCULUS_AXIS_MAP,
     CANONICAL_DIMENSION_IDS,
@@ -38,6 +40,15 @@ from core.tensor_profile import (
 )
 
 _THINK_OPEN = "<" + "think" + ">"
+
+
+def build_bounded_context(**kwargs):
+    bound = dict(kwargs)
+    genesis = hashlib.sha512(bound["session_id"].encode("utf-8")).hexdigest()
+    bound.setdefault("session_genesis_id", genesis)
+    bound.setdefault("sequence_number", 1)
+    bound.setdefault("parent_hash", genesis_parent_hash(genesis))
+    return _build_bounded_context(**bound)
 _THINK_CLOSE = "</" + "think" + ">"
 
 

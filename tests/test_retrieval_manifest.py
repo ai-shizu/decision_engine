@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ast
+import hashlib
 import json
 import sys
 from pathlib import Path
@@ -23,8 +24,8 @@ from core.retrieval_manifest import (  # noqa: E402
     RetrievalManifestPersistenceError,
     RetrievalManifestV1,
     SourceType,
-    build_bounded_context_with_manifest,
-    build_retrieval_manifest,
+    build_bounded_context_with_manifest as _build_bounded_context_with_manifest,
+    build_retrieval_manifest as _build_retrieval_manifest,
     canonical_manifest_json,
     compute_content_hash,
     compute_context_hash,
@@ -49,49 +50,50 @@ from core.session_memory import (  # noqa: E402
     _select_atoms,
     _select_tail_turn_blocks,
     _working_memory_from_atoms,
-    build_bounded_context,
+    build_bounded_context as _build_bounded_context,
     char_count,
     compile_atoms,
     normalize_text,
     transcript_turns_from_pairs,
 )
+from core.state_chain import genesis_parent_hash  # noqa: E402
 
 # Frozen from commit 412c1c2 (pre-Phase-4-A HEAD) via legacy selection algorithm.
 _GOLDEN_COMMIT = "412c1c2d9e02accb726909500faef75a5fe1d3c5"
 _GOLDEN_SESSION = "phase4a-golden-session"
-_GOLDEN_CONTEXT_HASH = "d3e1b6bb8dc5c1a44361db578a70e62c"
+_GOLDEN_CONTEXT_HASH = "57f4be9d0852b5b2f81f99dc7292f72e"
 _GOLDEN_WM_IDS = (
-    "d53c162d149ef76ad762dbbe279c5c47",
-    "9748a242365fa40e8a4ff6c350ea3d03",
-    "d9b5da0e10d018702fb8dd2a209e7ed9",
-    "9dafa9feacc3f37602bee3e7309d85bd",
-    "ec893a886008ce5cb30ca9f0e9dc260b",
-    "44c11f5d734d65b956588798d953190b",
-    "b7d2a366fcb27bed1766f7783285bec0",
-    "26eafcf5235e6b92a4d0ac780549964b",
-    "e16a3cbc764ad615d327efc6687fe33c",
-    "7c633f84ca72d8e513d99181545833de",
-    "753aa078a4f9f8a285049dfea522fff2",
-    "9e17ebcbcd64b1654e86b219f16032a6",
-    "96fd82a53d3a13eeeb700e936f77e2d7",
-    "02008f252e18f333b94be2dab1e2a950",
-    "81435a291d425d71c2987f2f01ac0484",
-    "4e898247711000033e2fcab345935500",
-    "b0aa0fa75e86a14cb1d32ab08158a2c3",
-    "7eb471e137313ae3bae817900cd4c4ea",
-    "bda22fdaea02120a6e1e755d133462f5",
-    "6f0d6c9d65d673d0766f169f75e770c5",
-    "d01cfb6c68c5da130ed62cbb19f776f6",
-    "146a444d5ad9d00a62ebebe1c4770095",
+    "51d90bc6ca4cec8be24213ddf0021653",
+    "eada6cd4ddba92d9cf41395d2fd11320",
+    "d871636b195bf02aeabeaf79ecd49b01",
+    "28a157725ebdf7206afe1eb86a6e32e7",
+    "ccd06394e287c4ad9072f63b5ed5dc0c",
+    "c79af90df3db7dd33c0062d5fa49d1eb",
+    "7dff50886fe09192b7bb2a0f8ea2eb38",
+    "81bc00fdfa3e470f5c4e0da6dd583472",
+    "7526dc003173a88ef2cfd02e2ff0a2ca",
+    "c5ee8df34eebfc6c6b9de94bbd07d3e7",
+    "f457b0d97a4031fef39d187e65db6640",
+    "369f47bf887b15cd8553e238e53d9c33",
+    "eca5442abdb679e9f46bb78a2526d139",
+    "62e5cbfdcd78eb20427c90e586670470",
+    "ed142608b74f44bf4ae863b3a254a5fe",
+    "16c5d28fe370c73a8bad1ae843312e29",
+    "96a752f2dc0b89224866f744d33d6da2",
+    "b69cd2d49bd64fbae59d5cc2910ba64c",
+    "c14a84b2b305be2edc5291ebbe5ddec9",
+    "a1dc0d652eb9651ebadee4cfe6576caa",
+    "37e57eeaa7e3c29f01847cb78a5dc05a",
+    "f101bd980033bf84e1008ae49e3c27d1",
 )
 _CONTRACT_SESSION = "phase4a-contract-session"
-_CONTRACT_CONTEXT_HASH = "13c1ee67938ab0394636000b50f61672"
+_CONTRACT_CONTEXT_HASH = "5ae6745882825c9e9243c2943eb736b9"
 _CONTRACT_WM_IDS = (
-    "3dca42d0d9b4f9b4ed9f9e55566de164",
-    "2906edb7fca0355fcb083b79d81bd496",
-    "793fc87f4728194fc464154fa1b0a058",
-    "6b38f7aa3fcb14be8e3eec326e71e116",
-    "43c54d1702daf280989c54648a5eb90b",
+    "40c34fa939aa842b7cec85fc478891da",
+    "ca519d2f7244ea468177269bd8744499",
+    "9a6a236cb94c4d30cfc92d1a2e620f23",
+    "2cfbcf41d87773d7f2de81235a90dec5",
+    "a87217290d96beaabe49f9ff33277f37",
 )
 _CONTRACT_TRANSCRIPT = [
     ("面接官", "turn-000-statement about problem 0 and data 0%"),
@@ -101,6 +103,27 @@ _CONTRACT_TRANSCRIPT = [
     ("面接官", "turn-004-statement about problem 4 and data 12%"),
     ("候補者", "turn-005-statement about problem 5 and data 15%"),
 ]
+
+
+def _with_initial_chain(kwargs: dict) -> dict:
+    bound = dict(kwargs)
+    genesis = hashlib.sha512(bound["session_id"].encode("utf-8")).hexdigest()
+    bound.setdefault("session_genesis_id", genesis)
+    bound.setdefault("sequence_number", 1)
+    bound.setdefault("parent_hash", genesis_parent_hash(genesis))
+    return bound
+
+
+def build_retrieval_manifest(**kwargs):
+    return _build_retrieval_manifest(**_with_initial_chain(kwargs))
+
+
+def build_bounded_context_with_manifest(**kwargs):
+    return _build_bounded_context_with_manifest(**_with_initial_chain(kwargs))
+
+
+def build_bounded_context(**kwargs):
+    return _build_bounded_context(**_with_initial_chain(kwargs))
 
 
 def _golden_transcript() -> list[tuple[str, str]]:
@@ -265,6 +288,9 @@ def _manifest_constructor_kwargs(manifest: RetrievalManifestV1) -> dict:
     return dict(
         schema=manifest.schema,
         manifest_id=manifest.manifest_id,
+        parent_hash=manifest.parent_hash,
+        sequence_number=manifest.sequence_number,
+        session_genesis_id=manifest.session_genesis_id,
         session_id=manifest.session_id,
         transcript_version=manifest.transcript_version,
         query_hash=manifest.query_hash,
@@ -286,8 +312,8 @@ def _manifest_constructor_kwargs(manifest: RetrievalManifestV1) -> dict:
 def test_direct_constructor_rejects_wrong_manifest_id() -> None:
     manifest = _minimal_manifest()
     kwargs = _manifest_constructor_kwargs(manifest)
-    kwargs["manifest_id"] = "f" * 32
-    with pytest.raises(ValueError, match="manifest_id mismatch"):
+    kwargs["manifest_id"] = "f" * 64
+    with pytest.raises(ValueError, match="MAC authentication failed"):
         RetrievalManifestV1(**kwargs)
 
 
@@ -781,11 +807,21 @@ def test_latest_pointer_rejects_extra_key(tmp_path, monkeypatch) -> None:
     )
     manifest_dir.mkdir(parents=True)
     (manifest_dir / "latest.json").write_text(
-        json.dumps({"manifest_id": "a" * 32, "extra": 1}),
+        json.dumps(
+            {
+                "manifest_id": "a" * 64,
+                "session_genesis_id": "cd" * 64,
+                "sequence_number": 1,
+                "extra": 1,
+            }
+        ),
         encoding="utf-8",
     )
     with pytest.raises(ValueError, match="latest pointer key mismatch"):
-        load_latest_retrieval_manifest()
+        load_latest_retrieval_manifest(
+            expected_session_head="cd" * 64,
+            expected_sequence_number=1,
+        )
 
 
 def test_latest_pointer_rejects_path_traversal(tmp_path, monkeypatch) -> None:
@@ -798,11 +834,20 @@ def test_latest_pointer_rejects_path_traversal(tmp_path, monkeypatch) -> None:
     )
     manifest_dir.mkdir(parents=True)
     (manifest_dir / "latest.json").write_text(
-        json.dumps({"manifest_id": "../" + "a" * 30}),
+        json.dumps(
+            {
+                "manifest_id": "../" + "a" * 61,
+                "session_genesis_id": "cd" * 64,
+                "sequence_number": 1,
+            }
+        ),
         encoding="utf-8",
     )
-    with pytest.raises(ValueError, match="manifest_id must be 32-char lowercase hex"):
-        load_latest_retrieval_manifest()
+    with pytest.raises(ValueError, match="manifest_id must be 64-char lowercase hex"):
+        load_latest_retrieval_manifest(
+            expected_session_head="cd" * 64,
+            expected_sequence_number=1,
+        )
 
 
 def test_latest_pointer_rejects_dot_in_manifest_id(tmp_path, monkeypatch) -> None:
@@ -815,11 +860,20 @@ def test_latest_pointer_rejects_dot_in_manifest_id(tmp_path, monkeypatch) -> Non
     )
     manifest_dir.mkdir(parents=True)
     (manifest_dir / "latest.json").write_text(
-        json.dumps({"manifest_id": "a" * 31 + "."}),
+        json.dumps(
+            {
+                "manifest_id": "a" * 63 + ".",
+                "session_genesis_id": "cd" * 64,
+                "sequence_number": 1,
+            }
+        ),
         encoding="utf-8",
     )
-    with pytest.raises(ValueError, match="manifest_id must be 32-char lowercase hex"):
-        load_latest_retrieval_manifest()
+    with pytest.raises(ValueError, match="manifest_id must be 64-char lowercase hex"):
+        load_latest_retrieval_manifest(
+            expected_session_head="cd" * 64,
+            expected_sequence_number=1,
+        )
 
 
 def test_load_latest_rejects_corrupt_immutable_manifest(tmp_path, monkeypatch) -> None:
@@ -830,15 +884,24 @@ def test_load_latest_rejects_corrupt_immutable_manifest(tmp_path, monkeypatch) -
     monkeypatch.setattr(
         paths, "LATEST_RETRIEVAL_MANIFEST", manifest_dir / "latest.json",
     )
-    manifest_id = "c" * 32
+    manifest_id = "c" * 64
     manifest_dir.mkdir(parents=True)
     (manifest_dir / "latest.json").write_text(
-        json.dumps({"manifest_id": manifest_id}),
+        json.dumps(
+            {
+                "manifest_id": manifest_id,
+                "session_genesis_id": "cd" * 64,
+                "sequence_number": 1,
+            }
+        ),
         encoding="utf-8",
     )
     (manifest_dir / f"{manifest_id}.json").write_text('{"broken": true}', encoding="utf-8")
     with pytest.raises(ValueError):
-        load_latest_retrieval_manifest()
+        load_latest_retrieval_manifest(
+            expected_session_head="cd" * 64,
+            expected_sequence_number=1,
+        )
 
 
 # ------------------------------------------------------------------ v3 persistence boundary
@@ -879,7 +942,10 @@ def test_load_latest_rejects_manifest_with_real_name_alias(
     after = manifest_path.read_text(encoding="utf-8")
     assert "山田太郎" in after
     with pytest.raises(ValueError, match="speaker_alias not approved"):
-        load_latest_retrieval_manifest()
+        load_latest_retrieval_manifest(
+            expected_session_head=manifest.session_genesis_id,
+            expected_sequence_number=manifest.sequence_number,
+        )
     assert manifest_path.read_text(encoding="utf-8") == after
 
 
@@ -900,7 +966,10 @@ def test_latest_read_does_not_sanitize_invalid_alias(
     data["candidates"][0]["speaker_alias"] = "山田太郎"
     manifest_path.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     with pytest.raises(ValueError):
-        load_latest_retrieval_manifest()
+        load_latest_retrieval_manifest(
+            expected_session_head=manifest.session_genesis_id,
+            expected_sequence_number=manifest.sequence_number,
+        )
     assert data["candidates"][0]["speaker_alias"] == "山田太郎"
 
 
@@ -966,8 +1035,8 @@ def test_validate_manifest_rejects_non_manifest_exact_type(bad_input) -> None:
 
 def test_validate_manifest_recomputes_manifest_id() -> None:
     manifest = _minimal_manifest()
-    object.__setattr__(manifest, "manifest_id", "f" * 32)
-    with pytest.raises(ValueError, match="manifest_id mismatch"):
+    object.__setattr__(manifest, "manifest_id", "f" * 64)
+    with pytest.raises(ValueError, match="MAC authentication failed"):
         validate_manifest(manifest)
 
 
@@ -983,8 +1052,8 @@ def test_save_retrieval_manifest_rejects_non_manifest() -> None:
 
 def test_manifest_to_dict_rejects_tampered_manifest_id() -> None:
     manifest = _minimal_manifest()
-    object.__setattr__(manifest, "manifest_id", "f" * 32)
-    with pytest.raises(ValueError, match="manifest_id mismatch"):
+    object.__setattr__(manifest, "manifest_id", "f" * 64)
+    with pytest.raises(ValueError, match="MAC authentication failed"):
         manifest_to_dict(manifest)
 
 
@@ -999,8 +1068,8 @@ def test_save_retrieval_manifest_rejects_tampered_manifest_id(
         paths, "LATEST_RETRIEVAL_MANIFEST", manifest_dir / "latest.json",
     )
     manifest = _minimal_manifest()
-    object.__setattr__(manifest, "manifest_id", "f" * 32)
-    with pytest.raises(ValueError, match="manifest_id mismatch"):
+    object.__setattr__(manifest, "manifest_id", "f" * 64)
+    with pytest.raises(ValueError, match="MAC authentication failed"):
         save_retrieval_manifest(manifest)
 
 
@@ -1054,14 +1123,9 @@ def test_load_latest_rejects_pointer_payload_id_substitution(
     monkeypatch.setattr(
         paths, "LATEST_RETRIEVAL_MANIFEST", manifest_dir / "latest.json",
     )
-    manifest_dir.mkdir(parents=True)
+    save_retrieval_manifest(manifest_a)
     latest_path = manifest_dir / "latest.json"
     manifest_path = manifest_dir / f"{manifest_a.manifest_id}.json"
-    latest_path.write_text(
-        json.dumps({"manifest_id": manifest_a.manifest_id}, ensure_ascii=False, indent=2)
-        + "\n",
-        encoding="utf-8",
-    )
     manifest_path.write_text(
         json.dumps(manifest_to_dict(manifest_b), ensure_ascii=False, indent=2) + "\n",
         encoding="utf-8",
@@ -1069,7 +1133,10 @@ def test_load_latest_rejects_pointer_payload_id_substitution(
     latest_before = latest_path.read_bytes()
     manifest_before = manifest_path.read_bytes()
     with pytest.raises(ValueError, match="latest pointer manifest_id mismatch"):
-        load_latest_retrieval_manifest()
+        load_latest_retrieval_manifest(
+            expected_session_head=manifest_a.session_genesis_id,
+            expected_sequence_number=manifest_a.sequence_number,
+        )
     assert latest_path.read_bytes() == latest_before
     assert manifest_path.read_bytes() == manifest_before
     assert list(manifest_dir.glob("*.tmp")) == []
@@ -1181,7 +1248,10 @@ def test_actual_consultation_engine_context_path_never_calls_backend(
         mode="interview_sim",
     )
     assert context
-    loaded = load_latest_retrieval_manifest()
+    loaded = load_latest_retrieval_manifest(
+        expected_session_head=state["session_id"],
+        expected_sequence_number=state["manifest_sequence_number"],
+    )
     assert loaded is not None
     assert loaded.context_hash == compute_context_hash(context)
 
@@ -1254,7 +1324,7 @@ def test_compute_manifest_id_excludes_self() -> None:
     _, _, manifest = build_bounded_context_with_manifest(**_contract_kwargs())
     mid = compute_manifest_id(manifest)
     assert mid == manifest.manifest_id
-    assert len(mid) == 32
+    assert len(mid) == 64
 
 
 def test_save_manifest_is_idempotent(tmp_path, monkeypatch) -> None:

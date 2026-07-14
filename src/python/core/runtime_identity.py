@@ -202,7 +202,7 @@ def transcript_head(transcript: Any) -> str:
             raise ValueError(f"transcript[{index}] role/text must be str")
         canonical_turns.append([role, text])
     encoded = _canonical_json_bytes({"transcript": canonical_turns})
-    return hashlib.blake2b(encoded).hexdigest()
+    return hashlib.sha512(encoded).hexdigest()
 
 
 @lru_cache(maxsize=16)

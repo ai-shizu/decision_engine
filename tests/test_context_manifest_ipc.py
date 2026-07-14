@@ -2,6 +2,7 @@
 """Phase 4-A STEP 4 — context.manifest.latest IPC contract tests."""
 from __future__ import annotations
 
+import hashlib
 import json
 import sys
 from pathlib import Path
@@ -19,12 +20,30 @@ from core.retrieval_manifest import (  # noqa: E402
     ReasonCode,
     RetrievalCandidateV1,
     SourceType,
-    build_bounded_context_with_manifest,
-    build_retrieval_manifest,
+    build_bounded_context_with_manifest as _build_bounded_context_with_manifest,
+    build_retrieval_manifest as _build_retrieval_manifest,
     compute_content_hash,
     manifest_to_dict,
     save_retrieval_manifest,
 )
+from core.state_chain import genesis_parent_hash  # noqa: E402
+
+
+def _with_initial_chain(kwargs: dict) -> dict:
+    bound = dict(kwargs)
+    genesis = hashlib.sha512(bound["session_id"].encode("utf-8")).hexdigest()
+    bound.setdefault("session_genesis_id", genesis)
+    bound.setdefault("sequence_number", 1)
+    bound.setdefault("parent_hash", genesis_parent_hash(genesis))
+    return bound
+
+
+def build_retrieval_manifest(**kwargs):
+    return _build_retrieval_manifest(**_with_initial_chain(kwargs))
+
+
+def build_bounded_context_with_manifest(**kwargs):
+    return _build_bounded_context_with_manifest(**_with_initial_chain(kwargs))
 
 
 def _minimal_candidate(**overrides) -> RetrievalCandidateV1:
@@ -184,13 +203,11 @@ def test_context_manifest_latest_corrupt_manifest_hard_failure(
     tmp_path, monkeypatch,
 ) -> None:
     manifest_dir = _patch_manifest_paths(tmp_path, monkeypatch)
-    manifest_id = "c" * 32
+    manifest = _minimal_manifest()
+    save_retrieval_manifest(manifest)
+    manifest_id = manifest.manifest_id
     latest_path = manifest_dir / "latest.json"
     manifest_path = manifest_dir / f"{manifest_id}.json"
-    latest_path.write_text(
-        json.dumps({"manifest_id": manifest_id}),
-        encoding="utf-8",
-    )
     manifest_path.write_text('{"broken": true}', encoding="utf-8")
     latest_before = latest_path.read_bytes()
     manifest_before = manifest_path.read_bytes()
@@ -213,13 +230,9 @@ def test_context_manifest_latest_pointer_payload_mismatch_propagates(
 ) -> None:
     manifest_dir = _patch_manifest_paths(tmp_path, monkeypatch)
     manifest_a, manifest_b = _manifest_pair()
+    save_retrieval_manifest(manifest_a)
     latest_path = manifest_dir / "latest.json"
     manifest_path = manifest_dir / f"{manifest_a.manifest_id}.json"
-    latest_path.write_text(
-        json.dumps({"manifest_id": manifest_a.manifest_id}, ensure_ascii=False, indent=2)
-        + "\n",
-        encoding="utf-8",
-    )
     manifest_path.write_text(
         json.dumps(manifest_to_dict(manifest_b), ensure_ascii=False, indent=2) + "\n",
         encoding="utf-8",

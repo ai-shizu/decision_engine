@@ -21,6 +21,7 @@ from core.retrieval_manifest import (  # noqa: E402
     manifest_from_dict,
     manifest_to_dict,
 )
+from core.state_chain import genesis_parent_hash  # noqa: E402
 
 
 _RUNTIME_COMPONENTS = {
@@ -151,7 +152,11 @@ def test_session_genesis_identity_binds_nonce_parent_and_transcript_head() -> No
 
 
 def _legacy_manifest_with_empty_model_hash():
+    genesis = hashlib.sha512(b"fsa06-red-session").hexdigest()
     _, _, manifest = build_bounded_context_with_manifest(
+        parent_hash=genesis_parent_hash(genesis),
+        sequence_number=1,
+        session_genesis_id=genesis,
         session_id="fsa06-red-session",
         transcript=[("user", "initial transcript")],
         current_query="initial transcript",
@@ -162,7 +167,11 @@ def _legacy_manifest_with_empty_model_hash():
 
 
 def _valid_runtime_bound_manifest():
+    genesis = hashlib.sha512(b"fsa06-green-session").hexdigest()
     _, _, manifest = build_bounded_context_with_manifest(
+        parent_hash=genesis_parent_hash(genesis),
+        sequence_number=1,
+        session_genesis_id=genesis,
         session_id="fsa06-green-session",
         transcript=[("user", "initial transcript")],
         current_query="initial transcript",
