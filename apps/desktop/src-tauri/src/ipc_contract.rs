@@ -2,7 +2,12 @@ use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
-const MAX_TEXT_BYTES: usize = 10 * 1024 * 1024;
+// One MiB is reserved for JSON expansion/peer fields, followed by another MiB
+// for the IPC id/cid/cmd envelope and terminating newline.
+pub(crate) const MAX_TEXT_BYTES: usize = 6 * 1024 * 1024;
+pub(crate) const MAX_REQUEST_PARAMS_JSON_BYTES: usize = 7 * 1024 * 1024;
+pub(crate) const REQUEST_PARAMS_JSON_HEADROOM_BYTES: usize = 1 * 1024 * 1024;
+pub(crate) const IPC_REQUEST_ENVELOPE_HEADROOM_BYTES: usize = 1 * 1024 * 1024;
 const MAX_SHORT_TEXT_BYTES: usize = 16 * 1024;
 
 pub trait ValidateRequest {

@@ -27,6 +27,8 @@ pub(crate) const IPC_MAX_RESPONSE_LINE_BYTES: usize = 1024 * 1024;
 pub(crate) const IPC_MAX_REQUEST_LINE_BYTES: usize = 8 * 1024 * 1024;
 pub(crate) const IPC_MAX_JSON_DEPTH: usize = 64;
 pub(crate) const IPC_MAX_MESSAGES_PER_REQUEST: usize = 1024;
+pub(crate) const IPC_STDOUT_QUEUE_CAPACITY: usize = 16;
+const _: () = assert!(IPC_STDOUT_QUEUE_CAPACITY <= IPC_MAX_MESSAGES_PER_REQUEST);
 #[cfg(not(test))]
 pub(crate) const IPC_IO_DEADLINE: Duration = Duration::from_secs(30);
 #[cfg(test)]
@@ -133,7 +135,7 @@ pub(crate) type EventSink = Box<dyn Fn(&Value) + Send + Sync>;
 struct ProcessConnection {
     child: Box<dyn ChildControl>,
     stdin_tx: Option<mpsc::Sender<WriteRequest>>,
-    stdout_rx: mpsc::Receiver<Result<String, InvokeError>>,
+    stdout_rx: Option<mpsc::Receiver<Result<String, InvokeError>>>,
     stdin_worker: Option<JoinHandle<()>>,
     stdout_worker: Option<JoinHandle<()>>,
     stderr_worker: Option<JoinHandle<()>>,
@@ -165,9 +167,18 @@ fn spawn_stdin_worker(
 }
 
 fn spawn_stdout_worker(
-    mut stdout: Box<dyn Read + Send>,
+    stdout: Box<dyn Read + Send>,
 ) -> (mpsc::Receiver<Result<String, InvokeError>>, JoinHandle<()>) {
-    let (tx, rx) = mpsc::channel::<Result<String, InvokeError>>();
+    debug_assert!(IPC_STDOUT_QUEUE_CAPACITY <= IPC_MAX_MESSAGES_PER_REQUEST);
+    spawn_stdout_worker_with_capacity(stdout, IPC_STDOUT_QUEUE_CAPACITY)
+}
+
+fn spawn_stdout_worker_with_capacity(
+    mut stdout: Box<dyn Read + Send>,
+    queue_capacity: usize,
+) -> (mpsc::Receiver<Result<String, InvokeError>>, JoinHandle<()>) {
+    assert!(queue_capacity > 0, "stdout queue capacity must be positive");
+    let (tx, rx) = mpsc::sync_channel::<Result<String, InvokeError>>(queue_capacity);
     let worker = thread::spawn(move || {
         let mut pending = Vec::with_capacity(8192);
         let mut chunk = [0u8; 8192];
@@ -227,7 +238,7 @@ impl ProcessConnection {
         Self {
             child,
             stdin_tx: Some(stdin_tx),
-            stdout_rx,
+            stdout_rx: Some(stdout_rx),
             stdin_worker: Some(stdin_worker),
             stdout_worker: Some(stdout_worker),
             stderr_worker: Some(stderr_worker),
@@ -236,6 +247,10 @@ impl ProcessConnection {
 
     fn terminate(&mut self) {
         self.stdin_tx.take();
+        // A bounded stdout producer may be blocked in `SyncSender::send` when
+        // the queue is saturated. Disconnect it before joining the worker so
+        // teardown cannot deadlock while no consumer is draining the queue.
+        self.stdout_rx.take();
         let _ = self.child.kill();
         let _ = self.child.wait();
         for worker in [
@@ -279,7 +294,11 @@ impl EngineConnection for ProcessConnection {
     }
 
     fn recv_line(&mut self) -> Result<String, InvokeError> {
-        match self.stdout_rx.recv_timeout(IPC_IO_DEADLINE) {
+        let stdout_rx = self
+            .stdout_rx
+            .as_ref()
+            .ok_or(InvokeError::Transport(TransportFailure::Read))?;
+        match stdout_rx.recv_timeout(IPC_IO_DEADLINE) {
             Ok(Ok(line)) if line.trim().is_empty() => {
                 Err(InvokeError::Transport(TransportFailure::Eof))
             }

@@ -920,6 +920,62 @@ fn requests_serialized_under_connection_lock() {
 // ---------------------------------------------------------------------------
 
 #[test]
+fn stdout_worker_backpressures_and_disconnect_releases_a_saturated_queue() {
+    struct StepReader {
+        chunks: VecDeque<Vec<u8>>,
+        reads: mpsc::Sender<usize>,
+        read_count: usize,
+    }
+
+    impl std::io::Read for StepReader {
+        fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
+            let Some(chunk) = self.chunks.pop_front() else {
+                return Ok(0);
+            };
+            assert!(chunk.len() <= buffer.len());
+            buffer[..chunk.len()].copy_from_slice(&chunk);
+            let read_count = self.read_count;
+            self.read_count += 1;
+            self.reads.send(read_count).expect("publish read progress");
+            Ok(chunk.len())
+        }
+    }
+
+    let (read_tx, read_rx) = mpsc::channel();
+    let reader = StepReader {
+        chunks: VecDeque::from([
+            b"first\n".to_vec(),
+            b"second\n".to_vec(),
+            b"third\n".to_vec(),
+        ]),
+        reads: read_tx,
+        read_count: 0,
+    };
+    let (receiver, worker) = spawn_stdout_worker_with_capacity(Box::new(reader), 1);
+
+    assert_eq!(
+        read_rx.recv_timeout(Duration::from_secs(1)),
+        Ok(0),
+        "worker must read the first line"
+    );
+    assert_eq!(
+        read_rx.recv_timeout(Duration::from_secs(1)),
+        Ok(1),
+        "worker must reach the second line before its blocking send"
+    );
+    assert_eq!(
+        read_rx.recv_timeout(Duration::from_millis(50)),
+        Err(mpsc::RecvTimeoutError::Timeout),
+        "a full bounded queue must stop the producer from reading more stdout"
+    );
+
+    drop(receiver);
+    worker
+        .join()
+        .expect("receiver disconnect must release the blocked producer");
+}
+
+#[test]
 fn fsa_2026_07_13_12_oversized_response_must_be_rejected() {
     const CONTRACT_MAX_RESPONSE_BYTES: usize = 1024 * 1024;
 

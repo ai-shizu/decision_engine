@@ -1,21 +1,74 @@
+use std::io::{self, Write};
 use std::sync::Arc;
 
 use serde::Serialize;
 use serde_json::{Map, Value};
 use tauri::State;
 
-use crate::engine::EngineManager;
+use crate::engine::{EngineManager, IPC_MAX_REQUEST_LINE_BYTES};
 use crate::ipc_contract::{
     CalendarAppleRequest, CalendarIcsRequest, ConsultRequest, ImportClassifyRequest,
     ImportDocumentRequest, ImportLineBatchRequest, ImportLineSingleRequest,
     NarrativeCompileRequest, ProbeAnswerRequest, ProbeDateRequest, RecordLoadRequest,
     RecordSaveRequest, ScopeRequest, SettingsSaveFixedRequest, TwinForecastRequest,
-    ValidateRequest,
+    ValidateRequest, IPC_REQUEST_ENVELOPE_HEADROOM_BYTES, MAX_REQUEST_PARAMS_JSON_BYTES,
+    MAX_TEXT_BYTES, REQUEST_PARAMS_JSON_HEADROOM_BYTES,
 };
+
+const _: () =
+    assert!(MAX_TEXT_BYTES + REQUEST_PARAMS_JSON_HEADROOM_BYTES == MAX_REQUEST_PARAMS_JSON_BYTES);
+const _: () = assert!(
+    MAX_REQUEST_PARAMS_JSON_BYTES + IPC_REQUEST_ENVELOPE_HEADROOM_BYTES
+        == IPC_MAX_REQUEST_LINE_BYTES
+);
+
+struct CappedJsonSink {
+    written: usize,
+    exceeded: bool,
+}
+
+impl CappedJsonSink {
+    fn new() -> Self {
+        Self {
+            written: 0,
+            exceeded: false,
+        }
+    }
+}
+
+impl Write for CappedJsonSink {
+    fn write(&mut self, buffer: &[u8]) -> io::Result<usize> {
+        if buffer.len() > MAX_REQUEST_PARAMS_JSON_BYTES.saturating_sub(self.written) {
+            self.exceeded = true;
+            return Err(io::Error::new(
+                io::ErrorKind::Other,
+                "renderer request size limit exceeded",
+            ));
+        }
+        self.written += buffer.len();
+        Ok(buffer.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+}
+
+fn require_request_params_size<T: Serialize + ?Sized>(params: &T) -> Result<(), String> {
+    let mut sink = CappedJsonSink::new();
+    match serde_json::to_writer(&mut sink, params) {
+        Ok(()) => Ok(()),
+        Err(_) if sink.exceeded => Err("renderer request exceeds the allowed size".to_string()),
+        Err(_) => Err("invalid renderer request".to_string()),
+    }
+}
 
 fn request_params<T: Serialize + ValidateRequest>(request: T) -> Result<Value, String> {
     request.validate()?;
-    serde_json::to_value(request).map_err(|_| "invalid renderer request".to_string())
+    require_request_params_size(&request)?;
+    let params =
+        serde_json::to_value(request).map_err(|_| "invalid renderer request".to_string())?;
+    Ok(params)
 }
 
 async fn invoke_request<T: Serialize + ValidateRequest>(
@@ -41,6 +94,7 @@ async fn invoke_request_with_fixed_field<T: Serialize + ValidateRequest>(
         .as_object_mut()
         .ok_or_else(|| "invalid renderer request".to_string())?;
     object.insert(key.to_string(), Value::String(value.to_string()));
+    require_request_params_size(&params)?;
     manager.invoke(command, params, cid).await
 }
 
@@ -255,4 +309,61 @@ pub async fn context_manifest_latest(
     manager: State<'_, Arc<EngineManager>>,
 ) -> Result<Value, String> {
     invoke_empty(manager, "context.manifest.latest").await
+}
+
+#[cfg(test)]
+mod request_size_tests {
+    use super::*;
+
+    #[test]
+    fn exact_field_limit_plain_text_fits_below_the_aggregate_cap() {
+        let query = "a".repeat(MAX_TEXT_BYTES);
+        let request: ConsultRequest =
+            serde_json::from_value(serde_json::json!({ "query": query })).unwrap();
+
+        assert!(request.validate().is_ok());
+        let params = request_params(request).expect("near-limit params must fit");
+        let mut sink = CappedJsonSink::new();
+        serde_json::to_writer(&mut sink, &params).unwrap();
+
+        assert!(sink.written <= MAX_REQUEST_PARAMS_JSON_BYTES);
+    }
+
+    #[test]
+    fn aggregate_cap_rejects_individually_valid_batch_items() {
+        let content = "a".repeat(4 * 1024 * 1024);
+        let request: CalendarIcsRequest = serde_json::from_value(serde_json::json!({
+            "mode": "append",
+            "ics_files": [
+                { "content": content.clone(), "filename": "a.ics" },
+                { "content": content, "filename": "b.ics" }
+            ]
+        }))
+        .unwrap();
+
+        assert!(
+            request.validate().is_ok(),
+            "each item is below its field cap"
+        );
+        assert_eq!(
+            request_params(request).unwrap_err(),
+            "renderer request exceeds the allowed size"
+        );
+    }
+
+    #[test]
+    fn aggregate_cap_rejects_json_escape_expansion_below_the_field_cap() {
+        let query = "\u{0001}".repeat(2 * 1024 * 1024);
+        let request: ConsultRequest =
+            serde_json::from_value(serde_json::json!({ "query": query })).unwrap();
+
+        assert!(
+            request.validate().is_ok(),
+            "raw text is below its field cap"
+        );
+        assert_eq!(
+            request_params(request).unwrap_err(),
+            "renderer request exceeds the allowed size"
+        );
+    }
 }
