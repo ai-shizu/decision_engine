@@ -10,9 +10,9 @@ import json
 import math
 import os
 import re
+import subprocess
 import sys
-import threading
-from concurrent.futures import ThreadPoolExecutor
+import time
 from pathlib import Path
 
 import pytest
@@ -35,6 +35,7 @@ from core.retrieval_manifest import (  # noqa: E402
     build_retrieval_manifest,
     compute_content_hash,
     load_latest_retrieval_manifest,
+    manifest_to_dict,
     save_retrieval_manifest,
 )
 from core.runtime_identity import (  # noqa: E402
@@ -173,9 +174,6 @@ def test_runtime_identity_does_not_rewrite_json_schema_regexes() -> None:
 
 
 def test_runtime_artifact_hash_cache_revalidates_actual_bytes(tmp_path: Path) -> None:
-    from core import runtime_identity
-
-    runtime_identity._hash_file_cached.cache_clear()
     artifact = tmp_path / "model.gguf"
     artifact.write_bytes(b"A" * 64)
     initial_stat = artifact.stat()
@@ -243,7 +241,10 @@ def test_ephemeral_state_key_restart_can_bootstrap_a_new_chain(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    from core.secure_identity import identity_root_key
+
     _patch_manifest_store(tmp_path, monkeypatch)
+    identity_root_key.cache_clear()
     old_genesis = hashlib.sha512(b"old-process").hexdigest()
     old = _manifest(
         session_id="old-session",
@@ -254,11 +255,17 @@ def test_ephemeral_state_key_restart_can_bootstrap_a_new_chain(
     )
     save_retrieval_manifest(old)
 
-    monkeypatch.setattr(state_chain, "_PROCESS_ROOT_KEY", b"R" * 32)
+    # A restarted process reloads the managed root key and loses its
+    # process-local trusted-head acceleration cache.
+    identity_root_key.cache_clear()
     retrieval_manifest._TRUSTED_STATE_HEADS.pop(
         retrieval_manifest._store_key(),
         None,
     )
+    from core.facade import latest_context_manifest
+
+    restarted_view = latest_context_manifest()
+    assert restarted_view["manifest"]["manifest_id"] == old.manifest_id
     new_genesis = hashlib.sha512(b"new-process").hexdigest()
     new = _manifest(
         session_id="new-session",
@@ -269,15 +276,20 @@ def test_ephemeral_state_key_restart_can_bootstrap_a_new_chain(
     )
 
     try:
-        save_retrieval_manifest(new)
-    except RetrievalManifestPersistenceError as exc:
-        pytest.fail(f"valid process restart is permanently poisoned by stale state: {exc}")
+        try:
+            save_retrieval_manifest(new)
+        except RetrievalManifestPersistenceError as exc:
+            pytest.fail(
+                f"valid process restart is permanently poisoned by stale state: {exc}"
+            )
 
-    loaded = load_latest_retrieval_manifest(
-        expected_session_head=new_genesis,
-        expected_sequence_number=1,
-    )
-    assert loaded is not None and loaded.manifest_id == new.manifest_id
+        loaded = load_latest_retrieval_manifest(
+            expected_session_head=new_genesis,
+            expected_sequence_number=1,
+        )
+        assert loaded is not None and loaded.manifest_id == new.manifest_id
+    finally:
+        identity_root_key.cache_clear()
 
 
 def test_manifest_atomic_writer_never_follows_a_precreated_hardlink(
@@ -315,7 +327,16 @@ def test_concurrent_state_children_cannot_both_commit(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    _patch_manifest_store(tmp_path, monkeypatch)
+    from core import paths
+    from core.secure_identity import identity_root_key
+
+    project_root = tmp_path / "shared-project"
+    manifest_dir = project_root / "data" / "processed" / "retrieval_manifests"
+    latest = manifest_dir / "latest.json"
+    monkeypatch.setattr(paths, "RETRIEVAL_MANIFESTS_DIR", manifest_dir)
+    monkeypatch.setattr(paths, "LATEST_RETRIEVAL_MANIFEST", latest)
+    retrieval_manifest._TRUSTED_STATE_HEADS.pop(str(latest.resolve()), None)
+    identity_root_key.cache_clear()
     genesis = hashlib.sha512(b"concurrent-session").hexdigest()
     root = _manifest(
         session_id="concurrent-session",
@@ -336,36 +357,112 @@ def test_concurrent_state_children_cannot_both_commit(
         for marker in ("child-a", "child-b")
     )
 
-    check_barrier = threading.Barrier(2)
-    write_lock = threading.Lock()
-    original_check = retrieval_manifest._assert_existing_latest_integrity
-    original_write = retrieval_manifest._atomic_write_text
+    payload_paths: list[Path] = []
+    for index, child in enumerate(children):
+        payload_path = tmp_path / f"child-{index}.json"
+        payload_path.write_text(
+            json.dumps(manifest_to_dict(child), ensure_ascii=False),
+            encoding="utf-8",
+        )
+        payload_paths.append(payload_path)
 
-    def synchronized_check():
-        current = original_check()
-        check_barrier.wait(timeout=5)
-        return current
+    start_signal = tmp_path / "start.signal"
+    ready_signals = [tmp_path / f"ready-{index}.signal" for index in range(2)]
+    child_program = r"""
+import json
+import sys
+import time
+from pathlib import Path
 
-    def serialized_write(path, text):
-        with write_lock:
-            return original_write(path, text)
+from core import retrieval_manifest
+from core.retrieval_manifest import (
+    RetrievalManifestPersistenceError,
+    manifest_from_dict,
+    save_retrieval_manifest,
+)
 
-    monkeypatch.setattr(
-        retrieval_manifest,
-        "_assert_existing_latest_integrity",
-        synchronized_check,
-    )
-    monkeypatch.setattr(retrieval_manifest, "_atomic_write_text", serialized_write)
+manifest = manifest_from_dict(
+    json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+)
+start_signal = Path(sys.argv[2])
+ready_signal = Path(sys.argv[3])
 
-    def commit(manifest) -> str:
-        try:
-            save_retrieval_manifest(manifest)
-        except RetrievalManifestPersistenceError:
-            return "rejected"
-        return "saved"
+original_write = retrieval_manifest._atomic_write_text
+delayed = [False]
 
-    with ThreadPoolExecutor(max_workers=2) as pool:
-        outcomes = list(pool.map(commit, children))
+def delayed_manifest_write(path, text):
+    if Path(path).name != "latest.json" and not delayed[0]:
+        delayed[0] = True
+        time.sleep(0.5)
+    return original_write(path, text)
+
+retrieval_manifest._atomic_write_text = delayed_manifest_write
+ready_signal.write_text("ready\n", encoding="utf-8")
+deadline = time.monotonic() + 10.0
+while not start_signal.exists():
+    if time.monotonic() >= deadline:
+        raise TimeoutError("start signal was not published")
+    time.sleep(0.005)
+try:
+    save_retrieval_manifest(manifest)
+except RetrievalManifestPersistenceError:
+    print("rejected")
+else:
+    print("saved")
+"""
+    child_env = os.environ.copy()
+    child_env["PKB_PROJECT_ROOT"] = str(project_root)
+    python_path = str(ROOT / "src" / "python")
+    if child_env.get("PYTHONPATH"):
+        python_path += os.pathsep + child_env["PYTHONPATH"]
+    child_env["PYTHONPATH"] = python_path
+
+    processes: list[subprocess.Popen[str]] = []
+    outcomes: list[str] = []
+    try:
+        for payload, ready_signal in zip(payload_paths, ready_signals, strict=True):
+            processes.append(
+                subprocess.Popen(
+                    [
+                        sys.executable,
+                        "-c",
+                        child_program,
+                        str(payload),
+                        str(start_signal),
+                        str(ready_signal),
+                    ],
+                    cwd=ROOT,
+                    env=child_env,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                )
+            )
+        ready_deadline = time.monotonic() + 10.0
+        while not all(signal.exists() for signal in ready_signals):
+            if any(process.poll() is not None for process in processes):
+                pytest.fail("concurrent child exited before publishing readiness")
+            if time.monotonic() >= ready_deadline:
+                pytest.fail("concurrent children did not become ready")
+            time.sleep(0.005)
+        start_signal.write_text("go\n", encoding="utf-8")
+        for process in processes:
+            try:
+                stdout, stderr = process.communicate(timeout=15)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                stdout, stderr = process.communicate()
+                pytest.fail(
+                    f"concurrent child timed out: stdout={stdout!r} stderr={stderr!r}"
+                )
+            assert process.returncode == 0, stderr
+            outcomes.append(stdout.strip())
+    finally:
+        for process in processes:
+            if process.poll() is None:
+                process.kill()
+                process.communicate()
+        identity_root_key.cache_clear()
 
     assert sorted(outcomes) == ["rejected", "saved"], (
         "two children of the same authenticated head both committed, forking "

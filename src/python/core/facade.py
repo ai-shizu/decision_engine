@@ -122,6 +122,7 @@ def last_romance_analysis() -> dict | None:
 
 def latest_context_manifest() -> dict:
     from .retrieval_manifest import (
+        bootstrap_latest_state_chain_expectation,
         latest_state_chain_expectation,
         load_latest_retrieval_manifest,
         manifest_to_dict,
@@ -129,10 +130,8 @@ def latest_context_manifest() -> dict:
 
     expectation = latest_state_chain_expectation()
     if expectation is None:
-        from . import paths
-
-        if paths.LATEST_RETRIEVAL_MANIFEST.exists():
-            raise ValueError("trusted state head unavailable")
+        expectation = bootstrap_latest_state_chain_expectation()
+    if expectation is None:
         return {
             "manifest": None,
             "reason": "NO_MANIFEST",

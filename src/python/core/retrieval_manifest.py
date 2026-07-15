@@ -3,12 +3,17 @@
 """RetrievalManifestV1 — deterministic context selection observability (Phase 4-A)."""
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import json
+import os
 import re
+import stat
+import threading
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import Any, Literal
+from pathlib import Path
+from typing import Any, Iterator, Literal
 
 from .canonicalization import canonicalize_json, canonicalize_text
 from .runtime_identity import validate_runtime_digest
@@ -842,6 +847,8 @@ class StateChainExpectation:
 
 
 _TRUSTED_STATE_HEADS: dict[str, StateChainExpectation] = {}
+_STATE_CHAIN_THREAD_LOCKS: dict[str, threading.RLock] = {}
+_STATE_CHAIN_THREAD_LOCKS_GUARD = threading.Lock()
 
 
 def _store_key() -> str:
@@ -852,6 +859,65 @@ def _store_key() -> str:
 
 def latest_state_chain_expectation() -> StateChainExpectation | None:
     return _TRUSTED_STATE_HEADS.get(_store_key())
+
+
+def _state_chain_lock_path() -> Path:
+    from . import paths
+
+    return Path(paths.RETRIEVAL_MANIFESTS_DIR) / ".state-chain.lock"
+
+
+def _state_chain_thread_lock(lock_path: Path) -> threading.RLock:
+    key = str(lock_path.resolve())
+    with _STATE_CHAIN_THREAD_LOCKS_GUARD:
+        lock = _STATE_CHAIN_THREAD_LOCKS.get(key)
+        if lock is None:
+            lock = threading.RLock()
+            _STATE_CHAIN_THREAD_LOCKS[key] = lock
+        return lock
+
+
+@contextlib.contextmanager
+def _state_chain_store_lock() -> Iterator[None]:
+    """Serialize state-head validation and replacement across threads/processes."""
+    lock_path = _state_chain_lock_path()
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    thread_lock = _state_chain_thread_lock(lock_path)
+    with thread_lock:
+        flags = os.O_RDWR | os.O_CREAT
+        flags |= getattr(os, "O_CLOEXEC", 0)
+        flags |= getattr(os, "O_NOINHERIT", 0)
+        flags |= getattr(os, "O_NOFOLLOW", 0)
+        fd = os.open(lock_path, flags, 0o600)
+        try:
+            metadata = os.fstat(fd)
+            if not stat.S_ISREG(metadata.st_mode):
+                raise OSError("state-chain lock must be a regular file")
+            if metadata.st_nlink != 1:
+                raise OSError("state-chain lock must not be hard-linked")
+            if metadata.st_size == 0:
+                os.write(fd, b"\0")
+                os.fsync(fd)
+            os.lseek(fd, 0, os.SEEK_SET)
+            if os.name == "nt":
+                import msvcrt
+
+                msvcrt.locking(fd, msvcrt.LK_LOCK, 1)
+                try:
+                    yield
+                finally:
+                    os.lseek(fd, 0, os.SEEK_SET)
+                    msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
+            else:
+                import fcntl
+
+                fcntl.flock(fd, fcntl.LOCK_EX)
+                try:
+                    yield
+                finally:
+                    fcntl.flock(fd, fcntl.LOCK_UN)
+        finally:
+            os.close(fd)
 
 
 def _validate_latest_pointer(latest: Any) -> StateChainExpectation:
@@ -906,20 +972,95 @@ def _read_latest_authenticated() -> RetrievalManifestV1 | None:
     return manifest
 
 
-def _assert_existing_latest_integrity() -> RetrievalManifestV1 | None:
-    """Strict-validate latest pointer + payload before any write. No repair."""
+def _remember_state_head(manifest: RetrievalManifestV1) -> None:
+    _TRUSTED_STATE_HEADS[_store_key()] = StateChainExpectation(
+        session_genesis_id=manifest.session_genesis_id,
+        sequence_number=manifest.sequence_number,
+        manifest_id=manifest.manifest_id,
+    )
+
+
+def bootstrap_latest_state_chain_expectation() -> StateChainExpectation | None:
+    """Restore the process-local head cache from an authenticated disk snapshot."""
+    with _state_chain_store_lock():
+        existing = _read_latest_authenticated()
+        trusted = latest_state_chain_expectation()
+        if existing is None:
+            if trusted is not None:
+                raise ValueError("expected state head missing")
+            return None
+        if trusted is None:
+            _remember_state_head(existing)
+            return latest_state_chain_expectation()
+        if existing.session_genesis_id != trusted.session_genesis_id:
+            raise ValueError("cross-session state replay detected")
+        if existing.sequence_number != trusted.sequence_number:
+            raise ValueError("state rollback sequence mismatch")
+        if existing.manifest_id != trusted.manifest_id:
+            raise ValueError("trusted state head mismatch")
+        return trusted
+
+
+def _assert_authenticated_forward_progress(
+    existing: RetrievalManifestV1,
+    trusted: StateChainExpectation,
+) -> None:
+    """Require an authenticated disk head to descend from our cached head."""
+    from . import paths
+
+    if existing.sequence_number <= trusted.sequence_number:
+        raise ValueError("state rollback sequence mismatch")
+    cursor = existing
+    while cursor.sequence_number > trusted.sequence_number:
+        if cursor.sequence_number == trusted.sequence_number + 1:
+            if cursor.parent_hash != trusted.manifest_id:
+                raise ValueError("trusted state head mismatch")
+            return
+        parent_path = paths.RETRIEVAL_MANIFESTS_DIR / f"{cursor.parent_hash}.json"
+        if not parent_path.is_file() or parent_path.is_symlink():
+            raise ValueError("state chain ancestor missing")
+        parent_data = json.loads(parent_path.read_text(encoding="utf-8"))
+        parent = validate_manifest(manifest_from_dict(parent_data))
+        if parent.manifest_id != cursor.parent_hash:
+            raise ValueError("state chain ancestor manifest_id mismatch")
+        if parent.session_genesis_id != existing.session_genesis_id:
+            raise ValueError("cross-session state ancestor detected")
+        if parent.sequence_number != cursor.sequence_number - 1:
+            raise ValueError("state chain ancestor sequence mismatch")
+        cursor = parent
+    raise ValueError("trusted state head mismatch")
+
+
+def _assert_existing_latest_integrity(
+    *,
+    intended_session_genesis_id: str,
+) -> RetrievalManifestV1 | None:
+    """Strict-validate the locked latest pointer + payload before any write."""
     existing = _read_latest_authenticated()
     if existing is None:
         return None
     trusted = latest_state_chain_expectation()
     if trusted is None:
-        raise ValueError("trusted state head unavailable")
+        # A new process starts without the in-memory acceleration cache.  The
+        # authenticated disk head is the durable bootstrap authority.
+        _remember_state_head(existing)
+        return existing
     if existing.session_genesis_id != trusted.session_genesis_id:
-        raise ValueError("cross-session state replay detected")
-    if existing.sequence_number != trusted.sequence_number:
+        # Another locked process may have started the intended session.  Adopt
+        # that authenticated head, but do not silently switch to an unrelated
+        # session while this caller is extending a different one.
+        if existing.session_genesis_id != intended_session_genesis_id:
+            raise ValueError("cross-session state replay detected")
+        _remember_state_head(existing)
+        return existing
+    if existing.sequence_number < trusted.sequence_number:
         raise ValueError("state rollback sequence mismatch")
-    if existing.manifest_id != trusted.manifest_id:
-        raise ValueError("trusted state head mismatch")
+    if existing.sequence_number == trusted.sequence_number:
+        if existing.manifest_id != trusted.manifest_id:
+            raise ValueError("trusted state head mismatch")
+        return existing
+    _assert_authenticated_forward_progress(existing, trusted)
+    _remember_state_head(existing)
     return existing
 
 
@@ -992,45 +1133,43 @@ def save_retrieval_manifest(manifest: RetrievalManifestV1) -> None:
 
     manifest = validate_manifest(manifest)
     try:
-        paths.RETRIEVAL_MANIFESTS_DIR.mkdir(parents=True, exist_ok=True)
-        current = _assert_existing_latest_integrity()
-        expected_genesis_parent = genesis_parent_hash(manifest.session_genesis_id)
-        if current is None or current.session_genesis_id != manifest.session_genesis_id:
-            if manifest.sequence_number != 1:
-                raise ValueError("new state chain must start at sequence_number 1")
-            if manifest.parent_hash != expected_genesis_parent:
-                raise ValueError("new state chain parent_hash mismatch")
-        elif current.manifest_id != manifest.manifest_id:
-            if manifest.sequence_number != current.sequence_number + 1:
-                raise ValueError("state chain sequence_number is not monotonic")
-            if manifest.parent_hash != current.manifest_id:
-                raise ValueError("state chain parent_hash mismatch")
-        path = paths.RETRIEVAL_MANIFESTS_DIR / f"{manifest.manifest_id}.json"
-        if path.exists():
-            existing_data = json.loads(path.read_text(encoding="utf-8"))
-            existing_manifest = validate_manifest(manifest_from_dict(existing_data))
-            if existing_manifest.manifest_id != manifest.manifest_id:
-                raise ValueError("existing manifest_id mismatch")
-        else:
-            payload = canonicalize_json(manifest_to_dict(manifest))
-            _atomic_write_text(path, payload + "\n")
-        latest_payload = canonicalize_json(
-            {
-                "manifest_id": manifest.manifest_id,
-                "session_genesis_id": manifest.session_genesis_id,
-                "sequence_number": manifest.sequence_number,
-            }
-        )
-        _atomic_write_text(
-            paths.LATEST_RETRIEVAL_MANIFEST,
-            latest_payload + "\n",
-        )
-        _TRUSTED_STATE_HEADS[_store_key()] = StateChainExpectation(
-            session_genesis_id=manifest.session_genesis_id,
-            sequence_number=manifest.sequence_number,
-            manifest_id=manifest.manifest_id,
-        )
-        _prune_retrieval_manifests(latest_manifest_id=manifest.manifest_id)
+        with _state_chain_store_lock():
+            current = _assert_existing_latest_integrity(
+                intended_session_genesis_id=manifest.session_genesis_id,
+            )
+            expected_genesis_parent = genesis_parent_hash(manifest.session_genesis_id)
+            if current is None or current.session_genesis_id != manifest.session_genesis_id:
+                if manifest.sequence_number != 1:
+                    raise ValueError("new state chain must start at sequence_number 1")
+                if manifest.parent_hash != expected_genesis_parent:
+                    raise ValueError("new state chain parent_hash mismatch")
+            elif current.manifest_id != manifest.manifest_id:
+                if manifest.sequence_number != current.sequence_number + 1:
+                    raise ValueError("state chain sequence_number is not monotonic")
+                if manifest.parent_hash != current.manifest_id:
+                    raise ValueError("state chain parent_hash mismatch")
+            path = paths.RETRIEVAL_MANIFESTS_DIR / f"{manifest.manifest_id}.json"
+            if path.exists():
+                existing_data = json.loads(path.read_text(encoding="utf-8"))
+                existing_manifest = validate_manifest(manifest_from_dict(existing_data))
+                if existing_manifest.manifest_id != manifest.manifest_id:
+                    raise ValueError("existing manifest_id mismatch")
+            else:
+                payload = canonicalize_json(manifest_to_dict(manifest))
+                _atomic_write_text(path, payload + "\n")
+            latest_payload = canonicalize_json(
+                {
+                    "manifest_id": manifest.manifest_id,
+                    "session_genesis_id": manifest.session_genesis_id,
+                    "sequence_number": manifest.sequence_number,
+                }
+            )
+            _atomic_write_text(
+                paths.LATEST_RETRIEVAL_MANIFEST,
+                latest_payload + "\n",
+            )
+            _remember_state_head(manifest)
+            _prune_retrieval_manifests(latest_manifest_id=manifest.manifest_id)
     except (OSError, ValueError) as exc:
         raise RetrievalManifestPersistenceError(_PERSISTENCE_FAILED_MSG) from exc
 

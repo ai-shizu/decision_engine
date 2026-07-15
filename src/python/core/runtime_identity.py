@@ -9,11 +9,13 @@ import platform
 import re
 import sys
 from dataclasses import dataclass
-from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
-from .canonicalization import canonical_json_bytes, canonicalize_text
+from .canonicalization import (
+    canonical_identity_json_bytes,
+    normalize_identity_text,
+)
 
 _HEX64 = re.compile(r"^[0-9a-f]{64}$")
 _HEX128 = re.compile(r"^[0-9a-f]{128}$")
@@ -34,10 +36,10 @@ _RUNTIME_COMPONENT_KEYS = frozenset(
 def _nonempty_text(value: Any, field: str) -> str:
     if type(value) is not str or not value.strip():
         raise ValueError(f"{field} must be non-empty str")
-    canonical = canonicalize_text(value)
-    if not canonical:
+    normalized = normalize_identity_text(value)
+    if not normalized.strip():
         raise ValueError(f"{field} must be non-empty str")
-    return canonical
+    return normalized
 
 
 def _sha256_digest(value: Any, field: str) -> str:
@@ -78,7 +80,7 @@ def _validate_json_value(value: Any, path: str) -> None:
 def _canonical_json_bytes(payload: dict[str, Any]) -> bytes:
     _validate_json_value(payload, "identity")
     try:
-        return canonical_json_bytes(payload)
+        return canonical_identity_json_bytes(payload)
     except (TypeError, ValueError) as exc:
         raise ValueError("identity must be canonical JSON") from exc
 
@@ -207,11 +209,9 @@ def transcript_head(transcript: Any) -> str:
     return hashlib.sha512(encoded).hexdigest()
 
 
-@lru_cache(maxsize=16)
-def _hash_file_cached(path_text: str, size: int, mtime_ns: int) -> str:
-    del size, mtime_ns
+def _hash_file(path: Path) -> str:
     hasher = hashlib.sha256()
-    with Path(path_text).open("rb") as handle:
+    with path.open("rb") as handle:
         while chunk := handle.read(1024 * 1024):
             hasher.update(chunk)
     return hasher.hexdigest()
@@ -220,17 +220,13 @@ def _hash_file_cached(path_text: str, size: int, mtime_ns: int) -> str:
 def hash_file_sha256(path: Path | str) -> str:
     candidate = Path(path)
     try:
-        stat_result = candidate.stat()
+        resolved = candidate.resolve(strict=True)
     except OSError as exc:
         raise ValueError("runtime artifact is unavailable") from exc
-    if not candidate.is_file():
+    if not resolved.is_file():
         raise ValueError("runtime artifact must be a file")
     try:
-        return _hash_file_cached(
-            str(candidate.resolve(strict=True)),
-            stat_result.st_size,
-            stat_result.st_mtime_ns,
-        )
+        return _hash_file(resolved)
     except OSError as exc:
         raise ValueError("runtime artifact hashing failed") from exc
 

@@ -22,6 +22,10 @@ import tempfile
 # ---------------------------------------------------------------- F-15a
 _SANDBOX = pathlib.Path(tempfile.mkdtemp(prefix="pkb_test_"))
 os.environ["PKB_PROJECT_ROOT"] = str(_SANDBOX)
+# Tests must never depend on a workstation's DPAPI state, and non-Windows
+# runners intentionally require a managed key provider.  A fixed sandbox-only
+# root makes process-restart and cross-process state-chain contracts portable.
+os.environ["PKB_IDENTITY_ROOT_KEY_HEX"] = "51" * 32
 
 _SKELETON = (
     "data/raw",

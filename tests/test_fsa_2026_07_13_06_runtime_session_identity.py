@@ -16,7 +16,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src" / "python"))
 
 from core.consultation_engine import ConsultationEngine  # noqa: E402
-from core.canonicalization import canonical_json_bytes  # noqa: E402
+from core.canonicalization import canonical_identity_json_bytes  # noqa: E402
 from core.retrieval_manifest import (  # noqa: E402
     build_bounded_context_with_manifest,
     manifest_from_dict,
@@ -54,7 +54,7 @@ def _runtime_components(**overrides: object) -> dict[str, object]:
 
 
 def _oracle_runtime_digest(components: dict[str, object]) -> str:
-    canonical = canonical_json_bytes(components)
+    canonical = canonical_identity_json_bytes(components)
     return hashlib.blake2b(canonical).hexdigest()
 
 

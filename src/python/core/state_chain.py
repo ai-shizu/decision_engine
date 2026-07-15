@@ -1,12 +1,11 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""Process-local keyed authentication primitives for persisted state chains."""
+"""Persistent keyed authentication primitives for persisted state chains."""
 from __future__ import annotations
 
 import hashlib
 import hmac
 import re
-import secrets
 from typing import Any
 
 from .canonicalization import canonical_json_bytes
@@ -14,7 +13,6 @@ from .runtime_identity import validate_runtime_digest
 
 STATE_MAC_HEX_LENGTH = 64
 _HEX64 = re.compile(r"^[0-9a-f]{64}$")
-_PROCESS_ROOT_KEY = secrets.token_bytes(32)
 
 
 def validate_state_mac(value: Any, *, field: str) -> str:
@@ -30,9 +28,11 @@ def validate_sequence_number(value: Any) -> int:
 
 
 def _session_key(session_genesis_id: str) -> bytes:
+    from .secure_identity import identity_root_key
+
     genesis = validate_runtime_digest(session_genesis_id)
     return hmac.digest(
-        _PROCESS_ROOT_KEY,
+        identity_root_key(),
         b"decision-engine/state-chain/session/v1\x00" + genesis.encode("ascii"),
         "sha256",
     )
