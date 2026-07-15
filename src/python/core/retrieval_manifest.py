@@ -5,7 +5,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import os
 import re
 from dataclasses import dataclass
 from enum import StrEnum
@@ -876,20 +875,12 @@ _OWNED_MANIFEST_FILENAME = re.compile(r"^[0-9a-f]{64}\.json$")
 
 
 def _atomic_write_text(path: Any, text: str) -> None:
-    """Write UTF-8 text via same-dir .tmp then os.replace; best-effort tmp cleanup."""
+    """Durably replace a path without opening a caller-predictable temp inode."""
     from pathlib import Path
 
-    target = Path(path)
-    tmp = target.with_suffix(".json.tmp")
-    try:
-        tmp.write_text(text, encoding="utf-8")
-        os.replace(tmp, target)
-    except Exception:
-        try:
-            tmp.unlink(missing_ok=True)
-        except OSError:
-            pass
-        raise
+    from .durable_persistence import durable_atomic_write_text
+
+    durable_atomic_write_text(Path(path), text)
 
 
 def _read_latest_authenticated() -> RetrievalManifestV1 | None:

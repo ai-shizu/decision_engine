@@ -23,8 +23,11 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
+import os
 import re
+import stat
 import struct
+import tempfile
 from pathlib import Path
 
 import numpy as np
@@ -184,6 +187,67 @@ def _preflight_manifest(manifest: dict) -> dict[str, Path]:
         if type(chash) is not str or not _CONTENT_HASH.fullmatch(chash):
             raise DerivedStoreIntegrityError("day content_hash is invalid")
     return paths
+
+
+def _snapshot_verified_segments(
+    manifest: dict,
+    verified_paths: dict[str, Path],
+    snapshot_root: Path,
+) -> dict[str, Path]:
+    """Copy and re-hash each segment from one open handle for search use.
+
+    The returned paths contain the exact bytes whose digest was compared with
+    the manifest.  Search backends may safely reopen these private snapshots;
+    they never reopen the mutable manifest-owned segment path.
+    """
+    snapshots: dict[str, Path] = {}
+    read_flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0)
+    read_flags |= getattr(os, "O_NOFOLLOW", 0)
+    write_flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+    write_flags |= getattr(os, "O_CLOEXEC", 0)
+    write_flags |= getattr(os, "O_NOFOLLOW", 0)
+
+    for segment in manifest["segments"]:
+        name = segment["file"]
+        source_path = verified_paths[name]
+        snapshot_path = snapshot_root / name
+        digest = hashlib.blake2b(digest_size=32)
+        try:
+            source_fd = os.open(source_path, read_flags)
+            try:
+                if not stat.S_ISREG(os.fstat(source_fd).st_mode):
+                    raise DerivedStoreIntegrityError(
+                        "declared segment changed file type before search"
+                    )
+                snapshot_fd = os.open(snapshot_path, write_flags, 0o600)
+                try:
+                    with os.fdopen(source_fd, "rb") as source:
+                        source_fd = -1
+                        with os.fdopen(snapshot_fd, "wb") as snapshot:
+                            snapshot_fd = -1
+                            while chunk := source.read(1024 * 1024):
+                                digest.update(chunk)
+                                snapshot.write(chunk)
+                finally:
+                    if snapshot_fd >= 0:
+                        os.close(snapshot_fd)
+            finally:
+                if source_fd >= 0:
+                    os.close(source_fd)
+        except DerivedStoreIntegrityError:
+            raise
+        except OSError as exc:
+            raise DerivedStoreIntegrityError(
+                "segment snapshot could not be created"
+            ) from exc
+
+        actual_hash = "blake2b-256:" + digest.hexdigest()
+        if not hmac.compare_digest(segment["payload_hash"], actual_hash):
+            raise DerivedStoreIntegrityError(
+                "segment payload changed between preflight and search"
+            )
+        snapshots[name] = snapshot_path
+    return snapshots
 
 
 def _tomb_offset(index_in_segment: int) -> int:
@@ -538,8 +602,7 @@ def sync_diary_index_lsm(engine, force: bool = False) -> bool:
 
 # ---------------------------------------------------------------- マルチセグメント検索
 def search_lsm(engine, qvec, top_k: int = 3) -> list[dict]:
-    """全セグメントに対して既存 search_index() を無改造のまま呼び、日付
-    デデュープしてマージする (C1 マイルストーン: C++ 側は完全無変更)。
+    """検査済みsnapshotを介して各segmentを検索し、日付dedupしてmergeする。
 
     manifest が存在しない (LSM 未移行) 環境では呼び出し側が legacy パスへ
     分岐すること — この関数はマニフェストの存在を前提にする。
@@ -550,9 +613,24 @@ def search_lsm(engine, qvec, top_k: int = 3) -> list[dict]:
         raise DerivedStoreIntegrityError("manifest embedder identity mismatch")
     verified_paths = _preflight_manifest(manifest)
     hits: list[dict] = []
-    for seg in manifest["segments"]:
-        seg_path = verified_paths[seg["file"]]
-        hits.extend(engine.search_index(seg_path, DIARY_META, qvec, top_k))
+    with tempfile.TemporaryDirectory(
+        prefix=".lsm-search-",
+        dir=PROCESSED,
+    ) as snapshot_dir:
+        snapshot_paths = _snapshot_verified_segments(
+            manifest,
+            verified_paths,
+            Path(snapshot_dir),
+        )
+        try:
+            for seg in manifest["segments"]:
+                seg_path = snapshot_paths[seg["file"]]
+                hits.extend(engine.search_index(seg_path, DIARY_META, qvec, top_k))
+        finally:
+            release_mapping = getattr(engine, "_release_index_mapping", None)
+            if callable(release_mapping):
+                for seg_path in snapshot_paths.values():
+                    release_mapping(seg_path)
     # 日付デデュープ: 同一日付の重複ヒットは score 最大の 1 件のみ残す
     # (クラッシュ窓 §2.1.3 と、墓標書き遅延の両方をここで吸収する)
     best: dict[str, dict] = {}
