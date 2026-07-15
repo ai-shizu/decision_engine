@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import sys
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
@@ -174,15 +175,34 @@ def _load_artifact() -> _ModelArtifact:
 
     numeric = _exact_keys(
         payload["numeric_contract"],
-        frozenset({"float", "reduction_order", "update"}),
+        frozenset(
+            {
+                "float",
+                "libm",
+                "reduction_order",
+                "rounding_mode",
+                "update",
+            }
+        ),
         "numeric_contract",
     )
     if numeric != {
         "float": "ieee754-binary64",
+        "libm": "runtime-fingerprint-v1",
         "reduction_order": "ascending-index",
+        "rounding_mode": "round-to-nearest-ties-even",
         "update": "log-sum-exp-v1",
     }:
         raise ValueError("unsupported ordinal Rasch numeric contract")
+    if (
+        sys.float_info.radix != 2
+        or sys.float_info.mant_dig != 53
+        or sys.float_info.max_exp != 1024
+        or sys.float_info.rounds != 1
+    ):
+        raise ValueError(
+            "ordinal Rasch requires IEEE-754 binary64 round-to-nearest-ties-even"
+        )
 
     grid_value = payload["ability_grid"]
     if type(grid_value) is not list or len(grid_value) < 3:
@@ -239,6 +259,8 @@ def _load_artifact() -> _ModelArtifact:
         raise ValueError("artifact items must be sorted by item_id")
     if len({item.item_id for item in items}) != len(items):
         raise ValueError("artifact item_id values must be unique")
+    if len({item.thresholds for item in items}) != len(items):
+        raise ValueError("artifact item thresholds must be unique")
 
     return _ModelArtifact(
         raw_sha256=hashlib.sha256(raw).hexdigest(),
@@ -268,14 +290,6 @@ def _log_sum_exp(values: Iterable[float]) -> float:
     if maximum == -math.inf:
         return -math.inf
     return maximum + math.log(math.fsum(math.exp(value - maximum) for value in ordered))
-
-
-def _sigmoid(value: float) -> float:
-    if value >= 0.0:
-        negative_exp = math.exp(-value)
-        return 1.0 / (1.0 + negative_exp)
-    positive_exp = math.exp(value)
-    return positive_exp / (1.0 + positive_exp)
 
 
 class DynamicOrdinalRaschFilter:
@@ -321,16 +335,32 @@ class DynamicOrdinalRaschFilter:
     ) -> tuple[float, ...]:
         item = self._item(item_id)
         theta = _finite_float(ability, "ability")
-        survival = tuple(_sigmoid(theta - threshold) for threshold in item.thresholds)
-        probabilities = [1.0 - survival[0]]
-        probabilities.extend(
-            survival[index - 1] - survival[index]
-            for index in range(1, len(survival))
+
+        # Partial Credit Model / adjacent-category Rasch logits.  Category zero
+        # is the reference category.  Building each cumulative threshold sum in
+        # ascending index order is part of the versioned numeric contract.
+        logits = [0.0]
+        cumulative_threshold = 0.0
+        for category, threshold in enumerate(item.thresholds, start=1):
+            cumulative_threshold += threshold
+            logits.append(category * theta - cumulative_threshold)
+        if any(not math.isfinite(logit) for logit in logits):
+            raise ArithmeticError("ordinal likelihood logits are not finite")
+
+        log_normalizer = _log_sum_exp(logits)
+        probabilities = tuple(
+            math.exp(logit - log_normalizer) for logit in logits
         )
-        probabilities.append(survival[-1])
         if any(value <= 0.0 or not math.isfinite(value) for value in probabilities):
             raise ArithmeticError("ordinal likelihood is not finite positive mass")
-        return tuple(probabilities)
+        if not math.isclose(
+            math.fsum(probabilities),
+            1.0,
+            rel_tol=0.0,
+            abs_tol=8.0 * sys.float_info.epsilon,
+        ):
+            raise ArithmeticError("ordinal likelihood does not have unit mass")
+        return probabilities
 
     def update(
         self,

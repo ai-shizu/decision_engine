@@ -244,6 +244,22 @@ def numeric_runtime_version() -> str:
         numpy_version = np.__version__
     except ImportError:
         numpy_version = "absent"
+    libm_probe = "|".join(
+        (
+            math.exp(-745.0).hex(),
+            math.exp(-1.0).hex(),
+            math.exp(1.0).hex(),
+            math.log(sys.float_info.min).hex(),
+            math.log(0.5).hex(),
+            math.log1p(2.0**-53).hex(),
+        )
+    ).encode("ascii")
+    libm_fingerprint = hashlib.sha256(libm_probe).hexdigest()
+    rounding_mode = (
+        "round-to-nearest-ties-even"
+        if sys.float_info.rounds == 1
+        else f"unsupported-flt-rounds-{sys.float_info.rounds}"
+    )
     return "|".join(
         (
             f"python-{platform.python_version()}",
@@ -252,5 +268,7 @@ def numeric_runtime_version() -> str:
             f"platform-{platform.system()}-{platform.release()}",
             f"machine-{platform.machine()}",
             f"byteorder-{sys.byteorder}",
+            f"libm-{libm_fingerprint}",
+            f"rounding-{rounding_mode}",
         )
     )

@@ -44,7 +44,7 @@ def test_unanchored_2pl_shift_scale_invariance_is_replaced_by_fixed_rasch_scale(
 
     dor = _load_subject()
     item = dor.OrdinalItem(
-        item_id="anchor-item",
+        item_id="pq-decision_threshold-FACT-01",
         thresholds=(-1.5, -0.5, 0.5, 1.5),
     )
     model = dor.DynamicOrdinalRaschFilter(items=(item,))
@@ -63,15 +63,26 @@ def test_unanchored_2pl_shift_scale_invariance_is_replaced_by_fixed_rasch_scale(
 
 def test_posterior_and_eig_policy_are_bit_reproducible_with_total_order() -> None:
     dor = _load_subject()
-    thresholds = (-1.5, -0.5, 0.5, 1.5)
     model = dor.DynamicOrdinalRaschFilter(
         items=(
-            dor.OrdinalItem(item_id="item-b", thresholds=thresholds),
-            dor.OrdinalItem(item_id="item-a", thresholds=thresholds),
-            dor.OrdinalItem(item_id="item-observed", thresholds=thresholds),
+            dor.OrdinalItem(
+                item_id="pq-decision_threshold-EMOTION-01",
+                thresholds=(-1.3, -0.3, 0.7, 1.7),
+            ),
+            dor.OrdinalItem(
+                item_id="pq-decision_threshold-CONTEXT-01",
+                thresholds=(-1.4, -0.4, 0.6, 1.6),
+            ),
+            dor.OrdinalItem(
+                item_id="pq-decision_threshold-FACT-01",
+                thresholds=(-1.5, -0.5, 0.5, 1.5),
+            ),
         )
     )
-    observations = (("item-observed", 4), ("item-observed", 1))
+    observations = (
+        ("pq-decision_threshold-FACT-01", 4),
+        ("pq-decision_threshold-FACT-01", 1),
+    )
 
     outputs: list[tuple[tuple[bytes, ...], str, bytes]] = []
     for _ in range(8):
@@ -80,7 +91,7 @@ def test_posterior_and_eig_policy_are_bit_reproducible_with_total_order() -> Non
             posterior = model.update(posterior, item_id=item_id, response=response)
         selection = model.select_next(
             posterior,
-            excluded_item_ids=frozenset({"item-observed"}),
+            excluded_item_ids=frozenset({"pq-decision_threshold-FACT-01"}),
         )
         outputs.append(
             (
@@ -91,4 +102,4 @@ def test_posterior_and_eig_policy_are_bit_reproducible_with_total_order() -> Non
         )
 
     assert len(set(outputs)) == 1, "same evidence must yield bit-identical posterior and EIG"
-    assert outputs[0][1] == "item-a", "equal EIG must use item_id ascending tie-break"
+    assert outputs[0][1] == "pq-decision_threshold-EMOTION-01"

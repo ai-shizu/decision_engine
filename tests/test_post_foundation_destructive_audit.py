@@ -197,9 +197,10 @@ def test_live_probe_bank_is_covered_by_the_rasch_artifact() -> None:
     artifact_ids = {item.item_id for item in model.items}
     production_ids = {question.id for question in PROBE_QUESTION_BANK}
 
-    assert production_ids <= artifact_ids, (
-        "the live PROBE bank cannot be observed or selected by the Rasch model; "
-        f"missing={sorted(production_ids - artifact_ids)}"
+    assert production_ids == artifact_ids, (
+        "the Rasch artifact must exactly match the live PROBE bank; "
+        f"missing={sorted(production_ids - artifact_ids)}, "
+        f"extra={sorted(artifact_ids - production_ids)}"
     )
 
 
@@ -215,9 +216,9 @@ def test_artifact_eig_policy_is_not_an_all_item_tie() -> None:
         for item in model.items
     }
 
-    assert len(set(quantized.values())) > 1, (
-        "all versioned items have the same response function, so EIG always "
-        f"degenerates to the item-id tie-break: {quantized}"
+    assert len(set(quantized.values())) == len(model.items), (
+        "every versioned item must expose a distinct initial EIG policy value; "
+        f"quantized={quantized}"
     )
 
 
@@ -225,8 +226,9 @@ def test_declared_rasch_model_obeys_adjacent_category_logit_invariant() -> None:
     model = dor.DynamicOrdinalRaschFilter()
     low_theta = -1.0
     high_theta = 1.0
-    low = model.response_probabilities(item_id="anchor-item", ability=low_theta)
-    high = model.response_probabilities(item_id="anchor-item", ability=high_theta)
+    item_id = "pq-decision_threshold-FACT-01"
+    low = model.response_probabilities(item_id=item_id, ability=low_theta)
+    high = model.response_probabilities(item_id=item_id, ability=high_theta)
 
     observed_change = math.log(high[1] / high[0]) - math.log(low[1] / low[0])
     expected_rasch_change = high_theta - low_theta
