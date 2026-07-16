@@ -24,7 +24,9 @@ pub use dual_run::{verify_and_gate, AttestedIntentPayload};
 pub use fsm::{
     AbortReason, Completed, Fetching, FsmError, Pending, ReadyToIntegrate, ResearchSlot, Txn,
 };
-pub use orchestrator::{refuse_if_policy_off, NetworkPolicy, OrchestratorError};
+pub use orchestrator::{
+    refuse_if_policy_off, InjectedFetch, NetworkPolicy, OrchestratorError,
+};
 pub use pii_snapshot::{snapshot_hash_hex, snapshot_preimage};
 
 #[derive(Debug, Clone, PartialEq, Eq)]

@@ -157,7 +157,12 @@ fn strip_tags(s: &str) -> String {
 }
 
 /// Sanitize external title/snippet for prompt + persistence.
-pub fn sanitize_external_text(text: &str, max_bytes: usize) -> Result<String, ()> {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SanitizeError {
+    Rejected,
+}
+
+pub fn sanitize_external_text(text: &str, max_bytes: usize) -> Result<String, SanitizeError> {
     let mut s = text.to_string();
     for _ in 0..4 {
         let nxt = decode_entities(&s);
@@ -180,7 +185,7 @@ pub fn sanitize_external_text(text: &str, max_bytes: usize) -> Result<String, ()
     }
     let truncated = utf8_truncate(&cleaned, max_bytes);
     if truncated.trim().is_empty() {
-        return Err(());
+        return Err(SanitizeError::Rejected);
     }
     Ok(truncated)
 }
