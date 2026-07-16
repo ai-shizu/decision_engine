@@ -5,6 +5,7 @@ import {
   parseEngineEvent,
   parseEngineHealth,
   parseImportStats,
+  parseKnowledgeResearchReceipt,
   parseNarrativeCompileResult,
   parseProbeQuestion,
   parseRecordData,
@@ -175,6 +176,44 @@ test("I-12 nested evidence and claims are strict objects", () => {
   expectReject(() => parseNarrativeCompileResult({
     ok: true,
     claims: [{ text: "claim", node_refs: [1], hidden: "x" }],
+  }));
+});
+
+test("I-12 knowledge research receipt is id/count only (no raw external payload)", () => {
+  const rid = "a".repeat(64);
+  const ok = parseKnowledgeResearchReceipt({
+    schema: "knowledge_research_receipt.v1",
+    research_id: rid,
+    results_persisted: 2,
+  });
+  assertOk(ok.research_id === rid && ok.results_persisted === 2, "receipt");
+  expectReject(() => parseKnowledgeResearchReceipt({
+    schema: "knowledge_research_receipt.v1",
+    research_id: rid,
+    results_persisted: 1,
+    snippet: "leak",
+  }));
+  expectReject(() => parseKnowledgeResearchReceipt({
+    schema: "knowledge_research_receipt.v1",
+    research_id: rid,
+    results_persisted: 1,
+    url: "https://example.invalid",
+  }));
+  expectReject(() => parseKnowledgeResearchReceipt({
+    schema: "knowledge_research_receipt.v1",
+    research_id: rid,
+    results_persisted: 1,
+    content: "body",
+  }));
+  expectReject(() => parseKnowledgeResearchReceipt({
+    schema: "knowledge_research_receipt.v1",
+    research_id: "A".repeat(64),
+    results_persisted: 1,
+  }));
+  expectReject(() => parseKnowledgeResearchReceipt({
+    schema: "knowledge_research_receipt.v1",
+    research_id: rid,
+    results_persisted: -1,
   }));
 });
 

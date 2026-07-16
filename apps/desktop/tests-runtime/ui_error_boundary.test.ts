@@ -47,15 +47,16 @@ const VERIFY_FIRST: UiErrorCode[] = [
   "APPLE_CALENDAR_SYNC",
   "DOCUMENT_IMPORT",
   "KNOWLEDGE_FETCH",
+  "KNOWLEDGE_RESEARCH",
   "ORACLE_REPORT",
   "TENSOR_REBUILD",
   "SETTINGS_SAVE",
   "PROFILER_RUN",
 ];
 
-test("T-01 exact 21 keys", () => {
+test("T-01 exact 22 keys", () => {
   const keys = Object.keys(UI_ERROR_SPECS).sort();
-  assertEqual(keys.length, 21, "key count");
+  assertEqual(keys.length, 22, "key count");
   const expected = [...RETRY_SAFE, ...VERIFY_FIRST].sort();
   assertEqual(JSON.stringify(keys), JSON.stringify(expected), "key set");
 });

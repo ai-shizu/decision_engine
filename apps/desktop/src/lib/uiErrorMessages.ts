@@ -81,7 +81,7 @@ export const UI_ERROR_SPECS = {
   },
   KNOWLEDGE_RESEARCH: {
     message:
-      "外部知識の取得は現在無効です（無網ポリシー）。Egress Live が有効になるまで利用できません。",
+      "外部知識の取得結果を確認できませんでした。現在の状態を確認し、必要な場合だけ再実行してください。",
     retryPolicy: "verify-first",
   },
   PROFILE_LOAD: {
