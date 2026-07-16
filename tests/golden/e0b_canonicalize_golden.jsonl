@@ -1,0 +1,15 @@
+{"name":"zwsp_evasion","input_hex":"417473756b69e2808b20497368697a75","expected_hex":"617473756b6920697368697a75"}
+{"name":"plain_ref","input_hex":"417473756b6920497368697a75","expected_hex":"617473756b6920697368697a75"}
+{"name":"rlo_prefix","input_hex":"e280ae417473756b69","expected_hex":"617473756b69"}
+{"name":"soft_hyphen","input_hex":"41747375c2ad6b69","expected_hex":"617473756b69"}
+{"name":"fullwidth","input_hex":"efbca1efbcb4efbcb3efbcb5efbcabefbca9","expected_hex":"617473756b69"}
+{"name":"ligature_fi","input_hex":"efac816c65","expected_hex":"66696c65"}
+{"name":"combining_nfc","input_hex":"65cc81","expected_hex":"c3a9"}
+{"name":"precomposed","input_hex":"c3a9","expected_hex":"c3a9"}
+{"name":"dotted_I","input_hex":"c4b0","expected_hex":"69cc87"}
+{"name":"superscript2","input_hex":"c2b2","expected_hex":"32"}
+{"name":"halfwidth_kana","input_hex":"efbdb1efbdb2efbdb3","expected_hex":"e382a2e382a4e382a6"}
+{"name":"tab_evasion","input_hex":"4a6f686e09536d697468","expected_hex":"6a6f686e20736d697468"}
+{"name":"bidi_isolate","input_hex":"e281a6736563726574e281a9","expected_hex":"736563726574"}
+{"name":"double_space","input_hex":"417473756b692020497368697a75","expected_hex":"617473756b6920697368697a75"}
+{"name":"empty_after","input_hex":"e2808befbbbf","expected_hex":""}
