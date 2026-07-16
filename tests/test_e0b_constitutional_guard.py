@@ -300,3 +300,62 @@ def test_python_tree_has_no_network_egress_imports() -> None:
         "Scope T network egress imports found in production tree:\n"
         + "\n".join(violations)
     )
+
+
+# ---------------------------------------------------------------------------
+# STEP 0.C — E0a freeze inheritance + Scope E reserved cage
+# ---------------------------------------------------------------------------
+def test_e0a_stub_freeze_still_holds() -> None:
+    """E0b dual-lock: knowledge_fetcher E0a stubs remain exact hard-fail."""
+    src = KF_PATH.read_text(encoding="utf-8")
+    tree = ast.parse(src, filename=str(KF_PATH))
+    assert isinstance(tree, ast.Module)
+    funcs = _func_defs(tree)
+
+    for name, args in (
+        ("_http_get", ["url"]),
+        ("default_online_fetcher", ["query"]),
+        ("process_pending", ["fetcher"]),
+    ):
+        assert name in funcs, f"missing E0a stub: {name}"
+        fn = funcs[name]
+        assert [a.arg for a in fn.args.args] == args, f"{name} args mismatch"
+        assert _is_exact_e0a_raise(fn.body), (
+            f"{name} must be exact raise NotImplementedError({E0A_MSG!r})"
+        )
+    assert funcs["process_pending"].args.defaults, (
+        "process_pending must keep optional fetcher default"
+    )
+
+    allowed = funcs["online_fetch_allowed"]
+    assert [a.arg for a in allowed.args.args] == []
+    assert _returns_false_only(allowed.body), (
+        "online_fetch_allowed must return False with no side effects"
+    )
+    for node in ast.walk(allowed):
+        if isinstance(node, ast.Attribute) and node.attr in {"environ", "getenv"}:
+            raise AssertionError("online_fetch_allowed must not read environment")
+        if isinstance(node, ast.Call) and _call_name(node) == "getenv":
+            raise AssertionError("online_fetch_allowed must not call getenv")
+
+
+def test_e0b_scoped_modules_absent_or_caged() -> None:
+    """Scope E reserved cage: zero E0b modules now; DENY_E0B applies if any appear."""
+    scoped = iter_e0b_scoped_modules()
+    # (a) STEP 0 proof: E0b body not yet implemented.
+    assert scoped == [], (
+        "E0b-scoped modules must be absent at STEP 0; found: "
+        + ", ".join(str(p.relative_to(ROOT)) for p in scoped)
+    )
+    # (b) Reserved cage body — empty loop today; auto-enforces when modules appear.
+    cage_violations: list[str] = []
+    for path in scoped:
+        src = path.read_text(encoding="utf-8")
+        tree = ast.parse(src, filename=str(path))
+        for h in denied_imports_scope_e(tree):
+            cage_violations.append(f"{path.relative_to(ROOT)}: import {h}")
+        for h in has_dynamic_bypass(tree):
+            cage_violations.append(f"{path.relative_to(ROOT)}: bypass {h}")
+    assert not cage_violations, (
+        "Scope E DENY_E0B violations:\n" + "\n".join(cage_violations)
+    )
