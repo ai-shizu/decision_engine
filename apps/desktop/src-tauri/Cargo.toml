@@ -17,7 +17,7 @@ tauri-build = { version = "2", features = [] }
 tauri = { version = "2", features = [] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-tokio = { version = "1", features = ["time"] }
+tokio = { version = "1", features = ["time", "macros", "rt", "sync"] }
 base64 = "=0.22.1"
 ed25519-dalek = "=3.0.0"
 sha2 = "=0.11.0"
@@ -28,6 +28,18 @@ caseless = "=0.2.1"
 aho-corasick = "=1.1.3"
 hex = "=0.4.3"
 subtle = "=2.6.1"
+# STEP 5.A (feature-isolated): base build carries NO TLS provider at all, so the
+# toolchain-heavy aws-lc-sys/ring C builds are never triggered by a plain
+# `cargo build`/`cargo test`. TLS only enters via the opt-in `egress-live`
+# feature below (§1.4 blueprint update). Never add gzip/brotli/deflate/
+# native-tls/default-tls/socks/cookies here or under egress-live.
+reqwest = { version = "=0.13.4", default-features = false, features = ["stream"] }
+
+[features]
+# NOTE: the blueprint prose says "reqwest/rustls-tls"; reqwest 0.13.4's actual
+# feature name is "rustls" (verified via `cargo add --dry-run` feature listing
+# during STEP 5.A). Adapted to crate reality — still rustls-only, no native-tls.
+egress-live = ["reqwest/rustls"]
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61.2", features = [
@@ -44,3 +56,6 @@ windows-sys = { version = "0.61.2", features = [
 
 [target.'cfg(target_os = "linux")'.dependencies]
 libc = "0.2"
+
+[dev-dependencies]
+tokio = { version = "1", features = ["test-util", "macros", "rt", "time"] }

@@ -10,8 +10,10 @@
 
 pub mod attestation;
 pub mod canonicalize;
+pub mod dns_guard;
 pub mod dual_run;
 pub mod fsm;
+pub mod net_gateway;
 pub mod pii_snapshot;
 
 pub use attestation::{attestation_framing, verify_tag};

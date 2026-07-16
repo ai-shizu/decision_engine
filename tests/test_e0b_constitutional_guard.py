@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import ast
 import fnmatch
+import re
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -555,39 +556,291 @@ def test_rust_detector_canary() -> None:
     )
 
 
-def test_rust_has_no_http_client_dependency() -> None:
-    """Cargo.toml must not directly depend on HTTP client crates (= sterile build).
+FORBIDDEN_REQWEST_FEATURES = frozenset({
+    "gzip", "brotli", "deflate", "native-tls", "default-tls", "socks", "cookies",
+})
+# STEP 5.A (feature-isolation update): the BASE reqwest dependency must carry
+# NO TLS provider at all — only "stream". TLS enters exclusively through the
+# opt-in [features] egress-live = ["reqwest/<tls-feature>"] alias, never in the
+# base [dependencies] line. This keeps `cargo build`/`cargo test` (no flags)
+# free of any C-toolchain-requiring crypto backend (aws-lc-sys / ring).
+SAFE_REQWEST_BASE_FEATURE_SUPERSET = frozenset({"stream"})
+# reqwest 0.13.4's actual rustls-family feature is named "rustls" (not
+# "rustls-tls" as in the blueprint's original prose) — verified via
+# `cargo add --dry-run` feature listing during STEP 5.A. native-tls is never
+# an acceptable substitute (explicitly forbidden by the blueprint).
+ALLOWED_EGRESS_LIVE_TLS_FEATURES = frozenset({"rustls", "rustls-no-provider"})
+OTHER_HTTP_CLIENT_CRATES = frozenset({"hyper", "isahc", "ureq", "curl", "surf"})
 
-    INVERSION OBLIGATION (dependency-intro STEP): do not delete — rewrite to the
-    affirmative contract that reqwest enters with default-features=false and
-    features limited to rustls-tls,stream (no gzip/native-tls/socks). Separate
-    STEP under commander ACK; STEP 0 keeps the negative (unlinked) contract.
+
+def _reqwest_dep_line(text: str) -> str | None:
+    """Return the raw Cargo.toml line declaring the direct `reqwest` dependency.
+
+    Assumes single-line inline-table or string form (the form this repo uses for
+    all other pinned deps). Returns None if no such line exists in a
+    [dependencies]-like section.
+    """
+    in_deps = False
+    for line in text.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("[") and stripped.endswith("]"):
+            section = stripped[1:-1]
+            in_deps = (
+                section == "dependencies"
+                or section.endswith(".dependencies")
+                or section == "build-dependencies"
+            )
+            continue
+        if not in_deps or not stripped or stripped.startswith("#"):
+            continue
+        if "=" in stripped:
+            name = stripped.split("=", 1)[0].strip().strip('"')
+            if name == "reqwest":
+                return stripped
+    return None
+
+
+def _extract_toml_string_list(line: str, key: str) -> set[str] | None:
+    """Extract a `key = ["a", "b"]` string-list value from a single TOML line.
+
+    Matches `key` only at a token boundary (start-of-string or preceded by a
+    non-identifier char) so `features` does not match inside `default-features`.
+    """
+    pattern = re.compile(r"(?<![\w-])" + re.escape(key) + r"\s*=")
+    m = pattern.search(line)
+    if m is None:
+        return None
+    rest = line[m.end():].lstrip()
+    if not rest.startswith("["):
+        return None
+    end = rest.find("]")
+    if end == -1:
+        return None
+    inner = rest[1:end]
+    items = {tok.strip().strip('"').strip("'") for tok in inner.split(",") if tok.strip()}
+    return items
+
+
+def _cargo_features_section(text: str) -> dict[str, str]:
+    """Return {feature_name: raw_line} for every entry under [features]."""
+    out: dict[str, str] = {}
+    in_features = False
+    for line in text.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("[") and stripped.endswith("]"):
+            in_features = stripped[1:-1] == "features"
+            continue
+        if not in_features or not stripped or stripped.startswith("#"):
+            continue
+        if "=" in stripped:
+            name = stripped.split("=", 1)[0].strip().strip('"')
+            if name:
+                out[name] = stripped
+    return out
+
+
+def reqwest_config_report(line: str | None) -> dict[str, object]:
+    """Pure evaluation of a candidate BASE `reqwest = {...}` dependency line.
+
+    STEP 5.A (feature-isolation): the base line must carry default-features=false
+    and a features set that is a subset of SAFE_REQWEST_BASE_FEATURE_SUPERSET
+    ({"stream"}) — i.e. NO TLS provider feature and no forbidden feature.
+    Returns a dict with keys: present, default_features_false, features (set|None),
+    forbidden_features (set), safe (bool). Shared by the real Cargo.toml
+    assertion and the synthetic-canary check.
+    """
+    if line is None:
+        return {
+            "present": False,
+            "default_features_false": False,
+            "features": None,
+            "forbidden_features": set(),
+            "safe": False,
+        }
+    default_features_false = "default-features" in line and "false" in line.split(
+        "default-features", 1
+    )[1].split(",", 1)[0]
+    features = _extract_toml_string_list(line, "features")
+    forbidden = (features or set()) & FORBIDDEN_REQWEST_FEATURES
+    safe = bool(
+        default_features_false
+        and features is not None
+        and features <= SAFE_REQWEST_BASE_FEATURE_SUPERSET
+        and not forbidden
+    )
+    return {
+        "present": True,
+        "default_features_false": default_features_false,
+        "features": features,
+        "forbidden_features": forbidden,
+        "safe": safe,
+    }
+
+
+def egress_live_feature_report(line: str | None) -> dict[str, object]:
+    """Pure evaluation of the `egress-live = [...]` Cargo [features] entry.
+
+    Must reference exactly one `reqwest/<tls-feature>` activation where
+    <tls-feature> is rustls-family (never native-tls/default-tls), and must
+    not smuggle in any forbidden decompression/cookie feature via this alias.
+    """
+    if line is None:
+        return {"present": False, "reqwest_tls_features": set(), "safe": False}
+    items = _extract_toml_string_list(line, "egress-live")
+    if items is None:
+        return {"present": False, "reqwest_tls_features": set(), "safe": False}
+    reqwest_tls_features = {
+        item.split("/", 1)[1] for item in items if item.startswith("reqwest/")
+    }
+    forbidden = reqwest_tls_features & (FORBIDDEN_REQWEST_FEATURES | {"native-tls", "default-tls"})
+    safe = bool(
+        reqwest_tls_features
+        and reqwest_tls_features <= ALLOWED_EGRESS_LIVE_TLS_FEATURES
+        and not forbidden
+    )
+    return {
+        "present": True,
+        "reqwest_tls_features": reqwest_tls_features,
+        "safe": safe,
+    }
+
+
+def test_rust_reqwest_safe_config() -> None:
+    """STEP 5.A affirmative contract (feature-isolation): the BASE reqwest
+    dependency carries ONLY `stream` (no TLS provider at all, so the default
+    `cargo build`/`cargo test` never needs a C toolchain); TLS is isolated
+    behind the opt-in `egress-live = ["reqwest/<rustls-family>"]` feature alias,
+    which itself must never enable native-tls/default-tls/decompression/cookies.
+    Also asserts no *other* HTTP client crate sneaks in.
+
+    INVERSION OBLIGATION lineage: this replaces test_rust_has_no_http_client_dependency
+    per the STEP 0.E docstring's inversion obligation, at commander-ACK'd STEP 5.A
+    (feature-isolation revision).
     """
     text = CARGO_TOML.read_text(encoding="utf-8")
     deps = _cargo_toml_direct_deps(text)
-    banned = sorted(HTTP_CLIENT_CRATES.intersection(deps))
-    assert not banned, (
-        "HTTP client crates must not be direct Cargo.toml dependencies; found: "
-        + ", ".join(banned)
+    assert "reqwest" in deps, "reqwest must be a direct Cargo.toml dependency"
+
+    other_clients = sorted(OTHER_HTTP_CLIENT_CRATES.intersection(deps))
+    assert not other_clients, (
+        "Only reqwest may be a direct HTTP client dependency; found: "
+        + ", ".join(other_clients)
+    )
+
+    line = _reqwest_dep_line(text)
+    report = reqwest_config_report(line)
+    assert report["present"], "reqwest dependency line not found in Cargo.toml"
+    assert report["default_features_false"], (
+        "reqwest must declare default-features = false"
+    )
+    features = report["features"]
+    assert features is not None, "reqwest base features list must be explicit"
+    assert features <= SAFE_REQWEST_BASE_FEATURE_SUPERSET, (
+        f"reqwest BASE features must be a subset of {SAFE_REQWEST_BASE_FEATURE_SUPERSET} "
+        f"(TLS must be isolated behind egress-live); found: {features}"
+    )
+    assert not report["forbidden_features"], (
+        "reqwest must not enable decompression/native-tls/socks/cookies features; "
+        f"found: {report['forbidden_features']}"
+    )
+    assert report["safe"], "reqwest_config_report must report safe=True"
+
+    features_section = _cargo_features_section(text)
+    egress_line = features_section.get("egress-live")
+    live_report = egress_live_feature_report(egress_line)
+    assert live_report["present"], "egress-live feature alias must be defined in [features]"
+    assert live_report["safe"], (
+        "egress-live must activate exactly a rustls-family reqwest TLS feature "
+        f"with no forbidden features; found: {live_report['reqwest_tls_features']}"
     )
 
 
-def test_rust_src_has_no_outbound_network_calls() -> None:
-    """src-tauri/src/**/*.rs must not contain outbound network client/socket symbols.
+def test_rust_reqwest_unsafe_config_canary() -> None:
+    """Canary: synthetic unsafe configs must be judged unsafe on both axes."""
+    unsafe_base = 'reqwest = { version = "0.13", features = ["gzip"] }'
+    report = reqwest_config_report(unsafe_base)
+    assert report["present"] is True
+    assert not report["safe"], "gzip-enabling reqwest base config must be flagged unsafe"
+    assert "gzip" in report["forbidden_features"]
 
-    WinSock / AF_INET usage in os_sandbox.rs and pkb-sandbox-probe.rs is AppContainer
-    / seccomp capability stripping (denial), not egress — those symbols are outside
-    RUST_OUTBOUND_PATTERNS by design.
+    missing_line = None
+    assert reqwest_config_report(missing_line)["safe"] is False
+
+    # A base line that (mis-)includes a TLS feature directly must be unsafe.
+    tls_in_base = 'reqwest = { version = "0.13", default-features = false, features = ["stream", "rustls"] }'
+    assert reqwest_config_report(tls_in_base)["safe"] is False
+
+    # egress-live canaries: native-tls forbidden; unknown TLS feature forbidden.
+    assert egress_live_feature_report('egress-live = ["reqwest/native-tls"]')["safe"] is False
+    assert egress_live_feature_report('egress-live = ["reqwest/gzip"]')["safe"] is False
+    assert egress_live_feature_report('egress-live = ["reqwest/rustls"]')["safe"] is True
+    assert egress_live_feature_report(None)["safe"] is False
+
+
+# EGRESS_ALLOWED_FILES: the single-file ratchet for STEP 5 (§1.4 blueprint).
+# reqwest:: may appear ONLY in these basenames; every other outbound-network
+# pattern (raw sockets, other HTTP client crates) stays forbidden everywhere,
+# including inside the allowed file itself.
+EGRESS_ALLOWED_FILES = frozenset({"net_gateway.rs"})
+RUST_EGRESS_SCOPED_PATTERNS = ("reqwest::",)
+RUST_ALWAYS_FORBIDDEN_PATTERNS = (
+    "TcpStream",
+    "tokio::net",
+    "hyper::",
+    "UdpSocket",
+    "isahc::",
+    "ureq::",
+    "surf::",
+)
+
+
+def rust_outbound_hits_scoped(basename: str, text: str) -> list[str]:
+    """Scoped outbound-network detector (STEP 5.A reversal).
+
+    Always-forbidden patterns are denied in every file, including net_gateway.rs.
+    Egress-scoped patterns (reqwest::) are denied everywhere EXCEPT basenames in
+    EGRESS_ALLOWED_FILES.
+    """
+    hits: list[str] = []
+    for pat in RUST_ALWAYS_FORBIDDEN_PATTERNS:
+        if pat in text:
+            hits.append(pat)
+    if basename not in EGRESS_ALLOWED_FILES:
+        for pat in RUST_EGRESS_SCOPED_PATTERNS:
+            if pat in text:
+                hits.append(pat)
+    return hits
+
+
+def test_rust_outbound_scoped_detector_canary() -> None:
+    """Canary: reqwest:: violates outside net_gateway.rs, is allowed inside it;
+    always-forbidden patterns violate even inside net_gateway.rs."""
+    assert rust_outbound_hits_scoped("commands.rs", "reqwest::get(x)") == ["reqwest::"]
+    assert rust_outbound_hits_scoped("net_gateway.rs", "reqwest::get(x)") == []
+    assert rust_outbound_hits_scoped("net_gateway.rs", "tokio::net::TcpStream") == [
+        "TcpStream",
+        "tokio::net",
+    ]
+    for allow in RUST_SANDBOX_ALLOW_SUBSTRINGS:
+        assert rust_outbound_hits_scoped("os_sandbox.rs", allow) == []
+
+
+def test_rust_src_has_no_outbound_network_calls_scoped() -> None:
+    """src-tauri/src/**/*.rs: reqwest:: confined to net_gateway.rs; all raw-socket
+    and other-HTTP-client symbols remain forbidden in every file (incl. net_gateway.rs).
+
+    INVERSION OBLIGATION lineage: this replaces test_rust_src_has_no_outbound_network_calls
+    per the STEP 0.E docstring's inversion obligation, at commander-ACK'd STEP 5.A.
     """
     assert RUST_SRC.is_dir(), f"missing Rust src tree: {RUST_SRC}"
     violations: list[str] = []
     for path in sorted(RUST_SRC.rglob("*.rs")):
         text = path.read_text(encoding="utf-8")
-        hits = rust_outbound_hits(text)
+        hits = rust_outbound_hits_scoped(path.name, text)
         if hits:
             rel = path.relative_to(ROOT)
             violations.append(f"{rel}: {', '.join(hits)}")
     assert not violations, (
-        "Outbound network symbols found in Rust sources:\n"
+        "Outbound network symbols found in Rust sources (scoped check):\n"
         + "\n".join(violations)
     )
