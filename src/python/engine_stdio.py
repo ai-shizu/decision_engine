@@ -196,6 +196,14 @@ def dispatch(cmd: str, params: dict[str, Any], emit: EventEmitter | None = None)
         if type(params) is not dict or params:
             raise ValueError("context.manifest.latest accepts no params")
         return facade.latest_context_manifest()
+    if cmd == "knowledge.intent.build":
+        if type(params) is not dict:
+            raise ValueError("E0B_VALIDATION_REJECTED")
+        return facade.knowledge_intent_build(params)
+    if cmd == "knowledge.integrate":
+        if type(params) is not dict:
+            raise ValueError("E0B_VALIDATION_REJECTED")
+        return facade.knowledge_integrate(params)
     if cmd == "shutdown":
         facade.shutdown_engine()
         return {"status": "stopped"}

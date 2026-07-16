@@ -64,10 +64,14 @@ DENY_CALL_NAMES = frozenset({
 
 E0A_MSG = "Egress blocked by E0a strict lockdown."
 
-E0B_BASENAME_GLOBS = ("knowledge_gateway*.py", "*e0b*.py")
+E0B_BASENAME_GLOBS = ("knowledge_gateway*.py", "*e0b*.py", "external_evidence.py")
 
-# STEP 1.A: sanctioned Scope E modules (basename only). Unsanctioned *e0b*.py → RED.
-SANCTIONED_E0B_MODULES = frozenset({"e0b_attestation.py", "e0b_intent.py"})
+# STEP 1.A / 6.A: sanctioned Scope E modules (basename only). Unsanctioned → RED.
+SANCTIONED_E0B_MODULES = frozenset({
+    "e0b_attestation.py",
+    "e0b_intent.py",
+    "external_evidence.py",
+})
 
 
 # ---------------------------------------------------------------------------
@@ -376,26 +380,30 @@ def test_e0b_scoped_modules_absent_or_caged() -> None:
 ENGINE_STDIO = PYTHON_SRC / "engine_stdio.py"
 FACADE_PATH = PYTHON_SRC / "core" / "facade.py"
 
-E0B_IPC_COMMANDS = frozenset({
+# Python-side E0b IPC: intent.build + integrate only.
+# Phase B (fetch) is Rust-owned; knowledge.research must stay out of Python dispatch.
+E0B_PYTHON_IPC_COMMANDS = frozenset({
     "knowledge.intent.build",
-    "knowledge.research",
     "knowledge.integrate",
 })
+E0B_RUST_ONLY_IPC = "knowledge.research"
 
-# Public facade names that would constitute E0b egress entrypoints (deny list).
-# fetch_pending_knowledge is the E0a raise-stub and is explicitly allowed.
-E0B_FACADE_EGRESS_NAMES = frozenset({
+# Affirmative facade entrypoints (STEP 6.A guard reversal).
+E0B_FACADE_REQUIRED = frozenset({
+    "knowledge_intent_build",
+    "knowledge_integrate",
+})
+# Names that must remain absent (research is Rust orchestrator, not Python facade).
+E0B_FACADE_FORBIDDEN = frozenset({
     "intent_build",
     "build_intent",
-    "knowledge_intent_build",
     "research",
     "knowledge_research",
     "start_research",
     "integrate",
-    "knowledge_integrate",
     "integrate_knowledge",
     "run_research",
-    "fetch_knowledge",  # distinct from fetch_pending_knowledge (E0a stub)
+    "fetch_knowledge",
 })
 
 
@@ -418,47 +426,95 @@ def _dispatch_string_constants(tree: ast.Module) -> list[str]:
     return found
 
 
-def test_no_e0b_ipc_command_wired() -> None:
-    """Fail-closed: E0b IPC command strings must not exist in dispatch body.
+def _dispatch_branch_calls_facade(tree: ast.Module, cmd: str, facade_attr: str) -> bool:
+    """True iff an `if cmd == <cmd>` branch body calls facade.<facade_attr>(...)."""
+    dispatch_fn: ast.FunctionDef | None = None
+    for node in tree.body:
+        if isinstance(node, ast.FunctionDef) and node.name == "dispatch":
+            dispatch_fn = node
+            break
+    assert dispatch_fn is not None
 
-    INVERSION OBLIGATION (STEP 5/8): when E0b commands are wired, do NOT delete
-    this test — rewrite it to the affirmative form that the commands exist AND
-    always pass through attestation + dual-run gate. That rewrite is a separate
-    STEP under commander ACK; STEP 0 must keep the negative (unwired) contract.
+    for node in ast.walk(dispatch_fn):
+        if not isinstance(node, ast.If):
+            continue
+        test = node.test
+        if not (
+            isinstance(test, ast.Compare)
+            and isinstance(test.left, ast.Name)
+            and test.left.id == "cmd"
+            and len(test.ops) == 1
+            and isinstance(test.ops[0], ast.Eq)
+            and len(test.comparators) == 1
+            and isinstance(test.comparators[0], ast.Constant)
+            and test.comparators[0].value == cmd
+        ):
+            continue
+        for child in ast.walk(node):
+            if not isinstance(child, ast.Call):
+                continue
+            func = child.func
+            if (
+                isinstance(func, ast.Attribute)
+                and func.attr == facade_attr
+                and isinstance(func.value, ast.Name)
+                and func.value.id == "facade"
+            ):
+                return True
+    return False
+
+
+def test_e0b_ipc_commands_wired_through_facade_gate() -> None:
+    """STEP 6.A affirmative: intent.build + integrate are wired via facade gates.
+
+    INVERSION of test_no_e0b_ipc_command_wired. knowledge.research remains absent
+    from Python dispatch (Rust orchestrator owns phase B).
     """
     src = ENGINE_STDIO.read_text(encoding="utf-8")
     tree = ast.parse(src, filename=str(ENGINE_STDIO))
     assert isinstance(tree, ast.Module)
-    constants = _dispatch_string_constants(tree)
-    hits = sorted(E0B_IPC_COMMANDS.intersection(constants))
-    assert not hits, (
-        "E0b IPC commands must not be wired in dispatch yet; found: "
-        + ", ".join(hits)
+    constants = set(_dispatch_string_constants(tree))
+
+    missing = sorted(E0B_PYTHON_IPC_COMMANDS - constants)
+    assert not missing, (
+        "E0b Python IPC commands must be wired in dispatch; missing: "
+        + ", ".join(missing)
     )
+    assert E0B_RUST_ONLY_IPC not in constants, (
+        "knowledge.research must not be wired in Python dispatch "
+        "(Rust orchestrator owns phase B)"
+    )
+    assert _dispatch_branch_calls_facade(
+        tree, "knowledge.intent.build", "knowledge_intent_build"
+    ), "knowledge.intent.build must call facade.knowledge_intent_build"
+    assert _dispatch_branch_calls_facade(
+        tree, "knowledge.integrate", "knowledge_integrate"
+    ), "knowledge.integrate must call facade.knowledge_integrate"
 
 
-def test_facade_has_no_e0b_egress_entrypoint() -> None:
-    """Fail-closed: facade must expose no E0b intent/research/integrate egress APIs.
+def test_facade_has_gated_e0b_entrypoint() -> None:
+    """STEP 6.A affirmative: facade exposes gated intent/integrate APIs.
 
-    E0a fetch_pending_knowledge (exact raise stub) remains allowed.
-    INVERSION OBLIGATION (STEP 5/8): same as test_no_e0b_ipc_command_wired —
-    rewrite to affirmative gated contract; do not merely delete.
+    INVERSION of test_facade_has_no_e0b_egress_entrypoint.
+    E0a fetch_pending_knowledge raise stub remains required.
     """
     src = FACADE_PATH.read_text(encoding="utf-8")
     tree = ast.parse(src, filename=str(FACADE_PATH))
     assert isinstance(tree, ast.Module)
     funcs = _func_defs(tree)
 
-    # E0a stub must still be present as exact raise (allowed exception).
     assert "fetch_pending_knowledge" in funcs
     assert _is_exact_e0a_raise(funcs["fetch_pending_knowledge"].body), (
         "fetch_pending_knowledge must remain exact E0a raise stub"
     )
 
-    banned = sorted(name for name in funcs if name in E0B_FACADE_EGRESS_NAMES)
+    missing = sorted(name for name in E0B_FACADE_REQUIRED if name not in funcs)
+    assert not missing, (
+        "E0b gated facade entrypoints must exist; missing: " + ", ".join(missing)
+    )
+    banned = sorted(name for name in funcs if name in E0B_FACADE_FORBIDDEN)
     assert not banned, (
-        "E0b egress facade entrypoints must not exist yet; found: "
-        + ", ".join(banned)
+        "forbidden E0b facade names must remain absent; found: " + ", ".join(banned)
     )
 
 

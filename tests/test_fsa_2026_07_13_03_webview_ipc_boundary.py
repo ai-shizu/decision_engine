@@ -37,6 +37,7 @@ EXPOSED_COMMANDS = {
     "profile_source_code",
     "narrative_compile",
     "knowledge_fetch_pending",
+    "knowledge_research",
     "probe_status",
     "probe_next",
     "probe_answer",

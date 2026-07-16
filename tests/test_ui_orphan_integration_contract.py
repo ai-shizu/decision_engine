@@ -28,10 +28,13 @@ def test_orphan_engine_wrappers() -> None:
 
     assert "export async function narrativeCompile" in engine
     assert "export async function knowledgeFetchPending" in engine
+    assert "export async function knowledgeResearch" in engine
     assert '"narrative_compile"' in engine
     assert '"knowledge_fetch_pending"' in engine
+    assert '"knowledge_research"' in engine
     assert '"narrative.compile"' not in engine
     assert '"knowledge.fetch_pending"' not in engine
+    assert '"knowledge.research"' not in engine
 
     for cmd in (
         '"profile_source_code"',

@@ -50,6 +50,7 @@ pub fn run() {
             commands::profile_source_code,
             commands::narrative_compile,
             commands::knowledge_fetch_pending,
+            commands::knowledge_research,
             commands::probe_status,
             commands::probe_next,
             commands::probe_answer,

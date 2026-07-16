@@ -79,6 +79,11 @@ export const UI_ERROR_SPECS = {
       "知識キューの処理結果を確認できませんでした。現在の状態を確認し、必要な場合だけ再実行してください。",
     retryPolicy: "verify-first",
   },
+  KNOWLEDGE_RESEARCH: {
+    message:
+      "外部知識の取得は現在無効です（無網ポリシー）。Egress Live が有効になるまで利用できません。",
+    retryPolicy: "verify-first",
+  },
   PROFILE_LOAD: {
     message: "プロフィール情報を読み込めませんでした。もう一度お試しください。",
     retryPolicy: "retry-safe",

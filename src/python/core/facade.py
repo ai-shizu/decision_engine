@@ -230,6 +230,48 @@ def fetch_pending_knowledge() -> dict:
     raise NotImplementedError("Egress blocked by E0a strict lockdown.")
 
 
+def knowledge_intent_build(params: dict) -> dict:
+    """E0b phase A: build attested intent (no network). Gate for Rust dual-run."""
+    if type(params) is not dict:
+        raise ValueError("E0B_VALIDATION_REJECTED")
+    from .e0b_intent import build_attested_intent, load_spawn_key_from_env
+    from .privacy_search import EgressSanitizer
+
+    required = {
+        "abstract_queries",
+        "session_id",
+        "txn_nonce",
+        "sidecar_generation",
+        "policy_epoch",
+        "dict_hash",
+        "dict_terms",
+    }
+    if set(params.keys()) != required:
+        raise ValueError("E0B_VALIDATION_REJECTED")
+    terms = params["dict_terms"]
+    if type(terms) is not list or not all(type(t) is str for t in terms):
+        raise ValueError("E0B_VALIDATION_REJECTED")
+    sanitizer = EgressSanitizer(terms)
+    k_spawn = load_spawn_key_from_env()
+    return build_attested_intent(
+        params["abstract_queries"],
+        k_spawn=k_spawn,
+        session_id=params["session_id"],
+        txn_nonce=params["txn_nonce"],
+        sidecar_generation=params["sidecar_generation"],
+        policy_epoch=params["policy_epoch"],
+        dict_hash=params["dict_hash"],
+        sanitizer=sanitizer,
+    )
+
+
+def knowledge_integrate(params: dict) -> dict:
+    """E0b phase C: strict integrate into isolated external sidecar (no network)."""
+    from .external_evidence import integrate_external_results
+
+    return integrate_external_results(params)
+
+
 def sync_diary_index(force: bool = False) -> bool:
     return get_engine().sync_diary_index(force=force)
 
@@ -932,6 +974,8 @@ __all__ = [
     "consult",
     "data_source_stats",
     "fetch_pending_knowledge",
+    "knowledge_intent_build",
+    "knowledge_integrate",
     "format_line_import",
     "format_user_profile_summary",
     "get_engine",

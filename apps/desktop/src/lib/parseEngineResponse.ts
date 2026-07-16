@@ -871,6 +871,46 @@ export function parseKnowledgeFetchSummary(value: unknown): KnowledgeFetchSummar
 }
 
 
+const RESEARCH_ID_RE = /^[0-9a-f]{64}$/;
+
+
+export interface KnowledgeResearchReceipt {
+  schema: "knowledge_research_receipt.v1";
+  research_id: string;
+  results_persisted: number;
+}
+
+
+export function parseKnowledgeResearchReceipt(value: unknown): KnowledgeResearchReceipt {
+  const object = exactObject(
+    value,
+    ["schema", "research_id", "results_persisted"],
+    [],
+    "knowledge_research_receipt",
+  );
+  if (object.schema !== "knowledge_research_receipt.v1") {
+    fail("knowledge_research_receipt.schema", "expected knowledge_research_receipt.v1");
+  }
+  if (typeof object.research_id !== "string" || !RESEARCH_ID_RE.test(object.research_id)) {
+    fail("knowledge_research_receipt.research_id", "expected 64 lowercase hex");
+  }
+  // Reject any accidental leakage of raw external payload fields.
+  for (const banned of ["query", "title", "content", "snippet", "url", "message", "error"]) {
+    if (Object.prototype.hasOwnProperty.call(object, banned)) {
+      fail(`knowledge_research_receipt.${banned}`, "forbidden field");
+    }
+  }
+  return {
+    schema: "knowledge_research_receipt.v1",
+    research_id: object.research_id,
+    results_persisted: asNonNegativeInteger(
+      object.results_persisted,
+      "knowledge_research_receipt.results_persisted",
+    ),
+  };
+}
+
+
 function parseProbeAxis(value: unknown, path: string): ProbeAxis {
   return asLiteral(value, PROBE_AXES, path);
 }

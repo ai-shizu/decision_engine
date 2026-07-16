@@ -11,6 +11,7 @@ import {
   parseEsView,
   parseImportStats,
   parseKnowledgeFetchSummary,
+  parseKnowledgeResearchReceipt,
   parseLineImportResult,
   parseNarrativeCompileResult,
   parseOraclePayload,
@@ -29,6 +30,7 @@ import {
   type CalendarSyncResult,
   type DocumentImportResult,
   type KnowledgeFetchSummary,
+  type KnowledgeResearchReceipt,
   type LineImportResult,
   type NarrativeCompileResult,
   type OraclePayload,
@@ -77,6 +79,7 @@ type EngineIpcCommand =
   | "profile_source_code"
   | "narrative_compile"
   | "knowledge_fetch_pending"
+  | "knowledge_research"
   | "probe_status"
   | "probe_next"
   | "probe_answer"
@@ -355,6 +358,11 @@ export async function narrativeCompile(targetDomain?: string): Promise<Narrative
 
 export async function knowledgeFetchPending(): Promise<KnowledgeFetchSummary> {
   return invokeEngine("knowledge_fetch_pending", parseKnowledgeFetchSummary);
+}
+
+
+export async function knowledgeResearch(query: string): Promise<KnowledgeResearchReceipt> {
+  return invokeEngine("knowledge_research", parseKnowledgeResearchReceipt, { query });
 }
 
 

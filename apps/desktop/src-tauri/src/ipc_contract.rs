@@ -514,3 +514,17 @@ impl ValidateRequest for ProbeAnswerRequest {
         require_iso_date(&self.today, "today")
     }
 }
+
+/// STEP 6: explicit external research request (no URL / no live egress by default).
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct KnowledgeResearchRequest {
+    query: String,
+}
+
+impl ValidateRequest for KnowledgeResearchRequest {
+    fn validate(&self) -> Result<(), String> {
+        require_nonempty(&self.query, "query")?;
+        require_max_bytes(&self.query, "query", MAX_SHORT_TEXT_BYTES)
+    }
+}
