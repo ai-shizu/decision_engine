@@ -511,6 +511,31 @@ Phase 4-E **E0a EMERGENCY EGRESS LOCKDOWN** により、外向き knowledge fetc
 
 **テスト規律**: 実ネットワークを叩くテストを書くな。E0a 契約は `tests/test_e0a_egress_lockdown.py`。
 
+### 7.2.1 E0b 外部知識 Sidecar（STEP 6 統合 — 無網既定）
+
+E0b は Rust Gateway（STEP 1–5）を Python 永続化・プロンプト・Tauri 境界へ結線する。**本番
+`NetworkPolicy::Off`** — `knowledge_research` は `EGRESS_LIVE_NOT_READY` で即拒否。
+`egress-live` / `ReqwestTransport` は未結線（DNS pinning TOCTOU は Egress Live の必達ブロッカー）。
+
+- **隔離永続化**: `data/knowledge/external/ext_{research_id}.json` のみ。
+  `load_knowledge_chunks()`（`^##` 分割）は非再帰のため対象外。`sync_knowledge_index()` と
+  intent 生成は external を読まない。
+- **プロンプト唯一入口**: `core/external_evidence.render_external_evidence()`。
+  毎 render で Rust/Python 同一サニタイザ（`render_guard` / `sanitize_external_text`）を適用。
+  `build_dynamic_suffix()` の**コンテキスト最後尾**（user query / `OUTPUT_FRAMEWORK` の前）のみ。
+- **明示バインド**: consult は `external_research_id`（64hex）+ 現在 query の digest 一致時のみ
+  sidecar を載せる。simulation モード（`interview_sim` / `gd_sim` / `es_review` /
+  `romance_analysis`）へは注入禁止（`test_integration._assert_no_gap_leak` 系と同格）。
+- **UI 無菌**: receipt は `research_id` + `results_persisted` のみ。title/content/url/query を
+  WebView へ渡すな。相談出力は `<pre>` テキストノードのまま（Markdown/HTML renderer 禁止）。
+- **残余リスク（RAG 限界）**: 構造無効化と非 egress 化は証明できるが、もっともらしい平文による
+  プロンプト誘導をゼロにすることはできない。`build_dynamic_suffix` / `render_external_evidence`
+  の docstring に明記済み — 過大主張するな。
+
+**ハマりどころ**: STEP 6 本番は orchestrator の Fake 経路も UI からは到達しない。憲法ガードは
+`knowledge.intent.build` / `knowledge.integrate` の肯定形反転を維持し、**`knowledge.research` を
+Python dispatch に足すな**（phase B は Rust 専有）。
+
 ---
 
 ## 8. Target Alpha: KV slot cache — RETIRED by FSA-2026-07-13-01/02

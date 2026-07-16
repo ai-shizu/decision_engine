@@ -40,6 +40,8 @@ PKB（Personal Knowledge Base）は、完全オフラインを原則とする自
 - 個人データはローカル永続化（コミット禁止領域あり）
 - 埋め込みモデル・LLM は遅延初期化（初回 consult / profiler まで起動しない）
 - オンライン knowledge fetch は Phase 4-E E0a により無条件封鎖中（外向き HTTP 経路なし）
+- E0b STEP 6: 外部 research の Tauri コマンド `knowledge_research` は本番 `NetworkPolicy::Off`
+  （`EGRESS_LIVE_NOT_READY`）。永続化は `data/knowledge/external/` の JSON sidecar のみ
 
 モデル名、容量、具体的テスト件数は本書に書かない（揮発するため。正本は `config/model_params.json` とテスト実行結果）。
 
@@ -58,6 +60,8 @@ PKB（Personal Knowledge Base）は、完全オフラインを原則とする自
 | persistence paths | `src/python/core/paths.py` |
 | retrieval / compiler | `src/python/core/session_memory.py` / `src/python/core/retrieval_manifest.py` |
 | consultation | `src/python/core/consultation_engine.py` |
+| E0b external evidence (sidecar / render) | `src/python/core/external_evidence.py` |
+| E0b networkless orchestrator | `apps/desktop/src-tauri/src/knowledge/orchestrator.rs` |
 | C++ search contract | `src/python/core/pipeline.py` / `src/cpp/search_engine.cpp` |
 | runtime parsers | `apps/desktop/src/lib/parseConsultResponse.ts` / `apps/desktop/src/lib/parseManifest.ts` |
 | incidents | `docs/architecture/INCIDENT_LEDGER.md` |

@@ -73,6 +73,7 @@ VERIFY_FIRST = {
     "APPLE_CALENDAR_SYNC",
     "DOCUMENT_IMPORT",
     "KNOWLEDGE_FETCH",
+    "KNOWLEDGE_RESEARCH",
     "ORACLE_REPORT",
     "TENSOR_REBUILD",
     "SETTINGS_SAVE",
@@ -185,7 +186,7 @@ def test_import_error_catch_has_no_file_name() -> None:
         assert "file?.name" not in block
 
 
-def test_helper_api_and_exact_twenty_one_keys() -> None:
+def test_helper_api_and_exact_twenty_two_keys() -> None:
     assert HELPER.is_file(), "uiErrorMessages.ts missing"
     src = HELPER.read_text(encoding="utf-8")
     # Must not accept an error/exception argument.
@@ -193,7 +194,7 @@ def test_helper_api_and_exact_twenty_one_keys() -> None:
     assert not re.search(r"function\s+uiErrorMessage\s*\([^)]*err", src)
     assert not re.search(r"function\s+uiErrorMessage\s*\([^)]*error", src)
     keys = re.findall(r"^\s{2}([A-Z0-9_]+):\s*\{", src, flags=re.M)
-    assert len(keys) == 21, f"expected 21 keys, got {len(keys)}: {keys}"
+    assert len(keys) == 22, f"expected 22 keys, got {len(keys)}: {keys}"
     assert set(keys) == RETRY_SAFE | VERIFY_FIRST
 
 
@@ -233,7 +234,7 @@ def test_retry_policy_aligns_with_rust_replay_policy() -> None:
 def test_fixed_messages_have_no_path_json_exception_tokens() -> None:
     helper = HELPER.read_text(encoding="utf-8")
     messages = re.findall(r'message:\s*"([^"]+)"', helper)
-    assert len(messages) == 21
+    assert len(messages) == 22
     banned = [
         "ValueError",
         "RuntimeError",

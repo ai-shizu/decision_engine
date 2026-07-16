@@ -373,10 +373,7 @@ mod platform {
                 return Err(std::io::Error::last_os_error());
             }
             self.try_wait()?.ok_or_else(|| {
-                std::io::Error::new(
-                    std::io::ErrorKind::Other,
-                    "AppContainer process remained active after wait",
-                )
+                std::io::Error::other("AppContainer process remained active after wait")
             })
         }
 
@@ -467,8 +464,7 @@ mod platform {
         if attribute_size == 0 {
             return Err(last_error("size process attribute list"));
         }
-        let words =
-            (attribute_size + std::mem::size_of::<usize>() - 1) / std::mem::size_of::<usize>();
+        let words = attribute_size.div_ceil(std::mem::size_of::<usize>());
         let mut attributes = AttributeList {
             storage: vec![0usize; words],
         };

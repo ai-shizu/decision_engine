@@ -1,13 +1,7 @@
 //! STEP 6.E — cross-language sanitize golden (byte parity with Python).
-#![deny(
-    clippy::unwrap_used,
-    clippy::expect_used,
-    clippy::panic,
-    clippy::indexing_slicing,
-    clippy::string_slice
-)]
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
-use pkb_desktop_lib::knowledge::render_guard::sanitize_external_text;
+use pkb_desktop_lib::knowledge::render_guard::{sanitize_external_text, SanitizeError};
 use serde::Deserialize;
 use std::path::PathBuf;
 
@@ -45,7 +39,7 @@ fn rust_sanitize_matches_golden_byte_exact() {
                     row.name
                 );
             }
-            Err(()) if !row.ok => {}
+            Err(SanitizeError::Rejected) if !row.ok => {}
             other => panic!("unexpected outcome for {}: {other:?}", row.name),
         }
     }

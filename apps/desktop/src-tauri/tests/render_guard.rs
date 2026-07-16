@@ -1,11 +1,5 @@
 //! STEP 6.B — render_guard negative matrix.
-#![deny(
-    clippy::unwrap_used,
-    clippy::expect_used,
-    clippy::panic,
-    clippy::indexing_slicing,
-    clippy::string_slice
-)]
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
 use pkb_desktop_lib::knowledge::render_guard::sanitize_external_text;
 

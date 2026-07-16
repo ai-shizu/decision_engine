@@ -41,8 +41,7 @@ impl Write for CappedJsonSink {
     fn write(&mut self, buffer: &[u8]) -> io::Result<usize> {
         if buffer.len() > MAX_REQUEST_PARAMS_JSON_BYTES.saturating_sub(self.written) {
             self.exceeded = true;
-            return Err(io::Error::new(
-                io::ErrorKind::Other,
+            return Err(io::Error::other(
                 "renderer request size limit exceeded",
             ));
         }

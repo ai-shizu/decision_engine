@@ -169,8 +169,10 @@ fn spawn_stdin_worker(
 fn spawn_stdout_worker(
     stdout: Box<dyn Read + Send>,
 ) -> (mpsc::Receiver<Result<String, InvokeError>>, JoinHandle<()>) {
-    debug_assert!(IPC_STDOUT_QUEUE_CAPACITY <= IPC_MAX_MESSAGES_PER_REQUEST);
-    spawn_stdout_worker_with_capacity(stdout, IPC_STDOUT_QUEUE_CAPACITY)
+    spawn_stdout_worker_with_capacity(
+        stdout,
+        IPC_STDOUT_QUEUE_CAPACITY.min(IPC_MAX_MESSAGES_PER_REQUEST),
+    )
 }
 
 fn spawn_stdout_worker_with_capacity(

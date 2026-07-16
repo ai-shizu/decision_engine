@@ -477,7 +477,7 @@ pub fn verify_signed_manifest_with_key(
     let signature_text = String::from_utf8(read_small_regular_file(signature_path, 128)?)
         .map_err(|_| auth_error("manifest signature is not UTF-8"))?;
     let signature_bytes = decode_hex_exact::<64>(signature_text.trim())?;
-    if signature_text.as_bytes().len() != 128 {
+    if signature_text.trim().len() != 128 {
         return Err(auth_error("manifest signature has trailing data"));
     }
     let verifying_key = VerifyingKey::from_bytes(public_key)

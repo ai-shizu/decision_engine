@@ -131,9 +131,11 @@ def test_stdio_dispatch_ignores_unknown_params() -> None:
     captured: dict = {}
 
     def fake_consult(query, status=None, on_token=None, mode="consult",
-                     personas=None, response_time_sec=None, config=None):
+                     personas=None, response_time_sec=None, config=None,
+                     external_research_id=None):
         captured["kwargs"] = {"query": query, "mode": mode, "personas": personas,
-                              "response_time_sec": response_time_sec, "config": config}
+                              "response_time_sec": response_time_sec, "config": config,
+                              "external_research_id": external_research_id}
         return "FAKE ANSWER"
 
     class _FakeFacade:

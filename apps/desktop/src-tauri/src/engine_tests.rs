@@ -888,7 +888,7 @@ fn requests_serialized_under_connection_lock() {
     });
     // Wait until first request has been written (lock held in recv Block)
     for _ in 0..200 {
-        if sent.lock().unwrap().len() >= 1 {
+        if !sent.lock().unwrap().is_empty() {
             break;
         }
         thread::sleep(Duration::from_millis(5));

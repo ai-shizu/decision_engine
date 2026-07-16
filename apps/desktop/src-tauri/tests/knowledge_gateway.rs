@@ -271,7 +271,7 @@ async fn cancel_drops_pending_stream_no_zombie() {
 #[test]
 fn safe_truncate_never_panics_on_multibyte_boundary() {
     let ch = '\u{3042}'; // U+3042 HIRAGANA LETTER A — 3 bytes/char in UTF-8
-    let s: String = std::iter::repeat(ch).take(500).collect();
+    let s: String = std::iter::repeat_n(ch, 500).collect();
     let truncated = safe_truncate(&s, 256);
     assert!(truncated.len() <= 256);
     assert!(s.starts_with(&truncated));
@@ -414,7 +414,7 @@ async fn e2e_bad_hmac_aborts_before_any_egress() {
         &slot,
         &transport,
         &resolver,
-        || std::future::pending::<()>(),
+        std::future::pending::<()>,
         Duration::from_secs(5),
     )
     .await;
@@ -438,7 +438,7 @@ async fn e2e_pii_hit_aborts_before_any_egress() {
         &slot,
         &transport,
         &resolver,
-        || std::future::pending::<()>(),
+        std::future::pending::<()>,
         Duration::from_secs(5),
     )
     .await;
@@ -461,7 +461,7 @@ async fn e2e_replay_aborts_before_any_egress() {
         &slot,
         &transport,
         &resolver,
-        || std::future::pending::<()>(),
+        std::future::pending::<()>,
         Duration::from_secs(5),
     )
     .await;
@@ -472,7 +472,7 @@ async fn e2e_replay_aborts_before_any_egress() {
         &slot,
         &transport,
         &resolver,
-        || std::future::pending::<()>(),
+        std::future::pending::<()>,
         Duration::from_secs(5),
     )
     .await;
@@ -492,7 +492,7 @@ async fn e2e_malformed_nonce_aborts_before_any_egress() {
         &slot,
         &transport,
         &resolver,
-        || std::future::pending::<()>(),
+        std::future::pending::<()>,
         Duration::from_secs(5),
     )
     .await;
