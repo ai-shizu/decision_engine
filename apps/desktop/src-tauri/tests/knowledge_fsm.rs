@@ -5,10 +5,12 @@ use pkb_desktop_lib::knowledge::fsm::{AbortReason, FsmError, ResearchSlot};
 use pkb_desktop_lib::knowledge::AttestedIntentPayload;
 
 const DICT_A: &str = "f3b8fd0c8070d2127fd0b3daaacd12c25ab5e819cd3c7d17d11cd9fa632d34e0";
+const DICT_B: &str = "1fe182bd334ab3fe0d98ce260b378ec3ca4f3e18b6c959ceef7a35ff4a8d94c2";
 const SID: &str = "0123456789abcdeffedcba9876543210";
 const NONCE1: &str = "00112233445566778899aabbccddeeffffeeddccbbaa99887766554433221100";
 const NONCE2: &str = "ffeeddccbbaa9988776655443322110000112233445566778899aabbccddeeff";
 const NONCE3: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+const NONCE4: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
 
 fn payload(nonce: &str, dict_hash: &str) -> AttestedIntentPayload {
     AttestedIntentPayload {
@@ -95,4 +97,51 @@ fn replay_malformed_nonce_does_not_occupy() {
     }
     // Slot never occupied; valid begin still works (nonce not consumed on malformed).
     assert!(slot.begin(payload(NONCE3, DICT_A)).is_ok());
+}
+
+// ---------------------------------------------------------------------------
+// STEP 4.C — dictionary drift + single-flight
+// ---------------------------------------------------------------------------
+#[test]
+fn drift_rejects_wrong_dict_hash_without_consuming_nonce() {
+    let slot = ResearchSlot::new(DICT_A);
+    assert_eq!(
+        slot.begin(payload(NONCE1, DICT_B)).err(),
+        Some(FsmError::DictionaryDrift)
+    );
+    // Slot free and nonce unused — same nonce works with correct dict.
+    assert!(slot.begin(payload(NONCE1, DICT_A)).is_ok());
+}
+
+#[test]
+fn drift_set_dictionary_then_accepts_new_hash() {
+    let slot = ResearchSlot::new(DICT_A);
+    slot.set_dictionary(DICT_B);
+    assert_eq!(
+        slot.begin(payload(NONCE1, DICT_A)).err(),
+        Some(FsmError::DictionaryDrift)
+    );
+    assert!(slot.begin(payload(NONCE2, DICT_B)).is_ok());
+}
+
+#[test]
+fn drift_while_busy_always_errs() {
+    let slot = ResearchSlot::new(DICT_A);
+    let _hold = slot.begin(payload(NONCE1, DICT_A)).expect("occupy");
+    // Occupied + wrong dict → Busy (checked before drift) — never Ok.
+    let err = slot.begin(payload(NONCE2, DICT_B)).err();
+    assert!(matches!(err, Some(FsmError::Busy) | Some(FsmError::DictionaryDrift)));
+    assert_ne!(err, None);
+}
+
+#[test]
+fn single_flight_busy_then_ok_after_drop() {
+    let slot = ResearchSlot::new(DICT_A);
+    let hold = slot.begin(payload(NONCE1, DICT_A)).expect("occupy");
+    assert_eq!(
+        slot.begin(payload(NONCE2, DICT_A)).err(),
+        Some(FsmError::Busy)
+    );
+    drop(hold);
+    assert!(slot.begin(payload(NONCE4, DICT_A)).is_ok());
 }
