@@ -451,3 +451,135 @@ def test_facade_has_no_e0b_egress_entrypoint() -> None:
         "E0b egress facade entrypoints must not exist yet; found: "
         + ", ".join(banned)
     )
+
+
+# ---------------------------------------------------------------------------
+# STEP 0.E — Rust side: no HTTP client linked (text scan; cargo not invoked)
+# ---------------------------------------------------------------------------
+TAURI_DIR = ROOT / "apps" / "desktop" / "src-tauri"
+CARGO_TOML = TAURI_DIR / "Cargo.toml"
+RUST_SRC = TAURI_DIR / "src"
+
+HTTP_CLIENT_CRATES = frozenset({
+    "reqwest",
+    "hyper",
+    "isahc",
+    "ureq",
+    "curl",
+    "surf",
+})
+
+# Outbound network symbols in .rs (egress clients / sockets). Sandbox capability
+# stripping uses WinSock/AF_INET — those are NOT in this deny list.
+RUST_OUTBOUND_PATTERNS = (
+    "reqwest::",
+    "TcpStream",
+    "tokio::net",
+    "hyper::",
+    "UdpSocket",
+    "isahc::",
+    "ureq::",
+    "surf::",
+)
+
+# Explicit allowlist substrings: sandbox capability denial / feature decls only.
+# These must never cause a hit when present alone (negative canary).
+RUST_SANDBOX_ALLOW_SUBSTRINGS = frozenset({
+    "Win32_Networking_WinSock",
+    "windows_sys::Win32::Networking::WinSock",
+})
+
+
+def _cargo_toml_direct_deps(text: str) -> set[str]:
+    """Collect crate names appearing as direct dependency keys in Cargo.toml.
+
+    Matches lines like `reqwest = "..."` / `reqwest = { ... }` inside any
+    [dependencies] / [target.*.dependencies] / [build-dependencies] section.
+    Does not parse Cargo.lock (transitive deps from tauri are out of scope).
+    """
+    deps: set[str] = set()
+    in_deps = False
+    for line in text.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("[") and stripped.endswith("]"):
+            section = stripped[1:-1]
+            in_deps = (
+                section == "dependencies"
+                or section.endswith(".dependencies")
+                or section == "build-dependencies"
+            )
+            continue
+        if not in_deps or not stripped or stripped.startswith("#"):
+            continue
+        # crate = "ver"  or  crate = { ... }
+        if "=" in stripped:
+            name = stripped.split("=", 1)[0].strip().strip('"')
+            if name:
+                deps.add(name)
+    return deps
+
+
+def rust_outbound_hits(text: str) -> list[str]:
+    """Return outbound-network symbol hits; sandbox allowlist substrings alone are OK."""
+    hits: list[str] = []
+    for pat in RUST_OUTBOUND_PATTERNS:
+        if pat in text:
+            hits.append(pat)
+    return hits
+
+
+def test_rust_detector_canary() -> None:
+    """Canary: reqwest:: egress hits; WinSock sandbox feature line does not."""
+    assert rust_outbound_hits("reqwest::get(...)") == ["reqwest::"], (
+        "detector must flag synthetic reqwest:: egress"
+    )
+    for allow in RUST_SANDBOX_ALLOW_SUBSTRINGS:
+        assert rust_outbound_hits(allow) == [], (
+            f"detector must NOT flag sandbox allowlist substring: {allow!r}"
+        )
+    allow_line = 'windows-sys = { features = ["Win32_Networking_WinSock"] }'
+    assert rust_outbound_hits(allow_line) == [], (
+        "detector must NOT flag Win32_Networking_WinSock sandbox feature line"
+    )
+    sandbox_import = "use windows_sys::Win32::Networking::WinSock::{socket, connect};"
+    assert rust_outbound_hits(sandbox_import) == [], (
+        "detector must NOT flag WinSock sandbox capability-probe imports"
+    )
+
+
+def test_rust_has_no_http_client_dependency() -> None:
+    """Cargo.toml must not directly depend on HTTP client crates (= sterile build).
+
+    INVERSION OBLIGATION (dependency-intro STEP): do not delete — rewrite to the
+    affirmative contract that reqwest enters with default-features=false and
+    features limited to rustls-tls,stream (no gzip/native-tls/socks). Separate
+    STEP under commander ACK; STEP 0 keeps the negative (unlinked) contract.
+    """
+    text = CARGO_TOML.read_text(encoding="utf-8")
+    deps = _cargo_toml_direct_deps(text)
+    banned = sorted(HTTP_CLIENT_CRATES.intersection(deps))
+    assert not banned, (
+        "HTTP client crates must not be direct Cargo.toml dependencies; found: "
+        + ", ".join(banned)
+    )
+
+
+def test_rust_src_has_no_outbound_network_calls() -> None:
+    """src-tauri/src/**/*.rs must not contain outbound network client/socket symbols.
+
+    WinSock / AF_INET usage in os_sandbox.rs and pkb-sandbox-probe.rs is AppContainer
+    / seccomp capability stripping (denial), not egress — those symbols are outside
+    RUST_OUTBOUND_PATTERNS by design.
+    """
+    assert RUST_SRC.is_dir(), f"missing Rust src tree: {RUST_SRC}"
+    violations: list[str] = []
+    for path in sorted(RUST_SRC.rglob("*.rs")):
+        text = path.read_text(encoding="utf-8")
+        hits = rust_outbound_hits(text)
+        if hits:
+            rel = path.relative_to(ROOT)
+            violations.append(f"{rel}: {', '.join(hits)}")
+    assert not violations, (
+        "Outbound network symbols found in Rust sources:\n"
+        + "\n".join(violations)
+    )
