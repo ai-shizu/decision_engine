@@ -5,6 +5,8 @@ mod engine;
 #[doc(hidden)]
 pub mod ipc_contract;
 #[doc(hidden)]
+pub mod knowledge;
+#[doc(hidden)]
 pub mod os_sandbox;
 mod paths;
 #[doc(hidden)]
