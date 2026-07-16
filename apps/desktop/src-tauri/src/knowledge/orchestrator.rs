@@ -21,11 +21,13 @@ use crate::knowledge::net_gateway::{
 use crate::knowledge::render_guard::sanitize_external_text;
 
 /// Production network policy for external research.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum NetworkPolicy {
-    /// Hard refuse — STEP 6 default. No Fake or live transport.
+    /// Hard refuse — default until user consent (Settings toggle).
     Off,
-    /// Test-only: allow injected FakeTransport / FakeResolver.
+    /// User consented via Settings; still requires egress-live build for real egress.
+    Live,
+    /// Test-only: allow injected FakeTransport (STEP 6.G).
     FakeAllowed,
 }
 
@@ -54,11 +56,24 @@ impl From<GatewayError> for OrchestratorError {
     }
 }
 
-/// Production entry: always refuse under NetworkPolicy::Off.
+/// Refuse when policy is Off (no user consent).
 pub fn refuse_if_policy_off(policy: NetworkPolicy) -> Result<(), OrchestratorError> {
     match policy {
         NetworkPolicy::Off => Err(OrchestratorError::PolicyOff),
-        NetworkPolicy::FakeAllowed => Ok(()),
+        NetworkPolicy::Live | NetworkPolicy::FakeAllowed => Ok(()),
+    }
+}
+
+/// Second factor: egress-live feature must be compiled in for real network.
+pub fn refuse_if_egress_unavailable() -> Result<(), OrchestratorError> {
+    #[cfg(not(feature = "egress-live"))]
+    {
+        let _ = ();
+        Err(OrchestratorError::PolicyOff)
+    }
+    #[cfg(feature = "egress-live")]
+    {
+        Ok(())
     }
 }
 

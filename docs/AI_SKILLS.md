@@ -552,6 +552,27 @@ Python dispatch に足すな**（fetch は Rust 専有）。
 **ハマりどころ**: egress-live ビルドは Windows ARM64 で VS Build Tools（vcvarsarm64）が必要。
   `native-tls` へ逃げるな。Wikipedia API は `User-Agent` 必須（無いと `StatusRejected`）。
 
+### 7.2.3 E0b UX Consent（STEP 8 — 二要素ゲートとアンビエント UI）
+
+- **二要素 Egress**: `NetworkPolicy::Live`（ユーザー同意）**かつ** `egress-live` ビルドの AND。
+  同意のみでは `refuse_if_egress_unavailable()` → `EGRESS_LIVE_NOT_READY`。同意は必要条件で十分条件ではない。
+  永続化は Rust `NetworkPolicyStore`（`%LOCALAPPDATA%\PKB\knowledge_policy.json`、既定 Off）。
+- **Tauri 境界**: `knowledge_policy_get` / `knowledge_policy_set`（schema `knowledge_policy.v1`）。
+  `knowledge_research` は store 読取 → policy gate → egress gate の順。
+- **フロント状態**: `policyStore.ts` / `researchUiReducer.ts` / `deriveProvenance` は React 非依存の純関数。
+  Zustand/Redux 新規導入禁止。検証は `tests-runtime/*.test.ts` のみ。
+- **アンビエント UX**: 外部検索中は `textarea`/送信/スクロールを `disabled` にするな。
+  `researching-ambient`（枠線発光 + スピナー）のみ。`alert`/`confirm`/確認モーダルで毎回同意を取るな
+  （設定タブのグローバル opt-in トグルが唯一の同意 UI）。
+- **Provenance**: `consult` レスポンスに `provenance` フィールドを足すな。表示は
+  `KnowledgeResearchReceipt.results_persisted > 0` から純関数 `deriveProvenance` で導出し、
+  「🔗 Wikipediaより参照」チップのみ（research_id / URL / 生テキスト露出禁止）。
+
+**ハマりどころ**: Windows では `fs::rename` が既存ファイルを上書きしない。policy 永続化は
+  本番パス削除後に rename すること。並列 `cargo test` で `LOCALAPPDATA` を触るテストは
+  `POLICY_TEST_LOCK` で直列化。research は `setBusy(true)`（consult 本流）の**前**に走らせ、
+  research 中に busy で入力を塞がないこと。
+
 ---
 
 ## 8. Target Alpha: KV slot cache — RETIRED by FSA-2026-07-13-01/02

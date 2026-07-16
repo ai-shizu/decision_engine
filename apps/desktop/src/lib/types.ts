@@ -33,6 +33,8 @@ export interface ChatMessage {
   text: string;
   /** ストリーミング受信中 (chunk 追記対象) の一時メッセージ */
   streaming?: boolean;
+  /** E0b: receipt-derived provenance chip (no raw external text). */
+  provenanceLabel?: string;
 }
 
 /**

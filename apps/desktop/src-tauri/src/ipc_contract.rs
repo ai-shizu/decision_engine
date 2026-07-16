@@ -191,6 +191,8 @@ pub struct ConsultRequest {
     response_time_sec: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     config: Option<InterviewConfig>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    external_research_id: Option<String>,
 }
 
 impl ValidateRequest for ConsultRequest {
@@ -217,6 +219,12 @@ impl ValidateRequest for ConsultRequest {
             require_max_bytes(&config.genre, "config.genre", MAX_SHORT_TEXT_BYTES)?;
             if let Some(theme) = &config.custom_theme {
                 require_max_bytes(theme, "config.customTheme", MAX_SHORT_TEXT_BYTES)?;
+            }
+        }
+        if let Some(ext_id) = &self.external_research_id {
+            require_nonempty(ext_id, "external_research_id")?;
+            if ext_id.len() != 64 || !ext_id.bytes().all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase()) {
+                return Err("external_research_id must be 64 lowercase hex".to_string());
             }
         }
         Ok(())
@@ -526,5 +534,19 @@ impl ValidateRequest for KnowledgeResearchRequest {
     fn validate(&self) -> Result<(), String> {
         require_nonempty(&self.query, "query")?;
         require_max_bytes(&self.query, "query", MAX_SHORT_TEXT_BYTES)
+    }
+}
+
+/// STEP 8: user consent toggle for external research.
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct KnowledgePolicySetRequest {
+    pub enabled: bool,
+}
+
+impl ValidateRequest for KnowledgePolicySetRequest {
+    fn validate(&self) -> Result<(), String> {
+        let _ = self.enabled;
+        Ok(())
     }
 }

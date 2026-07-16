@@ -1,6 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import type { ContextManifestResponseV1 } from "./manifest";
 import { parseConsultResponse, type ConsultResponse } from "./parseConsultResponse";
+import { parseKnowledgePolicy } from "./parseKnowledgePolicy";
 import {
   parseBoolean,
   parseCalendarEventDatesResult,
@@ -80,6 +81,8 @@ type EngineIpcCommand =
   | "narrative_compile"
   | "knowledge_fetch_pending"
   | "knowledge_research"
+  | "knowledge_policy_get"
+  | "knowledge_policy_set"
   | "probe_status"
   | "probe_next"
   | "probe_answer"
@@ -155,6 +158,7 @@ export interface ConsultOptions {
   personas?: { name: string; trait: string }[];
   response_time_sec?: number;
   config?: InterviewConfig;
+  external_research_id?: string;
 }
 
 
@@ -363,6 +367,16 @@ export async function knowledgeFetchPending(): Promise<KnowledgeFetchSummary> {
 
 export async function knowledgeResearch(query: string): Promise<KnowledgeResearchReceipt> {
   return invokeEngine("knowledge_research", parseKnowledgeResearchReceipt, { query });
+}
+
+
+export async function getKnowledgeResearchPolicy() {
+  return invokeEngine("knowledge_policy_get", parseKnowledgePolicy);
+}
+
+
+export async function setKnowledgeResearchPolicy(enabled: boolean) {
+  return invokeEngine("knowledge_policy_set", parseKnowledgePolicy, { enabled });
 }
 
 

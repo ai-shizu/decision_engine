@@ -713,6 +713,46 @@ button:disabled {
   gap: 12px;
 }
 
+.consult-form.researching-ambient {
+  border-radius: 10px;
+  box-shadow: 0 0 0 1px rgba(96, 165, 250, 0.45), 0 0 12px rgba(96, 165, 250, 0.15);
+  transition: box-shadow 0.25s ease;
+}
+
+.consult-research-ambient {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  font-size: 0.85rem;
+  color: var(--text-muted);
+}
+
+.consult-research-spinner {
+  width: 12px;
+  height: 12px;
+  border: 2px solid rgba(96, 165, 250, 0.25);
+  border-top-color: rgba(96, 165, 250, 0.9);
+  border-radius: 50%;
+  animation: consult-research-spin 0.9s linear infinite;
+}
+
+@keyframes consult-research-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.provenance-chip {
+  display: inline-block;
+  margin-top: 6px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 0.78rem;
+  color: var(--text-muted);
+  background: rgba(96, 165, 250, 0.08);
+}
+
 .consult-mode-row {
   display: flex;
   align-items: center;

@@ -9,12 +9,15 @@ use crate::engine::{EngineManager, IPC_MAX_REQUEST_LINE_BYTES};
 use crate::ipc_contract::{
     CalendarAppleRequest, CalendarIcsRequest, ConsultRequest, ImportClassifyRequest,
     ImportDocumentRequest, ImportLineBatchRequest, ImportLineSingleRequest,
-    KnowledgeResearchRequest, NarrativeCompileRequest, ProbeAnswerRequest, ProbeDateRequest,
+    KnowledgePolicySetRequest, KnowledgeResearchRequest, NarrativeCompileRequest, ProbeAnswerRequest,
+    ProbeDateRequest,
     RecordLoadRequest, RecordSaveRequest, ScopeRequest, SettingsSaveFixedRequest,
     TwinForecastRequest, ValidateRequest, IPC_REQUEST_ENVELOPE_HEADROOM_BYTES,
     MAX_REQUEST_PARAMS_JSON_BYTES, MAX_TEXT_BYTES, REQUEST_PARAMS_JSON_HEADROOM_BYTES,
 };
-use crate::knowledge::{refuse_if_policy_off, NetworkPolicy};
+use crate::knowledge::{
+    refuse_if_egress_unavailable, refuse_if_policy_off, NetworkPolicyStore,
+};
 
 const _: () =
     assert!(MAX_TEXT_BYTES + REQUEST_PARAMS_JSON_HEADROOM_BYTES == MAX_REQUEST_PARAMS_JSON_BYTES);
@@ -280,14 +283,39 @@ pub async fn knowledge_fetch_pending(
     invoke_empty(manager, "knowledge.fetch_pending").await
 }
 
-/// STEP 6: explicit external research. Production NetworkPolicy::Off → fixed refuse.
+/// STEP 8: read persisted user consent for external research.
+#[tauri::command]
+pub async fn knowledge_policy_get(
+    store: State<'_, NetworkPolicyStore>,
+) -> Result<Value, String> {
+    Ok(serde_json::json!({
+        "schema": "knowledge_policy.v1",
+        "enabled": store.enabled(),
+    }))
+}
+
+/// STEP 8: persist user consent (default Off).
+#[tauri::command]
+pub async fn knowledge_policy_set(
+    store: State<'_, NetworkPolicyStore>,
+    request: KnowledgePolicySetRequest,
+) -> Result<Value, String> {
+    request.validate()?;
+    store.set_enabled(request.enabled)?;
+    knowledge_policy_get(store).await
+}
+
+/// STEP 6/8: explicit external research. Requires consent (Live) AND egress-live build.
 #[tauri::command]
 pub async fn knowledge_research(
+    store: State<'_, NetworkPolicyStore>,
     request: KnowledgeResearchRequest,
 ) -> Result<Value, String> {
     request.validate()?;
-    refuse_if_policy_off(NetworkPolicy::Off).map_err(|e| e.to_string())?;
-    // Unreachable while policy is Off; FakeAllowed path is test-only (STEP 6.G).
+    refuse_if_policy_off(store.get()).map_err(|e| e.to_string())?;
+    refuse_if_egress_unavailable().map_err(|e| e.to_string())?;
+    // Full live pipeline (intent → fetch → integrate) ships with egress-live ACK;
+    // until wired end-to-end, fail closed after both gates pass.
     Err("EGRESS_LIVE_NOT_READY".to_string())
 }
 

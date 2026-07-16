@@ -38,6 +38,8 @@ EXPOSED_COMMANDS = {
     "narrative_compile",
     "knowledge_fetch_pending",
     "knowledge_research",
+    "knowledge_policy_get",
+    "knowledge_policy_set",
     "probe_status",
     "probe_next",
     "probe_answer",

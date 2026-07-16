@@ -16,6 +16,7 @@ pub mod fsm;
 pub mod net_gateway;
 pub mod orchestrator;
 pub mod pii_snapshot;
+pub mod policy_store;
 pub mod render_guard;
 
 pub use attestation::{attestation_framing, verify_tag};
@@ -25,8 +26,10 @@ pub use fsm::{
     AbortReason, Completed, Fetching, FsmError, Pending, ReadyToIntegrate, ResearchSlot, Txn,
 };
 pub use orchestrator::{
-    refuse_if_policy_off, InjectedFetch, NetworkPolicy, OrchestratorError,
+    refuse_if_egress_unavailable, refuse_if_policy_off, InjectedFetch, NetworkPolicy,
+    OrchestratorError,
 };
+pub use policy_store::NetworkPolicyStore;
 pub use pii_snapshot::{snapshot_hash_hex, snapshot_preimage};
 
 #[derive(Debug, Clone, PartialEq, Eq)]

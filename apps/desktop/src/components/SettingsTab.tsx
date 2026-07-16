@@ -1,8 +1,10 @@
 import { useEffect, useState } from "react";
 import {
+  getKnowledgeResearchPolicy,
   loadSettings,
   runProfiler,
   saveFixedAttributes,
+  setKnowledgeResearchPolicy,
 } from "../lib/engine";
 import { defaultBirthday } from "../lib/birthdayUtils";
 import type { FixedField, SettingsData } from "../lib/types";
@@ -20,6 +22,8 @@ export function SettingsTab() {
   );
   const [busy, setBusy] = useState(false);
   const [loadError, setLoadError] = useState("");
+  const [knowledgeResearchEnabled, setKnowledgeResearchEnabled] = useState(false);
+  const [policyBusy, setPolicyBusy] = useState(false);
 
   async function fetchSettings() {
     setLoadError("");
@@ -33,6 +37,8 @@ export function SettingsTab() {
       }
       setSettings(s);
       setAttrs(merged);
+      const policy = await getKnowledgeResearchPolicy();
+      setKnowledgeResearchEnabled(policy.enabled);
     } catch {
       setLoadError(uiErrorMessage("SETTINGS_LOAD"));
     }
@@ -58,6 +64,19 @@ export function SettingsTab() {
       setSaveNotice({ text: uiErrorMessage("SETTINGS_SAVE"), kind: "error" });
     } finally {
       setBusy(false);
+    }
+  }
+
+  async function handleKnowledgePolicyToggle(enabled: boolean) {
+    setPolicyBusy(true);
+    try {
+      const policy = await setKnowledgeResearchPolicy(enabled);
+      setKnowledgeResearchEnabled(policy.enabled);
+    } catch {
+      setStatusKind("error");
+      setStatus("外部検索の同意設定を保存できませんでした");
+    } finally {
+      setPolicyBusy(false);
     }
   }
 
@@ -157,6 +176,28 @@ export function SettingsTab() {
               {saveNotice.text}
             </p>
           )}
+        </div>
+      </div>
+
+      <div className="settings-block">
+        <h3>外部知識 (E0b)</h3>
+        <p className="hint">
+          同意後、相談送信時に Wikipedia 検索で知識を補強します（オフライン検証パイプライン経由）。
+        </p>
+        <div className="settings-list">
+          <div className="settings-row">
+            <label htmlFor="settings-knowledge-research" className="settings-row-label">
+              外部ネットワーク検索による知識補強を許可する
+            </label>
+            <div className="settings-row-value">
+              <Toggle
+                id="settings-knowledge-research"
+                checked={knowledgeResearchEnabled}
+                disabled={policyBusy}
+                onChange={(v) => void handleKnowledgePolicyToggle(v)}
+              />
+            </div>
+          </div>
         </div>
       </div>
 

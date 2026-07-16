@@ -1,7 +1,19 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useReducer, useRef, useState } from "react";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
-import { consult, type RomanceAnalysisResult } from "../lib/engine";
+import {
+  consult,
+  getKnowledgeResearchPolicy,
+  knowledgeResearch,
+  type RomanceAnalysisResult,
+} from "../lib/engine";
 import { parseEngineEvent } from "../lib/parseEngineResponse";
+import {
+  deriveProvenance,
+  INITIAL_RESEARCH_UI_STATE,
+  isResearching,
+  provenanceChipText,
+  reduceResearchUi,
+} from "../lib/researchUiReducer";
 import type { ChatMessage, EngineEvent } from "../lib/types";
 import { uiErrorMessage } from "../lib/uiErrorMessages";
 import { useCorrelationId } from "../lib/useCorrelationId";
@@ -28,6 +40,11 @@ export function ConsultTab() {
   const [confirmingClear, setConfirmingClear] = useState(false);
   const [mode, setMode] = useState<ConsultMode>("consult");
   const [romanceResult, setRomanceResult] = useState<RomanceAnalysisResult | null>(null);
+  const [researchUi, dispatchResearchUi] = useReducer(
+    reduceResearchUi,
+    INITIAL_RESEARCH_UI_STATE,
+  );
+  const researchSeqRef = useRef(0);
   const logRef = useRef<HTMLDivElement>(null);
   // SPEC_FOXTROT_UI.md §9 (Rev.10): 旧来の真偽値フラグ (F3 裁定1) を撤廃し、
   // 相関ID (cid) 照合へ移行した。自分の consult が in-flight の間だけ
@@ -116,15 +133,13 @@ export function ConsultTab() {
     if (!q || busy) return;
     setInput("");
     flushChunkQueue();
-    setBusy(true);
     const myCid = cid.begin();
-    setStatusKind("info");
-    setStatus("考え中…");
     stickRef.current = true;
 
     if (mode === "romance_analysis") {
       setRomanceResult(null);
       setMessages((prev) => stripRomanceSuccessMessages(prev));
+      setBusy(true);
       setStatusKind("info");
       setStatus(ROMANCE_PARSING_STATUS);
       try {
@@ -158,8 +173,40 @@ export function ConsultTab() {
       { role: "assistant", text: "", streaming: true },
     ]);
     scrollToBottom(true);
+
+    let externalResearchId: string | undefined;
+    let provenanceLabel: string | undefined;
     try {
-      const res = await consult(q, {}, myCid);
+      const policy = await getKnowledgeResearchPolicy();
+      if (policy.enabled) {
+        const seq = researchSeqRef.current + 1;
+        researchSeqRef.current = seq;
+        dispatchResearchUi({ kind: "START", seq });
+        try {
+          const receipt = await knowledgeResearch(q);
+          dispatchResearchUi({ kind: "DONE", seq });
+          const provenance = deriveProvenance(receipt);
+          if (provenance) {
+            provenanceLabel = provenanceChipText(provenance);
+            externalResearchId = receipt.research_id;
+          }
+        } catch {
+          dispatchResearchUi({ kind: "FAIL", seq });
+        }
+      }
+    } catch {
+      // Policy read failure: proceed with consult only (no external lane).
+    }
+
+    setBusy(true);
+    setStatusKind("info");
+    setStatus("考え中…");
+    try {
+      const res = await consult(
+        q,
+        externalResearchId ? { external_research_id: externalResearchId } : {},
+        myCid,
+      );
       // W-35: 確定置換は必ず「キュー破棄 → 置換」の順で原子的に行う。
       // 順序が逆だと、破棄前に残っていたキューが置換後のメッセージへ
       // 追記され続けてしまう。
@@ -167,9 +214,19 @@ export function ConsultTab() {
       setMessages((prev) => {
         const last = prev[prev.length - 1];
         if (last?.role === "assistant" && last.streaming) {
-          return [...prev.slice(0, -1), { role: "assistant", text: res.answer }];
+          return [
+            ...prev.slice(0, -1),
+            {
+              role: "assistant",
+              text: res.answer,
+              provenanceLabel,
+            },
+          ];
         }
-        return [...prev, { role: "assistant", text: res.answer }];
+        return [
+          ...prev,
+          { role: "assistant", text: res.answer, provenanceLabel },
+        ];
       });
       setStatusKind("info");
       setStatus("");
@@ -249,6 +306,9 @@ export function ConsultTab() {
                 {m.text}
                 {m.streaming && <span className="chat-cursor">▌</span>}
               </pre>
+              {m.provenanceLabel && (
+                <span className="provenance-chip">{m.provenanceLabel}</span>
+              )}
             </div>
           ))
         )}
@@ -256,7 +316,17 @@ export function ConsultTab() {
 
       {isRomance && <RomanceAnalysisPanel result={romanceResult} />}
 
-      <form className="consult-form" onSubmit={(e) => void handleSubmit(e)}>
+      <form
+        className={`consult-form${isResearching(researchUi) ? " researching-ambient" : ""}`}
+        onSubmit={(e) => void handleSubmit(e)}
+        aria-busy={isResearching(researchUi)}
+      >
+        {isResearching(researchUi) && (
+          <p className="consult-research-ambient" role="status">
+            <span className="consult-research-spinner" aria-hidden="true" />
+            外部知識を補強中…
+          </p>
+        )}
         <textarea
           value={input}
           onChange={(e) => setInput(e.target.value)}

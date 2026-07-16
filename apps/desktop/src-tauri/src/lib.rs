@@ -15,6 +15,7 @@ pub mod webview_policy;
 use std::sync::Arc;
 
 use engine::EngineManager;
+use knowledge::NetworkPolicyStore;
 use tauri::webview::{DownloadEvent, NewWindowResponse};
 use tauri::{RunEvent, WebviewWindowBuilder};
 
@@ -25,6 +26,7 @@ pub fn run() {
 
     tauri::Builder::default()
         .manage(Arc::clone(&engine))
+        .manage(NetworkPolicyStore::new())
         .invoke_handler(tauri::generate_handler![
             commands::engine_ready,
             commands::engine_health,
@@ -51,6 +53,8 @@ pub fn run() {
             commands::narrative_compile,
             commands::knowledge_fetch_pending,
             commands::knowledge_research,
+            commands::knowledge_policy_get,
+            commands::knowledge_policy_set,
             commands::probe_status,
             commands::probe_next,
             commands::probe_answer,
