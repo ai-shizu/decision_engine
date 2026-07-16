@@ -1,0 +1,46 @@
+{
+  "vectors": [
+    {
+      "name": "ab_c",
+      "terms": ["ab", "c"],
+      "revision": 1,
+      "preimage_hex": "504b422d5049492d444943542d5631000000000000000100000000000000026162000000000000000163",
+      "hash_hex": "1fe182bd334ab3fe0d98ce260b378ec3ca4f3e18b6c959ceef7a35ff4a8d94c2"
+    },
+    {
+      "name": "a_bc",
+      "terms": ["a", "bc"],
+      "revision": 1,
+      "preimage_hex": "504b422d5049492d444943542d5631000000000000000100000000000000016100000000000000026263",
+      "hash_hex": "95c0696115df12c4e92dead04ac9d01815d457069513df4d4da805a4745eb630"
+    },
+    {
+      "name": "cjk",
+      "terms": ["日"],
+      "revision": 1,
+      "preimage_hex": "504b422d5049492d444943542d563100000000000000010000000000000003e697a5",
+      "hash_hex": "1fdaaaeb4d3ce1d5c052f7146fda829e86a419e1f18cafff3b590da6d766c2eb"
+    },
+    {
+      "name": "emoji",
+      "terms": ["😀"],
+      "revision": 1,
+      "preimage_hex": "504b422d5049492d444943542d563100000000000000010000000000000004f09f9880",
+      "hash_hex": "6988184a1fecad5281f314f091a83af43ae0bff8eb62c69aeaa4406c71a59d44"
+    },
+    {
+      "name": "rev2",
+      "terms": ["a"],
+      "revision": 2,
+      "preimage_hex": "504b422d5049492d444943542d56310000000000000002000000000000000161",
+      "hash_hex": "08c61fc9cd5d91c8d00f76cd4dde0900d07fafb355fa59e634be3cfdfb2060f1"
+    },
+    {
+      "name": "empty",
+      "terms": [],
+      "revision": 1,
+      "preimage_hex": "504b422d5049492d444943542d56310000000000000001",
+      "hash_hex": "f3b8fd0c8070d2127fd0b3daaacd12c25ab5e819cd3c7d17d11cd9fa632d34e0"
+    }
+  ]
+}
