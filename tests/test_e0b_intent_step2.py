@@ -121,3 +121,97 @@ def test_failclosed_load_spawn_key_from_env() -> None:
     with pytest.raises(ValueError):
         load_spawn_key_from_env(env={"PKB_EGRESS_KEY": "not-hex"})
     assert load_spawn_key_from_env(env={"PKB_EGRESS_KEY": _VALID_K}) == _VALID_K
+
+
+# ---------------------------------------------------------------------------
+# STEP 2.B — Cryptographic framing + HMAC KAT
+# ---------------------------------------------------------------------------
+def _load_kat() -> list[dict]:
+    with open(GOLDEN_KAT, encoding="utf-8") as fh:
+        data = json.load(fh)
+    return list(data["vectors"])
+
+
+def test_framing_matches_golden() -> None:
+    from core.e0b_intent import attestation_framing
+
+    for row in _load_kat():
+        got = attestation_framing(
+            row["session_id"],
+            row["txn_nonce"],
+            row["sidecar_generation"],
+            row["policy_epoch"],
+            row["dict_hash"],
+            row["queries"],
+        )
+        assert got.hex() == row["framing_hex"], (
+            f"{row['name']}: framing mismatch\n"
+            f"  expected {row['framing_hex']}\n"
+            f"  got      {got.hex()}"
+        )
+
+
+def test_tag_matches_golden() -> None:
+    from core.e0b_intent import attest_tag
+
+    for row in _load_kat():
+        got = attest_tag(row["k_spawn"], bytes.fromhex(row["framing_hex"]))
+        assert got == row["tag_hex"], f"{row['name']}: tag mismatch {got}"
+
+
+def test_tag_end_to_end() -> None:
+    from core.e0b_intent import attestation_framing, attest_tag
+
+    for row in _load_kat():
+        framing = attestation_framing(
+            row["session_id"],
+            row["txn_nonce"],
+            row["sidecar_generation"],
+            row["policy_epoch"],
+            row["dict_hash"],
+            row["queries"],
+        )
+        assert attest_tag(row["k_spawn"], framing) == row["tag_hex"]
+
+
+def test_query_byte_length_not_scalar() -> None:
+    """CJK/emoji length prefixes must be UTF-8 byte lengths (15 / 9), not scalars."""
+    rows = {r["name"]: r for r in _load_kat()}
+    assert "000000000000000f" in rows["KAT-1"]["framing_hex"]  # 15 bytes for 日本の就職
+    assert "0000000000000009" in rows["KAT-3"]["framing_hex"]  # 9 bytes for 😀 test
+    # Scalar traps would be 5 / 6:
+    assert "0000000000000005e697a5" not in rows["KAT-1"]["framing_hex"]
+    assert "0000000000000006f09f9880" not in rows["KAT-3"]["framing_hex"]
+
+
+def test_tag_sensitivity_one_bit() -> None:
+    from core.e0b_intent import attestation_framing, attest_tag
+
+    kat1 = next(r for r in _load_kat() if r["name"] == "KAT-1")
+    good = kat1["tag_hex"]
+    framing = bytes.fromhex(kat1["framing_hex"])
+
+    tweaked_key = kat1["k_spawn"][:-1] + ("e" if kat1["k_spawn"][-1] != "e" else "f")
+    assert attest_tag(tweaked_key, framing) != good
+
+    framing_gen8 = attestation_framing(
+        kat1["session_id"],
+        kat1["txn_nonce"],
+        8,
+        kat1["policy_epoch"],
+        kat1["dict_hash"],
+        kat1["queries"],
+    )
+    assert attest_tag(kat1["k_spawn"], framing_gen8) != good
+
+    tweaked_q = list(kat1["queries"])
+    tweaked_q[0] = tweaked_q[0] + "x"
+    framing_q = attestation_framing(
+        kat1["session_id"],
+        kat1["txn_nonce"],
+        kat1["sidecar_generation"],
+        kat1["policy_epoch"],
+        kat1["dict_hash"],
+        tweaked_q,
+    )
+    assert attest_tag(kat1["k_spawn"], framing_q) != good
