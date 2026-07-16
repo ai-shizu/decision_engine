@@ -2,10 +2,12 @@
 //! Values are copied from tests/golden/* — never regenerated from Rust.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
+use hmac::{Hmac, KeyInit, Mac};
 use pkb_desktop_lib::knowledge::{
     attestation_framing, canonicalize_for_match, snapshot_hash_hex, snapshot_preimage,
-    verify_tag, VerifyError,
+    verify_and_gate, verify_tag, AttestedIntentPayload, VerifyError,
 };
+use sha2::Sha256;
 
 fn decode_utf8_hex(hex_str: &str) -> String {
     let bytes = hex::decode(hex_str).expect("golden input_hex");
@@ -330,4 +332,127 @@ fn kat_attestation_source_uses_ct_eq_not_eq() {
         !src.contains("computed_hex ==") && !src.contains("received_hex =="),
         "must not compare tags with =="
     );
+}
+
+// ---------------------------------------------------------------------------
+// STEP 3.C — Dual-Run AND gate
+// ---------------------------------------------------------------------------
+fn compute_tag_for_test(k_spawn: &str, framing: &[u8]) -> String {
+    type HmacSha256 = Hmac<Sha256>;
+    let key = hex::decode(k_spawn).unwrap();
+    let mut mac = HmacSha256::new_from_slice(&key).unwrap();
+    mac.update(framing);
+    hex::encode(mac.finalize().into_bytes())
+}
+
+fn signed_payload(row: &KatVec, queries: Vec<String>) -> AttestedIntentPayload {
+    let framing = attestation_framing(
+        row.session_id,
+        row.txn_nonce,
+        row.gen,
+        row.epoch,
+        row.dict_hash,
+        &queries,
+    )
+    .unwrap();
+    let tag = compute_tag_for_test(row.k_spawn, &framing);
+    AttestedIntentPayload {
+        session_id: row.session_id.to_string(),
+        txn_nonce: row.txn_nonce.to_string(),
+        sidecar_generation: row.gen,
+        policy_epoch: row.epoch,
+        dict_hash: row.dict_hash.to_string(),
+        queries,
+        attestation: tag,
+    }
+}
+
+#[test]
+fn gate_both_ok_kat1() {
+    let row = &KAT[0];
+    let payload = signed_payload(row, kat_queries(row));
+    let dict = vec![canonicalize_for_match("himitsu")];
+    assert!(verify_and_gate(&payload, &dict, row.k_spawn).is_ok());
+}
+
+#[test]
+fn gate_pii_rejected_despite_valid_hmac() {
+    let row = &KAT[0];
+    let queries = vec![
+        "ai career".to_string(),
+        "himitsu project".to_string(),
+    ];
+    let payload = signed_payload(row, queries);
+    // Prove HMAC alone would pass.
+    let framing = attestation_framing(
+        &payload.session_id,
+        &payload.txn_nonce,
+        payload.sidecar_generation,
+        payload.policy_epoch,
+        &payload.dict_hash,
+        &payload.queries,
+    )
+    .unwrap();
+    assert!(verify_tag(row.k_spawn, &framing, &payload.attestation).is_ok());
+
+    let dict = vec![canonicalize_for_match("Himitsu")];
+    assert_eq!(
+        verify_and_gate(&payload, &dict, row.k_spawn),
+        Err(VerifyError::PiiRejected)
+    );
+}
+
+#[test]
+fn gate_zwsp_evasion_caught_by_rust() {
+    let row = &KAT[0];
+    let queries = vec!["himi\u{200B}tsu".to_string()];
+    let payload = signed_payload(row, queries);
+    let dict = vec![canonicalize_for_match("himitsu")];
+    assert_eq!(
+        canonicalize_for_match("himi\u{200B}tsu"),
+        "himitsu"
+    );
+    assert_eq!(
+        verify_and_gate(&payload, &dict, row.k_spawn),
+        Err(VerifyError::PiiRejected)
+    );
+}
+
+#[test]
+fn gate_hmac_mismatch_rejected() {
+    let row = &KAT[0];
+    let mut payload = signed_payload(row, kat_queries(row));
+    let mut bad = payload.attestation.clone();
+    let last = bad.pop().unwrap();
+    bad.push(if last == 'a' { 'b' } else { 'a' });
+    payload.attestation = bad;
+    let dict: Vec<String> = vec![];
+    assert_eq!(
+        verify_and_gate(&payload, &dict, row.k_spawn),
+        Err(VerifyError::AttestationMismatch)
+    );
+}
+
+#[test]
+fn gate_serde_deny_unknown_no_panic() {
+    let json = r#"{
+        "session_id":"0123456789abcdeffedcba9876543210",
+        "txn_nonce":"00112233445566778899aabbccddeeffffeeddccbbaa99887766554433221100",
+        "sidecar_generation":1,
+        "policy_epoch":1,
+        "dict_hash":"f3b8fd0c8070d2127fd0b3daaacd12c25ab5e819cd3c7d17d11cd9fa632d34e0",
+        "queries":["safe"],
+        "attestation":"00",
+        "extra_field":true
+    }"#;
+    let parsed: Result<AttestedIntentPayload, _> = serde_json::from_str(json);
+    assert!(parsed.is_err());
+}
+
+#[test]
+fn gate_empty_queries_no_panic() {
+    let row = &KAT[0];
+    let payload = signed_payload(row, vec![]);
+    let dict = vec!["himitsu".to_string()];
+    assert!(verify_and_gate(&payload, &dict, row.k_spawn).is_ok());
 }
