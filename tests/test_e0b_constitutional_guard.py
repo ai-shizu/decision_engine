@@ -65,6 +65,9 @@ E0A_MSG = "Egress blocked by E0a strict lockdown."
 
 E0B_BASENAME_GLOBS = ("knowledge_gateway*.py", "*e0b*.py")
 
+# STEP 1.A: sanctioned Scope E modules (basename only). Unsanctioned *e0b*.py → RED.
+SANCTIONED_E0B_MODULES = frozenset({"e0b_attestation.py"})
+
 
 # ---------------------------------------------------------------------------
 # AST helpers
@@ -340,14 +343,19 @@ def test_e0a_stub_freeze_still_holds() -> None:
 
 
 def test_e0b_scoped_modules_absent_or_caged() -> None:
-    """Scope E reserved cage: zero E0b modules now; DENY_E0B applies if any appear."""
+    """STEP 1.A: e0b_attestation.py をサンクションし、Scope E cage を実働させた.
+
+    Unsanctioned *e0b*.py / knowledge_gateway*.py must not appear.
+    Sanctioned modules (when present) are still subject to DENY_E0B.
+    """
     scoped = iter_e0b_scoped_modules()
-    # (a) STEP 0 proof: E0b body not yet implemented.
-    assert scoped == [], (
-        "E0b-scoped modules must be absent at STEP 0; found: "
-        + ", ".join(str(p.relative_to(ROOT)) for p in scoped)
+    # (a) Only SANCTIONED_E0B_MODULES may exist under Scope E globs.
+    unexpected = [p for p in scoped if p.name not in SANCTIONED_E0B_MODULES]
+    assert unexpected == [], (
+        "unsanctioned E0b-scoped modules found: "
+        + ", ".join(str(p.relative_to(ROOT)) for p in unexpected)
     )
-    # (b) Reserved cage body — empty loop today; auto-enforces when modules appear.
+    # (b) Cage body — DENY_E0B applies to every scoped module (incl. sanctioned).
     cage_violations: list[str] = []
     for path in scoped:
         src = path.read_text(encoding="utf-8")
