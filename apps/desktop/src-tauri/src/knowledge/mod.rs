@@ -11,11 +11,15 @@
 pub mod attestation;
 pub mod canonicalize;
 pub mod dual_run;
+pub mod fsm;
 pub mod pii_snapshot;
 
 pub use attestation::{attestation_framing, verify_tag};
 pub use canonicalize::canonicalize_for_match;
 pub use dual_run::{verify_and_gate, AttestedIntentPayload};
+pub use fsm::{
+    AbortReason, Completed, Fetching, FsmError, Pending, ReadyToIntegrate, ResearchSlot, Txn,
+};
 pub use pii_snapshot::{snapshot_hash_hex, snapshot_preimage};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
