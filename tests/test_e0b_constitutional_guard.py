@@ -254,3 +254,49 @@ def test_detector_allows_legitimate_local_substrate() -> None:
         assert not has_dynamic_bypass(tree), (
             f"bypass detector false-positive on bare import:\n  src={src!r}"
         )
+
+
+# ---------------------------------------------------------------------------
+# STEP 0.B — Tree-wide sterile lock (Scope T → production src/python/)
+# ---------------------------------------------------------------------------
+def _iter_production_python() -> list[Path]:
+    """src/python/**/*.py excluding __pycache__; tests/ is never under this tree."""
+    files: list[Path] = []
+    for path in PYTHON_SRC.rglob("*.py"):
+        if "__pycache__" in path.parts:
+            continue
+        files.append(path)
+    return files
+
+
+def test_python_tree_has_no_network_egress_imports() -> None:
+    """Scope T applied to all production Python: zero network egress imports.
+
+    Negative check: offline_runtime.py bare asyncio must NOT be flagged.
+    """
+    violations: list[str] = []
+    offline_runtime_seen = False
+    for path in _iter_production_python():
+        src = path.read_text(encoding="utf-8")
+        try:
+            tree = ast.parse(src, filename=str(path))
+        except SyntaxError as exc:
+            violations.append(f"{path}: SyntaxError: {exc}")
+            continue
+        hits = denied_imports_scope_t(tree)
+        if hits:
+            rel = path.relative_to(ROOT)
+            for h in hits:
+                violations.append(f"{rel}: {h}")
+        if path.name == "offline_runtime.py":
+            offline_runtime_seen = True
+            # Explicit negative: bare asyncio must remain unflagged.
+            assert not any("asyncio" in h and "subprocess" not in h for h in hits), (
+                f"offline_runtime.py bare asyncio false-positive: {hits}"
+            )
+
+    assert offline_runtime_seen, "offline_runtime.py not found under src/python/"
+    assert not violations, (
+        "Scope T network egress imports found in production tree:\n"
+        + "\n".join(violations)
+    )
