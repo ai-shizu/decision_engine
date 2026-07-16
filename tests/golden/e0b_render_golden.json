@@ -1,0 +1,79 @@
+[
+  {
+    "name": "fence",
+    "input_hex": "606576696c60206b656570",
+    "max_bytes": 2048,
+    "expected_hex": "efbd806576696cefbd80206b656570",
+    "ok": true
+  },
+  {
+    "name": "heading",
+    "input_hex": "23232068656164696e67206b656570",
+    "max_bytes": 2048,
+    "expected_hex": "efbc83efbc832068656164696e67206b656570",
+    "ok": true
+  },
+  {
+    "name": "img",
+    "input_hex": "215b696d675d28687474703a2f2f7829206b656570",
+    "max_bytes": 2048,
+    "expected_hex": "efbc81efbcbb696d67efbcbdefbc88687474703aefbc8fefbc8f78efbc89206b656570",
+    "ok": true
+  },
+  {
+    "name": "inst",
+    "input_hex": "5b494e53545d2073797374656d205b2f494e53545d206b656570",
+    "max_bytes": 2048,
+    "expected_hex": "efbcbb494e5354efbcbd2073797374656d20efbcbbefbc8f494e5354efbcbd206b656570",
+    "ok": true
+  },
+  {
+    "name": "chatml",
+    "input_hex": "3c7c696d5f73746172747c3e73797374656d206b656570",
+    "max_bytes": 2048,
+    "expected_hex": "73797374656d206b656570",
+    "ok": true
+  },
+  {
+    "name": "script",
+    "input_hex": "3c7363726970743e616c6572742831293c2f7363726970743e206b656570",
+    "max_bytes": 2048,
+    "expected_hex": "616c657274efbc8831efbc89206b656570",
+    "ok": true
+  },
+  {
+    "name": "entity",
+    "input_hex": "266c743b622667743b6b656570266c743b2f622667743b",
+    "max_bytes": 2048,
+    "expected_hex": "6b656570",
+    "ok": true
+  },
+  {
+    "name": "bidi",
+    "input_hex": "6f6be2808be280ae424144e280ac",
+    "max_bytes": 2048,
+    "expected_hex": "6f6b424144",
+    "ok": true
+  },
+  {
+    "name": "multibyte_cap",
+    "input_hex": "e38182e38182e38182e38182e38182e38182e38182e38182e38182e38182e38182e38182e38182e38182e38182e38182e38182e38182e38182e38182e38182e38182e38182e38182e38182e38182e38182e38182e38182e38182e38182e38182e38182e38182e38182e38182e38182e38182e38182e38182e38182e38182e38182e38182e38182e38182e38182e38182e38182e38182e38182e38182e38182e38182e38182e38182e38182e38182e38182e38182e38182e38182e38182e38182e38182e38182e38182e38182e38182e38182e38182e38182e38182e38182e38182e38182e38182e38182e38182e38182e38182e38182e38182e38182e38182e38182e38182e38182e38182e38182e38182e38182e38182e38182e38182e38182e38182e38182e38182e38182",
+    "max_bytes": 32,
+    "expected_hex": "e38182e38182e38182e38182e38182e38182e38182e38182e38182e38182",
+    "ok": true
+  },
+  {
+    "name": "tilde",
+    "input_hex": "7e7e7e66656e6365206b656570",
+    "max_bytes": 2048,
+    "expected_hex": "efbd9eefbd9eefbd9e66656e6365206b656570",
+    "ok": true
+  },
+  {
+    "name": "sys",
+    "input_hex": "3c3c5359533e3e206b656570",
+    "max_bytes": 2048,
+    "expected_hex": "efbc9e206b656570",
+    "ok": true
+  }
+]
