@@ -272,7 +272,14 @@ def integrate_external_results(params: dict[str, Any]) -> dict[str, Any]:
     query = params["query"]
     if type(query) is not str or not query.strip():
         raise E0bRejected()
-    query_sha256 = hashlib.sha256(query.encode("utf-8")).hexdigest()
+    # Digest the outbound-canonical form so consult binding matches STEP2 shaping.
+    from core.e0b_intent import canonicalize_outbound_query
+
+    try:
+        q_star = canonicalize_outbound_query(query)
+    except (TypeError, ValueError) as exc:
+        raise E0bRejected() from exc
+    query_sha256 = hashlib.sha256(q_star.encode("utf-8")).hexdigest()
 
     raw_items = params["items"]
     if type(raw_items) is not list or not raw_items or len(raw_items) > MAX_ITEMS:

@@ -925,12 +925,26 @@ class ConsultationEngine:
 
 """
 
-    def build_dynamic_suffix(self, query: str, diary_hits: list[dict],
-                             knowledge_hits: list[dict]) -> str:
+    def build_dynamic_suffix(
+        self,
+        query: str,
+        diary_hits: list[dict],
+        knowledge_hits: list[dict],
+        external_evidence: str = "",
+    ) -> str:
         """相談ごとに変わる動的サフィックス (検索ヒット + Future Context + 相談文)。
 
         Future Context はプロファイルではなく日付依存のため、静的プレフィックス
-        ではなくこちらに置く (静的側に移すと日付が変わるたびキャッシュ全滅)。"""
+        ではなくこちらに置く (静的側に移すと日付が変わるたびキャッシュ全滅)。
+
+        External UNTRUSTED evidence (if any) is appended as the last *context*
+        lane before the user query. External text is untrusted. Structural and
+        tokenizer controls are physically neutralized and the data cannot trigger
+        further egress, but the fundamental RAG limitation remains: plausible
+        plain-language prompt injection can never be reduced to zero. The design
+        limits blast radius; it does not prove semantic truth or model
+        non-manipulation.
+        """
         def _tag(c: dict) -> str:
             return ("その日の行動ログ(日記+LINE)" if c.get("is_full_day_log")
                     else "日記" if c.get("has_diary") else "LINE")
@@ -941,6 +955,13 @@ class ConsultationEngine:
             f"[知識 {c['title']} / 類似度{c['score']:.3f}]\n{c['text'].strip()[:500]}"
             for c in knowledge_hits) or "(該当なし)"
         future_ctx = self._future_context_section(days_ahead=30)
+        external_lane = ""
+        if external_evidence:
+            external_lane = (
+                "\n\n# コンテキスト3: UNTRUSTED external evidence "
+                "(sanitized; RAG residual risk)\n"
+                f"{external_evidence}\n"
+            )
         return f"""# コンテキスト1: 関連する過去の日記 (NEONベクトル検索)
 {diary_ctx}
 
@@ -949,17 +970,26 @@ class ConsultationEngine:
 
 # Future Context: 向こう1ヶ月の予定 (calendar.json から構造化抽出)
 {future_ctx}
-
+{external_lane}
 # ユーザーの相談
 {query}
 
 {OUTPUT_FRAMEWORK}"""
 
-    def build_prompt(self, query: str, diary_hits: list[dict],
-                     knowledge_hits: list[dict]) -> str:
+    def build_prompt(
+        self,
+        query: str,
+        diary_hits: list[dict],
+        knowledge_hits: list[dict],
+        external_evidence: str = "",
+    ) -> str:
         """完全なプロンプト = 静的プレフィックス + 動的サフィックス (順序固定)。"""
-        return (self.build_static_prefix()
-                + self.build_dynamic_suffix(query, diary_hits, knowledge_hits))
+        return (
+            self.build_static_prefix()
+            + self.build_dynamic_suffix(
+                query, diary_hits, knowledge_hits, external_evidence=external_evidence
+            )
+        )
 
     # ---- c. 推論 -----------------------------------------------------------
     @property
@@ -1659,7 +1689,8 @@ class ConsultationEngine:
                 on_token=None, mode: str = "consult",
                 personas: list[dict] | None = None,
                 response_time_sec: float | None = None,
-                config: dict | None = None) -> str:
+                config: dict | None = None,
+                external_research_id: str | None = None) -> str:
         """相談1件を処理して4セクションMarkdownを返す。
 
         status は進捗コールバック、on_token は生成トークンの逐次コールバック。
@@ -1671,6 +1702,7 @@ class ConsultationEngine:
         config: interview_sim / gd_sim 用の InterviewConfig ({industry, genre,
         difficulty, customTheme} 等)。他モードでは無視する (未知フィールドを
         無視する境界防衛)。
+        external_research_id: E0b sidecar binding for mode=consult only.
         呼び出しごとに直前の成績表をリセットする (per-call スナップショット)。"""
         self._last_interview_report = None
         self._last_romance_analysis = None
@@ -1695,6 +1727,12 @@ class ConsultationEngine:
                 config=config)
         say = status or (lambda msg: None)
 
+        external_evidence = ""
+        if external_research_id is not None:
+            external_evidence = self._load_bound_external_evidence(
+                query, external_research_id
+            )
+
         say("クエリをベクトル化中…")
         qvec = self.embed(query)
 
@@ -1710,7 +1748,7 @@ class ConsultationEngine:
         # through the owned child's anonymous stdin.
         static_prefix = self.build_static_prefix()
         prompt = static_prefix + self.build_dynamic_suffix(
-            query, diary_hits, knowledge_hits)
+            query, diary_hits, knowledge_hits, external_evidence=external_evidence)
 
         say(f"ローカルLLMで推論中… ({self.backend.name})")
         t0 = time.perf_counter()
@@ -1729,6 +1767,30 @@ class ConsultationEngine:
         self.sync_diary_index(force=True)
 
         return answer
+
+    @staticmethod
+    def _load_bound_external_evidence(query: str, research_id: str) -> str:
+        """Load one sidecar by research_id and bind to the current query digest."""
+        import hashlib
+
+        from .e0b_intent import canonicalize_outbound_query
+        from .external_evidence import (
+            E0bRejected,
+            load_external_record,
+            render_external_evidence,
+        )
+
+        try:
+            record = load_external_record(research_id)
+            q_star = canonicalize_outbound_query(query)
+            digest = hashlib.sha256(q_star.encode("utf-8")).hexdigest()
+            if record.get("query_sha256") != digest:
+                raise E0bRejected("E0B_EXTERNAL_CONTEXT_QUERY_MISMATCH")
+            return render_external_evidence(record)
+        except E0bRejected:
+            raise
+        except Exception as exc:  # noqa: BLE001
+            raise E0bRejected("E0B_EXTERNAL_CONTEXT_UNAVAILABLE") from exc
 
     def shutdown(self) -> None:
         if self._backend:

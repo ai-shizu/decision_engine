@@ -105,12 +105,18 @@ def dispatch(cmd: str, params: dict[str, Any], emit: EventEmitter | None = None)
             config = None
         rts = params.get("response_time_sec")
         response_time_sec = float(rts) if isinstance(rts, (int, float)) else None
+        ext_id = params.get("external_research_id")
+        if ext_id is not None and type(ext_id) is not str:
+            raise ValueError("E0B_VALIDATION_REJECTED")
+        if ext_id is not None and mode != "consult":
+            raise ValueError("E0B_VALIDATION_REJECTED")
         # emit があれば進捗 status と生成トークンをイベント行として逐次送出する
         status = (lambda msg: emit({"event": "status", "message": msg})) if emit else None
         on_token = (lambda text: emit({"event": "chunk", "text": text})) if emit else None
         answer = facade.consult(
             query, status=status, on_token=on_token, mode=mode,
-            personas=personas, response_time_sec=response_time_sec, config=config)
+            personas=personas, response_time_sec=response_time_sec, config=config,
+            external_research_id=ext_id)
         result: dict = {"query": query, "mode": mode, "answer": answer}
         # F4b (W-37): 検証済みの interview_report.v1 のみを構造体として渡す。
         # UI は JSON.parse(LLM出力) を絶対に書かない。

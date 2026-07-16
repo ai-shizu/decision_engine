@@ -101,10 +101,12 @@ def consult(
     personas: list[dict] | None = None,
     response_time_sec: float | None = None,
     config: dict | None = None,
+    external_research_id: str | None = None,
 ) -> str:
     return get_engine().consult(
         query, status=status, on_token=on_token, mode=mode,
-        personas=personas, response_time_sec=response_time_sec, config=config)
+        personas=personas, response_time_sec=response_time_sec, config=config,
+        external_research_id=external_research_id)
 
 
 def last_interview_report() -> dict | None:
