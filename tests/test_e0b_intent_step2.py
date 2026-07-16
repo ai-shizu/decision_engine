@@ -215,3 +215,124 @@ def test_tag_sensitivity_one_bit() -> None:
         tweaked_q,
     )
     assert attest_tag(kat1["k_spawn"], framing_q) != good
+
+
+# ---------------------------------------------------------------------------
+# STEP 2.C — All-or-Nothing sanitizer preflight
+# ---------------------------------------------------------------------------
+def test_preflight_allornothing_middle_violation_no_hmac() -> None:
+    from core.privacy_search import EgressSanitizer, EgressViolationError
+
+    sanitizer = EgressSanitizer(["himitsu"])
+    with patch("core.e0b_intent.attest_tag") as mock_attest:
+        with pytest.raises(EgressViolationError):
+            from core.e0b_intent import build_attested_intent
+
+            build_attested_intent(
+                ["ai career", "himitsu project", "python async"],
+                k_spawn=_VALID_K,
+                session_id=_VALID_SID,
+                txn_nonce=_VALID_NONCE,
+                sidecar_generation=1,
+                policy_epoch=1,
+                dict_hash=_VALID_DH,
+                sanitizer=sanitizer,
+            )
+        assert mock_attest.call_count == 0
+
+
+def test_preflight_allornothing_trailing_violation_no_hmac() -> None:
+    from core.privacy_search import EgressSanitizer, EgressViolationError
+
+    sanitizer = EgressSanitizer(["himitsu"])
+    with patch("core.e0b_intent.attest_tag") as mock_attest:
+        with pytest.raises(EgressViolationError):
+            from core.e0b_intent import build_attested_intent
+
+            build_attested_intent(
+                ["ai career", "python async", "himitsu project"],
+                k_spawn=_VALID_K,
+                session_id=_VALID_SID,
+                txn_nonce=_VALID_NONCE,
+                sidecar_generation=1,
+                policy_epoch=1,
+                dict_hash=_VALID_DH,
+                sanitizer=sanitizer,
+            )
+        assert mock_attest.call_count == 0
+
+
+def test_preflight_safe_queries_hmac_once() -> None:
+    from core.e0b_intent import build_attested_intent
+    from core.privacy_search import EgressSanitizer
+
+    sanitizer = EgressSanitizer(["himitsu"])
+    with patch("core.e0b_intent.attest_tag", return_value="ab" * 32) as mock_attest:
+        result = build_attested_intent(
+            ["ai career", "python async"],
+            k_spawn=_VALID_K,
+            session_id=_VALID_SID,
+            txn_nonce=_VALID_NONCE,
+            sidecar_generation=1,
+            policy_epoch=1,
+            dict_hash=_VALID_DH,
+            sanitizer=sanitizer,
+        )
+        assert mock_attest.call_count == 1
+        assert result["attestation"] == "ab" * 32
+
+    # Real path: 64 lowercase hex attestation
+    real = build_attested_intent(
+        ["ai career", "python async"],
+        k_spawn=_VALID_K,
+        session_id=_VALID_SID,
+        txn_nonce=_VALID_NONCE,
+        sidecar_generation=1,
+        policy_epoch=1,
+        dict_hash=_VALID_DH,
+        sanitizer=sanitizer,
+    )
+    assert set(real.keys()) == {"abstract_queries", "attestation"}
+    assert len(real["attestation"]) == 64
+    assert all(c in "0123456789abcdef" for c in real["attestation"])
+
+
+def test_preflight_invisible_pii_rejected_after_canonicalize() -> None:
+    from core.privacy_search import EgressSanitizer, EgressViolationError
+
+    sanitizer = EgressSanitizer(["himitsu"])
+    with patch("core.e0b_intent.attest_tag") as mock_attest:
+        with pytest.raises(EgressViolationError):
+            from core.e0b_intent import build_attested_intent
+
+            # ZWSP between "himi" and "tsu" — stripped by canonicalize_outbound
+            build_attested_intent(
+                ["himi\u200btsu"],
+                k_spawn=_VALID_K,
+                session_id=_VALID_SID,
+                txn_nonce=_VALID_NONCE,
+                sidecar_generation=1,
+                policy_epoch=1,
+                dict_hash=_VALID_DH,
+                sanitizer=sanitizer,
+            )
+        assert mock_attest.call_count == 0
+
+
+def test_integration_build_matches_kat1() -> None:
+    from core.e0b_intent import build_attested_intent
+    from core.privacy_search import EgressSanitizer
+
+    kat1 = next(r for r in _load_kat() if r["name"] == "KAT-1")
+    result = build_attested_intent(
+        list(kat1["queries"]),
+        k_spawn=kat1["k_spawn"],
+        session_id=kat1["session_id"],
+        txn_nonce=kat1["txn_nonce"],
+        sidecar_generation=kat1["sidecar_generation"],
+        policy_epoch=kat1["policy_epoch"],
+        dict_hash=kat1["dict_hash"],
+        sanitizer=EgressSanitizer([]),
+    )
+    assert result["abstract_queries"] == kat1["queries"]
+    assert result["attestation"] == kat1["tag_hex"]
