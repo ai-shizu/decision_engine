@@ -1,5 +1,5 @@
-//! STEP 5.B E.E: offline tests for the E0b Egress Gateway. No real network or
-//! DNS is ever touched  EHttpTransport/HostResolver fakes only.
+//! STEP 5.B–5.E: offline tests for the E0b Egress Gateway. No real network or
+//! DNS is ever touched — HttpTransport fakes only (DNS deny-table: knowledge_resolver).
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use std::future::Future;
@@ -8,13 +8,13 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
-use pkb_desktop_lib::knowledge::dns_guard::{is_disallowed_ip, HostResolver};
+use pkb_desktop_lib::knowledge::dns_guard::is_disallowed_ip;
 use pkb_desktop_lib::knowledge::dual_run::AttestedIntentPayload;
 use pkb_desktop_lib::knowledge::fsm::ResearchSlot;
 use pkb_desktop_lib::knowledge::net_gateway::{
-    build_request, extract_results, fetch_bounded_with_deadline, fetch_one, research_fetch,
-    resolve_and_pin, safe_truncate, validate_outbound_url, validate_response_meta, GatewayError,
-    ResponseBody, ResponseMeta, HttpTransport, VerifyInputs, MAX_RESPONSE_BYTES, WIKI_HOST,
+    build_request, extract_results, fetch_bounded_with_deadline, research_fetch, safe_truncate,
+    validate_outbound_url, validate_response_meta, GatewayError, ResponseBody, ResponseMeta,
+    HttpTransport, VerifyInputs, MAX_RESPONSE_BYTES, WIKI_HOST,
 };
 
 // ---------------------------------------------------------------------------
@@ -56,34 +56,6 @@ fn dns_deny_table_global_allowed() {
         assert!(!is_disallowed_ip(v4(s)), "expected allowed: {s}");
     }
     assert!(!is_disallowed_ip(v6("2606:4700:4700::1111")));
-}
-
-struct FakeResolver {
-    ips: Vec<IpAddr>,
-}
-impl HostResolver for FakeResolver {
-    fn resolve(&self, _host: &str) -> Result<Vec<IpAddr>, GatewayError> {
-        Ok(self.ips.clone())
-    }
-}
-
-#[test]
-fn resolver_all_private_denies_before_transport() {
-    let r = FakeResolver { ips: vec![v4("127.0.0.1")] };
-    assert_eq!(resolve_and_pin(&r, WIKI_HOST), Err(GatewayError::DnsDenied));
-}
-
-#[test]
-fn resolver_mixed_denies_fail_closed() {
-    let r = FakeResolver { ips: vec![v4("8.8.8.8"), v4("10.0.0.5")] };
-    assert_eq!(resolve_and_pin(&r, WIKI_HOST), Err(GatewayError::DnsDenied));
-}
-
-#[test]
-fn resolver_all_global_pins_all() {
-    let r = FakeResolver { ips: vec![v4("8.8.8.8"), v4("1.1.1.1")] };
-    let pinned = resolve_and_pin(&r, WIKI_HOST).expect("all-global must pin");
-    assert_eq!(pinned.len(), 2);
 }
 
 // ---------------------------------------------------------------------------
@@ -380,10 +352,6 @@ impl HttpTransport for CountingTransport {
     }
 }
 
-fn valid_resolver() -> FakeResolver {
-    FakeResolver { ips: vec![v4("8.8.8.8")] }
-}
-
 fn make_slot(dict_hash: &str) -> Arc<ResearchSlot> {
     ResearchSlot::new(dict_hash)
 }
@@ -406,14 +374,12 @@ fn kat_payload(nonce_hex: &str, dict_hash: &str, queries: Vec<String>) -> Attest
 async fn e2e_bad_hmac_aborts_before_any_egress() {
     let slot = make_slot("dicthash1");
     let transport = CountingTransport::default();
-    let resolver = valid_resolver();
     let payload = kat_payload(&"a".repeat(64), "dicthash1", vec!["rust".into()]);
     let result = research_fetch(
         payload,
         VerifyInputs { dict_terms: &[], k_spawn: "irrelevant-k-spawn" },
         &slot,
         &transport,
-        &resolver,
         std::future::pending::<()>,
         Duration::from_secs(5),
     )
@@ -430,14 +396,12 @@ async fn e2e_pii_hit_aborts_before_any_egress() {
     // This test additionally proves FSM-level failures (drift) do the same.
     let slot = make_slot("dicthash-correct");
     let transport = CountingTransport::default();
-    let resolver = valid_resolver();
     let payload = kat_payload(&"b".repeat(64), "WRONG-DICT-HASH", vec!["rust".into()]);
     let result = research_fetch(
         payload,
         VerifyInputs { dict_terms: &[], k_spawn: "irrelevant-k-spawn" },
         &slot,
         &transport,
-        &resolver,
         std::future::pending::<()>,
         Duration::from_secs(5),
     )
@@ -450,7 +414,6 @@ async fn e2e_pii_hit_aborts_before_any_egress() {
 async fn e2e_replay_aborts_before_any_egress() {
     let slot = make_slot("dicthash1");
     let transport = CountingTransport::default();
-    let resolver = valid_resolver();
     let nonce = "c".repeat(64);
     // First begin() consumes the nonce (still fails verify_and_gate due to bad HMAC,
     // but the nonce is consumed at FSM.begin time regardless of verify outcome).
@@ -460,7 +423,6 @@ async fn e2e_replay_aborts_before_any_egress() {
         VerifyInputs { dict_terms: &[], k_spawn: "irrelevant-k-spawn" },
         &slot,
         &transport,
-        &resolver,
         std::future::pending::<()>,
         Duration::from_secs(5),
     )
@@ -471,7 +433,6 @@ async fn e2e_replay_aborts_before_any_egress() {
         VerifyInputs { dict_terms: &[], k_spawn: "irrelevant-k-spawn" },
         &slot,
         &transport,
-        &resolver,
         std::future::pending::<()>,
         Duration::from_secs(5),
     )
@@ -484,14 +445,12 @@ async fn e2e_replay_aborts_before_any_egress() {
 async fn e2e_malformed_nonce_aborts_before_any_egress() {
     let slot = make_slot("dicthash1");
     let transport = CountingTransport::default();
-    let resolver = valid_resolver();
     let payload = kat_payload("not-a-valid-hex-nonce", "dicthash1", vec!["rust".into()]);
     let result = research_fetch(
         payload,
         VerifyInputs { dict_terms: &[], k_spawn: "irrelevant-k-spawn" },
         &slot,
         &transport,
-        &resolver,
         std::future::pending::<()>,
         Duration::from_secs(5),
     )
@@ -500,13 +459,59 @@ async fn e2e_malformed_nonce_aborts_before_any_egress() {
     assert_eq!(transport.calls.load(Ordering::SeqCst), 0, "no egress on malformed nonce");
 }
 
-#[tokio::test]
-async fn e2e_dns_denied_query_aborts_that_query_with_zero_transport_calls() {
-    // Uses fetch_one directly with a private-IP resolver to prove the
-    // resolve->deny gate blocks the transport at the per-query level too.
-    let transport = CountingTransport::default();
-    let bad_resolver = FakeResolver { ips: vec![v4("127.0.0.1")] };
-    let result = fetch_one(&transport, &bad_resolver, "rust", std::future::pending::<()>(), Duration::from_secs(5)).await;
-    assert_eq!(result, Err(GatewayError::DnsDenied));
-    assert_eq!(transport.calls.load(Ordering::SeqCst), 0);
+// STEP 7.B: egress-live wiring — private IP blocked inside injected dns_resolver.
+#[cfg(feature = "egress-live")]
+mod egress_wiring {
+    use std::future::Future;
+    use std::net::{Ipv4Addr, SocketAddr};
+    use std::pin::Pin;
+    use std::time::Duration;
+
+    use pkb_desktop_lib::knowledge::net_gateway::{
+        build_request, fetch_one, AsyncLookup, GatewayError, HttpTransport, ReqwestTransport,
+    };
+
+    struct FakeLookup {
+        addrs: Vec<SocketAddr>,
+    }
+
+    impl AsyncLookup for FakeLookup {
+        fn lookup(
+            &self,
+            _host: String,
+        ) -> Pin<Box<dyn Future<Output = Result<Vec<SocketAddr>, GatewayError>> + Send + '_>> {
+            let addrs = self.addrs.clone();
+            Box::pin(async move { Ok(addrs) })
+        }
+    }
+
+    #[tokio::test]
+    async fn reqwest_dns_resolver_rejects_private_ip_before_connect() {
+        let transport = ReqwestTransport::with_lookup(FakeLookup {
+            addrs: vec![SocketAddr::new(Ipv4Addr::new(10, 0, 0, 5).into(), 443)],
+        })
+        .expect("client build");
+        let _url = build_request("rust");
+        let result = transport.get(&_url).await;
+        assert!(result.is_err(), "private IP must abort before HTTP success");
+    }
+
+    #[tokio::test]
+    async fn reqwest_dns_resolver_passes_global_unreachable_fails_connect_not_dns() {
+        let transport = ReqwestTransport::with_lookup(FakeLookup {
+            addrs: vec![SocketAddr::new(Ipv4Addr::new(192, 0, 2, 1).into(), 443)],
+        })
+        .expect("client build");
+        let result = fetch_one(
+            &transport,
+            "rust",
+            std::future::pending::<()>(),
+            Duration::from_secs(2),
+        )
+        .await;
+        assert!(
+            matches!(result, Err(GatewayError::WireViolation) | Err(GatewayError::Timeout)),
+            "global TEST-NET must pass deny-table; connect may fail: {result:?}"
+        );
+    }
 }

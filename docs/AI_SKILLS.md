@@ -515,7 +515,7 @@ Phase 4-E **E0a EMERGENCY EGRESS LOCKDOWN** により、外向き knowledge fetc
 
 E0b は Rust Gateway（STEP 1–5）を Python 永続化・プロンプト・Tauri 境界へ結線する。**本番
 `NetworkPolicy::Off`** — `knowledge_research` は `EGRESS_LIVE_NOT_READY` で即拒否。
-`egress-live` / `ReqwestTransport` は未結線（DNS pinning TOCTOU は Egress Live の必達ブロッカー）。
+`egress-live` は opt-in ビルドのみ（既定 `cargo test` は TLS 非コンパイル）。
 
 - **隔離永続化**: `data/knowledge/external/ext_{research_id}.json` のみ。
   `load_knowledge_chunks()`（`^##` 分割）は非再帰のため対象外。`sync_knowledge_index()` と
@@ -534,7 +534,23 @@ E0b は Rust Gateway（STEP 1–5）を Python 永続化・プロンプト・Tau
 
 **ハマりどころ**: STEP 6 本番は orchestrator の Fake 経路も UI からは到達しない。憲法ガードは
 `knowledge.intent.build` / `knowledge.integrate` の肯定形反転を維持し、**`knowledge.research` を
-Python dispatch に足すな**（phase B は Rust 専有）。
+Python dispatch に足すな**（fetch は Rust 専有）。
+
+### 7.2.2 E0b Egress-Live DNS（STEP 7 — TOCTOU 封鎖）
+
+- **唯一の解決経路**: `SafeKnowledgeResolver`（`reqwest::dns::Resolve`）を
+  `ClientBuilder::dns_resolver()` で注入。`resolve_and_pin` / `HostResolver` seam は**削除済み**
+  （チェック用解決と接続用解決の二重経路を構造的に禁止）。
+- **Fail-closed**: `enforce_deny_table` — 1 件でも `is_disallowed_ip` なら全体 `DnsDenied`。
+  安全 IP のみ抽出して続行する fail-open は禁止。
+- **二重ビルド**: 既定 = `reqwest` features `stream` のみ。`egress-live` =
+  `reqwest/rustls-no-provider` + 明示 `rustls/ring`（`native-tls` / `aws-lc` 既定禁止）。
+  Hickory 実解決は egress-live のみ。
+- **Live テスト隔離**: `tests/knowledge_live.rs` は `#[ignore]` + `PKB_E0B_LIVE=1` の二重ガード。
+  既定 CI / `cargo test` では走らない。
+
+**ハマりどころ**: egress-live ビルドは Windows ARM64 で VS Build Tools（vcvarsarm64）が必要。
+  `native-tls` へ逃げるな。Wikipedia API は `User-Agent` 必須（無いと `StatusRejected`）。
 
 ---
 

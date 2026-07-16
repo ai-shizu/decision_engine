@@ -12,7 +12,7 @@
 //! Everything in this file that is testable offline (URL construction, deny-table
 //! wiring, bounded-stream reading, JSON extraction, FSM/verify-gate integration)
 //! is transport-agnostic via the [`HttpTransport`] / [`ResponseBody`] seam and
-//! [`crate::knowledge::dns_guard::HostResolver`] seam — fakes are injected in
+//! [`SafeKnowledgeResolver`] (reqwest `dns::Resolve`) seam — fakes are injected in
 //! tests, never a real TLS client. The one piece of code that actually needs a
 //! TLS provider (`ReqwestTransport`, a real `HttpTransport` impl backed by
 //! `reqwest::Client`) is compiled ONLY under `#[cfg(feature = "egress-live")]`.
@@ -26,10 +26,12 @@
 
 use std::collections::BTreeSet;
 use std::future::Future;
-use std::net::IpAddr;
+use std::net::SocketAddr;
+use std::pin::Pin;
+use std::sync::Arc;
 use std::time::Duration;
 
-use crate::knowledge::dns_guard::{is_disallowed_ip, HostResolver};
+use crate::knowledge::dns_guard::is_disallowed_ip;
 use crate::knowledge::dual_run::{verify_and_gate, AttestedIntentPayload};
 use crate::knowledge::fsm::{AbortReason, FsmError, ReadyToIntegrate, ResearchSlot, Txn};
 use crate::knowledge::VerifyError;
@@ -272,22 +274,61 @@ pub fn validate_outbound_url(url: &str, expected_query: &str) -> Result<(), Gate
 }
 
 // ---------------------------------------------------------------------------
-// DNS resolve -> deny -> pin (STEP 5.B)
+// DNS deny-table enforcement + reqwest custom resolver (STEP 7 — TOCTOU closure)
 // ---------------------------------------------------------------------------
 
-/// Resolve `host`, then reject (fail-closed) if ANY resolved IP is non-global.
-/// Never "use the ones that passed" — a single denied IP aborts the whole set.
-pub fn resolve_and_pin<R: HostResolver>(resolver: &R, host: &str) -> Result<Vec<IpAddr>, GatewayError> {
-    let ips = resolver.resolve(host).map_err(|_| GatewayError::DnsDenied)?;
-    if ips.is_empty() {
+/// Fail-closed deny-table on resolved socket addresses. One disallowed IP
+/// aborts the entire set — never filter-and-continue (no fail-open).
+pub fn enforce_deny_table(addrs: Vec<SocketAddr>) -> Result<Vec<SocketAddr>, GatewayError> {
+    if addrs.is_empty() {
         return Err(GatewayError::DnsDenied);
     }
-    for ip in &ips {
-        if is_disallowed_ip(*ip) {
+    for a in &addrs {
+        if is_disallowed_ip(a.ip()) {
             return Err(GatewayError::DnsDenied);
         }
     }
-    Ok(ips)
+    Ok(addrs)
+}
+
+/// Async hostname lookup seam. Production (`egress-live`) uses Hickory;
+/// offline tests inject fakes — no real DNS in the default suite.
+pub trait AsyncLookup: Send + Sync {
+    fn lookup(
+        &self,
+        host: String,
+    ) -> Pin<Box<dyn Future<Output = Result<Vec<SocketAddr>, GatewayError>> + Send + '_>>;
+}
+
+/// reqwest `dns::Resolve` wrapper: lookup once, enforce deny-table, return vetted
+/// addresses. DNS rebinding TOCTOU is closed because reqwest connects only to
+/// these addresses (no independent OS re-resolve).
+pub struct SafeKnowledgeResolver<L> {
+    lookup: Arc<L>,
+}
+
+impl<L: AsyncLookup> SafeKnowledgeResolver<L> {
+    pub fn new(lookup: L) -> Self {
+        Self {
+            lookup: Arc::new(lookup),
+        }
+    }
+}
+
+impl<L: AsyncLookup + 'static> reqwest::dns::Resolve for SafeKnowledgeResolver<L> {
+    fn resolve(&self, name: reqwest::dns::Name) -> reqwest::dns::Resolving {
+        let lookup = Arc::clone(&self.lookup);
+        let host = name.as_str().to_string();
+        Box::pin(async move {
+            let raw = lookup
+                .lookup(host)
+                .await
+                .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { Box::new(e) })?;
+            let vetted = enforce_deny_table(raw)
+                .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { Box::new(e) })?;
+            Ok(Box::new(vetted.into_iter()) as reqwest::dns::Addrs)
+        })
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -327,23 +368,21 @@ pub fn extract_results(body: &[u8]) -> Result<Vec<SearchResult>, GatewayError> {
 // STEP 5.E: end-to-end research_fetch (FSM ∧ verify-gate ∧ bounded gateway)
 // ---------------------------------------------------------------------------
 
-/// Fetch one query end-to-end: build URL -> send-time assert -> resolve/deny/pin
-/// -> transport GET -> validate meta -> bounded read w/ cancel+deadline -> extract.
-pub async fn fetch_one<T, R, C>(
+/// Fetch one query end-to-end: build URL -> send-time assert -> transport GET
+/// (DNS deny runs inside reqwest custom resolver when using ReqwestTransport)
+/// -> validate meta -> bounded read w/ cancel+deadline -> extract.
+pub async fn fetch_one<T, C>(
     transport: &T,
-    resolver: &R,
     query: &str,
     cancel: C,
     deadline: Duration,
 ) -> Result<Vec<SearchResult>, GatewayError>
 where
     T: HttpTransport,
-    R: HostResolver,
     C: Future<Output = ()>,
 {
     let url = build_request(query);
     validate_outbound_url(&url, query)?;
-    let _pinned = resolve_and_pin(resolver, WIKI_HOST)?;
     let (meta, body) = transport.get(&url).await?;
     validate_response_meta(&meta)?;
     let raw = fetch_bounded_with_deadline(body, cancel, deadline).await?;
@@ -364,18 +403,16 @@ pub struct VerifyInputs<'a> {
 ///
 /// `cancel_factory`/`deadline` apply per-query (a fresh cancel future is
 /// requested per query since futures are not `Clone`).
-pub async fn research_fetch<T, R, CF, C>(
+pub async fn research_fetch<T, CF, C>(
     payload: AttestedIntentPayload,
     verify: VerifyInputs<'_>,
     slot: &std::sync::Arc<ResearchSlot>,
     transport: &T,
-    resolver: &R,
     mut cancel_factory: CF,
     deadline: Duration,
 ) -> Result<(Txn<ReadyToIntegrate>, Vec<Vec<SearchResult>>), GatewayError>
 where
     T: HttpTransport,
-    R: HostResolver,
     CF: FnMut() -> C,
     C: Future<Output = ()>,
 {
@@ -386,7 +423,7 @@ where
     let queries = fetching.payload().queries.clone();
     let mut all_results = Vec::with_capacity(queries.len());
     for q in &queries {
-        match fetch_one(transport, resolver, q, cancel_factory(), deadline).await {
+        match fetch_one(transport, q, cancel_factory(), deadline).await {
             Ok(r) => all_results.push(r),
             Err(e) => {
                 let _ = fetching.abort(AbortReason::Explicit);
@@ -407,7 +444,48 @@ mod live {
     //! Real `reqwest`-backed [`super::HttpTransport`]. Compiled only when the
     //! `egress-live` Cargo feature is enabled — the default build/test suite
     //! never touches this module, so it never requires aws-lc-rs/ring/clang-cl.
-    use super::{GatewayError, HttpTransport, ResponseBody, ResponseMeta};
+    use std::future::Future;
+    use std::net::SocketAddr;
+    use std::pin::Pin;
+
+    use super::{
+        AsyncLookup, GatewayError, HttpTransport, ResponseBody, ResponseMeta,
+        SafeKnowledgeResolver,
+    };
+
+    /// Production DNS lookup via hickory-resolver (real network; egress-live only).
+    pub struct HickoryLookup {
+        inner: hickory_resolver::TokioResolver,
+    }
+
+    impl HickoryLookup {
+        pub fn new() -> Result<Self, GatewayError> {
+            let inner = hickory_resolver::TokioResolver::builder_tokio()
+                .map_err(|_| GatewayError::DnsDenied)?
+                .build();
+            Ok(Self { inner })
+        }
+    }
+
+    impl AsyncLookup for HickoryLookup {
+        fn lookup(
+            &self,
+            host: String,
+        ) -> Pin<Box<dyn Future<Output = Result<Vec<SocketAddr>, GatewayError>> + Send + '_>> {
+            let inner = self.inner.clone();
+            Box::pin(async move {
+                let response = inner
+                    .lookup_ip(host)
+                    .await
+                    .map_err(|_| GatewayError::DnsDenied)?;
+                let mut addrs = Vec::new();
+                for ip in response.iter() {
+                    addrs.push(SocketAddr::new(ip, 443));
+                }
+                Ok(addrs)
+            })
+        }
+    }
 
     pub struct ReqwestTransport {
         client: reqwest::Client,
@@ -415,10 +493,17 @@ mod live {
 
     impl ReqwestTransport {
         pub fn new() -> Result<Self, GatewayError> {
+            Self::with_lookup(HickoryLookup::new()?)
+        }
+
+        pub fn with_lookup<L: AsyncLookup + 'static>(lookup: L) -> Result<Self, GatewayError> {
+            let _ = rustls::crypto::ring::default_provider().install_default();
+            let dns = SafeKnowledgeResolver::new(lookup);
             let client = reqwest::Client::builder()
                 .https_only(true)
                 .redirect(reqwest::redirect::Policy::none())
                 .no_proxy()
+                .dns_resolver(dns)
                 .connect_timeout(std::time::Duration::from_secs(5))
                 .timeout(std::time::Duration::from_secs(15))
                 .build()
@@ -449,6 +534,10 @@ mod live {
                 .client
                 .get(url)
                 .header("Accept-Encoding", "identity")
+                .header(
+                    "User-Agent",
+                    "PKB-E0b/1.0 (local-only research; https://ja.wikipedia.org/w/api.php)",
+                )
                 .send()
                 .await
                 .map_err(|_| GatewayError::WireViolation)?;

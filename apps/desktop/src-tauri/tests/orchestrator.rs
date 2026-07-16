@@ -2,11 +2,9 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use std::future::Future;
-use std::net::{IpAddr, Ipv4Addr};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
-use pkb_desktop_lib::knowledge::dns_guard::HostResolver;
 use pkb_desktop_lib::knowledge::dual_run::AttestedIntentPayload;
 use pkb_desktop_lib::knowledge::fsm::ResearchSlot;
 use pkb_desktop_lib::knowledge::net_gateway::{
@@ -90,16 +88,6 @@ impl HttpTransport for CountingTransport {
     }
 }
 
-struct FakeResolver {
-    ips: Vec<IpAddr>,
-}
-
-impl HostResolver for FakeResolver {
-    fn resolve(&self, _host: &str) -> Result<Vec<IpAddr>, GatewayError> {
-        Ok(self.ips.clone())
-    }
-}
-
 fn valid_payload(nonce: &str) -> AttestedIntentPayload {
     AttestedIntentPayload {
         session_id: SESSION.into(),
@@ -116,9 +104,6 @@ fn valid_payload(nonce: &str) -> AttestedIntentPayload {
 async fn policy_off_aborts_before_any_fake_transport_call() {
     let slot = ResearchSlot::new(DICT_HASH);
     let transport = CountingTransport::default();
-    let resolver = FakeResolver {
-        ips: vec![IpAddr::V4(Ipv4Addr::new(8, 8, 8, 8))],
-    };
     match run_networkless_research(
         NetworkPolicy::Off,
         valid_payload(NONCE),
@@ -129,7 +114,6 @@ async fn policy_off_aborts_before_any_fake_transport_call() {
         &slot,
         InjectedFetch {
             transport: &transport,
-            resolver: &resolver,
             cancel_factory: std::future::pending::<()>,
             deadline: Duration::from_secs(5),
         },
@@ -146,9 +130,6 @@ async fn policy_off_aborts_before_any_fake_transport_call() {
 async fn and_gate_bad_hmac_aborts_before_transport() {
     let slot = ResearchSlot::new(DICT_HASH);
     let transport = CountingTransport::default();
-    let resolver = FakeResolver {
-        ips: vec![IpAddr::V4(Ipv4Addr::new(8, 8, 8, 8))],
-    };
     let mut payload = valid_payload(&"a".repeat(64));
     payload.attestation = "0".repeat(64);
     match run_networkless_research(
@@ -161,7 +142,6 @@ async fn and_gate_bad_hmac_aborts_before_transport() {
         &slot,
         InjectedFetch {
             transport: &transport,
-            resolver: &resolver,
             cancel_factory: std::future::pending::<()>,
             deadline: Duration::from_secs(5),
         },
@@ -179,9 +159,6 @@ async fn and_gate_bad_hmac_aborts_before_transport() {
 async fn fake_e2e_sanitizes_results_with_zero_real_network() {
     let slot = ResearchSlot::new(DICT_HASH);
     let transport = CountingTransport::default();
-    let resolver = FakeResolver {
-        ips: vec![IpAddr::V4(Ipv4Addr::new(8, 8, 8, 8))],
-    };
     let (ready, results) = run_networkless_research(
         NetworkPolicy::FakeAllowed,
         valid_payload(NONCE),
@@ -192,7 +169,6 @@ async fn fake_e2e_sanitizes_results_with_zero_real_network() {
         &slot,
         InjectedFetch {
             transport: &transport,
-            resolver: &resolver,
             cancel_factory: std::future::pending::<()>,
             deadline: Duration::from_secs(5),
         },

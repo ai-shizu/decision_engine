@@ -34,12 +34,18 @@ subtle = "=2.6.1"
 # feature below (§1.4 blueprint update). Never add gzip/brotli/deflate/
 # native-tls/default-tls/socks/cookies here or under egress-live.
 reqwest = { version = "=0.13.4", default-features = false, features = ["stream"] }
+hickory-resolver = { version = "=0.25.2", default-features = false, features = ["tokio", "system-config"], optional = true }
+# egress-live TLS: rustls+ring only (native-tls/aws-lc forbidden per STEP 7).
+rustls = { version = "=0.23.41", default-features = false, features = ["ring", "std", "tls12"], optional = true }
+hyper-rustls = { version = "=0.27.9", default-features = false, features = ["http1", "ring", "tls12", "logging"], optional = true }
+tokio-rustls = { version = "=0.26.4", default-features = false, features = ["ring", "tls12", "logging"], optional = true }
 
 [features]
 # NOTE: the blueprint prose says "reqwest/rustls-tls"; reqwest 0.13.4's actual
 # feature name is "rustls" (verified via `cargo add --dry-run` feature listing
 # during STEP 5.A). Adapted to crate reality — still rustls-only, no native-tls.
-egress-live = ["reqwest/rustls"]
+# Use rustls-no-provider + explicit ring deps (aws-lc-sys toolchain blocker on ARM64).
+egress-live = ["dep:hickory-resolver", "dep:rustls", "dep:hyper-rustls", "dep:tokio-rustls", "reqwest/rustls-no-provider"]
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61.2", features = [

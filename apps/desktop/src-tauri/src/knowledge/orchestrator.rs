@@ -12,7 +12,6 @@ use std::future::Future;
 use std::sync::Arc;
 use std::time::Duration;
 
-use crate::knowledge::dns_guard::HostResolver;
 use crate::knowledge::dual_run::AttestedIntentPayload;
 use crate::knowledge::fsm::{ReadyToIntegrate, ResearchSlot, Txn};
 use crate::knowledge::net_gateway::{
@@ -82,33 +81,30 @@ pub fn sanitize_search_results(
     Ok(out)
 }
 
-/// Injected transport/resolver/cancel/deadline for test-only fake egress.
-pub struct InjectedFetch<'a, T, R, CF> {
+/// Injected transport/cancel/deadline for test-only fake egress.
+pub struct InjectedFetch<'a, T, CF> {
     pub transport: &'a T,
-    pub resolver: &'a R,
     pub cancel_factory: CF,
     pub deadline: Duration,
 }
 
 /// Networkless FakeAllowed path: verify ∧ FSM ∧ FakeTransport ∧ sanitize.
 /// Production must never call this with live transport; callers inject fakes.
-pub async fn run_networkless_research<T, R, CF, C>(
+pub async fn run_networkless_research<T, CF, C>(
     policy: NetworkPolicy,
     payload: AttestedIntentPayload,
     verify: VerifyInputs<'_>,
     slot: &Arc<ResearchSlot>,
-    fetch: InjectedFetch<'_, T, R, CF>,
+    fetch: InjectedFetch<'_, T, CF>,
 ) -> Result<(Txn<ReadyToIntegrate>, Vec<Vec<SearchResult>>), OrchestratorError>
 where
     T: HttpTransport,
-    R: HostResolver,
     CF: FnMut() -> C,
     C: Future<Output = ()>,
 {
     refuse_if_policy_off(policy)?;
     let InjectedFetch {
         transport,
-        resolver,
         cancel_factory,
         deadline,
     } = fetch;
@@ -117,7 +113,6 @@ where
         verify,
         slot,
         transport,
-        resolver,
         cancel_factory,
         deadline,
     )

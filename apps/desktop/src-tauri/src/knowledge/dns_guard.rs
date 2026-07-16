@@ -112,8 +112,3 @@ fn extract_embedded_v4(ip: Ipv6Addr) -> Option<Ipv4Addr> {
     None
 }
 
-/// DNS resolution seam — production impl lives behind `egress-live` (STEP 5.B/5.E);
-/// tests inject fakes so no real DNS resolver runs in the default test suite.
-pub trait HostResolver: Send + Sync {
-    fn resolve(&self, host: &str) -> Result<Vec<IpAddr>, crate::knowledge::net_gateway::GatewayError>;
-}
