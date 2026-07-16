@@ -66,7 +66,7 @@ E0A_MSG = "Egress blocked by E0a strict lockdown."
 E0B_BASENAME_GLOBS = ("knowledge_gateway*.py", "*e0b*.py")
 
 # STEP 1.A: sanctioned Scope E modules (basename only). Unsanctioned *e0b*.py → RED.
-SANCTIONED_E0B_MODULES = frozenset({"e0b_attestation.py"})
+SANCTIONED_E0B_MODULES = frozenset({"e0b_attestation.py", "e0b_intent.py"})
 
 
 # ---------------------------------------------------------------------------
