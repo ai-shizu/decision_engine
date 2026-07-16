@@ -359,3 +359,95 @@ def test_e0b_scoped_modules_absent_or_caged() -> None:
     assert not cage_violations, (
         "Scope E DENY_E0B violations:\n" + "\n".join(cage_violations)
     )
+
+
+# ---------------------------------------------------------------------------
+# STEP 0.D — Fail-closed: E0b egress IPC / facade entrypoints unwired
+# ---------------------------------------------------------------------------
+ENGINE_STDIO = PYTHON_SRC / "engine_stdio.py"
+FACADE_PATH = PYTHON_SRC / "core" / "facade.py"
+
+E0B_IPC_COMMANDS = frozenset({
+    "knowledge.intent.build",
+    "knowledge.research",
+    "knowledge.integrate",
+})
+
+# Public facade names that would constitute E0b egress entrypoints (deny list).
+# fetch_pending_knowledge is the E0a raise-stub and is explicitly allowed.
+E0B_FACADE_EGRESS_NAMES = frozenset({
+    "intent_build",
+    "build_intent",
+    "knowledge_intent_build",
+    "research",
+    "knowledge_research",
+    "start_research",
+    "integrate",
+    "knowledge_integrate",
+    "integrate_knowledge",
+    "run_research",
+    "fetch_knowledge",  # distinct from fetch_pending_knowledge (E0a stub)
+})
+
+
+def _dispatch_string_constants(tree: ast.Module) -> list[str]:
+    """Collect ast.Constant(str) values inside the dispatch() function body only.
+
+    Comments/docstrings outside dispatch, and module-level strings, are ignored
+    so that documentation mentions cannot false-positive.
+    """
+    dispatch_fn: ast.FunctionDef | None = None
+    for node in tree.body:
+        if isinstance(node, ast.FunctionDef) and node.name == "dispatch":
+            dispatch_fn = node
+            break
+    assert dispatch_fn is not None, "engine_stdio.dispatch not found"
+    found: list[str] = []
+    for node in ast.walk(dispatch_fn):
+        if isinstance(node, ast.Constant) and isinstance(node.value, str):
+            found.append(node.value)
+    return found
+
+
+def test_no_e0b_ipc_command_wired() -> None:
+    """Fail-closed: E0b IPC command strings must not exist in dispatch body.
+
+    INVERSION OBLIGATION (STEP 5/8): when E0b commands are wired, do NOT delete
+    this test — rewrite it to the affirmative form that the commands exist AND
+    always pass through attestation + dual-run gate. That rewrite is a separate
+    STEP under commander ACK; STEP 0 must keep the negative (unwired) contract.
+    """
+    src = ENGINE_STDIO.read_text(encoding="utf-8")
+    tree = ast.parse(src, filename=str(ENGINE_STDIO))
+    assert isinstance(tree, ast.Module)
+    constants = _dispatch_string_constants(tree)
+    hits = sorted(E0B_IPC_COMMANDS.intersection(constants))
+    assert not hits, (
+        "E0b IPC commands must not be wired in dispatch yet; found: "
+        + ", ".join(hits)
+    )
+
+
+def test_facade_has_no_e0b_egress_entrypoint() -> None:
+    """Fail-closed: facade must expose no E0b intent/research/integrate egress APIs.
+
+    E0a fetch_pending_knowledge (exact raise stub) remains allowed.
+    INVERSION OBLIGATION (STEP 5/8): same as test_no_e0b_ipc_command_wired —
+    rewrite to affirmative gated contract; do not merely delete.
+    """
+    src = FACADE_PATH.read_text(encoding="utf-8")
+    tree = ast.parse(src, filename=str(FACADE_PATH))
+    assert isinstance(tree, ast.Module)
+    funcs = _func_defs(tree)
+
+    # E0a stub must still be present as exact raise (allowed exception).
+    assert "fetch_pending_knowledge" in funcs
+    assert _is_exact_e0a_raise(funcs["fetch_pending_knowledge"].body), (
+        "fetch_pending_knowledge must remain exact E0a raise stub"
+    )
+
+    banned = sorted(name for name in funcs if name in E0B_FACADE_EGRESS_NAMES)
+    assert not banned, (
+        "E0b egress facade entrypoints must not exist yet; found: "
+        + ", ".join(banned)
+    )
