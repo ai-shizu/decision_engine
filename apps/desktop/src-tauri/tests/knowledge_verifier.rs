@@ -3,7 +3,8 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use pkb_desktop_lib::knowledge::{
-    canonicalize_for_match, snapshot_hash_hex, snapshot_preimage,
+    attestation_framing, canonicalize_for_match, snapshot_hash_hex, snapshot_preimage,
+    verify_tag, VerifyError,
 };
 
 fn decode_utf8_hex(hex_str: &str) -> String {
@@ -167,4 +168,166 @@ fn snapshot_injective_and_byte_length() {
         .unwrap()
         .preimage_hex
         .contains("0000000000000004f09f9880"));
+}
+
+// ---------------------------------------------------------------------------
+// STEP 3.B — HMAC framing + constant-time verify (STEP 2 KAT)
+// ---------------------------------------------------------------------------
+struct KatVec {
+    name: &'static str,
+    k_spawn: &'static str,
+    session_id: &'static str,
+    txn_nonce: &'static str,
+    gen: u64,
+    epoch: u64,
+    dict_hash: &'static str,
+    queries: &'static [&'static str],
+    framing_hex: &'static str,
+    tag_hex: &'static str,
+}
+
+// Copied from tests/golden/e0b_attestation_kat.json (STEP 2).
+const KAT: &[KatVec] = &[
+    KatVec {
+        name: "KAT-1",
+        k_spawn: "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+        session_id: "0123456789abcdeffedcba9876543210",
+        txn_nonce: "00112233445566778899aabbccddeeffffeeddccbbaa99887766554433221100",
+        gen: 7,
+        epoch: 3,
+        dict_hash: "f3b8fd0c8070d2127fd0b3daaacd12c25ab5e819cd3c7d17d11cd9fa632d34e0",
+        queries: &["ai career", "日本の就職"],
+        framing_hex: "30313233343536373839616263646566666564636261393837363534333231303030313132323333343435353636373738383939616162626363646465656666666665656464636362626161393938383737363635353434333332323131303000000000000000070000000000000003663362386664306338303730643231323766643062336461616163643132633235616235653831396364336337643137643131636439666136333264333465300000000000000009616920636172656572000000000000000fe697a5e69cace381aee5b0b1e881b7",
+        tag_hex: "6c4390f16549039ca60fca51104a4a6c204252d6ce0583d4237eae27c328d9fa",
+    },
+    KatVec {
+        name: "KAT-2",
+        k_spawn: "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+        session_id: "0123456789abcdeffedcba9876543210",
+        txn_nonce: "00112233445566778899aabbccddeeffffeeddccbbaa99887766554433221100",
+        gen: 1,
+        epoch: 1,
+        dict_hash: "f3b8fd0c8070d2127fd0b3daaacd12c25ab5e819cd3c7d17d11cd9fa632d34e0",
+        queries: &["python async"],
+        framing_hex: "3031323334353637383961626364656666656463626139383736353433323130303031313232333334343535363637373838393961616262636364646565666666666565646463636262616139393838373736363535343433333232313130300000000000000001000000000000000166336238666430633830373064323132376664306233646161616364313263323561623565383139636433633764313764313163643966613633326433346530000000000000000c707974686f6e206173796e63",
+        tag_hex: "c36b1fe4c46564af2dfd5310c771b5bf95eb81daff071a2e8b9bb87aac284861",
+    },
+    KatVec {
+        name: "KAT-3",
+        k_spawn: "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+        session_id: "0123456789abcdeffedcba9876543210",
+        txn_nonce: "00112233445566778899aabbccddeeffffeeddccbbaa99887766554433221100",
+        gen: 7,
+        epoch: 3,
+        dict_hash: "f3b8fd0c8070d2127fd0b3daaacd12c25ab5e819cd3c7d17d11cd9fa632d34e0",
+        queries: &["😀 test"],
+        framing_hex: "30313233343536373839616263646566666564636261393837363534333231303030313132323333343435353636373738383939616162626363646465656666666665656464636362626161393938383737363635353434333332323131303000000000000000070000000000000003663362386664306338303730643231323766643062336461616163643132633235616235653831396364336337643137643131636439666136333264333465300000000000000009f09f98802074657374",
+        tag_hex: "dec75bd5da278801c3d75074e329a8349c483263f799519164f5dc17dd9ccee8",
+    },
+];
+
+fn kat_queries(row: &KatVec) -> Vec<String> {
+    row.queries.iter().map(|s| (*s).to_string()).collect()
+}
+
+#[test]
+fn kat_framing_and_tag_verify() {
+    for row in KAT {
+        let queries = kat_queries(row);
+        let framing = attestation_framing(
+            row.session_id,
+            row.txn_nonce,
+            row.gen,
+            row.epoch,
+            row.dict_hash,
+            &queries,
+        )
+        .expect("framing");
+        assert_eq!(
+            hex::encode(&framing),
+            row.framing_hex,
+            "{}: framing mismatch",
+            row.name
+        );
+        assert!(
+            verify_tag(row.k_spawn, &framing, row.tag_hex).is_ok(),
+            "{}: good tag must verify",
+            row.name
+        );
+    }
+}
+
+#[test]
+fn kat_tamper_rejected() {
+    let row = &KAT[0];
+    let queries = kat_queries(row);
+    let framing = attestation_framing(
+        row.session_id,
+        row.txn_nonce,
+        row.gen,
+        row.epoch,
+        row.dict_hash,
+        &queries,
+    )
+    .expect("framing");
+
+    let mut bad_tag = row.tag_hex.to_string();
+    let last = bad_tag.pop().unwrap();
+    bad_tag.push(if last == 'a' { 'b' } else { 'a' });
+    assert_eq!(
+        verify_tag(row.k_spawn, &framing, &bad_tag),
+        Err(VerifyError::AttestationMismatch)
+    );
+
+    let framing_gen8 = attestation_framing(
+        row.session_id,
+        row.txn_nonce,
+        8,
+        row.epoch,
+        row.dict_hash,
+        &queries,
+    )
+    .expect("framing gen8");
+    assert_eq!(
+        verify_tag(row.k_spawn, &framing_gen8, row.tag_hex),
+        Err(VerifyError::AttestationMismatch)
+    );
+
+    let mut tweaked = queries.clone();
+    tweaked[0].push('x');
+    let framing_q = attestation_framing(
+        row.session_id,
+        row.txn_nonce,
+        row.gen,
+        row.epoch,
+        row.dict_hash,
+        &tweaked,
+    )
+    .expect("framing q");
+    assert_eq!(
+        verify_tag(row.k_spawn, &framing_q, row.tag_hex),
+        Err(VerifyError::AttestationMismatch)
+    );
+}
+
+#[test]
+fn kat_failclosed_bad_key() {
+    let framing = hex::decode(KAT[0].framing_hex).unwrap();
+    assert!(verify_tag(&KAT[0].k_spawn[..63], &framing, KAT[0].tag_hex).is_err());
+    assert!(verify_tag(&(KAT[0].k_spawn.to_string() + "00"), &framing, KAT[0].tag_hex).is_err());
+    assert!(verify_tag(&"z".repeat(64), &framing, KAT[0].tag_hex).is_err());
+}
+
+#[test]
+fn kat_attestation_source_uses_ct_eq_not_eq() {
+    let src = include_str!("../src/knowledge/attestation.rs");
+    assert!(
+        src.contains("ct_eq"),
+        "attestation.rs must use subtle::ct_eq"
+    );
+    // Forbid naive tag string equality on the verification path.
+    assert!(
+        !src.contains("computed_hex ==") && !src.contains("received_hex =="),
+        "must not compare tags with =="
+    );
 }

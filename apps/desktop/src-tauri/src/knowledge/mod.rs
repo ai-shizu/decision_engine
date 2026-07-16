@@ -8,8 +8,29 @@
     clippy::string_slice
 )]
 
+pub mod attestation;
 pub mod canonicalize;
 pub mod pii_snapshot;
 
+pub use attestation::{attestation_framing, verify_tag};
 pub use canonicalize::canonicalize_for_match;
 pub use pii_snapshot::{snapshot_hash_hex, snapshot_preimage};
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum VerifyError {
+    MalformedField,
+    AttestationMismatch,
+    PiiRejected,
+}
+
+impl std::fmt::Display for VerifyError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::MalformedField => write!(f, "malformed attestation field"),
+            Self::AttestationMismatch => write!(f, "attestation tag mismatch"),
+            Self::PiiRejected => write!(f, "PII rejected by dual-run gate"),
+        }
+    }
+}
+
+impl std::error::Error for VerifyError {}
