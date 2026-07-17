@@ -709,12 +709,18 @@ button:disabled {
 .chat-bubble.user {
   margin-left: 48px;
   background: var(--bg-selected);
+  border-right: 2px solid var(--text);
 }
 
 .chat-bubble.assistant {
   margin-right: 48px;
-  background: var(--bg-raised);
+  background: transparent;
+  border-left: 2px solid var(--border);
   max-width: 68ch;
+}
+
+.chat-bubble.assistant:has(.chat-text.streaming) {
+  border-left-color: var(--text);
 }
 
 .chat-role {
@@ -723,6 +729,12 @@ button:disabled {
   font-size: 0.72rem;
   color: var(--text-muted);
   margin-bottom: 4px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.chat-role::before {
+  content: "> ";
 }
 
 .chat-text {
@@ -760,10 +772,20 @@ button:disabled {
   gap: 12px;
 }
 
+/* 白の呼吸 — research 中のみ (許可ループ b)。入力は塞がない */
 .consult-form.researching-ambient {
   border-radius: 0;
-  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.35), 0 0 12px rgba(255, 255, 255, 0.08);
-  transition: box-shadow 0.25s ease;
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.35);
+  animation: research-breath 2.4s ease-in-out alternate infinite;
+}
+
+@keyframes research-breath {
+  from {
+    box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.35);
+  }
+  to {
+    box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.35), 0 0 18px rgba(255, 255, 255, 0.08);
+  }
 }
 
 .consult-research-ambient {
@@ -771,17 +793,26 @@ button:disabled {
   align-items: center;
   gap: 8px;
   margin: 0;
+  font-family: var(--font-mono);
   font-size: 0.85rem;
+  color: var(--text-muted);
+  letter-spacing: 0.04em;
+}
+
+.consult-research-ambient::before {
+  content: ">> ";
   color: var(--text-muted);
 }
 
+/* 正方形アウトラインの段階回転 (許可ループ c) */
 .consult-research-spinner {
   width: 12px;
   height: 12px;
-  border: 2px solid rgba(255, 255, 255, 0.25);
+  border: 2px solid rgba(255, 255, 255, 0.2);
   border-top-color: rgba(255, 255, 255, 0.9);
   border-radius: 0;
-  animation: consult-research-spin 0.9s linear infinite;
+  flex-shrink: 0;
+  animation: consult-research-spin 1.2s steps(8) infinite;
 }
 
 @keyframes consult-research-spin {
