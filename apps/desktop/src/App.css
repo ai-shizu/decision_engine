@@ -16,7 +16,7 @@
   --err-soft:    #d0d0d0;
   --err-bg:      #161616;
 
-  /* ---- タイポグラフィ (ローカル等幅のみ — CDN / @font-face 禁止) ---- */
+  /* ---- タイポグラフィ (ローカル等幅のみ — CDN / 外部フォント取得禁止) ---- */
   --font-ui:   "Cascadia Mono", "BIZ UDGothic", "MS Gothic", Consolas, ui-monospace, monospace;
   --font-mono: "Cascadia Mono", "BIZ UDGothic", "MS Gothic", Consolas, ui-monospace, monospace;
 
@@ -231,10 +231,16 @@ body::after {
   margin-top: 12px;
   color: var(--ok);
   font-size: 0.95rem;
+  font-family: var(--font-mono);
 }
 
-.error-text {
-  color: var(--err-soft);
+/* エラーは色相ではなく反転ビデオ（静止・最大音量） */
+.error-text,
+.status-line.error-text {
+  background: var(--text);
+  color: var(--bg);
+  padding: 2px 6px;
+  display: inline-block;
 }
 
 /* Calendar */
@@ -825,10 +831,19 @@ button:disabled {
   display: inline-block;
   margin-top: 6px;
   padding: 2px 8px;
+  border: 1px dotted var(--border);
   border-radius: 0;
-  font-size: 0.78rem;
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
   color: var(--text-muted);
-  background: rgba(255, 255, 255, 0.06);
+  background: transparent;
+  letter-spacing: 0.04em;
+  transition: border-color var(--t-fast), color var(--t-fast);
+}
+
+.provenance-chip:hover {
+  border-color: var(--text);
+  color: var(--text);
 }
 
 .consult-mode-row {
