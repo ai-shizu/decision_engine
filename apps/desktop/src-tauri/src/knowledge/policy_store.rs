@@ -9,7 +9,7 @@
 
 use std::fs::{self, File};
 use std::io::Write;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 use crate::knowledge::NetworkPolicy;
@@ -26,8 +26,13 @@ struct PersistedPolicy {
 }
 
 /// Managed Tauri state: in-memory policy + disk round-trip (default Off).
+///
+/// Persistence root is captured at construction (`user_data_root()` in production).
+/// Tests inject an isolated temp directory via [`NetworkPolicyStore::from_root`] so
+/// they never touch process-global `LOCALAPPDATA`.
 pub struct NetworkPolicyStore {
     inner: Mutex<NetworkPolicy>,
+    root: PathBuf,
 }
 
 impl Default for NetworkPolicyStore {
@@ -38,9 +43,16 @@ impl Default for NetworkPolicyStore {
 
 impl NetworkPolicyStore {
     pub fn new() -> Self {
-        let policy = Self::load_from_disk().unwrap_or(NetworkPolicy::Off);
+        Self::from_root(user_data_root())
+    }
+
+    /// Construct against an explicit data root (production: `user_data_root()`;
+    /// tests: per-case temp dir — no env mutation).
+    fn from_root(root: PathBuf) -> Self {
+        let policy = Self::load_from_disk(&root).unwrap_or(NetworkPolicy::Off);
         Self {
             inner: Mutex::new(policy),
+            root,
         }
     }
 
@@ -68,15 +80,15 @@ impl NetworkPolicyStore {
                 .map_err(|_| "policy store lock poisoned".to_string())?;
             *guard = policy;
         }
-        Self::save_to_disk(policy)
+        Self::save_to_disk(&self.root, policy)
     }
 
-    fn policy_path() -> PathBuf {
-        user_data_root().join(FILE_NAME)
+    fn policy_path(root: &Path) -> PathBuf {
+        root.join(FILE_NAME)
     }
 
-    fn load_from_disk() -> Option<NetworkPolicy> {
-        let path = Self::policy_path();
+    fn load_from_disk(root: &Path) -> Option<NetworkPolicy> {
+        let path = Self::policy_path(root);
         let bytes = fs::read(&path).ok()?;
         let parsed: PersistedPolicy = serde_json::from_slice(&bytes).ok()?;
         if parsed.schema != SCHEMA {
@@ -89,8 +101,8 @@ impl NetworkPolicyStore {
         })
     }
 
-    fn save_to_disk(policy: NetworkPolicy) -> Result<(), String> {
-        let path = Self::policy_path();
+    fn save_to_disk(root: &Path, policy: NetworkPolicy) -> Result<(), String> {
+        let path = Self::policy_path(root);
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent).map_err(|_| "policy persist failed".to_string())?;
         }
@@ -125,22 +137,22 @@ mod tests {
     #![allow(clippy::expect_used, clippy::unwrap_used)]
     use super::*;
     use std::sync::atomic::{AtomicUsize, Ordering};
-    use std::sync::Mutex;
-
-    static POLICY_TEST_LOCK: Mutex<()> = Mutex::new(());
 
     static TEST_DIR_SEQ: AtomicUsize = AtomicUsize::new(0);
 
-    fn isolated_store() -> NetworkPolicyStore {
-        let _guard = POLICY_TEST_LOCK
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
+    fn isolated_root() -> PathBuf {
         let seq = TEST_DIR_SEQ.fetch_add(1, Ordering::SeqCst);
         let dir = std::env::temp_dir().join(format!("pkb_policy_test_{seq}"));
         let _ = fs::remove_dir_all(&dir);
+        // Mirror production layout: policy file lives under <root>/PKB/ only when
+        // user_data_root() is used; for DI tests the injected root *is* the data
+        // directory (file written directly as knowledge_policy.json).
         fs::create_dir_all(&dir).expect("mkdir");
-        std::env::set_var("LOCALAPPDATA", &dir);
-        NetworkPolicyStore::new()
+        dir
+    }
+
+    fn isolated_store() -> NetworkPolicyStore {
+        NetworkPolicyStore::from_root(isolated_root())
     }
 
     #[test]
@@ -168,26 +180,17 @@ mod tests {
 
     #[test]
     fn persistence_round_trip() {
-        let _guard = POLICY_TEST_LOCK
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        let dir = std::env::temp_dir().join(format!(
-            "pkb_policy_rt_{}",
-            TEST_DIR_SEQ.fetch_add(1, Ordering::SeqCst)
-        ));
-        let _ = fs::remove_dir_all(&dir);
-        fs::create_dir_all(&dir).expect("mkdir");
-        std::env::set_var("LOCALAPPDATA", &dir);
+        let root = isolated_root();
 
         {
-            let store = NetworkPolicyStore::new();
+            let store = NetworkPolicyStore::from_root(root.clone());
             store.set_enabled(true).expect("set");
         }
-        let reloaded = NetworkPolicyStore::new();
+        let reloaded = NetworkPolicyStore::from_root(root.clone());
         assert_eq!(reloaded.get(), NetworkPolicy::Live);
 
         reloaded.set_enabled(false).expect("unset");
-        let again = NetworkPolicyStore::new();
+        let again = NetworkPolicyStore::from_root(root);
         assert_eq!(again.get(), NetworkPolicy::Off);
     }
 }

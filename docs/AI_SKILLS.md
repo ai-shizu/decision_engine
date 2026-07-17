@@ -571,8 +571,9 @@ Python dispatch に足すな**（fetch は Rust 専有）。
   「🔗 Wikipediaより参照」チップのみ（research_id / URL / 生テキスト露出禁止）。
 
 **ハマりどころ**: Windows では `fs::rename` が既存ファイルを上書きしない。policy 永続化は
-  本番パス削除後に rename すること。並列 `cargo test` で `LOCALAPPDATA` を触るテストは
-  `POLICY_TEST_LOCK` で直列化。research は `setBusy(true)`（consult 本流）の**前**に走らせ、
+  本番パス削除後に rename すること。テストは `from_root(temp)` でルートを DI し、
+  `LOCALAPPDATA` の `set_var` を使わない（並列 cargo test の環境変数競合を根絶）。
+  research は `setBusy(true)`（consult 本流）の**前**に走らせ、
   research 中に busy で入力を塞がないこと。
 
 ---
