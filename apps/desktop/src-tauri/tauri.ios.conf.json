@@ -1,0 +1,28 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "build": {
+    "beforeDevCommand": "bash scripts/run-dev.sh",
+    "beforeBuildCommand": "bash scripts/run-build.sh"
+  },
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "PKB",
+        "width": 1200,
+        "height": 800,
+        "create": true,
+        "visible": true,
+        "center": true,
+        "backgroundColor": "#0f1419",
+        "decorations": false
+      }
+    ]
+  },
+  "bundle": {
+    "externalBin": [],
+    "iOS": {
+      "minimumSystemVersion": "17.0"
+    }
+  }
+}

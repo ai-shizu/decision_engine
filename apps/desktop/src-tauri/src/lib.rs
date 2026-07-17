@@ -16,8 +16,11 @@ use std::sync::Arc;
 
 use engine::EngineManager;
 use knowledge::NetworkPolicyStore;
+#[cfg(not(mobile))]
 use tauri::webview::{DownloadEvent, NewWindowResponse};
-use tauri::{RunEvent, WebviewWindowBuilder};
+use tauri::RunEvent;
+#[cfg(not(mobile))]
+use tauri::WebviewWindowBuilder;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -61,21 +64,31 @@ pub fn run() {
             commands::context_manifest_latest,
         ])
         .setup(move |app| {
-            let handle = app.handle().clone();
-            let manager = Arc::clone(&engine);
-            tauri::async_runtime::block_on(manager.start(handle)).map_err(std::io::Error::other)?;
+            #[cfg(not(mobile))]
+            {
+                let handle = app.handle().clone();
+                let manager = Arc::clone(&engine);
+                tauri::async_runtime::block_on(manager.start(handle)).map_err(std::io::Error::other)?;
 
-            let window_config = app
-                .config()
-                .app
-                .windows
-                .first()
-                .ok_or_else(|| std::io::Error::other("main window config is missing"))?;
-            WebviewWindowBuilder::from_config(app.handle(), window_config)?
-                .on_navigation(|url| webview_policy::current_navigation_allowed(url.as_str()))
-                .on_new_window(|_, _| NewWindowResponse::Deny)
-                .on_download(|_, event| !matches!(event, DownloadEvent::Requested { .. }))
-                .build()?;
+                let window_config = app
+                    .config()
+                    .app
+                    .windows
+                    .first()
+                    .ok_or_else(|| std::io::Error::other("main window config is missing"))?;
+                WebviewWindowBuilder::from_config(app.handle(), window_config)?
+                    .on_navigation(|url| webview_policy::current_navigation_allowed(url.as_str()))
+                    .on_new_window(|_, _| NewWindowResponse::Deny)
+                    .on_download(|_, event| !matches!(event, DownloadEvent::Requested { .. }))
+                    .build()?;
+            }
+            #[cfg(mobile)]
+            {
+                // iOS: Tauri mobile runtime が config から main webview を生成する。
+                // sidecar は存在しないため start() を呼ばない（engine は "not ready" のまま）。
+                let _ = &engine;
+                let _ = app;
+            }
             Ok(())
         })
         .build(tauri::generate_context!())

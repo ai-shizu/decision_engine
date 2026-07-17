@@ -33,7 +33,10 @@ fn main() {
     let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap());
     let target = env::var("TARGET").unwrap_or_else(|_| "aarch64-pc-windows-msvc".to_string());
 
-    ensure_engine_placeholder(&manifest_dir, &target);
+    // iOS has no Python sidecar; skip placeholder binaries for apple-ios targets.
+    if !target.contains("ios") {
+        ensure_engine_placeholder(&manifest_dir, &target);
+    }
 
     if target.contains("windows-msvc") {
         println!("cargo::rustc-link-arg=/MANIFEST:EMBED");

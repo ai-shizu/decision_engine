@@ -26,6 +26,7 @@
 | Tauri/Rust sidecar・stdio IPC・artifact署名 | §1, §2.1, §2.3, §2.5, §9, §16 |
 | 永続化境界・シリアライズ・runtime検証・IPC契約 | §1, §16 (SKILL-PKB-BOUNDARY-V3), `docs/architecture/INCIDENT_LEDGER.md` |
 | macOS ビルド・配布・コード署名 | §1, §2.3, §4 |
+| Tauri iOS (M0〜) 初期化・シミュレータ | §1, §2.3, §4.4, `docs/M0_IOS_INIT_INSTRUCTIONS.md` |
 | LLM モデル選定・consult/KV キャッシュ | §1, §5, §7, §8 |
 | 検索エンジン・mmap・LSM 索引 | §1, §9, §10 |
 | LINE インポート・データ層・冪等性 | §1, §14 (IMP-1/IMP-2 as-built, T-20〜T-25) |
@@ -365,6 +366,18 @@ python3 -c "import platform; print(platform.machine())"  # Python 自体のア�
 - [ ] `beforeBuildCommand` が PowerShell のまま → macOS 差分は `tauri.macos.conf.json` で bash スクリプトに上書き済み。Windows 側 conf を書き換えるな
 - [ ] シェルスクリプトの改行が CRLF になっていないか（Git for Windows で編集した .sh は要注意。`bash: /bin/bash^M` エラーの原因。`.gitattributes` か `git config core.autocrlf` で LF を保証しろ）
 - [ ] データルートの分岐（`paths.rs`）を触った後、**Windows / macOS / Linux の 3 分岐全部**が `cargo check` を通るか（cfg ブロックは書いた環境でしかコンパイル検証されないことを忘れるな）
+
+### 4.4 M0 iOS Standalone 初期化 — as-built (2026-07-18)
+
+**射程:** Tauri v2 iOS ターゲット初期化＋シミュレータ上での UI シェル起動のみ。embedded Python / llama / SQLCipher は M2〜。手順正本は `docs/M0_IOS_INIT_INSTRUCTIONS.md`。
+
+**不変条件:**
+1. **base `tauri.conf.json` / `Cargo.toml` / `package.json` / React `src/**` は触るな。** iOS 差分は `tauri.ios.conf.json`（macos override と同パターン）と `#[cfg(mobile)]` のみ。
+2. **`gen/apple` は disposable。** `tauri ios init` 生成物を手編集で育てるな。`.gitignore` が `Externals/` / `build/` / `xcuserdata/` を除外する。
+3. **mobile では sidecar を `start()` するな。** `lib.rs` の `#[cfg(not(mobile))]` が desktop 経路を byte-identical に保つ。`build.rs` は `TARGET` に `ios` を含むとき engine placeholder を作らない。
+4. **desktop の `create:false` は iOS で webview 未生成になる。** base を書き換えず、`tauri.ios.conf.json` の `app.windows[0].create: true` で上書きする（M0 で検証済み）。
+5. **App.tsx の boot gate は `engine_ready` 待ち。** M0 では engine が無いため LoadingScreen（漆黒）→120s 後に失敗メッセージで止まる。7タブ本体は engine 接続後（M2）まで出ない。これは UI 凍結下の既定挙動であり、「クラッシュしていない」ことと混同するな。
+6. **ホスト要件:** Xcode（`xcode-select` が Xcode.app）、CocoaPods、iOS Simulator runtime（SDK だけでは足りない。`xcodebuild -downloadPlatform iOS`）、Rust targets `aarch64-apple-ios` / `aarch64-apple-ios-sim`。`tauri ios dev --open` は Xcode を開くだけでデプロイしない — デバイス名を引数に渡せ。
 
 ---
 
