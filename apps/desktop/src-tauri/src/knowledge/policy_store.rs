@@ -119,6 +119,10 @@ impl NetworkPolicyStore {
 
 #[cfg(test)]
 mod tests {
+    // Test scope: `.expect()` / `.unwrap()` are the sanctioned idiom for test
+    // fixtures; relax the crate-level `#![deny]` here without weakening it for
+    // production code above.
+    #![allow(clippy::expect_used, clippy::unwrap_used)]
     use super::*;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Mutex;
