@@ -34,6 +34,19 @@
 5. 記録と分析の分離: RECORD 保存で profiler を走らせるな (sync_diary_index のみ)。
    profiler 自動実行は LINE 取込のみ。LLM・埋め込みは初回 consult まで遅延初期化。
 
+## E0b Egress & フロントエンド絶対規律 (STEP 8 確定 — 交渉不可 / 詳細: docs/AI_SKILLS.md §7.2.1〜7.2.3)
+
+1. フロントエンド状態管理: `Zustand` / `Redux` 等の外部状態管理ライブラリの提案・導入を永久禁止。
+   状態は React 非依存の純関数・純 Reducer (`manifestFetchState.ts` / `researchUiReducer.ts` パターン) で実装し、
+   必ず `tests-runtime` の依存ゼロ Harness でテスト可能にせよ。React コンポーネントは「Dumb View」に徹する。
+2. 摩擦ゼロ・アンビエント UX: 外部検索の待機を理由に入力を `disabled` にするコードを絶対に書くな。
+   `alert` / `confirm` / 確認モーダルによる同意 UI も実装不可。状態変化はユーザー操作を阻害しないアンビエント
+   (枠線発光・非同期スピナー) で表現し、完了で自然に消す。同意は設定タブのグローバル opt-in トグルが唯一の同意 UI。
+3. 二要素 Egress & Provenance: 外部通信は (1) ユーザー同意 `NetworkPolicy::On` と (2) ビルドフラグ `egress-live` の
+   「二要素 AND」でのみ開く。同意のみ (egress-live 非ビルド) は `EGRESS_LIVE_NOT_READY`。トグルは STEP3〜7 の検証
+   (attestation ∧ FSM ∧ dual-run ∧ deny-table ∧ TOCTOU 封鎖) を 1 経路も迂回しない。`consult` の exact-keys スキーマは
+   変更禁止 — 取得痕跡は `KnowledgeResearchReceipt.results_persisted > 0` から純関数 `deriveProvenance` で導出する。
+
 ## Gap Analysis (主観×客観 差分分析) — 推論コアの保護 (詳細: docs/AI_SKILLS.md §6)
 
 - core/gap_analysis.py は「日記・相談 (主観)」と「家計簿・予定・LINE発話 (客観)」の

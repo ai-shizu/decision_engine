@@ -216,6 +216,8 @@ python -m pytest tests/test_ui_smoke.py -q
 5. 状態は最小に。サーバー状態（エンジンからのデータ）を複数コンポーネントに複製するな。取得はタブのマウント時、更新は保存成功時の再取得で足りる。
 6. `useEffect` のイベントリスナー（Tauri `listen` 含む）は必ずクリーンアップを返せ。
 7. 長時間処理（consult, profiler, import）は必ず「進捗の見える化」をセットで実装しろ。busy フラグでボタンを殺すだけの UI は不合格。status イベント（2.1 参照）を表示せよ。
+8. **状態管理ライブラリ（`Zustand` / `Redux` / `Jotai` / `Valtio` 等）を導入するな（永久・交渉不可・STEP 8 確定）。** UI の状態ロジックは React 非依存の純関数・純 Reducer（`manifestFetchState.ts` / `researchUiReducer.ts` パターン）として実装し、必ず `tests-runtime` の依存ゼロ Harness でテスト可能にせよ。React コンポーネントは表示に徹する「Dumb View」に留める。
+9. **アンビエント UX の徹底（STEP 8 確定）。** 外部検索など非同期処理の待機を理由に `textarea`・送信ボタン・スクロールを `disabled` にするコードを書くな。`alert` / `confirm` / 確認モーダルによる同意・確認 UI も禁止。状態変化はユーザー操作を阻害しないアンビエント表示（枠線発光・非同期スピナー・`aria-busy`）で表し、完了で自然に消す。項目 7 の「進捗の見える化」は入力を殺さずに両立させよ（詳細な E0b 二要素 Egress / Provenance 規律は §7.2.3）。
 
 ### 3.5 完了の定義 (Definition of Done)
 
