@@ -1123,7 +1123,8 @@ button:disabled {
   font-weight: 600;
   color: var(--text-muted);
   text-transform: uppercase;
-  letter-spacing: 0.04em;
+  letter-spacing: 0.08em;
+  font-family: var(--font-mono);
 }
 
 .settings-list {
@@ -1141,6 +1142,7 @@ button:disabled {
   min-height: 44px;
   padding: var(--s2) var(--s4);
   border-bottom: 1px solid var(--border);
+  font-family: var(--font-mono);
 }
 
 .settings-row:last-child {
@@ -1149,9 +1151,11 @@ button:disabled {
 
 .settings-row-label {
   flex: 0 1 auto;
-  color: var(--text);
+  color: var(--text-muted);
   font-size: 0.95rem;
   line-height: 1.3;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
 }
 
 .settings-row-value {
@@ -1219,7 +1223,7 @@ button:disabled {
   align-items: center;
 }
 
-/* Toggle (SPEC §4.2 — CSS-only iOS switch) */
+/* Toggle — 契約の刻印: OFF=中空 / ON=反転ビデオ (白地黒ノブ) */
 .toggle {
   display: inline-flex;
   align-items: center;
@@ -1230,6 +1234,7 @@ button:disabled {
   font-family: var(--font-mono);
   font-size: 0.85rem;
   color: var(--text-muted);
+  letter-spacing: 0.08em;
 }
 
 .toggle-switch {
@@ -1260,9 +1265,10 @@ button:disabled {
   width: 44px;
   height: 26px;
   border-radius: 0;
-  background: var(--border);
+  border: 1px solid var(--border);
+  background: var(--bg-deep);
   position: relative;
-  transition: background var(--t-fast);
+  transition: background var(--t-fast), border-color var(--t-fast);
   pointer-events: none;
 }
 
@@ -1271,22 +1277,24 @@ button:disabled {
 }
 
 .toggle-input:checked + .toggle-track {
-  background: var(--accent);
+  background: var(--text);
+  border-color: var(--text);
 }
 
 .toggle-knob {
   position: absolute;
   top: 2px;
   left: 2px;
-  width: 22px;
-  height: 22px;
+  width: 20px;
+  height: 20px;
   border-radius: 0;
-  background: var(--text);
-  transition: transform var(--t-fast);
+  background: var(--text-muted);
+  transition: transform var(--t-fast), background var(--t-fast);
 }
 
 .toggle-input:checked + .toggle-track .toggle-knob {
-  transform: translateX(18px);
+  transform: translateX(20px);
+  background: var(--bg);
 }
 
 .toggle-readonly .toggle-track {
