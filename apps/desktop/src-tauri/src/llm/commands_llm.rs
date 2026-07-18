@@ -1,50 +1,56 @@
-//! [C] Tauri command bindings — M4 Phase 0 stubs (docs/architecture_blueprint.md §3.7).
+//! [C] Tauri command bindings (docs/architecture_blueprint.md §3.7).
 //!
-//! **STUBS ONLY — NO LOGIC.** Bodies return `Ok(())`. These commands are defined
-//! now to verify signature/type resolution against Tauri (`State`, `Channel`,
-//! `AppHandle`); they are NOT yet registered in the `invoke_handler` — registration
-//! lands with the real logic (Phase 1: memory monitor, Phase 2/3: LLM).
+//! Phase 1: bodies delegate to the real worker / monitor logic. These commands are
+//! NOT yet registered in `lib.rs`'s `invoke_handler` and their State is not managed
+//! — that wiring lands with the frontend-integration step (hence the dead-code
+//! warnings under `--features pocket-brain`).
+
+use std::sync::Arc;
 
 use tauri::ipc::Channel;
 use tauri::{AppHandle, State};
 
-use super::{GenerationParams, LlmHandle, LoadParams, TokenEvent};
+use super::model_path::resolve_model_path;
+use super::params::{GenerationParams, LoadParams};
+use super::service::{LlmHandle, TokenEvent};
 use crate::monitor::{MemSample, MemoryMonitor};
-use std::sync::Arc;
 
-/// Phase 2: resolve the App-Container model path and load the GGUF.
+/// Resolve the App-Container model path and load the GGUF (blocking on the worker).
 #[tauri::command]
 pub async fn llm_load_model(
-    _app: AppHandle,
-    _handle: State<'_, LlmHandle>,
-    _params: LoadParams,
+    app: AppHandle,
+    handle: State<'_, LlmHandle>,
+    params: LoadParams,
 ) -> Result<(), String> {
-    Ok(())
+    let path = resolve_model_path(&app)?;
+    handle.load(path, params)
 }
 
-/// Phase 3: start a generation, streaming `TokenEvent`s over `on_token`.
+/// Start a generation, streaming `TokenEvent`s over `on_token`.
 #[tauri::command]
 pub async fn llm_generate(
-    _handle: State<'_, LlmHandle>,
-    _params: GenerationParams,
-    _on_token: Channel<TokenEvent>,
+    handle: State<'_, LlmHandle>,
+    params: GenerationParams,
+    on_token: Channel<TokenEvent>,
 ) -> Result<(), String> {
-    Ok(())
+    handle.generate(params, on_token)
 }
 
-/// Phase 3: cancel an in-flight generation.
+/// Cancel an in-flight generation.
 #[tauri::command]
-pub async fn llm_cancel(_handle: State<'_, LlmHandle>) -> Result<(), String> {
+pub async fn llm_cancel(handle: State<'_, LlmHandle>) -> Result<(), String> {
+    handle.cancel();
     Ok(())
 }
 
-/// Phase 1: start the Jetsam monitor, streaming `MemSample`s over `on_sample`.
+/// Start the Jetsam monitor, streaming `MemSample`s over `on_sample`.
 #[tauri::command]
 pub async fn memory_monitor_start(
-    _monitor: State<'_, Arc<MemoryMonitor>>,
-    _on_sample: Channel<MemSample>,
-    _interval_ms: u64,
-    _threshold_bytes: u64,
+    monitor: State<'_, Arc<MemoryMonitor>>,
+    on_sample: Channel<MemSample>,
+    interval_ms: u64,
+    threshold_bytes: u64,
 ) -> Result<(), String> {
+    monitor.start(on_sample, interval_ms, threshold_bytes);
     Ok(())
 }
