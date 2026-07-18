@@ -81,6 +81,7 @@ targets:
       - sdk: Accelerate.framework
       - sdk: QuartzCore.framework
       - sdk: Security.framework
+      - sdk: LocalAuthentication.framework
       - sdk: UIKit.framework
       - sdk: WebKit.framework
     preBuildScripts:

@@ -1,9 +1,12 @@
-//! M3 Phase 0-A — SQLCipher / Security.framework link probe.
+//! M3 Phase 0 — SQLCipher / typed objc2 Keychain link probe.
 //!
-//! Scope: prove `bundled-sqlcipher` and Apple Security.framework symbols link
-//! into the final binary. This is **not** encrypted-at-rest proof and **not**
-//! Keychain operational authentication proof.
-//! Gated behind `secure-vault` (docs/m3_action_plan.md §4.1 / Phase 0-A).
+//! Scope: prove `bundled-sqlcipher` and the single-stack objc2 Security /
+//! LocalAuthentication bindings link into the final binary. This is **not**
+//! encrypted-at-rest proof and **not** Keychain operational authentication.
+//! Gated behind `secure-vault` (docs/m3_action_plan.md §4.1 / §4.2.1).
+
+#[cfg(target_vendor = "apple")]
+mod keychain_probe;
 
 use rusqlite::Connection;
 use zeroize::Zeroizing;
@@ -12,8 +15,6 @@ const ERR_OPEN: &str = "secure_vault_link_probe: open_in_memory failed";
 const ERR_KEY: &str = "secure_vault_link_probe: pragma key failed";
 const ERR_CIPHER_QUERY: &str = "secure_vault_link_probe: cipher_version query failed";
 const ERR_CIPHER_EMPTY: &str = "secure_vault_link_probe: cipher_version empty";
-const ERR_SECRANDOM: &str = "secure_vault_link_probe: SecRandom failed";
-const ERR_ACCESS_CONTROL: &str = "secure_vault_link_probe: SecAccessControl failed";
 
 /// Phase 0-A link probe only — not a production vault API.
 ///
@@ -38,37 +39,10 @@ pub fn verify_sqlcipher_link_and_keychain() -> Result<String, String> {
 
     #[cfg(target_vendor = "apple")]
     {
-        probe_security_framework_symbols()?;
+        keychain_probe::verify_typed_keychain_link_probe()?;
     }
 
     Ok(format!("sqlcipher_link_ok:{cipher_version}"))
-}
-
-/// Force-link Security.framework via confirmed high-level APIs.
-///
-/// Phase 0-A does **not** create, store, or retrieve Keychain items.
-/// Success here means constructors returned `Ok` (symbols resolved and ran);
-/// it does **not** mean userPresence authentication or Keychain round-trip.
-#[cfg(target_vendor = "apple")]
-fn probe_security_framework_symbols() -> Result<(), String> {
-    use security_framework::access_control::{ProtectionMode, SecAccessControl};
-    use security_framework::passwords::AccessControlOptions;
-    use security_framework::random::SecRandom;
-
-    let mut key_buf = Zeroizing::new([0u8; 32]);
-    SecRandom::default()
-        .copy_bytes(key_buf.as_mut())
-        .map_err(|_| ERR_SECRANDOM.to_string())?;
-
-    let access = SecAccessControl::create_with_protection(
-        Some(ProtectionMode::AccessibleWhenPasscodeSetThisDeviceOnly),
-        AccessControlOptions::USER_PRESENCE.bits(),
-    )
-    .map_err(|_| ERR_ACCESS_CONTROL.to_string())?;
-
-    // Drop without Keychain I/O. Plaintext key_buf is zeroized on drop.
-    drop(access);
-    Ok(())
 }
 
 #[cfg(test)]

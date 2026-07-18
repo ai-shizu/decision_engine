@@ -61,8 +61,17 @@ egress-live = ["dep:hickory-resolver", "dep:rustls", "dep:hyper-rustls", "dep:to
 # M4 on-device LLM scaffold. Enables the optional llama-cpp-2 dep (requires cmake
 # + C++ toolchain). Never enable on default/release desktop builds.
 pocket-brain = ["llama-cpp-2", "libc"]
-# M3 Phase 0+: SQLCipher + Apple Keychain link gate. Keep off default builds.
-secure-vault = ["dep:rusqlite", "dep:security-framework"]
+# M3 Phase 0+: SQLCipher + typed objc2 Keychain link gate. Keep off default
+# builds. All Apple bindings live in one objc2 type system; do not reintroduce
+# security-framework alongside them (docs/m3_action_plan.md §4.2.1).
+secure-vault = [
+    "dep:rusqlite",
+    "dep:objc2",
+    "dep:objc2-security",
+    "dep:objc2-local-authentication",
+    "dep:objc2-foundation",
+    "dep:objc2-core-foundation",
+]
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61.2", features = [
@@ -82,10 +91,15 @@ libc = "0.2"
 
 # M4 pocket-brain jetsam probe (proc_pid_rusage). Optional; only pulled by the
 # `pocket-brain` feature so the default desktop build is unaffected.
-# M3 Keychain: security-framework is Apple-only (docs/m3_action_plan.md §1.4).
+# M3 Keychain: exact-pin typed objc2 stack, Apple-only and secure-vault-only
+# (docs/m3_action_plan.md §4.2.1).
 [target.'cfg(target_vendor = "apple")'.dependencies]
 libc = { version = "0.2", optional = true }
-security-framework = { version = "=3.7.0", default-features = false, optional = true }
+objc2 = { version = "=0.6.4", default-features = false, features = ["std"], optional = true }
+objc2-security = { version = "=0.3.2", default-features = false, features = ["std", "objc2", "SecAccessControl", "SecBase", "SecItem", "SecRandom"], optional = true }
+objc2-local-authentication = { version = "=0.3.2", default-features = false, features = ["std", "LAContext"], optional = true }
+objc2-foundation = { version = "=0.3.2", default-features = false, features = ["std", "NSString", "NSDictionary", "NSObject", "NSValue", "objc2-core-foundation"], optional = true }
+objc2-core-foundation = { version = "=0.3.2", default-features = false, features = ["CFDictionary", "CFError", "objc2"], optional = true }
 
 [dev-dependencies]
 tokio = { version = "1", features = ["test-util", "macros", "rt", "time"] }

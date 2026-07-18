@@ -23,7 +23,7 @@
     "externalBin": [],
     "iOS": {
       "minimumSystemVersion": "17.0",
-      "frameworks": ["Accelerate"]
+      "frameworks": ["Accelerate", "LocalAuthentication"]
     }
   }
 }

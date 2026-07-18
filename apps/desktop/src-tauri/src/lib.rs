@@ -20,9 +20,9 @@ mod llm;
 #[cfg(feature = "pocket-brain")]
 mod monitor;
 
-// M3 Phase 0-A SQLCipher / Security.framework link probe
-// (docs/m3_action_plan.md §4.1). Feature-gated so the default desktop build
-// never pulls rusqlite/SQLCipher.
+// M3 Phase 0 SQLCipher / typed objc2 Keychain link probe
+// (docs/m3_action_plan.md §4.1 / §4.2.1). Feature-gated so the default desktop
+// build never pulls rusqlite/SQLCipher or Apple security bindings.
 #[cfg(feature = "secure-vault")]
 mod db;
 #[cfg(feature = "secure-vault")]

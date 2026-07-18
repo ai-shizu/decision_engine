@@ -8,6 +8,7 @@
 
 /* Begin PBXBuildFile section */
 		03B7376CA2D12CFEFDA3B202 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 347805749B3D39BFC77E9F48 /* Assets.xcassets */; };
+		17215C4E4413E3DFC3F33D8D /* LocalAuthentication.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = D8D6BAA6D688B7759D69A486 /* LocalAuthentication.framework */; };
 		1735727BEA94E33552D24CEF /* CoreGraphics.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 11B66B8144AAD4938D443C90 /* CoreGraphics.framework */; };
 		1FC9EC8B4CC0A8E7B06337AC /* libapp.a in Frameworks */ = {isa = PBXBuildFile; fileRef = E1C4A6FFB59DAAFA4EDFBA66 /* libapp.a */; };
 		287DD22AB1797D5E85D68FAA /* assets in Resources */ = {isa = PBXBuildFile; fileRef = 359616079650F14B0403E3CD /* assets */; };
@@ -65,6 +66,7 @@
 		9833FBD1E4D21231B45EF19D /* commands_db.rs */ = {isa = PBXFileReference; path = commands_db.rs; sourceTree = "<group>"; };
 		9868BF528D518053606C1ED6 /* commands.rs */ = {isa = PBXFileReference; path = commands.rs; sourceTree = "<group>"; };
 		A65AD16339592F226899830E /* artifact_auth.rs */ = {isa = PBXFileReference; path = artifact_auth.rs; sourceTree = "<group>"; };
+		B126C5A49F5DA259E3AA9110 /* keychain_probe.rs */ = {isa = PBXFileReference; path = keychain_probe.rs; sourceTree = "<group>"; };
 		B3AF304CB077057B9B13CB1F /* prompt.rs */ = {isa = PBXFileReference; path = prompt.rs; sourceTree = "<group>"; };
 		B5A5593D1149BEC8D271540B /* Security.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Security.framework; path = System/Library/Frameworks/Security.framework; sourceTree = SDKROOT; };
 		BAEE1955C54C4108D5083502 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
@@ -72,6 +74,7 @@
 		CB1D463C678CA9BC8DD4C0EE /* probe.rs */ = {isa = PBXFileReference; path = probe.rs; sourceTree = "<group>"; };
 		CC3895C3A5B783926983B690 /* canonicalize.rs */ = {isa = PBXFileReference; path = canonicalize.rs; sourceTree = "<group>"; };
 		D008535E835A49D61B88A1B7 /* mod.rs */ = {isa = PBXFileReference; path = mod.rs; sourceTree = "<group>"; };
+		D8D6BAA6D688B7759D69A486 /* LocalAuthentication.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = LocalAuthentication.framework; path = System/Library/Frameworks/LocalAuthentication.framework; sourceTree = SDKROOT; };
 		DDED864292765BCED8078FB9 /* engine.rs */ = {isa = PBXFileReference; path = engine.rs; sourceTree = "<group>"; };
 		E1C4A6FFB59DAAFA4EDFBA66 /* libapp.a */ = {isa = PBXFileReference; lastKnownFileType = archive.ar; path = libapp.a; sourceTree = "<group>"; };
 		E281496B579BFBC75FB3D6BC /* mod.rs */ = {isa = PBXFileReference; path = mod.rs; sourceTree = "<group>"; };
@@ -91,6 +94,7 @@
 				58630A9EF027449284BD5AAC /* Accelerate.framework in Frameworks */,
 				C11F42EC2CF580D9F4A9628D /* QuartzCore.framework in Frameworks */,
 				A0551B40297A87DF18ED2B84 /* Security.framework in Frameworks */,
+				17215C4E4413E3DFC3F33D8D /* LocalAuthentication.framework in Frameworks */,
 				91DEA1C7F3F6383EB3B38B8D /* UIKit.framework in Frameworks */,
 				93A7D661072070588E8CAAB3 /* WebKit.framework in Frameworks */,
 			);
@@ -143,6 +147,7 @@
 		41F842DC9BC092A1A89154A2 /* db */ = {
 			isa = PBXGroup;
 			children = (
+				B126C5A49F5DA259E3AA9110 /* keychain_probe.rs */,
 				7B963A39EDD0B919FDE09D7D /* mod.rs */,
 			);
 			path = db;
@@ -180,6 +185,7 @@
 				0D71B4AE587DFFBD79D29152 /* Accelerate.framework */,
 				11B66B8144AAD4938D443C90 /* CoreGraphics.framework */,
 				E1C4A6FFB59DAAFA4EDFBA66 /* libapp.a */,
+				D8D6BAA6D688B7759D69A486 /* LocalAuthentication.framework */,
 				1202AE46455F3240195984C3 /* Metal.framework */,
 				BF7A34A7509F2B0ADE206529 /* MetalKit.framework */,
 				0CD0577103CB48AD9773BAD7 /* QuartzCore.framework */,
@@ -287,7 +293,7 @@
 			name = Products;
 			sourceTree = "<group>";
 		};
-		"TEMP_395CEA54-8103-441F-91B4-6A6E5E6F058C" /* x86_64 */ = {
+		"TEMP_6C4D5A7B-B20C-4946-9F2A-0294C54DEFD0" /* x86_64 */ = {
 			isa = PBXGroup;
 			children = (
 			);
