@@ -99,7 +99,7 @@ objc2 = { version = "=0.6.4", default-features = false, features = ["std"], opti
 objc2-security = { version = "=0.3.2", default-features = false, features = ["std", "objc2", "SecAccessControl", "SecBase", "SecItem", "SecRandom"], optional = true }
 objc2-local-authentication = { version = "=0.3.2", default-features = false, features = ["std", "LAContext"], optional = true }
 objc2-foundation = { version = "=0.3.2", default-features = false, features = ["std", "NSString", "NSDictionary", "NSObject", "NSValue", "objc2-core-foundation"], optional = true }
-objc2-core-foundation = { version = "=0.3.2", default-features = false, features = ["CFDictionary", "CFError", "objc2"], optional = true }
+objc2-core-foundation = { version = "=0.3.2", default-features = false, features = ["alloc", "CFData", "CFDictionary", "CFError", "objc2"], optional = true }
 
 [dev-dependencies]
 tokio = { version = "1", features = ["test-util", "macros", "rt", "time"] }

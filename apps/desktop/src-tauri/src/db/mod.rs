@@ -7,6 +7,11 @@
 
 #[cfg(target_vendor = "apple")]
 mod keychain_probe;
+// Phase 1-A defines the production boundary; Phase 1-B will connect it to the
+// DB worker. Keep this scoped allowance until that caller is introduced.
+#[cfg(target_vendor = "apple")]
+#[allow(dead_code)]
+pub(crate) mod secure_vault;
 
 use rusqlite::Connection;
 use zeroize::Zeroizing;
