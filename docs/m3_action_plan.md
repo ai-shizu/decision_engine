@@ -264,6 +264,121 @@ device for the security acceptance. Verify `NSFaceIDUsageDescription` and the
 system prompt copy before enabling Face ID. Simulator success alone is not the
 final security gate.
 
+#### 4.2.1 User-approved Keychain probe contract (2026-07-18)
+
+Formal name for this workstream: **M3 Phase 0 / §4.2 — Keychain probe**.
+Do not invent alternate phase labels (for example “Phase 0-C”).
+
+This subsection records user-approved contracts only. It does **not** authorize
+implementation in the same change, and it does **not** prove runtime, link, or
+ownership safety for LocalAuthentication.
+
+##### Exact prompt copy
+
+| Key | Exact approved string (byte-for-byte; do not paraphrase) |
+|---|---|
+| `NSFaceIDUsageDescription` | `暗号化されたデータのロックを解除するためにFace IDを使用します。` |
+| `LAContext.localizedReason` | `暗号化されたデータのロックを解除します。` |
+
+Changing either string requires a new user ruling. Do not append the app name
+or other suffixes to `localizedReason`.
+
+##### Explicit-action harness contract (`KeychainProbePanel`)
+
+A Phase 0-only debug harness named `KeychainProbePanel` is permitted in a later
+limited implementation under these rules:
+
+- Start the probe only from an explicit user button press.
+- Automatic start is forbidden: no launch-time, setup-time, background, or
+  React-effect authentication.
+- Required visible states: `pre-auth`, `auth-in-progress`, `success`,
+  `cancelled`, `failed`, `deleted`.
+- Use the real iOS system authentication sheet.
+- Do not imitate biometric UI; do not overlay app-owned chrome on the OS sheet.
+- Function only as an app-owned pre-auth / post-auth surface around the trusted
+  system exception.
+- The harness proves probe plumbing only; it is **not** evidence that the
+  production unlock UI is complete.
+
+`KeychainProbePanel` is not created by this documentation amendment.
+
+##### Info.plist source-of-truth
+
+Future implementation must inject usage description via this path only:
+
+- source plist: `apps/desktop/src-tauri/Info.ios.plist`
+- Tauri config: `apps/desktop/src-tauri/tauri.ios.conf.json`
+- setting: `bundle.iOS.infoPlist = "Info.ios.plist"`
+- final verification target: `PKB.app/Info.plist` must contain the exact
+  approved `NSFaceIDUsageDescription` string
+
+Forbidden: editing `gen/apple/project.yml`, editing
+`gen/apple/pkb-desktop.xcodeproj/project.pbxproj`, hand-editing generated
+Info.plist files, running `xcodegen`, or running `tauri ios init` to satisfy
+this contract. Creating `Info.ios.plist` or changing `tauri.ios.conf.json` is
+out of scope for this documentation amendment.
+
+##### LocalAuthentication direction (future, not yet added)
+
+A later limited implementation may add Apple-target-only optional dependencies
+under the existing `secure-vault` feature:
+
+```toml
+objc2-local-authentication = "=0.3.2"
+objc2-foundation = "=0.3.2"
+```
+
+Integration rules:
+
+- create an `LAContext`;
+- set the approved exact `localizedReason`;
+- inject the same context into the Keychain retrieval query;
+- use `kSecUseAuthenticationContext` (or the equivalent typed attribute);
+- never use deprecated `kSecUseOperationPrompt`;
+- keep the Apple-target and `secure-vault` feature boundary.
+
+Recording these pins does **not** prove dependency addition, bridge safety, or
+iOS link success.
+
+##### Mandatory ownership / link feasibility gate (before probe body)
+
+Before implementing the Keychain probe body, UI, or DB work, an independent
+gate must prove all of the following with primary-source evidence and a final
+iOS link:
+
+1. `LAContext` construction;
+2. setting the exact approved `localizedReason`;
+3. injecting that same context into the Keychain query;
+4. Rust ownership / retain / release justification from primary sources;
+5. iOS final link success for the chosen bridge.
+
+Hard stops for that gate: undocumented raw-pointer casts, ownership-unknown
+bridges, guessed retain/release, `unwrap` / `expect` / `panic!`,
+`kSecUseOperationPrompt`, unproven FFI, or any security-weakening fallback.
+Until that gate passes, do not implement the Keychain probe body, production UI,
+or DB persistence.
+
+##### Evidence separation
+
+Canonicalized by this ruling:
+
+- exact prompt strings;
+- `KeychainProbePanel` harness contract;
+- Info.plist source-of-truth path;
+- approved `objc2-*` dependency pins and LAContext injection direction;
+- requirement for the ownership/link feasibility gate.
+
+Still unproven after this documentation amendment:
+
+- safe bridge between `objc2` types and Security queries;
+- retain/release correctness in code;
+- iOS link after adding `objc2-*`;
+- simulator or physical-device `userPresence` runtime;
+- cancellation runtime;
+- Keychain round-trip / cleanup / zeroization runtime;
+- SQLCipher persistent DB / wrong-key / encrypted-at-rest;
+- Blueprint-wide Phase 0 completion.
+
 ### 4.3 SQLCipher smoke test
 
 In an isolated app container:
