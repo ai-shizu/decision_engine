@@ -35,6 +35,7 @@
 		284E3EA450CECC9ACE97CD2C /* main.rs */ = {isa = PBXFileReference; path = main.rs; sourceTree = "<group>"; };
 		299778ED9B66A924BAFD4ED4 /* LaunchScreen.storyboard */ = {isa = PBXFileReference; lastKnownFileType = file.storyboard; path = LaunchScreen.storyboard; sourceTree = "<group>"; };
 		2C99FFF0A9D80A02C64F859B /* pkb-sandbox-probe.rs */ = {isa = PBXFileReference; path = "pkb-sandbox-probe.rs"; sourceTree = "<group>"; };
+		2F768DCC9D9F71BCED9BD31B /* schema.rs */ = {isa = PBXFileReference; path = schema.rs; sourceTree = "<group>"; };
 		347805749B3D39BFC77E9F48 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		359616079650F14B0403E3CD /* assets */ = {isa = PBXFileReference; lastKnownFileType = folder; path = assets; sourceTree = SOURCE_ROOT; };
 		40F35766290BE515ADF3771B /* net_gateway.rs */ = {isa = PBXFileReference; path = net_gateway.rs; sourceTree = "<group>"; };
@@ -42,6 +43,7 @@
 		4AD8A98CB523BAA8BC148637 /* pii_snapshot.rs */ = {isa = PBXFileReference; path = pii_snapshot.rs; sourceTree = "<group>"; };
 		4B26D4E71E5FC66544CAF203 /* webview_policy.rs */ = {isa = PBXFileReference; path = webview_policy.rs; sourceTree = "<group>"; };
 		4B99AB8FC192E29A42FF8F12 /* commands_llm.rs */ = {isa = PBXFileReference; path = commands_llm.rs; sourceTree = "<group>"; };
+		4C229030FF15ABBC454A5E01 /* kakeibo_v1.gbnf */ = {isa = PBXFileReference; path = kakeibo_v1.gbnf; sourceTree = "<group>"; };
 		511B88B9AE14372BEC7B1C7A /* model_path.rs */ = {isa = PBXFileReference; path = model_path.rs; sourceTree = "<group>"; };
 		513022C945746ABE7E076784 /* params.rs */ = {isa = PBXFileReference; path = params.rs; sourceTree = "<group>"; };
 		51D1228BCDCD24E395F6D361 /* orchestrator.rs */ = {isa = PBXFileReference; path = orchestrator.rs; sourceTree = "<group>"; };
@@ -56,11 +58,14 @@
 		6A651946D07A03E110BBD6DF /* os_sandbox.rs */ = {isa = PBXFileReference; path = os_sandbox.rs; sourceTree = "<group>"; };
 		71E3D35EEDC01259C1303E69 /* engine_tests.rs */ = {isa = PBXFileReference; path = engine_tests.rs; sourceTree = "<group>"; };
 		75C811F5FF54FE7403912D85 /* mod.rs */ = {isa = PBXFileReference; path = mod.rs; sourceTree = "<group>"; };
+		7B963A39EDD0B919FDE09D7D /* mod.rs */ = {isa = PBXFileReference; path = mod.rs; sourceTree = "<group>"; };
 		7F93EC6A66D182E9F5E1A5A8 /* dns_guard.rs */ = {isa = PBXFileReference; path = dns_guard.rs; sourceTree = "<group>"; };
 		8A111BBA1A2DCA28A39A1D3D /* ipc_contract.rs */ = {isa = PBXFileReference; path = ipc_contract.rs; sourceTree = "<group>"; };
 		8B521E1165E62112FCC1555F /* bindings.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = bindings.h; sourceTree = "<group>"; };
+		9833FBD1E4D21231B45EF19D /* commands_db.rs */ = {isa = PBXFileReference; path = commands_db.rs; sourceTree = "<group>"; };
 		9868BF528D518053606C1ED6 /* commands.rs */ = {isa = PBXFileReference; path = commands.rs; sourceTree = "<group>"; };
 		A65AD16339592F226899830E /* artifact_auth.rs */ = {isa = PBXFileReference; path = artifact_auth.rs; sourceTree = "<group>"; };
+		B3AF304CB077057B9B13CB1F /* prompt.rs */ = {isa = PBXFileReference; path = prompt.rs; sourceTree = "<group>"; };
 		B5A5593D1149BEC8D271540B /* Security.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Security.framework; path = System/Library/Frameworks/Security.framework; sourceTree = SDKROOT; };
 		BAEE1955C54C4108D5083502 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
 		BF7A34A7509F2B0ADE206529 /* MetalKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = MetalKit.framework; path = System/Library/Frameworks/MetalKit.framework; sourceTree = SDKROOT; };
@@ -127,9 +132,20 @@
 				75C811F5FF54FE7403912D85 /* mod.rs */,
 				511B88B9AE14372BEC7B1C7A /* model_path.rs */,
 				513022C945746ABE7E076784 /* params.rs */,
+				B3AF304CB077057B9B13CB1F /* prompt.rs */,
+				2F768DCC9D9F71BCED9BD31B /* schema.rs */,
 				1E3308809C1FA122730A5A35 /* service.rs */,
+				5AEF32A6FBC23A3BF969051D /* assets */,
 			);
 			path = llm;
+			sourceTree = "<group>";
+		};
+		41F842DC9BC092A1A89154A2 /* db */ = {
+			isa = PBXGroup;
+			children = (
+				7B963A39EDD0B919FDE09D7D /* mod.rs */,
+			);
+			path = db;
 			sourceTree = "<group>";
 		};
 		4AF761F3C7128405DD08D50A /* knowledge */ = {
@@ -148,6 +164,14 @@
 				60598D53A7BF8B0BFE584A51 /* render_guard.rs */,
 			);
 			path = knowledge;
+			sourceTree = "<group>";
+		};
+		5AEF32A6FBC23A3BF969051D /* assets */ = {
+			isa = PBXGroup;
+			children = (
+				4C229030FF15ABBC454A5E01 /* kakeibo_v1.gbnf */,
+			);
+			path = assets;
 			sourceTree = "<group>";
 		};
 		5DC82AA189942119845E0664 /* Frameworks */ = {
@@ -179,6 +203,7 @@
 			isa = PBXGroup;
 			children = (
 				A65AD16339592F226899830E /* artifact_auth.rs */,
+				9833FBD1E4D21231B45EF19D /* commands_db.rs */,
 				9868BF528D518053606C1ED6 /* commands.rs */,
 				71E3D35EEDC01259C1303E69 /* engine_tests.rs */,
 				DDED864292765BCED8078FB9 /* engine.rs */,
@@ -189,6 +214,7 @@
 				47C4863C6265AD7B67EF6635 /* paths.rs */,
 				4B26D4E71E5FC66544CAF203 /* webview_policy.rs */,
 				C41BA6E749A43D238E597CB6 /* bin */,
+				41F842DC9BC092A1A89154A2 /* db */,
 				4AF761F3C7128405DD08D50A /* knowledge */,
 				3AEDD95D4B63E01C378A7BAA /* llm */,
 				3825605288B0E07C52B31705 /* monitor */,
@@ -261,7 +287,7 @@
 			name = Products;
 			sourceTree = "<group>";
 		};
-		"TEMP_2EF480C4-8E61-43CF-9F92-881C833A658A" /* x86_64 */ = {
+		"TEMP_395CEA54-8103-441F-91B4-6A6E5E6F058C" /* x86_64 */ = {
 			isa = PBXGroup;
 			children = (
 			);
@@ -480,7 +506,7 @@
 				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
 				GCC_WARN_UNUSED_FUNCTION = YES;
 				GCC_WARN_UNUSED_VARIABLE = YES;
-				IPHONEOS_DEPLOYMENT_TARGET = 14.0;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
 				MTL_ENABLE_DEBUG_INFO = NO;
 				MTL_FAST_MATH = YES;
 				PRODUCT_NAME = "$(TARGET_NAME)";
@@ -542,7 +568,7 @@
 				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
 				GCC_WARN_UNUSED_FUNCTION = YES;
 				GCC_WARN_UNUSED_VARIABLE = YES;
-				IPHONEOS_DEPLOYMENT_TARGET = 14.0;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
 				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
 				MTL_FAST_MATH = YES;
 				ONLY_ACTIVE_ARCH = YES;
