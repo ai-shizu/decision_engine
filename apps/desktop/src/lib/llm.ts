@@ -1,8 +1,9 @@
 // [D] Pocket Brain frontend client (docs/architecture_blueprint.md §3.8).
 //
 // invoke wrappers + Channel listeners for the M4 on-device LLM commands. Command
-// arg keys are snake_case to match the Rust parameter names (Tauri default
-// RenamePolicy::Keep — verified against tauri-macros 2.6.3).
+// arg keys are camelCase: Tauri v2 converts snake_case Rust parameter names to
+// camelCase for the JS payload (confirmed at runtime on the iOS simulator — the
+// command rejected `on_sample` and required `onSample`).
 
 import { Channel, invoke } from "@tauri-apps/api/core";
 
@@ -56,7 +57,7 @@ export function generate(
   onToken: (event: TokenEvent) => void,
 ): Promise<void> {
   const channel = new Channel<TokenEvent>(onToken);
-  return invoke("llm_generate", { params, on_token: channel });
+  return invoke("llm_generate", { params, onToken: channel });
 }
 
 /** Request cancellation of the in-flight generation. */
@@ -72,9 +73,9 @@ export function startMemoryMonitor(
 ): Promise<void> {
   const channel = new Channel<MemSample>(onSample);
   return invoke("memory_monitor_start", {
-    on_sample: channel,
-    interval_ms: intervalMs,
-    threshold_bytes: thresholdBytes,
+    onSample: channel,
+    intervalMs,
+    thresholdBytes,
   });
 }
 
