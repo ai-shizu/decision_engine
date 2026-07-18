@@ -146,8 +146,34 @@ function statusAfterUnlockFailure(code: VaultErrorCode): VaultStatus {
   return "locked";
 }
 
-function bounded<T>(items: readonly T[]): readonly T[] {
+function boundedHead<T>(items: readonly T[]): readonly T[] {
   return items.slice(0, MAX_REDUCER_RECORDS);
+}
+
+function compareMessages(left: VaultMessageRecord, right: VaultMessageRecord): number {
+  if (left.timestamp !== right.timestamp) {
+    return left.timestamp < right.timestamp ? -1 : 1;
+  }
+  if (left.id === right.id) {
+    return 0;
+  }
+  return left.id < right.id ? -1 : 1;
+}
+
+function mergeMessages(
+  existing: readonly VaultMessageRecord[],
+  incoming: readonly VaultMessageRecord[],
+): readonly VaultMessageRecord[] {
+  const byId = new Map<string, VaultMessageRecord>();
+  for (const record of existing) {
+    byId.set(record.id, record);
+  }
+  for (const record of incoming) {
+    byId.set(record.id, record);
+  }
+  return [...byId.values()]
+    .sort(compareMessages)
+    .slice(-MAX_REDUCER_RECORDS);
 }
 
 export function vaultReducer(state: VaultState, action: VaultAction): VaultState {
@@ -157,7 +183,9 @@ export function vaultReducer(state: VaultState, action: VaultAction): VaultState
 
     case "unlockStarted": {
       if (
-        (state.status !== "locked" && state.status !== "unprovisioned") ||
+        (state.status !== "locked" &&
+          state.status !== "unprovisioned" &&
+          state.status !== "unavailable") ||
         state.unlock.phase === "pending"
       ) {
         return state;
@@ -235,7 +263,7 @@ export function vaultReducer(state: VaultState, action: VaultAction): VaultState
       }
       return {
         ...state,
-        chats: { phase: "loaded", items: bounded(action.records), error: null },
+        chats: { phase: "loaded", items: boundedHead(action.records), error: null },
       };
 
     case "chatsLoadFailed":
@@ -275,7 +303,10 @@ export function vaultReducer(state: VaultState, action: VaultAction): VaultState
         messages: {
           phase: "loaded",
           chatId: action.chatId,
-          items: bounded(action.records),
+          items:
+            state.messages.cursor === null
+              ? mergeMessages([], action.records)
+              : mergeMessages(state.messages.items, action.records),
           cursor: action.nextCursor,
           error: null,
         },
@@ -322,7 +353,10 @@ export function vaultReducer(state: VaultState, action: VaultAction): VaultState
       return {
         ...state,
         messages: sameChat
-          ? { ...state.messages, items: bounded([...withoutReplay, action.record]) }
+          ? {
+              ...state.messages,
+              items: mergeMessages(withoutReplay, [action.record]),
+            }
           : state.messages,
         save: { phase: "saved", messageId: action.messageId, error: null },
       };

@@ -1834,3 +1834,156 @@ button.secondary {
   color: var(--text-muted);
   font-size: 0.75rem;
 }
+
+/* M3 Phase 3-B: secure vault shell */
+.vault-panel {
+  width: 100%;
+  margin-top: var(--s4);
+  text-align: left;
+}
+
+.vault-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--s3);
+  border-bottom: 1px solid var(--border);
+  padding-bottom: var(--s2);
+}
+
+.vault-header h2,
+.vault-section h3 {
+  margin: 0;
+}
+
+.vault-status {
+  flex-shrink: 0;
+  border: 1px solid var(--text);
+  padding: var(--s1) var(--s2);
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  letter-spacing: 0.08em;
+}
+
+.vault-status-description,
+.vault-error {
+  margin: var(--s2) 0 0;
+}
+
+.vault-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s2);
+  margin-top: var(--s3);
+}
+
+.vault-unlocked {
+  display: grid;
+  grid-template-columns: minmax(0, 0.8fr) minmax(0, 1.2fr);
+  gap: var(--s3);
+  margin-top: var(--s4);
+}
+
+.vault-section {
+  min-width: 0;
+  border: 1px solid var(--border);
+  background: var(--bg-raised);
+  padding: var(--s3);
+}
+
+.vault-form-row,
+.vault-message-compose {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s2);
+  margin-top: var(--s3);
+}
+
+.vault-form-row input,
+.vault-message-compose textarea {
+  width: 100%;
+  border: 1px solid var(--border);
+  border-radius: 0;
+  background: var(--bg-deep);
+  color: var(--text);
+  padding: var(--s2);
+  font: inherit;
+}
+
+.vault-chat-list,
+.vault-message-list {
+  list-style: none;
+  margin: var(--s3) 0 0;
+  padding: 0;
+  max-height: 18rem;
+  overflow: auto;
+  border-top: 1px solid var(--border);
+}
+
+.vault-chat-list button {
+  width: 100%;
+  display: flex;
+  justify-content: space-between;
+  gap: var(--s2);
+  border: 0;
+  border-bottom: 1px solid var(--border);
+  border-radius: 0;
+  background: var(--bg-deep);
+  color: var(--text);
+  padding: var(--s2);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.vault-chat-list button.active {
+  background: var(--text);
+  color: var(--bg);
+}
+
+.vault-chat-list time,
+.vault-message-list time {
+  flex-shrink: 0;
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  color: var(--text-muted);
+}
+
+.vault-chat-list button.active time {
+  color: var(--bg);
+}
+
+.vault-message-list li {
+  border-bottom: 1px solid var(--border);
+  padding: var(--s2) 0;
+}
+
+.vault-message-list header {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--s2);
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  text-transform: uppercase;
+}
+
+.vault-message-list p {
+  margin: var(--s1) 0 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.vault-retry {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--s2);
+  margin-top: var(--s2);
+}
+
+@media (max-width: 44rem) {
+  .vault-unlocked {
+    grid-template-columns: 1fr;
+  }
+}

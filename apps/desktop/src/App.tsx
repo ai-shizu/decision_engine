@@ -18,6 +18,7 @@ import "./App.css";
 // screen because that is where the iOS shell sits (engine never becomes ready on
 // device). On desktop it shows briefly before the 7-tab UI takes over.
 import { PocketBrainPanel } from "./components/PocketBrainPanel";
+import { VaultPanel } from "./components/VaultPanel";
 
 function LoadingScreen({ message }: { message: string }) {
   return (
@@ -28,6 +29,7 @@ function LoadingScreen({ message }: { message: string }) {
         <p className="status-line">{message}</p>
         <p className="hint">初回起動はエンジン展開に 30 秒ほどかかることがあります。</p>
         <PocketBrainPanel />
+        <VaultPanel />
       </main>
     </div>
   );

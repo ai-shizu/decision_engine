@@ -206,6 +206,159 @@ test("V-R12 message completion for another chat is ignored", () => {
   assertOk(next === state, "wrong-chat completion ignored");
 });
 
+test("V-R13 unavailable permits an explicit unlock retry", () => {
+  const unavailable = vaultReducer(INITIAL_VAULT_STATE, {
+    type: "statusReceived",
+    status: "unavailable",
+  });
+  const next = vaultReducer(unavailable, { type: "unlockStarted" });
+  assertEq(next.status, "unlocking", "retry enters unlocking");
+  assertEq(next.unlock.phase, "pending", "retry pending");
+});
+
+test("V-R14 protected stop states reject unlock attempts", () => {
+  for (const status of [
+    "quarantined",
+    "recovery_required",
+    "orphaned_key",
+  ] as const) {
+    const state = vaultReducer(INITIAL_VAULT_STATE, {
+      type: "statusReceived",
+      status,
+    });
+    const next = vaultReducer(state, { type: "unlockStarted" });
+    assertOk(next === state, `${status} must remain blocked`);
+  }
+});
+
+test("V-R15 initial message page replaces and sorts existing items", () => {
+  let state = unlockedWithPlaintext();
+  const early: VaultMessageRecord = {
+    ...MESSAGE,
+    id: "40000000-0000-4000-8000-000000000004",
+    content: "early",
+    timestamp: 10,
+  };
+  const late: VaultMessageRecord = {
+    ...MESSAGE,
+    id: "50000000-0000-4000-8000-000000000005",
+    content: "late",
+    timestamp: 20,
+  };
+  state = vaultReducer(state, {
+    type: "messagesLoadStarted",
+    chatId: CHAT_ID,
+    cursor: null,
+  });
+  state = vaultReducer(state, {
+    type: "messagesLoaded",
+    chatId: CHAT_ID,
+    records: [late, early],
+    nextCursor: { timestamp: late.timestamp, id: late.id },
+  });
+  assertEq(state.messages.items.length, 2, "old page replaced");
+  assertEq(state.messages.items[0]?.id, early.id, "ascending first");
+  assertEq(state.messages.items[1]?.id, late.id, "ascending second");
+});
+
+test("V-R16 continuation page appends with id deduplication", () => {
+  const first: VaultMessageRecord = {
+    ...MESSAGE,
+    id: "60000000-0000-4000-8000-000000000006",
+    timestamp: 10,
+  };
+  const second: VaultMessageRecord = {
+    ...MESSAGE,
+    id: "70000000-0000-4000-8000-000000000007",
+    timestamp: 20,
+  };
+  const third: VaultMessageRecord = {
+    ...MESSAGE,
+    id: "80000000-0000-4000-8000-000000000008",
+    timestamp: 30,
+  };
+  let state = vaultReducer(INITIAL_VAULT_STATE, {
+    type: "statusReceived",
+    status: "unlocked",
+  });
+  state = vaultReducer(state, {
+    type: "messagesLoadStarted",
+    chatId: CHAT_ID,
+    cursor: null,
+  });
+  state = vaultReducer(state, {
+    type: "messagesLoaded",
+    chatId: CHAT_ID,
+    records: [first, second],
+    nextCursor: { timestamp: second.timestamp, id: second.id },
+  });
+  state = vaultReducer(state, {
+    type: "messagesLoadStarted",
+    chatId: CHAT_ID,
+    cursor: state.messages.cursor,
+  });
+  state = vaultReducer(state, {
+    type: "messagesLoaded",
+    chatId: CHAT_ID,
+    records: [{ ...second, content: "same id replay" }, third],
+    nextCursor: { timestamp: third.timestamp, id: third.id },
+  });
+  assertEq(state.messages.items.length, 3, "deduplicated length");
+  assertEq(
+    state.messages.items.map((record) => record.id).join(","),
+    [first.id, second.id, third.id].join(","),
+    "merged ascending ids",
+  );
+  assertEq(state.messages.items[1]?.content, "same id replay", "incoming replay wins");
+});
+
+test("V-R17 message cap drops the oldest side and keeps ascending order", () => {
+  const records = Array.from({ length: 205 }, (_, index): VaultMessageRecord => ({
+    id: `message-${String(index).padStart(3, "0")}`,
+    chat_id: CHAT_ID,
+    role: "user",
+    content: `message ${index}`,
+    timestamp: index,
+  }));
+  let state = vaultReducer(INITIAL_VAULT_STATE, {
+    type: "statusReceived",
+    status: "unlocked",
+  });
+  state = vaultReducer(state, {
+    type: "messagesLoadStarted",
+    chatId: CHAT_ID,
+    cursor: null,
+  });
+  state = vaultReducer(state, {
+    type: "messagesLoaded",
+    chatId: CHAT_ID,
+    records: records.slice(0, 200),
+    nextCursor: { timestamp: 199, id: records[199]?.id ?? "" },
+  });
+  state = vaultReducer(state, {
+    type: "messagesLoadStarted",
+    chatId: CHAT_ID,
+    cursor: state.messages.cursor,
+  });
+  state = vaultReducer(state, {
+    type: "messagesLoaded",
+    chatId: CHAT_ID,
+    records: records.slice(195).reverse(),
+    nextCursor: null,
+  });
+  assertEq(state.messages.items.length, 200, "bounded length");
+  assertEq(state.messages.items[0]?.timestamp, 5, "oldest five dropped");
+  assertEq(state.messages.items[199]?.timestamp, 204, "newest retained");
+  for (let index = 1; index < state.messages.items.length; index += 1) {
+    const previous = state.messages.items[index - 1];
+    const current = state.messages.items[index];
+    assertOk(
+      previous !== undefined && current !== undefined && previous.timestamp < current.timestamp,
+      `ascending at ${index}`,
+    );
+  }
+});
+
 let failed = 0;
 for (const { name, fn } of tests) {
   try {
