@@ -28,7 +28,7 @@ use llama_cpp_2::context::params::LlamaContextParams;
 use llama_cpp_2::llama_backend::LlamaBackend;
 use llama_cpp_2::llama_batch::LlamaBatch;
 use llama_cpp_2::model::params::LlamaModelParams;
-use llama_cpp_2::model::{AddBos, LlamaModel, Special};
+use llama_cpp_2::model::{AddBos, LlamaChatMessage, LlamaModel, Special};
 use llama_cpp_2::sampling::LlamaSampler;
 
 use super::params::{GenerationParams, LoadParams};
@@ -170,6 +170,36 @@ fn worker_loop(rx: mpsc::Receiver<LlmCommand>, cancel: Arc<AtomicBool>, monitor:
             LlmCommand::Shutdown => break,
         }
     }
+}
+
+/// Apply the model's baked-in chat template to a `(system, user)` pair.
+///
+/// Uses the verified llama-cpp-2 0.1.151 APIs:
+/// `LlamaModel::chat_template` → `LlamaChatMessage::new` → `LlamaModel::apply_chat_template`.
+/// `add_ass = true` so the rendered prompt ends with the assistant open tag
+/// (required for completion-style generation). Does not touch the existing
+/// generate loop — callers pass the returned String as `GenerationParams.prompt`.
+///
+/// Phase 2 wires this into the extraction generate path; kept public and unused
+/// until then so the helper can be reviewed in isolation.
+#[allow(dead_code)]
+pub fn render_chat_prompt(
+    model: &LlamaModel,
+    system: &str,
+    user: &str,
+) -> Result<String, String> {
+    let tmpl = model
+        .chat_template(None)
+        .map_err(|e| format!("chat_template: {e}"))?;
+    let messages = vec![
+        LlamaChatMessage::new("system".into(), system.to_string())
+            .map_err(|e| format!("chat message system: {e}"))?,
+        LlamaChatMessage::new("user".into(), user.to_string())
+            .map_err(|e| format!("chat message user: {e}"))?,
+    ];
+    model
+        .apply_chat_template(&tmpl, &messages, true)
+        .map_err(|e| format!("apply_chat_template: {e}"))
 }
 
 fn load_model(backend: &LlamaBackend, path: &Path, p: &LoadParams) -> Result<LlamaModel, String> {

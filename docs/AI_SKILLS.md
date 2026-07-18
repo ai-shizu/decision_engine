@@ -27,6 +27,7 @@
 | 永続化境界・シリアライズ・runtime検証・IPC契約 | §1, §16 (SKILL-PKB-BOUNDARY-V3), `docs/architecture/INCIDENT_LEDGER.md` |
 | macOS ビルド・配布・コード署名 | §1, §2.3, §4 |
 | Tauri iOS (M0〜) 初期化・シミュレータ | §1, §2.3, §4.4, `docs/M0_IOS_INIT_INSTRUCTIONS.md` |
+| Pocket Brain / on-device LLM (M4〜M5) | §1, §4.5, §5, `docs/m5_action_plan.md` |
 | LLM モデル選定・consult/KV キャッシュ | §1, §5, §7, §8 |
 | 検索エンジン・mmap・LSM 索引 | §1, §9, §10 |
 | LINE インポート・データ層・冪等性 | §1, §14 (IMP-1/IMP-2 as-built, T-20〜T-25) |
@@ -378,6 +379,18 @@ python3 -c "import platform; print(platform.machine())"  # Python 自体のア�
 4. **desktop の `create:false` は iOS で webview 未生成になる。** base を書き換えず、`tauri.ios.conf.json` の `app.windows[0].create: true` で上書きする（M0 で検証済み）。
 5. **App.tsx の boot gate は `engine_ready` 待ち。** M0 では engine が無いため LoadingScreen（漆黒）→120s 後に失敗メッセージで止まる。7タブ本体は engine 接続後（M2）まで出ない。これは UI 凍結下の既定挙動であり、「クラッシュしていない」ことと混同するな。
 6. **ホスト要件:** Xcode（`xcode-select` が Xcode.app）、CocoaPods、iOS Simulator runtime（SDK だけでは足りない。`xcodebuild -downloadPlatform iOS`）、Rust targets `aarch64-apple-ios` / `aarch64-apple-ios-sim`。`tauri ios dev --open` は Xcode を開くだけでデプロイしない — デバイス名を引数に渡せ。
+
+### 4.5 M5 Phase 1 — GBNF 構造化抽出の純 Rust 層 (2026-07-18)
+
+**射程:** `pocket-brain` feature 配下の schema / GBNF asset / PromptSpec / chat-template ヘルパーのみ。Tauri command 登録・UI・grammar サンプラ合成は Phase 2/3。
+
+**as-built:**
+1. `llm/schema.rs` — `KakeiboEntryV1`（`deny_unknown_fields`）。文字列不明値は `"unknown"`、`amount` は `Option<i64>`（null=不明）。`normalize()` は NFKC＋カンマ除去の決定論的補正（新規クレート禁止、既存 `unicode-normalization` のみ）。
+2. `llm/assets/kakeibo_v1.gbnf` — 固定キー順の厳密文法（date ISO|unknown、amount int|null、残り string|unknown）。
+3. `llm/prompt.rs` — `build_prompt(task_id, input) -> (system, user)`。既知 task は `kakeibo_v1` のみ、未知は Err。
+4. `llm/service.rs::render_chat_prompt` — 実在 API のみ: `model.chat_template(None)` → `LlamaChatMessage::new` → `model.apply_chat_template(..., add_ass=true)`。生成ループは未接続。
+
+**不変条件:** 全新規コードは `lib.rs` の `#[cfg(feature = "pocket-brain")]` 配下。default `cargo check` を壊すな。amount の文字列形（`"1,000"` / `"１０００"`）は serde カスタムデシリアライザ＋`parse_amount_token` で吸収し、GBNF 経路の数値出力と両立させる。
 
 ---
 
