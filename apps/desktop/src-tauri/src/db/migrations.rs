@@ -40,6 +40,9 @@ const READ_MESSAGES_INDEX_SQL: &str = "SELECT count(*) FROM sqlite_schema \
      WHERE type = 'index' AND name = 'idx_messages_chat_timestamp' AND tbl_name = 'messages';";
 const READ_MESSAGES_INDEX_COLUMNS_SQL: &str =
     "SELECT name FROM pragma_index_info('idx_messages_chat_timestamp') ORDER BY seqno;";
+const READ_MESSAGES_INDEX_PROPERTIES_SQL: &str =
+    "SELECT \"unique\", partial FROM pragma_index_list('messages') \
+     WHERE name = 'idx_messages_chat_timestamp';";
 
 #[derive(Clone, Copy)]
 struct Migration {
@@ -164,7 +167,13 @@ pub(crate) fn run_migrations(connection: &mut Connection) -> Result<(), Migratio
         current = migration.version;
     }
 
-    verify_v1_schema(connection)
+    let latest = MIGRATIONS
+        .last()
+        .filter(|migration| migration.version == LATEST_SCHEMA_VERSION)
+        .ok_or(MigrationError::MissingMigration {
+            expected: LATEST_SCHEMA_VERSION,
+        })?;
+    (latest.verify)(connection)
 }
 
 fn read_user_version(connection: &Connection) -> Result<i64, MigrationError> {
@@ -253,6 +262,14 @@ fn verify_v1_schema(connection: &Connection) -> Result<(), MigrationError> {
     if index_columns != ["chat_id", "timestamp", "id"] {
         return Err(MigrationError::SchemaMismatch { version: 1 });
     }
+    let (unique, partial): (i64, i64) = connection
+        .query_row(READ_MESSAGES_INDEX_PROPERTIES_SQL, [], |row| {
+            Ok((row.get(0)?, row.get(1)?))
+        })
+        .map_err(|_| MigrationError::SchemaMismatch { version: 1 })?;
+    if unique != 0 || partial != 0 {
+        return Err(MigrationError::SchemaMismatch { version: 1 });
+    }
 
     Ok(())
 }
@@ -292,6 +309,18 @@ fn columns_match(actual: &[ColumnShape], expected: &[(&str, &str, bool, i64)]) -
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn migration_versions_are_contiguous_unique_and_end_at_latest() {
+        assert_eq!(MIGRATIONS.len() as i64, LATEST_SCHEMA_VERSION);
+        for (index, migration) in MIGRATIONS.iter().enumerate() {
+            assert_eq!(migration.version, index as i64 + 1);
+        }
+        assert_eq!(
+            MIGRATIONS.last().map(|migration| migration.version),
+            Some(LATEST_SCHEMA_VERSION)
+        );
+    }
 
     #[test]
     fn creates_and_versions_v1_schema() -> Result<(), Box<dyn Error>> {
@@ -396,6 +425,44 @@ mod tests {
         let error = run_migrations(&mut connection)
             .err()
             .ok_or("wrong index shape unexpectedly accepted")?;
+        assert_eq!(error, MigrationError::SchemaMismatch { version: 1 });
+        assert_eq!(read_user_version(&connection)?, 0);
+        Ok(())
+    }
+
+    #[test]
+    fn rejects_same_name_unique_index() -> Result<(), Box<dyn Error>> {
+        let mut connection = Connection::open_in_memory()?;
+        run_migrations(&mut connection)?;
+        connection.execute_batch(
+            "PRAGMA user_version = 0; \
+             DROP INDEX idx_messages_chat_timestamp; \
+             CREATE UNIQUE INDEX idx_messages_chat_timestamp \
+             ON messages(chat_id, timestamp, id);",
+        )?;
+
+        let error = run_migrations(&mut connection)
+            .err()
+            .ok_or("unique index unexpectedly accepted")?;
+        assert_eq!(error, MigrationError::SchemaMismatch { version: 1 });
+        assert_eq!(read_user_version(&connection)?, 0);
+        Ok(())
+    }
+
+    #[test]
+    fn rejects_same_name_partial_index() -> Result<(), Box<dyn Error>> {
+        let mut connection = Connection::open_in_memory()?;
+        run_migrations(&mut connection)?;
+        connection.execute_batch(
+            "PRAGMA user_version = 0; \
+             DROP INDEX idx_messages_chat_timestamp; \
+             CREATE INDEX idx_messages_chat_timestamp \
+             ON messages(chat_id, timestamp, id) WHERE role = 'user';",
+        )?;
+
+        let error = run_migrations(&mut connection)
+            .err()
+            .ok_or("partial index unexpectedly accepted")?;
         assert_eq!(error, MigrationError::SchemaMismatch { version: 1 });
         assert_eq!(read_user_version(&connection)?, 0);
         Ok(())

@@ -16,12 +16,17 @@ use std::{
 };
 
 use objc2::rc::autoreleasepool;
-use rusqlite::Connection;
+use rusqlite::{Connection, TransactionBehavior};
 use serde::Serialize;
+
+use crate::ipc_contract::MAX_TEXT_BYTES;
 
 use super::{
     connection::{open_encrypted_database, verify_encrypted_connection, VaultConnectionError},
     migrations::{run_migrations, MigrationError},
+    repository::{
+        self, ChatCreate, ChatRecord, MessageAppend, MessageCursor, MessageRecord, RepositoryError,
+    },
     secure_vault::{SecureVault, SecureVaultError},
 };
 
@@ -30,6 +35,14 @@ pub(crate) const VAULT_DATABASE_FILENAME: &str = "vault.sqlite3";
 const COMMAND_QUEUE_CAPACITY: usize = 8;
 const UNLOCK_TIMEOUT: Duration = Duration::from_secs(120);
 const SHORT_OPERATION_TIMEOUT: Duration = Duration::from_secs(5);
+const DEFAULT_LIST_LIMIT: u32 = 50;
+const MAX_LIST_LIMIT: u32 = 200;
+const TITLE_MAX_BYTES: usize = 512;
+pub(crate) const REPOSITORY_CONTENT_MAX_BYTES: usize = if MAX_TEXT_BYTES < 64 * 1024 {
+    MAX_TEXT_BYTES
+} else {
+    64 * 1024
+};
 
 /// Public lifecycle state. No secret-bearing or filesystem detail is exposed.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
@@ -63,6 +76,10 @@ pub(crate) enum VaultErrorCode {
     UnsupportedSchema,
     VaultQuarantined,
     Unavailable,
+    InvalidInput,
+    NotFound,
+    Conflict,
+    StorageFailed,
 }
 
 #[derive(Clone)]
@@ -87,10 +104,48 @@ struct RequestControl {
     cancelled: Arc<AtomicBool>,
 }
 
-struct VaultRequest {
-    operation: VaultOperation,
-    control: RequestControl,
-    reply: SyncSender<Result<VaultStatus, VaultErrorCode>>,
+enum VaultReply {
+    Lifecycle(Result<VaultStatus, VaultErrorCode>),
+    ChatCreate(Result<ChatRecord, VaultErrorCode>),
+    ChatDelete(Result<(), VaultErrorCode>),
+    ChatsList(Result<Vec<ChatRecord>, VaultErrorCode>),
+    MessageAppend(Result<MessageRecord, VaultErrorCode>),
+    MessagesList(Result<Vec<MessageRecord>, VaultErrorCode>),
+}
+
+enum VaultRequest {
+    Lifecycle {
+        operation: VaultOperation,
+        control: RequestControl,
+        reply: SyncSender<VaultReply>,
+    },
+    ChatCreate {
+        input: ChatCreate,
+        control: RequestControl,
+        reply: SyncSender<VaultReply>,
+    },
+    ChatDelete {
+        id: String,
+        control: RequestControl,
+        reply: SyncSender<VaultReply>,
+    },
+    ChatsList {
+        limit: Option<u32>,
+        control: RequestControl,
+        reply: SyncSender<VaultReply>,
+    },
+    MessageAppend {
+        input: MessageAppend,
+        control: RequestControl,
+        reply: SyncSender<VaultReply>,
+    },
+    MessagesList {
+        chat_id: String,
+        cursor: Option<MessageCursor>,
+        limit: Option<u32>,
+        control: RequestControl,
+        reply: SyncSender<VaultReply>,
+    },
 }
 
 impl VaultHandle {
@@ -153,7 +208,7 @@ impl VaultHandle {
     ) -> Result<VaultStatus, VaultErrorCode> {
         let (reply_sender, reply_receiver) = mpsc::sync_channel(1);
         let cancelled = Arc::new(AtomicBool::new(false));
-        let request = VaultRequest {
+        let request = VaultRequest::Lifecycle {
             operation,
             control: RequestControl {
                 deadline: Instant::now() + timeout,
@@ -162,6 +217,19 @@ impl VaultHandle {
             reply: reply_sender,
         };
 
+        match self.submit(request, reply_receiver, cancelled, timeout)? {
+            VaultReply::Lifecycle(result) => result,
+            _ => Err(VaultErrorCode::Unavailable),
+        }
+    }
+
+    fn submit(
+        &self,
+        request: VaultRequest,
+        reply_receiver: Receiver<VaultReply>,
+        cancelled: Arc<AtomicBool>,
+        timeout: Duration,
+    ) -> Result<VaultReply, VaultErrorCode> {
         let send_result = {
             let sender_guard = self
                 .inner
@@ -179,12 +247,113 @@ impl VaultHandle {
         }
 
         match reply_receiver.recv_timeout(timeout) {
-            Ok(result) => result,
+            Ok(reply) => Ok(reply),
             Err(RecvTimeoutError::Timeout) => {
                 cancelled.store(true, Ordering::Release);
                 Err(VaultErrorCode::Timeout)
             }
             Err(RecvTimeoutError::Disconnected) => Err(VaultErrorCode::Unavailable),
+        }
+    }
+}
+
+// Phase 2-C adds only the worker-internal repository capability. IPC wiring is
+// deliberately deferred, so these crate-visible methods are not called by the
+// production command layer yet.
+#[allow(dead_code)]
+impl VaultHandle {
+    pub(crate) fn chat_create(&self, input: ChatCreate) -> Result<ChatRecord, VaultErrorCode> {
+        let (reply, receiver) = mpsc::sync_channel(1);
+        let cancelled = Arc::new(AtomicBool::new(false));
+        let request = VaultRequest::ChatCreate {
+            input,
+            control: RequestControl {
+                deadline: Instant::now() + SHORT_OPERATION_TIMEOUT,
+                cancelled: Arc::clone(&cancelled),
+            },
+            reply,
+        };
+        match self.submit(request, receiver, cancelled, SHORT_OPERATION_TIMEOUT)? {
+            VaultReply::ChatCreate(result) => result,
+            _ => Err(VaultErrorCode::Unavailable),
+        }
+    }
+
+    pub(crate) fn chat_delete(&self, id: String) -> Result<(), VaultErrorCode> {
+        let (reply, receiver) = mpsc::sync_channel(1);
+        let cancelled = Arc::new(AtomicBool::new(false));
+        let request = VaultRequest::ChatDelete {
+            id,
+            control: RequestControl {
+                deadline: Instant::now() + SHORT_OPERATION_TIMEOUT,
+                cancelled: Arc::clone(&cancelled),
+            },
+            reply,
+        };
+        match self.submit(request, receiver, cancelled, SHORT_OPERATION_TIMEOUT)? {
+            VaultReply::ChatDelete(result) => result,
+            _ => Err(VaultErrorCode::Unavailable),
+        }
+    }
+
+    pub(crate) fn chats_list(&self, limit: Option<u32>) -> Result<Vec<ChatRecord>, VaultErrorCode> {
+        let (reply, receiver) = mpsc::sync_channel(1);
+        let cancelled = Arc::new(AtomicBool::new(false));
+        let request = VaultRequest::ChatsList {
+            limit,
+            control: RequestControl {
+                deadline: Instant::now() + SHORT_OPERATION_TIMEOUT,
+                cancelled: Arc::clone(&cancelled),
+            },
+            reply,
+        };
+        match self.submit(request, receiver, cancelled, SHORT_OPERATION_TIMEOUT)? {
+            VaultReply::ChatsList(result) => result,
+            _ => Err(VaultErrorCode::Unavailable),
+        }
+    }
+
+    pub(crate) fn message_append(
+        &self,
+        input: MessageAppend,
+    ) -> Result<MessageRecord, VaultErrorCode> {
+        let (reply, receiver) = mpsc::sync_channel(1);
+        let cancelled = Arc::new(AtomicBool::new(false));
+        let request = VaultRequest::MessageAppend {
+            input,
+            control: RequestControl {
+                deadline: Instant::now() + SHORT_OPERATION_TIMEOUT,
+                cancelled: Arc::clone(&cancelled),
+            },
+            reply,
+        };
+        match self.submit(request, receiver, cancelled, SHORT_OPERATION_TIMEOUT)? {
+            VaultReply::MessageAppend(result) => result,
+            _ => Err(VaultErrorCode::Unavailable),
+        }
+    }
+
+    pub(crate) fn messages_list(
+        &self,
+        chat_id: String,
+        cursor: Option<MessageCursor>,
+        limit: Option<u32>,
+    ) -> Result<Vec<MessageRecord>, VaultErrorCode> {
+        let (reply, receiver) = mpsc::sync_channel(1);
+        let cancelled = Arc::new(AtomicBool::new(false));
+        let request = VaultRequest::MessagesList {
+            chat_id,
+            cursor,
+            limit,
+            control: RequestControl {
+                deadline: Instant::now() + SHORT_OPERATION_TIMEOUT,
+                cancelled: Arc::clone(&cancelled),
+            },
+            reply,
+        };
+        match self.submit(request, receiver, cancelled, SHORT_OPERATION_TIMEOUT)? {
+            VaultReply::MessagesList(result) => result,
+            _ => Err(VaultErrorCode::Unavailable),
         }
     }
 }
@@ -206,16 +375,82 @@ impl VaultWorker {
 
     fn run(mut self, receiver: Receiver<VaultRequest>) {
         while let Ok(request) = receiver.recv() {
-            let result = if request_expired(&request.control) {
-                Err(VaultErrorCode::Timeout)
-            } else {
-                match request.operation {
-                    VaultOperation::Unlock => self.unlock(&request.control),
-                    VaultOperation::Lock => self.lock(),
-                    VaultOperation::Health => self.check_health(),
+            match request {
+                VaultRequest::Lifecycle {
+                    operation,
+                    control,
+                    reply,
+                } => {
+                    let result = if request_expired(&control) {
+                        Err(VaultErrorCode::Timeout)
+                    } else {
+                        match operation {
+                            VaultOperation::Unlock => self.unlock(&control),
+                            VaultOperation::Lock => self.lock(),
+                            VaultOperation::Health => self.check_health(),
+                        }
+                    };
+                    let _ = reply.send(VaultReply::Lifecycle(result));
                 }
-            };
-            let _ = request.reply.send(result);
+                VaultRequest::ChatCreate {
+                    input,
+                    control,
+                    reply,
+                } => {
+                    let result = if request_expired(&control) {
+                        Err(VaultErrorCode::Timeout)
+                    } else {
+                        self.create_chat(input)
+                    };
+                    let _ = reply.send(VaultReply::ChatCreate(result));
+                }
+                VaultRequest::ChatDelete { id, control, reply } => {
+                    let result = if request_expired(&control) {
+                        Err(VaultErrorCode::Timeout)
+                    } else {
+                        self.delete_chat(id)
+                    };
+                    let _ = reply.send(VaultReply::ChatDelete(result));
+                }
+                VaultRequest::ChatsList {
+                    limit,
+                    control,
+                    reply,
+                } => {
+                    let result = if request_expired(&control) {
+                        Err(VaultErrorCode::Timeout)
+                    } else {
+                        self.list_chats(limit)
+                    };
+                    let _ = reply.send(VaultReply::ChatsList(result));
+                }
+                VaultRequest::MessageAppend {
+                    input,
+                    control,
+                    reply,
+                } => {
+                    let result = if request_expired(&control) {
+                        Err(VaultErrorCode::Timeout)
+                    } else {
+                        self.append_message(input)
+                    };
+                    let _ = reply.send(VaultReply::MessageAppend(result));
+                }
+                VaultRequest::MessagesList {
+                    chat_id,
+                    cursor,
+                    limit,
+                    control,
+                    reply,
+                } => {
+                    let result = if request_expired(&control) {
+                        Err(VaultErrorCode::Timeout)
+                    } else {
+                        self.list_messages(chat_id, cursor, limit)
+                    };
+                    let _ = reply.send(VaultReply::MessagesList(result));
+                }
+            }
         }
 
         self.connection.take();
@@ -285,6 +520,168 @@ impl VaultWorker {
 
         Ok(VaultStatus::Unlocked)
     }
+
+    fn create_chat(&mut self, input: ChatCreate) -> Result<ChatRecord, VaultErrorCode> {
+        gate(snapshot_status(&self.status))?;
+        let input = validate_chat_create(input)?;
+        let connection = self
+            .connection
+            .as_mut()
+            .ok_or(VaultErrorCode::Unavailable)?;
+        let transaction = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(|_| VaultErrorCode::StorageFailed)?;
+        let record = repository::chat_create(&transaction, &input).map_err(map_repository_error)?;
+        transaction
+            .commit()
+            .map_err(|_| VaultErrorCode::StorageFailed)?;
+        Ok(record)
+    }
+
+    fn delete_chat(&mut self, id: String) -> Result<(), VaultErrorCode> {
+        gate(snapshot_status(&self.status))?;
+        validate_uuid_v4(&id)?;
+        let connection = self
+            .connection
+            .as_mut()
+            .ok_or(VaultErrorCode::Unavailable)?;
+        let transaction = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(|_| VaultErrorCode::StorageFailed)?;
+        repository::chat_delete(&transaction, &id).map_err(map_repository_error)?;
+        transaction
+            .commit()
+            .map_err(|_| VaultErrorCode::StorageFailed)
+    }
+
+    fn list_chats(&self, limit: Option<u32>) -> Result<Vec<ChatRecord>, VaultErrorCode> {
+        gate(snapshot_status(&self.status))?;
+        let connection = self
+            .connection
+            .as_ref()
+            .ok_or(VaultErrorCode::Unavailable)?;
+        repository::chats_list(connection, clamp_limit(limit)).map_err(map_repository_error)
+    }
+
+    fn append_message(&mut self, input: MessageAppend) -> Result<MessageRecord, VaultErrorCode> {
+        gate(snapshot_status(&self.status))?;
+        let input = validate_message_append(input)?;
+        let connection = self
+            .connection
+            .as_mut()
+            .ok_or(VaultErrorCode::Unavailable)?;
+        let transaction = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(|_| VaultErrorCode::StorageFailed)?;
+        let record =
+            repository::message_append(&transaction, &input).map_err(map_repository_error)?;
+        transaction
+            .commit()
+            .map_err(|_| VaultErrorCode::StorageFailed)?;
+        Ok(record)
+    }
+
+    fn list_messages(
+        &self,
+        chat_id: String,
+        cursor: Option<MessageCursor>,
+        limit: Option<u32>,
+    ) -> Result<Vec<MessageRecord>, VaultErrorCode> {
+        gate(snapshot_status(&self.status))?;
+        validate_uuid_v4(&chat_id)?;
+        if let Some(cursor) = cursor.as_ref() {
+            validate_uuid_v4(&cursor.id)?;
+            validate_nonnegative(cursor.timestamp)?;
+        }
+        let connection = self
+            .connection
+            .as_ref()
+            .ok_or(VaultErrorCode::Unavailable)?;
+        repository::messages_list(connection, &chat_id, cursor.as_ref(), clamp_limit(limit))
+            .map_err(map_repository_error)
+    }
+}
+
+fn gate(status: VaultStatus) -> Result<(), VaultErrorCode> {
+    match status {
+        VaultStatus::Unlocked => Ok(()),
+        VaultStatus::Quarantined | VaultStatus::RecoveryRequired | VaultStatus::OrphanedKey => {
+            Err(VaultErrorCode::VaultQuarantined)
+        }
+        VaultStatus::Unavailable => Err(VaultErrorCode::Unavailable),
+        VaultStatus::Unprovisioned
+        | VaultStatus::Locked
+        | VaultStatus::Unlocking
+        | VaultStatus::Locking => Err(VaultErrorCode::Locked),
+    }
+}
+
+fn validate_chat_create(mut input: ChatCreate) -> Result<ChatCreate, VaultErrorCode> {
+    validate_uuid_v4(&input.id)?;
+    validate_nonnegative(input.created_at)?;
+    let title = input.title.trim();
+    if title.is_empty() || title.len() > TITLE_MAX_BYTES {
+        return Err(VaultErrorCode::InvalidInput);
+    }
+    input.title = title.to_string();
+    Ok(input)
+}
+
+fn validate_message_append(input: MessageAppend) -> Result<MessageAppend, VaultErrorCode> {
+    validate_uuid_v4(&input.id)?;
+    validate_uuid_v4(&input.chat_id)?;
+    if input.role != "user" && input.role != "assistant" {
+        return Err(VaultErrorCode::InvalidInput);
+    }
+    if input.content.is_empty() || input.content.len() > REPOSITORY_CONTENT_MAX_BYTES {
+        return Err(VaultErrorCode::InvalidInput);
+    }
+    validate_nonnegative(input.timestamp)?;
+    Ok(input)
+}
+
+fn validate_uuid_v4(value: &str) -> Result<(), VaultErrorCode> {
+    let bytes = value.as_bytes();
+    if bytes.len() != 36
+        || bytes[8] != b'-'
+        || bytes[13] != b'-'
+        || bytes[18] != b'-'
+        || bytes[23] != b'-'
+        || bytes[14] != b'4'
+        || !matches!(bytes[19], b'8' | b'9' | b'a' | b'b')
+    {
+        return Err(VaultErrorCode::InvalidInput);
+    }
+
+    for (index, byte) in bytes.iter().enumerate() {
+        if matches!(index, 8 | 13 | 18 | 23) {
+            continue;
+        }
+        if !matches!(byte, b'0'..=b'9' | b'a'..=b'f') {
+            return Err(VaultErrorCode::InvalidInput);
+        }
+    }
+    Ok(())
+}
+
+fn validate_nonnegative(value: i64) -> Result<(), VaultErrorCode> {
+    if value < 0 {
+        Err(VaultErrorCode::InvalidInput)
+    } else {
+        Ok(())
+    }
+}
+
+fn clamp_limit(limit: Option<u32>) -> u32 {
+    limit.unwrap_or(DEFAULT_LIST_LIMIT).clamp(1, MAX_LIST_LIMIT)
+}
+
+fn map_repository_error(error: RepositoryError) -> VaultErrorCode {
+    match error {
+        RepositoryError::NotFound => VaultErrorCode::NotFound,
+        RepositoryError::Conflict => VaultErrorCode::Conflict,
+        RepositoryError::StorageFailed => VaultErrorCode::StorageFailed,
+    }
 }
 
 fn request_expired(control: &RequestControl) -> bool {
@@ -352,6 +749,9 @@ fn classify_migration_error(error: MigrationError) -> (VaultStatus, VaultErrorCo
 mod tests {
     use super::*;
 
+    const CHAT_ID: &str = "00000000-0000-4000-8000-000000000001";
+    const MESSAGE_ID: &str = "10000000-0000-4000-8000-000000000001";
+
     #[test]
     fn unavailable_handle_fails_closed() {
         let handle = VaultHandle::unavailable();
@@ -365,5 +765,158 @@ mod tests {
         assert_eq!(handle.status(), VaultStatus::Locked);
         assert_eq!(handle.check_health(), Err(VaultErrorCode::Locked));
         assert_eq!(handle.lock(), Ok(VaultStatus::Locked));
+    }
+
+    #[test]
+    fn repository_gate_uses_public_status() {
+        assert_eq!(gate(VaultStatus::Unlocked), Ok(()));
+        assert_eq!(gate(VaultStatus::Locked), Err(VaultErrorCode::Locked));
+        assert_eq!(
+            gate(VaultStatus::Quarantined),
+            Err(VaultErrorCode::VaultQuarantined)
+        );
+        assert_eq!(
+            gate(VaultStatus::Unavailable),
+            Err(VaultErrorCode::Unavailable)
+        );
+    }
+
+    #[test]
+    fn canonical_uuid_v4_validation_is_strict() {
+        assert_eq!(validate_uuid_v4(CHAT_ID), Ok(()));
+        assert_eq!(
+            validate_uuid_v4("00000000-0000-4000-8000-00000000000A"),
+            Err(VaultErrorCode::InvalidInput)
+        );
+        assert_eq!(
+            validate_uuid_v4("00000000-0000-5000-8000-000000000001"),
+            Err(VaultErrorCode::InvalidInput)
+        );
+        assert_eq!(
+            validate_uuid_v4("00000000-0000-4000-7000-000000000001"),
+            Err(VaultErrorCode::InvalidInput)
+        );
+    }
+
+    #[test]
+    fn chat_validation_trims_and_rejects_invalid_fields() {
+        let valid = validate_chat_create(ChatCreate {
+            id: CHAT_ID.to_string(),
+            title: "  title  ".to_string(),
+            created_at: 0,
+        });
+        assert_eq!(
+            valid,
+            Ok(ChatCreate {
+                id: CHAT_ID.to_string(),
+                title: "title".to_string(),
+                created_at: 0,
+            })
+        );
+        assert_eq!(
+            validate_chat_create(ChatCreate {
+                id: "invalid".to_string(),
+                title: "title".to_string(),
+                created_at: 0,
+            }),
+            Err(VaultErrorCode::InvalidInput)
+        );
+        assert_eq!(
+            validate_chat_create(ChatCreate {
+                id: CHAT_ID.to_string(),
+                title: "   ".to_string(),
+                created_at: 0,
+            }),
+            Err(VaultErrorCode::InvalidInput)
+        );
+        assert_eq!(
+            validate_chat_create(ChatCreate {
+                id: CHAT_ID.to_string(),
+                title: "x".repeat(TITLE_MAX_BYTES + 1),
+                created_at: 0,
+            }),
+            Err(VaultErrorCode::InvalidInput)
+        );
+        assert_eq!(
+            validate_chat_create(ChatCreate {
+                id: CHAT_ID.to_string(),
+                title: "title".to_string(),
+                created_at: -1,
+            }),
+            Err(VaultErrorCode::InvalidInput)
+        );
+    }
+
+    #[test]
+    fn message_validation_rejects_role_content_and_timestamp_violations() {
+        let valid = MessageAppend {
+            id: MESSAGE_ID.to_string(),
+            chat_id: CHAT_ID.to_string(),
+            role: "user".to_string(),
+            content: "content".to_string(),
+            timestamp: 0,
+        };
+        assert_eq!(validate_message_append(valid.clone()), Ok(valid.clone()));
+
+        let mut invalid = valid.clone();
+        invalid.role = "system".to_string();
+        assert_eq!(
+            validate_message_append(invalid),
+            Err(VaultErrorCode::InvalidInput)
+        );
+        let mut invalid = valid.clone();
+        invalid.content.clear();
+        assert_eq!(
+            validate_message_append(invalid),
+            Err(VaultErrorCode::InvalidInput)
+        );
+        let mut invalid = valid.clone();
+        invalid.content = "x".repeat(REPOSITORY_CONTENT_MAX_BYTES + 1);
+        assert_eq!(
+            validate_message_append(invalid),
+            Err(VaultErrorCode::InvalidInput)
+        );
+        let mut invalid = valid;
+        invalid.timestamp = -1;
+        assert_eq!(
+            validate_message_append(invalid),
+            Err(VaultErrorCode::InvalidInput)
+        );
+    }
+
+    #[test]
+    fn list_limits_are_bounded() {
+        assert_eq!(clamp_limit(None), DEFAULT_LIST_LIMIT);
+        assert_eq!(clamp_limit(Some(0)), 1);
+        assert_eq!(clamp_limit(Some(1)), 1);
+        assert_eq!(clamp_limit(Some(MAX_LIST_LIMIT + 1)), MAX_LIST_LIMIT);
+    }
+
+    #[test]
+    fn worker_executes_repository_only_while_unlocked() -> Result<(), VaultErrorCode> {
+        let mut connection =
+            Connection::open_in_memory().map_err(|_| VaultErrorCode::StorageFailed)?;
+        run_migrations(&mut connection).map_err(|_| VaultErrorCode::StorageFailed)?;
+        let status = Arc::new(Mutex::new(VaultStatus::Unlocked));
+        let mut worker = VaultWorker {
+            database_path: PathBuf::new(),
+            connection: Some(connection),
+            status: Arc::clone(&status),
+        };
+
+        let created = worker.create_chat(ChatCreate {
+            id: CHAT_ID.to_string(),
+            title: "  Chat  ".to_string(),
+            created_at: 1,
+        })?;
+        assert_eq!(created.title, "Chat");
+        assert_eq!(worker.list_chats(None)?.len(), 1);
+
+        publish_status(&status, VaultStatus::Quarantined);
+        assert_eq!(
+            worker.list_chats(None),
+            Err(VaultErrorCode::VaultQuarantined)
+        );
+        Ok(())
     }
 }

@@ -12,6 +12,8 @@ mod keychain_probe;
 #[cfg(target_vendor = "apple")]
 mod migrations;
 #[cfg(target_vendor = "apple")]
+mod repository;
+#[cfg(target_vendor = "apple")]
 pub(crate) mod secure_vault;
 #[cfg(target_vendor = "apple")]
 mod worker;
