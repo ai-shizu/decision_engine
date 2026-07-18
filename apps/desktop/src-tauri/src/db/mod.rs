@@ -10,6 +10,8 @@ pub(crate) mod connection;
 #[allow(dead_code)] // Retained Phase 0 diagnostic; no longer exposed over IPC.
 mod keychain_probe;
 #[cfg(target_vendor = "apple")]
+mod migrations;
+#[cfg(target_vendor = "apple")]
 pub(crate) mod secure_vault;
 #[cfg(target_vendor = "apple")]
 mod worker;

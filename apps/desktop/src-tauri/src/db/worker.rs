@@ -21,6 +21,7 @@ use serde::Serialize;
 
 use super::{
     connection::{open_encrypted_database, verify_encrypted_connection, VaultConnectionError},
+    migrations::{run_migrations, MigrationError},
     secure_vault::{SecureVault, SecureVaultError},
 };
 
@@ -59,6 +60,8 @@ pub(crate) enum VaultErrorCode {
     InteractionNotAllowed,
     KeychainUnavailable,
     CorruptOrWrongKey,
+    UnsupportedSchema,
+    VaultQuarantined,
     Unavailable,
 }
 
@@ -238,7 +241,19 @@ impl VaultWorker {
         }
 
         match open_result {
-            Ok(connection) => {
+            Ok(mut connection) => {
+                if let Err(error) = run_migrations(&mut connection) {
+                    let (status, code) = classify_migration_error(error);
+                    drop(connection);
+                    publish_status(&self.status, status);
+                    return Err(code);
+                }
+                if request_expired(control) {
+                    drop(connection);
+                    publish_status(&self.status, VaultStatus::Locked);
+                    return Err(VaultErrorCode::Timeout);
+                }
+
                 self.connection = Some(connection);
                 publish_status(&self.status, VaultStatus::Unlocked);
                 Ok(VaultStatus::Unlocked)
@@ -311,6 +326,24 @@ fn classify_connection_error(error: VaultConnectionError) -> (VaultStatus, Vault
         ),
         VaultConnectionError::OpenFailed | VaultConnectionError::CipherIdentityUnavailable => {
             (VaultStatus::Unavailable, VaultErrorCode::Unavailable)
+        }
+    }
+}
+
+fn classify_migration_error(error: MigrationError) -> (VaultStatus, VaultErrorCode) {
+    match error {
+        MigrationError::UnsupportedVersion { .. } | MigrationError::InvalidVersion { .. } => {
+            (VaultStatus::Quarantined, VaultErrorCode::UnsupportedSchema)
+        }
+        MigrationError::VersionReadFailed
+        | MigrationError::MissingMigration { .. }
+        | MigrationError::ForeignKeysEnableFailed
+        | MigrationError::TransactionBeginFailed { .. }
+        | MigrationError::MigrationApplyFailed { .. }
+        | MigrationError::SchemaMismatch { .. }
+        | MigrationError::VersionWriteFailed { .. }
+        | MigrationError::CommitFailed { .. } => {
+            (VaultStatus::Quarantined, VaultErrorCode::VaultQuarantined)
         }
     }
 }

@@ -2,7 +2,8 @@
 //!
 //! This module retrieves the device-bound master key, opens exactly one local
 //! connection, applies the key before reading the database, and verifies that
-//! SQLCipher can read the schema. Migrations and the vault worker are deferred.
+//! SQLCipher can read the schema. The vault worker runs migrations immediately
+//! after this boundary returns and before publishing the `Unlocked` state.
 
 use std::{error::Error, fmt, path::Path};
 
