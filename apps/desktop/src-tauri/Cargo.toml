@@ -47,6 +47,11 @@ tokio-rustls = { version = "=0.26.4", default-features = false, features = ["rin
 # LlamaSampler::grammar/grammar_lazy are #[cfg(feature = "common")] in 0.1.151.
 llama-cpp-2 = { version = "=0.1.151", default-features = false, features = ["metal", "common"], optional = true }
 
+# M3 SQLCipher vault (docs/m3_action_plan.md §2.1). Opt-in only — default desktop
+# builds must not pull SQLCipher. `bundled-sqlcipher` uses Apple CommonCrypto on
+# iOS/macOS; NEVER enable `bundled-sqlcipher-vendored-openssl` (OpenSSL link ban).
+rusqlite = { version = "=0.40.1", default-features = false, features = ["bundled-sqlcipher"], optional = true }
+
 [features]
 # NOTE: the blueprint prose says "reqwest/rustls-tls"; reqwest 0.13.4's actual
 # feature name is "rustls" (verified via `cargo add --dry-run` feature listing
@@ -56,6 +61,8 @@ egress-live = ["dep:hickory-resolver", "dep:rustls", "dep:hyper-rustls", "dep:to
 # M4 on-device LLM scaffold. Enables the optional llama-cpp-2 dep (requires cmake
 # + C++ toolchain). Never enable on default/release desktop builds.
 pocket-brain = ["llama-cpp-2", "libc"]
+# M3 Phase 0+: SQLCipher + Apple Keychain link gate. Keep off default builds.
+secure-vault = ["dep:rusqlite", "dep:security-framework"]
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61.2", features = [
@@ -75,8 +82,10 @@ libc = "0.2"
 
 # M4 pocket-brain jetsam probe (proc_pid_rusage). Optional; only pulled by the
 # `pocket-brain` feature so the default desktop build is unaffected.
+# M3 Keychain: security-framework is Apple-only (docs/m3_action_plan.md §1.4).
 [target.'cfg(target_vendor = "apple")'.dependencies]
 libc = { version = "0.2", optional = true }
+security-framework = { version = "=3.7.0", default-features = false, optional = true }
 
 [dev-dependencies]
 tokio = { version = "1", features = ["test-util", "macros", "rt", "time"] }

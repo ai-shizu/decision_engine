@@ -20,6 +20,14 @@ mod llm;
 #[cfg(feature = "pocket-brain")]
 mod monitor;
 
+// M3 Phase 0-A SQLCipher / Security.framework link probe
+// (docs/m3_action_plan.md §4.1). Feature-gated so the default desktop build
+// never pulls rusqlite/SQLCipher.
+#[cfg(feature = "secure-vault")]
+mod db;
+#[cfg(feature = "secure-vault")]
+mod commands_db;
+
 use std::sync::Arc;
 
 use engine::EngineManager;
@@ -92,6 +100,8 @@ pub fn run() {
             llm::commands_llm::memory_monitor_start,
             #[cfg(feature = "pocket-brain")]
             llm::commands_llm::memory_monitor_stop,
+            #[cfg(feature = "secure-vault")]
+            commands_db::verify_sqlcipher_link_and_keychain,
         ])
         .setup(move |app| {
             #[cfg(not(mobile))]

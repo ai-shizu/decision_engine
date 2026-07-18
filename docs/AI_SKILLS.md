@@ -28,6 +28,7 @@
 | macOS ビルド・配布・コード署名 | §1, §2.3, §4 |
 | Tauri iOS (M0〜) 初期化・シミュレータ | §1, §2.3, §4.4, `docs/M0_IOS_INIT_INSTRUCTIONS.md` |
 | Pocket Brain / on-device LLM (M4〜M5) | §1, §4.5, §4.6, §4.7, §5, `docs/m5_action_plan.md` |
+| SQLCipher vault / Keychain (M3) | §1, §4.8, `docs/m3_action_plan.md` |
 | LLM モデル選定・consult/KV キャッシュ | §1, §5, §7, §8 |
 | 検索エンジン・mmap・LSM 索引 | §1, §9, §10 |
 | LINE インポート・データ層・冪等性 | §1, §14 (IMP-1/IMP-2 as-built, T-20〜T-25) |
@@ -437,6 +438,32 @@ rm -rf .boundary-tests-out
 ```
 
    - scoped `package.json` の中身は `{"type":"commonjs"}` のみでよい。リポジトリ直下や `apps/desktop/package.json` を書き換えないこと（本番 ESM 契約を壊す）。
+
+### 4.8 M3 Phase 0-A — SQLCipher / Security.framework iOS link gate (2026-07-18)
+
+**射程（Phase 0-A のみ）:** `secure-vault` feature、依存解決、in-memory SQLCipher identity（`PRAGMA key` + `cipher_version`）、Security.framework シンボル（`SecRandom` / `SecAccessControl`）、Tauri command 登録、iOS Simulator 最終リンク証明。スキーマ・repository・UI・本番 Keychain item 作成は対象外。
+
+**as-built:**
+1. `rusqlite = "=0.40.1"` + `bundled-sqlcipher`（`bundled-sqlcipher-vendored-openssl` 禁止）。`security-framework = "=3.7.0"` は Apple target のみ optional。既存 `zeroize = "=1.9.0"` を再利用（変更なし）。
+2. `db::verify_sqlcipher_link_and_keychain` — `Zeroizing` パスフレーズ、`open_in_memory`、`pragma_update` で `PRAGMA key`、空でない `cipher_version`。Apple では `SecRandom::copy_bytes` + `SecAccessControl::create_with_protection(AccessibleWhenPasscodeSetThisDeviceOnly, USER_PRESENCE)`。Keychain item の作成・検索・保存はしない。
+3. Tauri コマンド同名を `#[cfg(feature = "secure-vault")]` で `invoke_handler` 登録。本番 Vault API ではない。フロント呼び出し未実装。
+4. 公開エラーは固定文言のみ（鍵・SQL・パス・Keychain query を含めない）。`unwrap`/`expect`/全エラー成功化なし。
+
+**検証実測（Phase 0-A）:**
+- `cargo check` / `cargo test --lib` GREEN（default）
+- `cargo check --features secure-vault` / `cargo test --lib --features secure-vault` GREEN
+- `cargo tree --features secure-vault -i openssl-sys` → パッケージ無し
+- `npm run tauri -- ios build -t aarch64-sim -f secure-vault --debug --no-sign --ci` → exit 0、`Finished 1 iOS Bundle` → `PKB.app`
+- 成果物監査: `_sqlite3_key` / `_sqlcipher_cc_setup` / `_CCCryptor*` / `_SecRandomCopyBytes` / `_SecAccessControlCreateWithFlags`、`Security.framework` リンク、`libcrypto`/OpenSSL/`libsqlite3.dylib` 動的リンク無し。Phase 0-A コードは Keychain item API を呼ばない（`SecItem*` を運用成功の証拠として扱わない）。
+
+**`BUILD SUCCEEDED` / 最終リンクが証明すること:** 依存が iOS Simulator バイナリへリンクされたこと。Keychain 運用成功や暗号化 at-rest は証明しない。
+
+**Phase 0-B 必須残件（Blueprint 全体の Phase 0 完了まで未実施）:**
+- 実機 userPresence Keychain 往復（作成・取得・取消・削除）
+- 永続 SQLCipher DB smoke（create/reopen/wrong-key）
+- 暗号化ヘッダ検証 / plaintext scan
+- Data Protection / バックアップ除外
+- compile_options 領収書と system SQLite 非混在の最終確認（リリース用）
 
 ---
 
