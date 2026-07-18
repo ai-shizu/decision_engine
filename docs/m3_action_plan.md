@@ -269,9 +269,10 @@ final security gate.
 Formal name for this workstream: **M3 Phase 0 / §4.2 — Keychain probe**.
 Do not invent alternate phase labels (for example “Phase 0-C”).
 
-This subsection records user-approved contracts only. It does **not** authorize
-implementation in the same change, and it does **not** prove runtime, link, or
-ownership safety for LocalAuthentication.
+This subsection records the user-approved contract and the independently
+verified ownership/type-feasibility result. It does **not** authorize
+implementation in the same change, and it does **not** prove main-repository
+integration, final-app link, or runtime behavior for LocalAuthentication.
 
 ##### Exact prompt copy
 
@@ -318,33 +319,63 @@ Info.plist files, running `xcodegen`, or running `tauri ios init` to satisfy
 this contract. Creating `Info.ios.plist` or changing `tauri.ios.conf.json` is
 out of scope for this documentation amendment.
 
-##### LocalAuthentication direction (future, not yet added)
+##### Approved typed `objc2` architecture (future, not yet added)
 
-A later limited implementation may add Apple-target-only optional dependencies
-under the existing `secure-vault` feature:
+A later, separately authorized implementation may add the following exact-pin,
+Apple-target-only optional dependencies under the existing `secure-vault`
+feature:
 
 ```toml
+objc2 = "=0.6.4"
+objc2-security = "=0.3.2"
 objc2-local-authentication = "=0.3.2"
 objc2-foundation = "=0.3.2"
+objc2-core-foundation = "=0.3.2"
 ```
 
-Integration rules:
+The Keychain probe must use one `objc2` type system end to end. The future
+implementation must remove the `security-framework` path rather than mixing it
+with `objc2-security`; the final `secure-vault` dependency graph must not retain
+both Keychain binding stacks.
 
-- create an `LAContext`;
+Integration and ownership rules:
+
+- create one `LAContext` and keep it in `objc2::rc::Retained`;
 - set the approved exact `localizedReason`;
-- inject the same context into the Keychain retrieval query;
-- use `kSecUseAuthenticationContext` (or the equivalent typed attribute);
+- construct the heterogeneous query with Foundation collection types, including
+  the same `LAContext` under `kSecUseAuthenticationContext`;
+- use the public typed `NSDictionary` / `CFDictionary` bridge exposed through
+  `objc2-core-foundation` when calling the `objc2-security` SecItem API;
+- rely on Foundation collection retention and normal `Retained` / collection
+  drop behavior; do not force an ownership transfer;
+- never use raw-pointer casts, `Retained::into_raw` / `from_raw`, Core Foundation
+  Create/Get-rule wrapping, `transmute`, `mem::forget`, or `ManuallyDrop` to
+  bridge the context;
 - never use deprecated `kSecUseOperationPrompt`;
-- keep the Apple-target and `secure-vault` feature boundary.
+- keep every dependency and implementation path inside the Apple-target and
+  `secure-vault` feature boundary.
 
-Recording these pins does **not** prove dependency addition, bridge safety, or
-iOS link success.
+The direct `objc2-core-foundation` dependency is required so the public typed
+`CFDictionary` bridge can be named at the `SecItemCopyMatching` call site.
+Recording these pins does **not** authorize their addition to the main
+repository or prove final-app link success.
+
+##### Fixed Rust toolchain for Apple gates
+
+All iOS type checks and builds for this workstream must select Rust toolchain
+`1.96.1` explicitly. The canonical simulator type-check form is:
+
+```bash
+cargo +1.96.1 check --offline --target aarch64-apple-ios-sim
+```
+
+Tauri or Xcode build entry points must likewise run with toolchain `1.96.1`
+selected explicitly; do not rely on the mutable default `stable` toolchain.
 
 ##### Mandatory ownership / link feasibility gate (before probe body)
 
-Before implementing the Keychain probe body, UI, or DB work, an independent
-gate must prove all of the following with primary-source evidence and a final
-iOS link:
+Before implementing the Keychain probe body, UI, or DB work, the gate must prove
+all of the following with primary-source evidence and a final iOS link:
 
 1. `LAContext` construction;
 2. setting the exact approved `localizedReason`;
@@ -355,8 +386,12 @@ iOS link:
 Hard stops for that gate: undocumented raw-pointer casts, ownership-unknown
 bridges, guessed retain/release, `unwrap` / `expect` / `panic!`,
 `kSecUseOperationPrompt`, unproven FFI, or any security-weakening fallback.
-Until that gate passes, do not implement the Keychain probe body, production UI,
-or DB persistence.
+The isolated audit has proven items 1 through 4 and passed host plus
+`aarch64-apple-ios-sim` type checking with toolchain `1.96.1`. A separately
+authorized, minimal main-repository integration must still add the approved
+dependencies, replace the old binding path, and pass the final Tauri iOS link
+before item 5 can be marked complete. Until that remaining link gate passes, do
+not implement the Keychain probe body, production UI, or DB persistence.
 
 ##### Evidence separation
 
@@ -365,14 +400,18 @@ Canonicalized by this ruling:
 - exact prompt strings;
 - `KeychainProbePanel` harness contract;
 - Info.plist source-of-truth path;
-- approved `objc2-*` dependency pins and LAContext injection direction;
-- requirement for the ownership/link feasibility gate.
+- the five approved exact dependency pins and single-`objc2` architecture;
+- the typed heterogeneous dictionary and `CFDictionary` bridge direction;
+- retain/release rules that forbid raw ownership transfer;
+- fixed Rust toolchain `1.96.1` for Apple gates;
+- isolated host and iOS-simulator ownership/type feasibility for the typed
+  bridge.
 
 Still unproven after this documentation amendment:
 
-- safe bridge between `objc2` types and Security queries;
-- retain/release correctness in code;
-- iOS link after adding `objc2-*`;
+- dependency addition and replacement of `security-framework` in the main
+  repository;
+- final Tauri iOS link after adding the approved `objc2-*` dependencies;
 - simulator or physical-device `userPresence` runtime;
 - cancellation runtime;
 - Keychain round-trip / cleanup / zeroization runtime;
