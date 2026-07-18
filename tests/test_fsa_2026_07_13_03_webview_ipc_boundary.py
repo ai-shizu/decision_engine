@@ -185,7 +185,7 @@ def test_07_frontend_has_no_generic_command_or_typed_invoke_cast() -> None:
     assert not re.search(r'invoke\s*<\s*unknown\s*>\s*\(\s*"', engine)
 
 
-def test_08_tauri_invoke_has_one_frontend_owner() -> None:
+def test_08_tauri_invoke_has_closed_frontend_owners() -> None:
     owners: list[Path] = []
     for path in FRONTEND.rglob("*"):
         if path.suffix not in {".ts", ".tsx"}:
@@ -193,7 +193,15 @@ def test_08_tauri_invoke_has_one_frontend_owner() -> None:
         source = path.read_text(encoding="utf-8")
         if "@tauri-apps/api/core" in source or re.search(r"\binvoke\s*<", source):
             owners.append(path.relative_to(ROOT))
-    assert owners == [Path("apps/desktop/src/lib/engine.ts")]
+    expected = [
+        # Canonical application-engine IPC owner.
+        Path("apps/desktop/src/lib/engine.ts"),
+        # Retroactive recognition of the existing M5 Phase 2+ LLM IPC owner.
+        Path("apps/desktop/src/lib/llm.ts"),
+        # M3 Phase 3-A secure-vault IPC owner.
+        Path("apps/desktop/src/lib/vault.ts"),
+    ]
+    assert sorted(owners) == sorted(expected)
 
 
 def test_09_engine_events_are_unknown_then_strictly_parsed() -> None:
