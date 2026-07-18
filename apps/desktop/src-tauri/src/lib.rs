@@ -12,6 +12,14 @@ mod paths;
 #[doc(hidden)]
 pub mod webview_policy;
 
+// M4 on-device LLM scaffold (docs/architecture_blueprint.md). Feature-gated so the
+// default desktop build is byte-identical to main. Phase 0 = module tree only;
+// command registration + State management land in Phase 1+.
+#[cfg(feature = "pocket-brain")]
+mod llm;
+#[cfg(feature = "pocket-brain")]
+mod monitor;
+
 use std::sync::Arc;
 
 use engine::EngineManager;

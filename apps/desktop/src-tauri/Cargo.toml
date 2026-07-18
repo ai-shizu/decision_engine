@@ -40,12 +40,20 @@ rustls = { version = "=0.23.41", default-features = false, features = ["ring", "
 hyper-rustls = { version = "=0.27.9", default-features = false, features = ["http1", "ring", "tls12", "logging"], optional = true }
 tokio-rustls = { version = "=0.26.4", default-features = false, features = ["ring", "tls12", "logging"], optional = true }
 
+# M4 on-device LLM (docs/architecture_blueprint.md §3.1). Gated behind the
+# `pocket-brain` feature so the default desktop build never pulls the cmake/C++
+# toolchain and stays byte-identical to main. `metal` drives -DGGML_METAL=ON.
+llama-cpp-2 = { version = "=0.1.151", default-features = false, features = ["metal"], optional = true }
+
 [features]
 # NOTE: the blueprint prose says "reqwest/rustls-tls"; reqwest 0.13.4's actual
 # feature name is "rustls" (verified via `cargo add --dry-run` feature listing
 # during STEP 5.A). Adapted to crate reality — still rustls-only, no native-tls.
 # Use rustls-no-provider + explicit ring deps (aws-lc-sys toolchain blocker on ARM64).
 egress-live = ["dep:hickory-resolver", "dep:rustls", "dep:hyper-rustls", "dep:tokio-rustls", "reqwest/rustls-no-provider"]
+# M4 on-device LLM scaffold. Enables the optional llama-cpp-2 dep (requires cmake
+# + C++ toolchain). Never enable on default/release desktop builds.
+pocket-brain = ["llama-cpp-2"]
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61.2", features = [
