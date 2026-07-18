@@ -16,7 +16,7 @@ use std::{
 };
 
 use objc2::rc::autoreleasepool;
-use rusqlite::{Connection, TransactionBehavior};
+use rusqlite::{Connection, Transaction, TransactionBehavior};
 use serde::Serialize;
 
 use crate::ipc_contract::MAX_TEXT_BYTES;
@@ -80,6 +80,10 @@ pub(crate) enum VaultErrorCode {
     NotFound,
     Conflict,
     StorageFailed,
+    /// The OS denied storage access (iOS Data Protection sealed the file while
+    /// the device was locked). The worker has self-locked; re-authentication is
+    /// required.
+    OsLockEngaged,
 }
 
 #[derive(Clone)]
@@ -520,65 +524,36 @@ impl VaultWorker {
     fn create_chat(&mut self, input: ChatCreate) -> Result<ChatRecord, VaultErrorCode> {
         gate(snapshot_status(&self.status))?;
         let input = validate_chat_create(input)?;
-        let connection = self
-            .connection
-            .as_mut()
-            .ok_or(VaultErrorCode::Unavailable)?;
-        let transaction = connection
-            .transaction_with_behavior(TransactionBehavior::Immediate)
-            .map_err(|_| VaultErrorCode::StorageFailed)?;
-        let record = repository::chat_create(&transaction, &input).map_err(map_repository_error)?;
-        transaction
-            .commit()
-            .map_err(|_| VaultErrorCode::StorageFailed)?;
-        Ok(record)
+        let outcome =
+            self.write_repository(|transaction| repository::chat_create(transaction, &input));
+        self.resolve_repository(outcome)
     }
 
     fn delete_chat(&mut self, id: String) -> Result<(), VaultErrorCode> {
         gate(snapshot_status(&self.status))?;
         validate_uuid_v4(&id)?;
-        let connection = self
-            .connection
-            .as_mut()
-            .ok_or(VaultErrorCode::Unavailable)?;
-        let transaction = connection
-            .transaction_with_behavior(TransactionBehavior::Immediate)
-            .map_err(|_| VaultErrorCode::StorageFailed)?;
-        repository::chat_delete(&transaction, &id).map_err(map_repository_error)?;
-        transaction
-            .commit()
-            .map_err(|_| VaultErrorCode::StorageFailed)
+        let outcome =
+            self.write_repository(|transaction| repository::chat_delete(transaction, &id));
+        self.resolve_repository(outcome)
     }
 
-    fn list_chats(&self, limit: Option<u32>) -> Result<Vec<ChatRecord>, VaultErrorCode> {
+    fn list_chats(&mut self, limit: Option<u32>) -> Result<Vec<ChatRecord>, VaultErrorCode> {
         gate(snapshot_status(&self.status))?;
-        let connection = self
-            .connection
-            .as_ref()
-            .ok_or(VaultErrorCode::Unavailable)?;
-        repository::chats_list(connection, clamp_limit(limit)).map_err(map_repository_error)
+        let outcome = self
+            .read_repository(|connection| repository::chats_list(connection, clamp_limit(limit)));
+        self.resolve_repository(outcome)
     }
 
     fn append_message(&mut self, input: MessageAppend) -> Result<MessageRecord, VaultErrorCode> {
         gate(snapshot_status(&self.status))?;
         let input = validate_message_append(input)?;
-        let connection = self
-            .connection
-            .as_mut()
-            .ok_or(VaultErrorCode::Unavailable)?;
-        let transaction = connection
-            .transaction_with_behavior(TransactionBehavior::Immediate)
-            .map_err(|_| VaultErrorCode::StorageFailed)?;
-        let record =
-            repository::message_append(&transaction, &input).map_err(map_repository_error)?;
-        transaction
-            .commit()
-            .map_err(|_| VaultErrorCode::StorageFailed)?;
-        Ok(record)
+        let outcome =
+            self.write_repository(|transaction| repository::message_append(transaction, &input));
+        self.resolve_repository(outcome)
     }
 
     fn list_messages(
-        &self,
+        &mut self,
         chat_id: String,
         cursor: Option<MessageCursor>,
         limit: Option<u32>,
@@ -589,12 +564,62 @@ impl VaultWorker {
             validate_uuid_v4(&cursor.id)?;
             validate_nonnegative(cursor.timestamp)?;
         }
-        let connection = self
-            .connection
-            .as_ref()
-            .ok_or(VaultErrorCode::Unavailable)?;
-        repository::messages_list(connection, &chat_id, cursor.as_ref(), clamp_limit(limit))
-            .map_err(map_repository_error)
+        let outcome = self.read_repository(|connection| {
+            repository::messages_list(connection, &chat_id, cursor.as_ref(), clamp_limit(limit))
+        });
+        self.resolve_repository(outcome)
+    }
+
+    /// Borrow the live connection for a read. `None` means no connection is
+    /// present (a status/connection desync), surfaced later as `Unavailable`.
+    fn read_repository<T>(
+        &self,
+        operation: impl FnOnce(&Connection) -> Result<T, RepositoryError>,
+    ) -> Option<Result<T, RepositoryError>> {
+        self.connection.as_ref().map(operation)
+    }
+
+    /// Run a write inside one IMMEDIATE transaction. Begin/commit failures are
+    /// classified with the same Data-Protection-aware mapping as the repository
+    /// body, so an OS-sealed file is detected at every boundary.
+    fn write_repository<T>(
+        &mut self,
+        operation: impl FnOnce(&Transaction<'_>) -> Result<T, RepositoryError>,
+    ) -> Option<Result<T, RepositoryError>> {
+        let connection = self.connection.as_mut()?;
+        let transaction = match connection.transaction_with_behavior(TransactionBehavior::Immediate)
+        {
+            Ok(transaction) => transaction,
+            Err(error) => return Some(Err(repository::map_storage_error(error))),
+        };
+        let value = match operation(&transaction) {
+            Ok(value) => value,
+            Err(error) => return Some(Err(error)),
+        };
+        match transaction.commit() {
+            Ok(()) => Some(Ok(value)),
+            Err(error) => Some(Err(repository::map_storage_error(error))),
+        }
+    }
+
+    /// Convert a repository outcome to the IPC result. A `DataProtection` error
+    /// engages a fail-closed self-lock: the sealed connection is dropped and the
+    /// public status falls back to `Locked`, so the next access must re-run the
+    /// OS user-presence ceremony (docs/m3_action_plan.md §0, §8).
+    fn resolve_repository<T>(
+        &mut self,
+        outcome: Option<Result<T, RepositoryError>>,
+    ) -> Result<T, VaultErrorCode> {
+        match outcome {
+            None => Err(VaultErrorCode::Unavailable),
+            Some(Ok(value)) => Ok(value),
+            Some(Err(RepositoryError::DataProtection)) => {
+                self.connection.take();
+                publish_status(&self.status, VaultStatus::Locked);
+                Err(VaultErrorCode::OsLockEngaged)
+            }
+            Some(Err(other)) => Err(map_repository_error(other)),
+        }
     }
 }
 
@@ -677,6 +702,9 @@ fn map_repository_error(error: RepositoryError) -> VaultErrorCode {
         RepositoryError::NotFound => VaultErrorCode::NotFound,
         RepositoryError::Conflict => VaultErrorCode::Conflict,
         RepositoryError::StorageFailed => VaultErrorCode::StorageFailed,
+        // Reached only if a caller bypasses `resolve_repository`; that path
+        // performs the self-lock. Kept exhaustive and fail-closed regardless.
+        RepositoryError::DataProtection => VaultErrorCode::OsLockEngaged,
     }
 }
 
@@ -913,6 +941,33 @@ mod tests {
             worker.list_chats(None),
             Err(VaultErrorCode::VaultQuarantined)
         );
+        Ok(())
+    }
+
+    #[test]
+    fn data_protection_error_self_locks_and_drops_connection() -> Result<(), VaultErrorCode> {
+        let mut connection =
+            Connection::open_in_memory().map_err(|_| VaultErrorCode::StorageFailed)?;
+        run_migrations(&mut connection).map_err(|_| VaultErrorCode::StorageFailed)?;
+        let status = Arc::new(Mutex::new(VaultStatus::Unlocked));
+        let mut worker = VaultWorker {
+            database_path: PathBuf::new(),
+            connection: Some(connection),
+            status: Arc::clone(&status),
+        };
+
+        // Model an OS access denial surfacing mid-operation (iOS Data Protection
+        // sealing the file while the device is locked).
+        let outcome: Option<Result<(), RepositoryError>> =
+            Some(Err(RepositoryError::DataProtection));
+        let result = worker.resolve_repository(outcome);
+
+        assert_eq!(result, Err(VaultErrorCode::OsLockEngaged));
+        assert!(
+            worker.connection.is_none(),
+            "sealed connection must be dropped"
+        );
+        assert_eq!(snapshot_status(&status), VaultStatus::Locked);
         Ok(())
     }
 }

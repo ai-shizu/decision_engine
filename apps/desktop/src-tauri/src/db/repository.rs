@@ -52,6 +52,10 @@ pub(crate) enum RepositoryError {
     NotFound,
     Conflict,
     StorageFailed,
+    /// OS-level storage access denial (e.g. iOS Data Protection sealing the
+    /// database file while the device is locked). The worker treats this as a
+    /// fail-closed self-lock trigger, not a generic storage failure.
+    DataProtection,
 }
 
 impl fmt::Display for RepositoryError {
@@ -60,8 +64,36 @@ impl fmt::Display for RepositoryError {
             Self::NotFound => "repository record not found",
             Self::Conflict => "repository record conflict",
             Self::StorageFailed => "repository storage failed",
+            Self::DataProtection => "repository storage access denied by the OS",
         };
         formatter.write_str(message)
+    }
+}
+
+/// True when the error signals OS-level storage access denial rather than a
+/// logical failure. iOS Data Protection seals the vault file while the device
+/// is locked, so subsequent I/O surfaces as one of these platform-independent
+/// SQLite primary result codes. Detection uses the primary code only, so it is
+/// identical on every target (no iOS-specific error handling).
+pub(crate) fn is_data_protection_error(error: &rusqlite::Error) -> bool {
+    matches!(
+        error,
+        rusqlite::Error::SqliteFailure(ffi_error, _)
+            if matches!(
+                ffi_error.code,
+                rusqlite::ErrorCode::SystemIoFailure
+                    | rusqlite::ErrorCode::PermissionDenied
+                    | rusqlite::ErrorCode::CannotOpen
+            )
+    )
+}
+
+/// Classify a storage error, preferring the fail-closed `DataProtection` code.
+pub(crate) fn map_storage_error(error: rusqlite::Error) -> RepositoryError {
+    if is_data_protection_error(&error) {
+        RepositoryError::DataProtection
+    } else {
+        RepositoryError::StorageFailed
     }
 }
 
@@ -96,7 +128,7 @@ pub(crate) fn chat_create(
 pub(crate) fn chat_delete(transaction: &Transaction<'_>, id: &str) -> Result<(), RepositoryError> {
     let changed = transaction
         .execute("DELETE FROM chats WHERE id = ?1", params![id])
-        .map_err(|_| RepositoryError::StorageFailed)?;
+        .map_err(map_storage_error)?;
     if changed == 0 {
         Err(RepositoryError::NotFound)
     } else {
@@ -113,12 +145,12 @@ pub(crate) fn chats_list(
             "SELECT id, title, created_at FROM chats \
              ORDER BY created_at DESC, id ASC LIMIT ?1",
         )
-        .map_err(|_| RepositoryError::StorageFailed)?;
+        .map_err(map_storage_error)?;
     let rows = statement
         .query_map(params![i64::from(limit)], read_chat_row)
-        .map_err(|_| RepositoryError::StorageFailed)?;
+        .map_err(map_storage_error)?;
     rows.collect::<Result<Vec<_>, _>>()
-        .map_err(|_| RepositoryError::StorageFailed)
+        .map_err(map_storage_error)
 }
 
 pub(crate) fn message_append(
@@ -143,7 +175,7 @@ pub(crate) fn message_append(
             params![input.chat_id],
             |row| row.get(0),
         )
-        .map_err(|_| RepositoryError::StorageFailed)?;
+        .map_err(map_storage_error)?;
     if parent_count != 1 {
         return Err(RepositoryError::NotFound);
     }
@@ -184,27 +216,27 @@ pub(crate) fn messages_list(
                  WHERE chat_id = ?1 AND (timestamp, id) > (?2, ?3) \
                  ORDER BY timestamp ASC, id ASC LIMIT ?4",
             )
-            .map_err(|_| RepositoryError::StorageFailed)?;
+            .map_err(map_storage_error)?;
         let rows = statement
             .query_map(
                 params![chat_id, cursor.timestamp, cursor.id, i64::from(limit)],
                 read_message_row,
             )
-            .map_err(|_| RepositoryError::StorageFailed)?;
+            .map_err(map_storage_error)?;
         rows.collect::<Result<Vec<_>, _>>()
-            .map_err(|_| RepositoryError::StorageFailed)
+            .map_err(map_storage_error)
     } else {
         let mut statement = connection
             .prepare(
                 "SELECT id, chat_id, role, content, timestamp FROM messages \
                  WHERE chat_id = ?1 ORDER BY timestamp ASC, id ASC LIMIT ?2",
             )
-            .map_err(|_| RepositoryError::StorageFailed)?;
+            .map_err(map_storage_error)?;
         let rows = statement
             .query_map(params![chat_id, i64::from(limit)], read_message_row)
-            .map_err(|_| RepositoryError::StorageFailed)?;
+            .map_err(map_storage_error)?;
         rows.collect::<Result<Vec<_>, _>>()
-            .map_err(|_| RepositoryError::StorageFailed)
+            .map_err(map_storage_error)
     }
 }
 
@@ -216,7 +248,7 @@ fn find_chat(connection: &Connection, id: &str) -> Result<Option<ChatRecord>, Re
             read_chat_row,
         )
         .optional()
-        .map_err(|_| RepositoryError::StorageFailed)
+        .map_err(map_storage_error)
 }
 
 fn find_message(
@@ -230,7 +262,7 @@ fn find_message(
             read_message_row,
         )
         .optional()
-        .map_err(|_| RepositoryError::StorageFailed)
+        .map_err(map_storage_error)
 }
 
 fn read_chat_row(row: &Row<'_>) -> rusqlite::Result<ChatRecord> {
@@ -252,6 +284,11 @@ fn read_message_row(row: &Row<'_>) -> rusqlite::Result<MessageRecord> {
 }
 
 fn map_write_error(error: rusqlite::Error) -> RepositoryError {
+    // OS-level access denial takes precedence: it is a fail-closed self-lock
+    // signal, not a constraint outcome.
+    if is_data_protection_error(&error) {
+        return RepositoryError::DataProtection;
+    }
     match error {
         rusqlite::Error::SqliteFailure(code, _)
             if code.extended_code == ffi::SQLITE_CONSTRAINT_FOREIGNKEY =>
@@ -285,6 +322,43 @@ mod tests {
         let mut connection = Connection::open_in_memory()?;
         run_migrations(&mut connection)?;
         Ok(connection)
+    }
+
+    fn sqlite_failure(primary_code: i32) -> rusqlite::Error {
+        rusqlite::Error::SqliteFailure(ffi::Error::new(primary_code), None)
+    }
+
+    #[test]
+    fn detects_os_access_denied_codes_only() {
+        assert!(is_data_protection_error(&sqlite_failure(ffi::SQLITE_IOERR)));
+        assert!(is_data_protection_error(&sqlite_failure(ffi::SQLITE_PERM)));
+        assert!(is_data_protection_error(&sqlite_failure(
+            ffi::SQLITE_CANTOPEN
+        )));
+
+        assert!(!is_data_protection_error(&sqlite_failure(ffi::SQLITE_BUSY)));
+        assert!(!is_data_protection_error(&sqlite_failure(
+            ffi::SQLITE_CONSTRAINT
+        )));
+        assert!(!is_data_protection_error(
+            &rusqlite::Error::QueryReturnedNoRows
+        ));
+    }
+
+    #[test]
+    fn maps_access_denied_before_constraint_or_storage() {
+        assert_eq!(
+            map_storage_error(sqlite_failure(ffi::SQLITE_IOERR)),
+            RepositoryError::DataProtection
+        );
+        assert_eq!(
+            map_storage_error(sqlite_failure(ffi::SQLITE_BUSY)),
+            RepositoryError::StorageFailed
+        );
+        assert_eq!(
+            map_write_error(sqlite_failure(ffi::SQLITE_CANTOPEN)),
+            RepositoryError::DataProtection
+        );
     }
 
     fn create_chat(
