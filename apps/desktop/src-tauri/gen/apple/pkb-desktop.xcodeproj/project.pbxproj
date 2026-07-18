@@ -12,6 +12,7 @@
 		1FC9EC8B4CC0A8E7B06337AC /* libapp.a in Frameworks */ = {isa = PBXBuildFile; fileRef = E1C4A6FFB59DAAFA4EDFBA66 /* libapp.a */; };
 		287DD22AB1797D5E85D68FAA /* assets in Resources */ = {isa = PBXBuildFile; fileRef = 359616079650F14B0403E3CD /* assets */; };
 		54C806B6276D1689EA012B75 /* MetalKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = BF7A34A7509F2B0ADE206529 /* MetalKit.framework */; };
+		58630A9EF027449284BD5AAC /* Accelerate.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 0D71B4AE587DFFBD79D29152 /* Accelerate.framework */; };
 		91DEA1C7F3F6383EB3B38B8D /* UIKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 68CB68B5021CC67B1DED848F /* UIKit.framework */; };
 		93A7D661072070588E8CAAB3 /* WebKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 60E97AB2D3437D88806B1C82 /* WebKit.framework */; };
 		969A36E16C6E75EFE6F93006 /* LaunchScreen.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = 299778ED9B66A924BAFD4ED4 /* LaunchScreen.storyboard */; };
@@ -19,15 +20,18 @@
 		BBDB88D560F2DA25B7A7B71B /* Metal.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 1202AE46455F3240195984C3 /* Metal.framework */; };
 		C11F42EC2CF580D9F4A9628D /* QuartzCore.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 0CD0577103CB48AD9773BAD7 /* QuartzCore.framework */; };
 		DA9B3E2FB74F44B4A76FB8A8 /* main.mm in Sources */ = {isa = PBXBuildFile; fileRef = 617A3EB0D9E4BC2225140A9C /* main.mm */; };
+		DDE8D425AB7283EBF6BB763E /* libapp.a in Resources */ = {isa = PBXBuildFile; fileRef = E3E09C338062E96BB56F4250 /* libapp.a */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
 		0CD0577103CB48AD9773BAD7 /* QuartzCore.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = QuartzCore.framework; path = System/Library/Frameworks/QuartzCore.framework; sourceTree = SDKROOT; };
+		0D71B4AE587DFFBD79D29152 /* Accelerate.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Accelerate.framework; path = System/Library/Frameworks/Accelerate.framework; sourceTree = SDKROOT; };
 		0F3964A5C4BDBF93AC716035 /* pkb-desktop_iOS.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = "pkb-desktop_iOS.entitlements"; sourceTree = "<group>"; };
 		0F8687C1616DC783211642CE /* lib.rs */ = {isa = PBXFileReference; path = lib.rs; sourceTree = "<group>"; };
 		11B66B8144AAD4938D443C90 /* CoreGraphics.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = CoreGraphics.framework; path = System/Library/Frameworks/CoreGraphics.framework; sourceTree = SDKROOT; };
 		1202AE46455F3240195984C3 /* Metal.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Metal.framework; path = System/Library/Frameworks/Metal.framework; sourceTree = SDKROOT; };
 		172AE807900932695206676F /* policy_store.rs */ = {isa = PBXFileReference; path = policy_store.rs; sourceTree = "<group>"; };
+		1E3308809C1FA122730A5A35 /* service.rs */ = {isa = PBXFileReference; path = service.rs; sourceTree = "<group>"; };
 		284E3EA450CECC9ACE97CD2C /* main.rs */ = {isa = PBXFileReference; path = main.rs; sourceTree = "<group>"; };
 		299778ED9B66A924BAFD4ED4 /* LaunchScreen.storyboard */ = {isa = PBXFileReference; lastKnownFileType = file.storyboard; path = LaunchScreen.storyboard; sourceTree = "<group>"; };
 		2C99FFF0A9D80A02C64F859B /* pkb-sandbox-probe.rs */ = {isa = PBXFileReference; path = "pkb-sandbox-probe.rs"; sourceTree = "<group>"; };
@@ -37,6 +41,9 @@
 		47C4863C6265AD7B67EF6635 /* paths.rs */ = {isa = PBXFileReference; path = paths.rs; sourceTree = "<group>"; };
 		4AD8A98CB523BAA8BC148637 /* pii_snapshot.rs */ = {isa = PBXFileReference; path = pii_snapshot.rs; sourceTree = "<group>"; };
 		4B26D4E71E5FC66544CAF203 /* webview_policy.rs */ = {isa = PBXFileReference; path = webview_policy.rs; sourceTree = "<group>"; };
+		4B99AB8FC192E29A42FF8F12 /* commands_llm.rs */ = {isa = PBXFileReference; path = commands_llm.rs; sourceTree = "<group>"; };
+		511B88B9AE14372BEC7B1C7A /* model_path.rs */ = {isa = PBXFileReference; path = model_path.rs; sourceTree = "<group>"; };
+		513022C945746ABE7E076784 /* params.rs */ = {isa = PBXFileReference; path = params.rs; sourceTree = "<group>"; };
 		51D1228BCDCD24E395F6D361 /* orchestrator.rs */ = {isa = PBXFileReference; path = orchestrator.rs; sourceTree = "<group>"; };
 		5320698AA48FC28D4182BF26 /* attestation.rs */ = {isa = PBXFileReference; path = attestation.rs; sourceTree = "<group>"; };
 		5A42EB6DCAB22E27E53341FD /* dual_run.rs */ = {isa = PBXFileReference; path = dual_run.rs; sourceTree = "<group>"; };
@@ -48,6 +55,7 @@
 		68CB68B5021CC67B1DED848F /* UIKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = UIKit.framework; path = System/Library/Frameworks/UIKit.framework; sourceTree = SDKROOT; };
 		6A651946D07A03E110BBD6DF /* os_sandbox.rs */ = {isa = PBXFileReference; path = os_sandbox.rs; sourceTree = "<group>"; };
 		71E3D35EEDC01259C1303E69 /* engine_tests.rs */ = {isa = PBXFileReference; path = engine_tests.rs; sourceTree = "<group>"; };
+		75C811F5FF54FE7403912D85 /* mod.rs */ = {isa = PBXFileReference; path = mod.rs; sourceTree = "<group>"; };
 		7F93EC6A66D182E9F5E1A5A8 /* dns_guard.rs */ = {isa = PBXFileReference; path = dns_guard.rs; sourceTree = "<group>"; };
 		8A111BBA1A2DCA28A39A1D3D /* ipc_contract.rs */ = {isa = PBXFileReference; path = ipc_contract.rs; sourceTree = "<group>"; };
 		8B521E1165E62112FCC1555F /* bindings.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = bindings.h; sourceTree = "<group>"; };
@@ -56,10 +64,13 @@
 		B5A5593D1149BEC8D271540B /* Security.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Security.framework; path = System/Library/Frameworks/Security.framework; sourceTree = SDKROOT; };
 		BAEE1955C54C4108D5083502 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
 		BF7A34A7509F2B0ADE206529 /* MetalKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = MetalKit.framework; path = System/Library/Frameworks/MetalKit.framework; sourceTree = SDKROOT; };
+		CB1D463C678CA9BC8DD4C0EE /* probe.rs */ = {isa = PBXFileReference; path = probe.rs; sourceTree = "<group>"; };
 		CC3895C3A5B783926983B690 /* canonicalize.rs */ = {isa = PBXFileReference; path = canonicalize.rs; sourceTree = "<group>"; };
 		D008535E835A49D61B88A1B7 /* mod.rs */ = {isa = PBXFileReference; path = mod.rs; sourceTree = "<group>"; };
 		DDED864292765BCED8078FB9 /* engine.rs */ = {isa = PBXFileReference; path = engine.rs; sourceTree = "<group>"; };
 		E1C4A6FFB59DAAFA4EDFBA66 /* libapp.a */ = {isa = PBXFileReference; lastKnownFileType = archive.ar; path = libapp.a; sourceTree = "<group>"; };
+		E281496B579BFBC75FB3D6BC /* mod.rs */ = {isa = PBXFileReference; path = mod.rs; sourceTree = "<group>"; };
+		E3E09C338062E96BB56F4250 /* libapp.a */ = {isa = PBXFileReference; lastKnownFileType = archive.ar; path = libapp.a; sourceTree = "<group>"; };
 		F18C32FB8CFADC0927C8EF4E /* pkb-artifact-manifest.rs */ = {isa = PBXFileReference; path = "pkb-artifact-manifest.rs"; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
@@ -72,6 +83,7 @@
 				1735727BEA94E33552D24CEF /* CoreGraphics.framework in Frameworks */,
 				BBDB88D560F2DA25B7A7B71B /* Metal.framework in Frameworks */,
 				54C806B6276D1689EA012B75 /* MetalKit.framework in Frameworks */,
+				58630A9EF027449284BD5AAC /* Accelerate.framework in Frameworks */,
 				C11F42EC2CF580D9F4A9628D /* QuartzCore.framework in Frameworks */,
 				A0551B40297A87DF18ED2B84 /* Security.framework in Frameworks */,
 				91DEA1C7F3F6383EB3B38B8D /* UIKit.framework in Frameworks */,
@@ -82,6 +94,14 @@
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
+		036B729D8D8FE5F1CB76F527 /* arm64 */ = {
+			isa = PBXGroup;
+			children = (
+				D3CF3EB0318E9DA9FD8779D2 /* debug */,
+			);
+			path = arm64;
+			sourceTree = "<group>";
+		};
 		1FE63238C2F7919CA87C7742 /* pkb-desktop_iOS */ = {
 			isa = PBXGroup;
 			children = (
@@ -89,6 +109,27 @@
 				0F3964A5C4BDBF93AC716035 /* pkb-desktop_iOS.entitlements */,
 			);
 			path = "pkb-desktop_iOS";
+			sourceTree = "<group>";
+		};
+		3825605288B0E07C52B31705 /* monitor */ = {
+			isa = PBXGroup;
+			children = (
+				E281496B579BFBC75FB3D6BC /* mod.rs */,
+				CB1D463C678CA9BC8DD4C0EE /* probe.rs */,
+			);
+			path = monitor;
+			sourceTree = "<group>";
+		};
+		3AEDD95D4B63E01C378A7BAA /* llm */ = {
+			isa = PBXGroup;
+			children = (
+				4B99AB8FC192E29A42FF8F12 /* commands_llm.rs */,
+				75C811F5FF54FE7403912D85 /* mod.rs */,
+				511B88B9AE14372BEC7B1C7A /* model_path.rs */,
+				513022C945746ABE7E076784 /* params.rs */,
+				1E3308809C1FA122730A5A35 /* service.rs */,
+			);
+			path = llm;
 			sourceTree = "<group>";
 		};
 		4AF761F3C7128405DD08D50A /* knowledge */ = {
@@ -112,6 +153,7 @@
 		5DC82AA189942119845E0664 /* Frameworks */ = {
 			isa = PBXGroup;
 			children = (
+				0D71B4AE587DFFBD79D29152 /* Accelerate.framework */,
 				11B66B8144AAD4938D443C90 /* CoreGraphics.framework */,
 				E1C4A6FFB59DAAFA4EDFBA66 /* libapp.a */,
 				1202AE46455F3240195984C3 /* Metal.framework */,
@@ -148,6 +190,8 @@
 				4B26D4E71E5FC66544CAF203 /* webview_policy.rs */,
 				C41BA6E749A43D238E597CB6 /* bin */,
 				4AF761F3C7128405DD08D50A /* knowledge */,
+				3AEDD95D4B63E01C378A7BAA /* llm */,
+				3825605288B0E07C52B31705 /* monitor */,
 			);
 			name = src;
 			path = ../../src;
@@ -171,6 +215,7 @@
 		B634D13EDF97A2167794441E /* Externals */ = {
 			isa = PBXGroup;
 			children = (
+				036B729D8D8FE5F1CB76F527 /* arm64 */,
 			);
 			path = Externals;
 			sourceTree = "<group>";
@@ -200,12 +245,27 @@
 			path = bin;
 			sourceTree = "<group>";
 		};
+		D3CF3EB0318E9DA9FD8779D2 /* debug */ = {
+			isa = PBXGroup;
+			children = (
+				E3E09C338062E96BB56F4250 /* libapp.a */,
+			);
+			path = debug;
+			sourceTree = "<group>";
+		};
 		FE854A39B0C8BB49259426CD /* Products */ = {
 			isa = PBXGroup;
 			children = (
 				5C7DBB39C59D37FDE82E5083 /* pkb-desktop_iOS.app */,
 			);
 			name = Products;
+			sourceTree = "<group>";
+		};
+		"TEMP_2EF480C4-8E61-43CF-9F92-881C833A658A" /* x86_64 */ = {
+			isa = PBXGroup;
+			children = (
+			);
+			path = x86_64;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
@@ -269,6 +329,7 @@
 				03B7376CA2D12CFEFDA3B202 /* Assets.xcassets in Resources */,
 				969A36E16C6E75EFE6F93006 /* LaunchScreen.storyboard in Resources */,
 				287DD22AB1797D5E85D68FAA /* assets in Resources */,
+				DDE8D425AB7283EBF6BB763E /* libapp.a in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -294,7 +355,7 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
-			shellScript = "npm run -- tauri ios xcode-script -v --platform ${PLATFORM_DISPLAY_NAME:?} --sdk-root ${SDKROOT:?} --framework-search-paths \"${FRAMEWORK_SEARCH_PATHS:?}\" --header-search-paths \"${HEADER_SEARCH_PATHS:?}\" --gcc-preprocessor-definitions \"${GCC_PREPROCESSOR_DEFINITIONS:-}\" --configuration ${CONFIGURATION:?} 0 ${ARCHS:?}";
+			shellScript = "npm run -- tauri ios xcode-script -v --platform ${PLATFORM_DISPLAY_NAME:?} --sdk-root ${SDKROOT:?} --framework-search-paths \"${FRAMEWORK_SEARCH_PATHS:?}\" --header-search-paths \"${HEADER_SEARCH_PATHS:?}\" --gcc-preprocessor-definitions \"${GCC_PREPROCESSOR_DEFINITIONS:-}\" --configuration ${CONFIGURATION:?} ${FORCE_COLOR} ${ARCHS:?}";
 		};
 /* End PBXShellScriptBuildPhase section */
 
@@ -321,6 +382,7 @@
 				CODE_SIGN_ENTITLEMENTS = "pkb-desktop_iOS/pkb-desktop_iOS.entitlements";
 				CODE_SIGN_IDENTITY = "iPhone Developer";
 				ENABLE_BITCODE = NO;
+				ENABLE_USER_SCRIPT_SANDBOXING = NO;
 				"EXCLUDED_ARCHS[sdk=iphoneos*]" = x86_64;
 				FRAMEWORK_SEARCH_PATHS = (
 					"$(inherited)",
@@ -352,6 +414,7 @@
 				CODE_SIGN_ENTITLEMENTS = "pkb-desktop_iOS/pkb-desktop_iOS.entitlements";
 				CODE_SIGN_IDENTITY = "iPhone Developer";
 				ENABLE_BITCODE = NO;
+				ENABLE_USER_SCRIPT_SANDBOXING = NO;
 				"EXCLUDED_ARCHS[sdk=iphoneos*]" = x86_64;
 				FRAMEWORK_SEARCH_PATHS = (
 					"$(inherited)",

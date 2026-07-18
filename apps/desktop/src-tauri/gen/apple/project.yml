@@ -12,6 +12,9 @@ settingGroups:
     base:
       PRODUCT_NAME: PKB
       PRODUCT_BUNDLE_IDENTIFIER: com.ai-shizu.pkb
+      # Xcode 26's default script sandboxing blocks tauri's `ios xcode-script`
+      # from reading project.pbxproj. Disable it so the Rust build phase works.
+      ENABLE_USER_SCRIPT_SANDBOXING: NO
 targetTemplates:
   app:
     type: application
@@ -75,6 +78,7 @@ targets:
       - sdk: CoreGraphics.framework
       - sdk: Metal.framework
       - sdk: MetalKit.framework
+      - sdk: Accelerate.framework
       - sdk: QuartzCore.framework
       - sdk: Security.framework
       - sdk: UIKit.framework
