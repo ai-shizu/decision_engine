@@ -13,5 +13,6 @@ pub mod model_path;
 pub mod params;
 pub mod service;
 
-pub use params::{GenerationParams, LoadParams};
-pub use service::{LlmHandle, TokenEvent};
+// Re-exported for `lib.rs`'s `llm::LlmHandle::spawn(...)` wiring. Other types are
+// referenced through their submodules directly, so they are not re-exported here.
+pub use service::LlmHandle;

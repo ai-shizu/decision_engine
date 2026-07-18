@@ -35,9 +35,21 @@ pub fn run() {
     let engine = EngineManager::new();
     let engine_for_exit = Arc::clone(&engine);
 
-    tauri::Builder::default()
+    let builder = tauri::Builder::default()
         .manage(Arc::clone(&engine))
-        .manage(NetworkPolicyStore::new())
+        .manage(NetworkPolicyStore::new());
+
+    // M4 pocket-brain: spawn the LLM worker + memory monitor and register them in
+    // State. Entirely feature-gated — the default desktop build is byte-identical.
+    #[cfg(feature = "pocket-brain")]
+    let builder = {
+        let monitor = Arc::new(monitor::MemoryMonitor::new());
+        builder
+            .manage(Arc::clone(&monitor))
+            .manage(llm::LlmHandle::spawn(Arc::clone(&monitor)))
+    };
+
+    builder
         .invoke_handler(tauri::generate_handler![
             commands::engine_ready,
             commands::engine_health,
@@ -70,6 +82,16 @@ pub fn run() {
             commands::probe_next,
             commands::probe_answer,
             commands::context_manifest_latest,
+            #[cfg(feature = "pocket-brain")]
+            llm::commands_llm::llm_load_model,
+            #[cfg(feature = "pocket-brain")]
+            llm::commands_llm::llm_generate,
+            #[cfg(feature = "pocket-brain")]
+            llm::commands_llm::llm_cancel,
+            #[cfg(feature = "pocket-brain")]
+            llm::commands_llm::memory_monitor_start,
+            #[cfg(feature = "pocket-brain")]
+            llm::commands_llm::memory_monitor_stop,
         ])
         .setup(move |app| {
             #[cfg(not(mobile))]

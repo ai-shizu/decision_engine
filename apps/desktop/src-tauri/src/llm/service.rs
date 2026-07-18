@@ -9,6 +9,12 @@
 //! llama-cpp-2 0.1.151 APIs, but the commands that drive them are not yet
 //! registered in the `invoke_handler` (frontend not connected).
 
+// `token_to_str` + `Special` are deprecated upstream in favour of `token_to_piece`,
+// but that replacement requires an `encoding_rs::Decoder` (a new dependency not in
+// the blueprint). The current path is functional; migrating it is deferred to a
+// later phase, so we explicitly allow the deprecation here rather than pull the dep.
+#![allow(deprecated)]
+
 use std::num::NonZeroU32;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -26,6 +32,7 @@ use llama_cpp_2::model::{AddBos, LlamaModel, Special};
 use llama_cpp_2::sampling::LlamaSampler;
 
 use super::params::{GenerationParams, LoadParams};
+use crate::monitor::{MemPhase, MemoryMonitor};
 
 /// One streamed token pushed to the frontend over `tauri::ipc::Channel`.
 #[derive(Clone, Serialize)]
@@ -59,13 +66,15 @@ pub struct LlmHandle {
 
 impl LlmHandle {
     /// Spawn the worker thread (initializes `LlamaBackend`, enters command loop).
-    pub fn spawn() -> Self {
+    /// `monitor` is shared so the worker can mark memory phases (ModelLoaded /
+    /// CtxCreated / Inference / Idle) as it progresses.
+    pub fn spawn(monitor: Arc<MemoryMonitor>) -> Self {
         let (tx, rx) = mpsc::channel::<LlmCommand>();
         let cancel = Arc::new(AtomicBool::new(false));
         let cancel_worker = Arc::clone(&cancel);
         thread::Builder::new()
             .name("pocket-brain-llm".into())
-            .spawn(move || worker_loop(rx, cancel_worker))
+            .spawn(move || worker_loop(rx, cancel_worker, monitor))
             .expect("spawn pocket-brain llm worker");
         Self {
             tx: Mutex::new(tx),
@@ -112,7 +121,7 @@ impl Drop for LlmHandle {
     }
 }
 
-fn worker_loop(rx: mpsc::Receiver<LlmCommand>, cancel: Arc<AtomicBool>) {
+fn worker_loop(rx: mpsc::Receiver<LlmCommand>, cancel: Arc<AtomicBool>, monitor: Arc<MemoryMonitor>) {
     let backend = match LlamaBackend::init() {
         Ok(b) => b,
         Err(e) => {
@@ -131,6 +140,7 @@ fn worker_loop(rx: mpsc::Receiver<LlmCommand>, cancel: Arc<AtomicBool>) {
             } => {
                 let result = load_model(&backend, &model_path, &params).map(|m| {
                     model = Some(Arc::new(m));
+                    monitor.set_phase(MemPhase::ModelLoaded);
                 });
                 let _ = reply.send(result);
             }
@@ -147,7 +157,7 @@ fn worker_loop(rx: mpsc::Receiver<LlmCommand>, cancel: Arc<AtomicBool>) {
                         continue;
                     }
                 };
-                if let Err(e) = generate(&backend, &model, &params, &tokens, &cancel) {
+                if let Err(e) = generate(&backend, &model, &params, &tokens, &cancel, &monitor) {
                     let _ = tokens.send(TokenEvent {
                         seq: 0,
                         text: String::new(),
@@ -155,6 +165,7 @@ fn worker_loop(rx: mpsc::Receiver<LlmCommand>, cancel: Arc<AtomicBool>) {
                         error: Some(e),
                     });
                 }
+                monitor.set_phase(MemPhase::Idle);
             }
             LlmCommand::Shutdown => break,
         }
@@ -177,11 +188,13 @@ fn generate(
     g: &GenerationParams,
     tokens: &Channel<TokenEvent>,
     cancel: &AtomicBool,
+    monitor: &MemoryMonitor,
 ) -> Result<(), String> {
     let ctx_params = LlamaContextParams::default().with_n_ctx(NonZeroU32::new(g.n_ctx));
     let mut ctx = model
         .new_context(backend, ctx_params)
         .map_err(|e| format!("context create: {e}"))?;
+    monitor.set_phase(MemPhase::CtxCreated);
 
     // Prompt ingest.
     let prompt_tokens = model
@@ -195,6 +208,7 @@ fn generate(
             .map_err(|e| format!("batch add: {e}"))?;
     }
     ctx.decode(&mut batch).map_err(|e| format!("decode: {e}"))?;
+    monitor.set_phase(MemPhase::Inference);
 
     let mut sampler = if g.temp <= 0.0 {
         LlamaSampler::greedy()

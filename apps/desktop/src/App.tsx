@@ -14,6 +14,10 @@ import { TitleBar } from "./components/TitleBar";
 import { engineHealth, engineReady } from "./lib/engine";
 import type { MainTab } from "./lib/types";
 import "./App.css";
+// M4 pocket-brain (docs/architecture_blueprint.md §3.9). Mounted on the loading
+// screen because that is where the iOS shell sits (engine never becomes ready on
+// device). On desktop it shows briefly before the 7-tab UI takes over.
+import { PocketBrainPanel } from "./components/PocketBrainPanel";
 
 function LoadingScreen({ message }: { message: string }) {
   return (
@@ -23,6 +27,7 @@ function LoadingScreen({ message }: { message: string }) {
         <h1>PKB</h1>
         <p className="status-line">{message}</p>
         <p className="hint">初回起動はエンジン展開に 30 秒ほどかかることがあります。</p>
+        <PocketBrainPanel />
       </main>
     </div>
   );
