@@ -13,6 +13,7 @@ import {
   startMemoryMonitor,
   type MemSample,
 } from "../lib/llm";
+import { ExtractionPanel } from "./ExtractionPanel";
 
 interface ChatMessage {
   role: "user" | "assistant";
@@ -166,6 +167,8 @@ export function PocketBrainPanel() {
           Send
         </button>
       </div>
+
+      <ExtractionPanel modelReady={modelReady} />
     </section>
   );
 }

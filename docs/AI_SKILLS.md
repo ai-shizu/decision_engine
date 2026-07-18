@@ -27,7 +27,7 @@
 | 永続化境界・シリアライズ・runtime検証・IPC契約 | §1, §16 (SKILL-PKB-BOUNDARY-V3), `docs/architecture/INCIDENT_LEDGER.md` |
 | macOS ビルド・配布・コード署名 | §1, §2.3, §4 |
 | Tauri iOS (M0〜) 初期化・シミュレータ | §1, §2.3, §4.4, `docs/M0_IOS_INIT_INSTRUCTIONS.md` |
-| Pocket Brain / on-device LLM (M4〜M5) | §1, §4.5, §4.6, §5, `docs/m5_action_plan.md` |
+| Pocket Brain / on-device LLM (M4〜M5) | §1, §4.5, §4.6, §4.7, §5, `docs/m5_action_plan.md` |
 | LLM モデル選定・consult/KV キャッシュ | §1, §5, §7, §8 |
 | 検索エンジン・mmap・LSM 索引 | §1, §9, §10 |
 | LINE インポート・データ層・冪等性 | §1, §14 (IMP-1/IMP-2 as-built, T-20〜T-25) |
@@ -404,6 +404,39 @@ python3 -c "import platform; print(platform.machine())"  # Python 自体のア�
 5. **通常チャット経路のトークン列（temp/top_k/top_p/dist）を変えるな。** 抽出経路では temp 系を無視。
 6. **検証ゲート実測:** クレート全体には既存のフォーマット乖離（pre-existing drift）があるため、Phase 2 の対象ファイルのみ `cargo fmt --check` 相当の check が成功。`cargo test -p pkb-desktop --features pocket-brain --lib` / `cargo check` / `cargo check --features pocket-brain` / `npx tsc --noEmit` / `tauri ios dev … -f pocket-brain` の `BUILD SUCCEEDED`。
 7. **非ブロッカーの未解決事項:** GGUFモデル不在のため、`LlamaSampler::grammar` のランタイム初期化および実際のJSON拘束推論は未実施。iOSの `BUILD SUCCEEDED` はリンク成功を証明するが、grammarの実行成功までは証明しない。
+
+### 4.7 M5 Phase 3 — フロントエンドReducer / ExtractionPanel (2026-07-18)
+
+**射程:** フロントエンドのみ。Rust / Cargo / `gen/apple` / package-lock / DB 永続化は触らない。
+
+**as-built / 不変条件:**
+1. **`extractionReducer` は純関数。** React / Tauri / clipboard / DOM 依存ゼロ。状態は `idle | extracting | success | error` の discriminated union。副作用（invoke・時刻・乱数）禁止。
+2. **信頼境界は `TokenEvent.validated` のみ。** raw トークン列 / `streamedText` を `JSON.parse` して結果採用するな。完了時 `validated == null` は fail-closed で `extractionFailed`。
+3. **API 通信は `llm.ts` ラッパーのみ。** 抽出は `taskId: "kakeibo_v1"`（camelCase）。通常チャットは `taskId` 省略/`null`。コンポーネントから直接 `invoke()` するな。
+4. **`ExtractionSink` の実装は clipboard のみ**（`navigator.clipboard.writeText`）。DB / localStorage / IndexedDB は未実装（M3）。
+5. **UI:** `ExtractionPanel` を `PocketBrainPanel` 直下に合成。M4 のモデルロード / MemoryMonitor / phys_footprint / Cancel / 通常チャット経路は維持。入力欄は抽出中も編集可（二重送信のみ送信側で防止）。抽出中の `inputChanged` は `phase`/`requestId` を維持して入力だけ更新。`idle`/`success`/`error` では `requestId: null`。Cancel IPC 失敗時は idle へ落とさず `extracting` 維持＋`cancelError` 表示。
+6. **検証ゲート実測 (2026-07-18):**
+   - `npx tsc --noEmit` (apps/desktop): exit 0
+   - lint script: package.json に未定義（実行せず）
+   - Reducer 境界テスト: 下記「ESM/CJS 手順」で実行 → PASS
+   - `npm run build` (PowerShell 入口): `powershell: command not found`（実ビルド未実行）
+   - 同等手順 `node node_modules/typescript/bin/tsc` + `node node_modules/vite/bin/vite.js build`: **GREEN**
+   - `git diff --check`: 問題なし。Rust / Cargo / gen/apple / package-lock は Phase 3 で未変更（pre-existing の schema.rs / package-lock 差分は維持）
+7. **非ブロッカー:** GGUF 不在のため実推論 E2E は未実施。Reducer / tsc / vite build ゲートのみが Phase 3 の証明範囲。
+8. **Reducer テストの ESM/CJS 不整合（実測と解決手順）:**
+   - **現象:** `apps/desktop/package.json` は `"type": "module"`。`tsconfig.boundary.json` は `module: "CommonJS"` で `.boundary-tests-out/**/*.test.js` を emit する。このまま `node .boundary-tests-out/tests-runtime/*.test.js` を実行すると、Node が親の ESM package を継承し `ReferenceError: exports is not defined in ES module scope` で **exit 1** になる（実測）。
+   - **解決（既存 `scripts/run-boundary-tests.ps1` と同型）:** コンパイル出力ディレクトリ直下に **scoped** `package.json` を置き、そのツリーだけ CommonJS 扱いにする。
+
+```bash
+cd apps/desktop
+rm -rf .boundary-tests-out
+node ./node_modules/typescript/bin/tsc -p tsconfig.boundary.json
+printf '%s\n' '{"type":"commonjs"}' > .boundary-tests-out/package.json
+node .boundary-tests-out/tests-runtime/extractionReducer.test.js
+rm -rf .boundary-tests-out
+```
+
+   - scoped `package.json` の中身は `{"type":"commonjs"}` のみでよい。リポジトリ直下や `apps/desktop/package.json` を書き換えないこと（本番 ESM 契約を壊す）。
 
 ---
 

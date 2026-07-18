@@ -1,11 +1,14 @@
 // [D] Pocket Brain frontend client (docs/architecture_blueprint.md §3.8).
 //
-// invoke wrappers + Channel listeners for the M4 on-device LLM commands. Command
-// arg keys are camelCase: Tauri v2 converts snake_case Rust parameter names to
-// camelCase for the JS payload (confirmed at runtime on the iOS simulator — the
-// command rejected `on_sample` and required `onSample`).
+// invoke wrappers + Channel listeners for the M4/M5 on-device LLM commands.
+// Command arg keys are camelCase: Tauri v2 converts snake_case Rust parameter
+// names to camelCase for the JS payload.
 
 import { Channel, invoke } from "@tauri-apps/api/core";
+
+import type { KakeiboEntryV1 } from "./extractionReducer";
+
+export type { KakeiboEntryV1 } from "./extractionReducer";
 
 export type MemPhase =
   | "baseline"
@@ -24,11 +27,18 @@ export interface MemSample {
   t_ms: number;
 }
 
+/** Known extraction task ids accepted by the Rust worker. */
+export type LlmTaskId = "kakeibo_v1";
+
+export const TASK_KAKEIBO_V1: LlmTaskId = "kakeibo_v1";
+
 export interface TokenEvent {
   seq: number;
   text: string;
   done: boolean;
   error: string | null;
+  /** Set only on successful kakeibo extraction completion. */
+  validated: KakeiboEntryV1 | null;
 }
 
 export interface LoadParams {
@@ -51,13 +61,22 @@ export function loadModel(params: LoadParams): Promise<void> {
   return invoke("llm_load_model", { params });
 }
 
-/** Start a generation; `onToken` receives each streamed `TokenEvent`. */
+/**
+ * Start a generation; `onToken` receives each streamed `TokenEvent`.
+ * Optional `taskId` selects extraction (`"kakeibo_v1"`) vs plain chat (`null`).
+ * Existing two-argument callers remain valid.
+ */
 export function generate(
   params: GenerationParams,
   onToken: (event: TokenEvent) => void,
+  taskId: LlmTaskId | null = null,
 ): Promise<void> {
   const channel = new Channel<TokenEvent>(onToken);
-  return invoke("llm_generate", { params, onToken: channel });
+  return invoke("llm_generate", {
+    params,
+    taskId: taskId ?? null,
+    onToken: channel,
+  });
 }
 
 /** Request cancellation of the in-flight generation. */
