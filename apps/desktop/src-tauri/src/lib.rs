@@ -141,11 +141,18 @@ pub fn run() {
                         db::VaultHandle::unavailable()
                     }
                 };
+                // iOS only: wire background / protected-data-unavailable
+                // transitions to an automatic lock before handing the vault to
+                // Tauri State (docs/m3_action_plan.md §0, §8 Lifecycle row).
+                #[cfg(target_os = "ios")]
+                let vault_for_lifecycle = vault.clone();
                 if !app.manage(vault) {
                     return Err(
                         std::io::Error::other("secure vault state registration failed").into(),
                     );
                 }
+                #[cfg(target_os = "ios")]
+                db::lifecycle::install_auto_lock(vault_for_lifecycle);
             }
 
             #[cfg(not(mobile))]

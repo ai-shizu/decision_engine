@@ -71,6 +71,7 @@ secure-vault = [
     "dep:objc2-local-authentication",
     "dep:objc2-foundation",
     "dep:objc2-core-foundation",
+    "dep:objc2-ui-kit",
 ]
 
 [target.'cfg(windows)'.dependencies]
@@ -98,8 +99,14 @@ libc = { version = "0.2", optional = true }
 objc2 = { version = "=0.6.4", default-features = false, features = ["std"], optional = true }
 objc2-security = { version = "=0.3.2", default-features = false, features = ["std", "objc2", "SecAccessControl", "SecBase", "SecItem", "SecRandom"], optional = true }
 objc2-local-authentication = { version = "=0.3.2", default-features = false, features = ["std", "LAContext"], optional = true }
-objc2-foundation = { version = "=0.3.2", default-features = false, features = ["std", "NSString", "NSDictionary", "NSObject", "NSValue", "objc2-core-foundation"], optional = true }
+objc2-foundation = { version = "=0.3.2", default-features = false, features = ["std", "NSString", "NSDictionary", "NSObject", "NSValue", "NSNotification", "objc2-core-foundation"], optional = true }
 objc2-core-foundation = { version = "=0.3.2", default-features = false, features = ["alloc", "CFData", "CFDictionary", "CFError", "objc2"], optional = true }
+
+# M3 Phase 4-A background auto-lock: UIKit lifecycle notification constants.
+# iOS-only because UIKit does not exist on macOS; already compiled in the graph
+# via tao/tauri, so this exact pin adds no new build (docs/m3_action_plan.md §0).
+[target.'cfg(target_os = "ios")'.dependencies]
+objc2-ui-kit = { version = "=0.3.2", default-features = false, features = ["std", "UIApplication"], optional = true }
 
 [dev-dependencies]
 tokio = { version = "1", features = ["test-util", "macros", "rt", "time"] }

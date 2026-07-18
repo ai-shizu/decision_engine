@@ -9,6 +9,10 @@ pub(crate) mod connection;
 #[cfg(target_vendor = "apple")]
 #[allow(dead_code)] // Retained Phase 0 diagnostic; no longer exposed over IPC.
 mod keychain_probe;
+// Background auto-lock is iOS-only: it observes UIKit lifecycle notifications,
+// and UIKit does not exist on macOS (docs/m3_action_plan.md §0, §8).
+#[cfg(target_os = "ios")]
+pub(crate) mod lifecycle;
 #[cfg(target_vendor = "apple")]
 mod migrations;
 #[cfg(target_vendor = "apple")]

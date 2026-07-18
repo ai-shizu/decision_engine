@@ -342,6 +342,36 @@ export function VaultPanel(): ReactElement | null {
     };
   }, []);
 
+  // Re-sync status when the app returns to the foreground. On iOS the native
+  // lifecycle observer locks the vault on backgrounding; this re-probe makes
+  // the UI observe that lock (reducer purges plaintext via `statusReceived`).
+  // One-shot per visibility change — never polls.
+  useEffect(() => {
+    if (probe !== "ready") {
+      return;
+    }
+    let active = true;
+    function onVisibility(): void {
+      if (document.visibilityState !== "visible") {
+        return;
+      }
+      void vaultStatus()
+        .then((status) => {
+          if (active) {
+            dispatch({ type: "statusReceived", status });
+          }
+        })
+        .catch(() => {
+          // Keep the last known state on a failed re-probe (closed error policy).
+        });
+    }
+    document.addEventListener("visibilitychange", onVisibility);
+    return () => {
+      active = false;
+      document.removeEventListener("visibilitychange", onVisibility);
+    };
+  }, [probe]);
+
   async function onUnlock(): Promise<void> {
     dispatch({ type: "unlockStarted" });
     try {
