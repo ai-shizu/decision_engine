@@ -128,7 +128,9 @@ fn apply_sqlcipher_key(connection: &Connection, key: &[u8]) -> Result<(), VaultC
     Ok(())
 }
 
-fn verify_encrypted_connection(connection: &Connection) -> Result<(), VaultConnectionError> {
+pub(crate) fn verify_encrypted_connection(
+    connection: &Connection,
+) -> Result<(), VaultConnectionError> {
     let _: i64 = connection
         .query_row(SCHEMA_VERIFICATION_SQL, [], |row| row.get(0))
         .map_err(|_| VaultConnectionError::SchemaVerificationFailed)?;

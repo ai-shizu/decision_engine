@@ -124,6 +124,17 @@ enum LookupOutcome {
 pub struct SecureVault;
 
 impl SecureVault {
+    /// Construct the LocalAuthentication context at the audited native
+    /// boundary. The context remains local to the dedicated vault worker and
+    /// is never stored in Tauri State or sent across a Rust thread boundary.
+    pub(crate) fn new_authentication_context() -> Retained<LAContext> {
+        // SAFETY: `+[LAContext new]` is the generated Objective-C constructor.
+        // It returns a retained, typed owner and requires no caller-provided
+        // pointers or lifetime extension. All higher-level vault code remains
+        // safe Rust; native unsafety is confined to this binding boundary.
+        unsafe { LAContext::new() }
+    }
+
     /// Retrieve the existing master key after user-presence authentication, or
     /// generate and persist a new key on first use.
     pub fn retrieve_or_generate_key(

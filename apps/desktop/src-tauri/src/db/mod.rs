@@ -1,32 +1,39 @@
-//! M3 Phase 0 — SQLCipher / typed objc2 Keychain link probe.
+//! M3 SQLCipher vault boundary.
 //!
-//! Scope: prove `bundled-sqlcipher` and the single-stack objc2 Security /
-//! LocalAuthentication bindings link into the final binary. This is **not**
-//! encrypted-at-rest proof and **not** Keychain operational authentication.
-//! Gated behind `secure-vault` (docs/m3_action_plan.md §4.1 / §4.2.1).
+//! The Phase 0 link probe remains available for diagnostics. Production access
+//! goes through a cloneable [`VaultHandle`]; the dedicated worker exclusively
+//! owns LocalAuthentication objects and the single SQLCipher connection.
 
 #[cfg(target_vendor = "apple")]
+pub(crate) mod connection;
+#[cfg(target_vendor = "apple")]
+#[allow(dead_code)] // Retained Phase 0 diagnostic; no longer exposed over IPC.
 mod keychain_probe;
 #[cfg(target_vendor = "apple")]
 pub(crate) mod secure_vault;
-// Phase 1-B defines the encrypted connection boundary; the dedicated DB worker
-// will become its sole caller in the next implementation step.
 #[cfg(target_vendor = "apple")]
-#[allow(dead_code)]
-pub(crate) mod connection;
+mod worker;
+
+#[cfg(target_vendor = "apple")]
+pub(crate) use worker::{VaultErrorCode, VaultHandle, VaultStatus, VAULT_DATABASE_FILENAME};
 
 use rusqlite::Connection;
 use zeroize::Zeroizing;
 
+#[allow(dead_code)]
 const ERR_OPEN: &str = "secure_vault_link_probe: open_in_memory failed";
+#[allow(dead_code)]
 const ERR_KEY: &str = "secure_vault_link_probe: pragma key failed";
+#[allow(dead_code)]
 const ERR_CIPHER_QUERY: &str = "secure_vault_link_probe: cipher_version query failed";
+#[allow(dead_code)]
 const ERR_CIPHER_EMPTY: &str = "secure_vault_link_probe: cipher_version empty";
 
 /// Phase 0-A link probe only — not a production vault API.
 ///
 /// Returns a safe diagnostic string containing the SQLCipher identity
 /// (`cipher_version`). Never returns key material.
+#[allow(dead_code)]
 pub fn verify_sqlcipher_link_and_keychain() -> Result<String, String> {
     let passphrase = Zeroizing::new(String::from("pkb-m3-phase0a-link-probe"));
 

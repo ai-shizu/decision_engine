@@ -1,14 +1,46 @@
-//! M3 Phase 0 Tauri command — SQLCipher / typed objc2 Keychain link probe only.
+//! M3 secure-vault Tauri commands.
 //!
-//! Feature-gated: `secure-vault`. This is **not** a production vault API.
-//! No frontend caller is required for Phase 0-A. Do not manage DB connections,
-//! keys, or Security / LocalAuthentication objects in Tauri State.
+//! Tauri State contains only a cloneable worker capability. Commands expose
+//! closed status/error enums; no connection, key, SQL, PRAGMA, or path crosses
+//! IPC.
 
 use crate::db;
 
-/// Phase 0 native link probe. Returns SQLCipher identity diagnostics only.
-/// Never returns key material, SQL, Keychain payloads, or file paths.
+#[cfg(target_vendor = "apple")]
 #[tauri::command]
-pub fn verify_sqlcipher_link_and_keychain() -> Result<String, String> {
-    db::verify_sqlcipher_link_and_keychain()
+pub fn vault_status(state: tauri::State<'_, db::VaultHandle>) -> db::VaultStatus {
+    state.status()
+}
+
+#[cfg(target_vendor = "apple")]
+#[tauri::command]
+pub async fn vault_unlock(
+    state: tauri::State<'_, db::VaultHandle>,
+) -> Result<db::VaultStatus, db::VaultErrorCode> {
+    let handle = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || handle.unlock())
+        .await
+        .map_err(|_| db::VaultErrorCode::Unavailable)?
+}
+
+#[cfg(target_vendor = "apple")]
+#[tauri::command]
+pub async fn vault_lock(
+    state: tauri::State<'_, db::VaultHandle>,
+) -> Result<db::VaultStatus, db::VaultErrorCode> {
+    let handle = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || handle.lock())
+        .await
+        .map_err(|_| db::VaultErrorCode::Unavailable)?
+}
+
+#[cfg(target_vendor = "apple")]
+#[tauri::command]
+pub async fn check_db_health(
+    state: tauri::State<'_, db::VaultHandle>,
+) -> Result<db::VaultStatus, db::VaultErrorCode> {
+    let handle = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || handle.check_health())
+        .await
+        .map_err(|_| db::VaultErrorCode::Unavailable)?
 }

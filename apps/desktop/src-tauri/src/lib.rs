@@ -35,6 +35,8 @@ use knowledge::NetworkPolicyStore;
 #[cfg(not(mobile))]
 use tauri::webview::{DownloadEvent, NewWindowResponse};
 use tauri::RunEvent;
+#[cfg(all(feature = "secure-vault", target_vendor = "apple"))]
+use tauri::Manager;
 #[cfg(not(mobile))]
 use tauri::WebviewWindowBuilder;
 
@@ -100,10 +102,42 @@ pub fn run() {
             llm::commands_llm::memory_monitor_start,
             #[cfg(feature = "pocket-brain")]
             llm::commands_llm::memory_monitor_stop,
-            #[cfg(feature = "secure-vault")]
-            commands_db::verify_sqlcipher_link_and_keychain,
+            #[cfg(all(feature = "secure-vault", target_vendor = "apple"))]
+            commands_db::vault_status,
+            #[cfg(all(feature = "secure-vault", target_vendor = "apple"))]
+            commands_db::vault_unlock,
+            #[cfg(all(feature = "secure-vault", target_vendor = "apple"))]
+            commands_db::vault_lock,
+            #[cfg(all(feature = "secure-vault", target_vendor = "apple"))]
+            commands_db::check_db_health,
         ])
         .setup(move |app| {
+            #[cfg(all(feature = "secure-vault", target_vendor = "apple"))]
+            {
+                // Authentication is deliberately not started from setup. The
+                // canonical contract requires an explicit `vault_unlock` user
+                // action; setup registers only a locked capability handle.
+                let vault = match app.path().app_data_dir() {
+                    Ok(data_dir) => {
+                        if std::fs::create_dir_all(&data_dir).is_ok() {
+                            db::VaultHandle::spawn(data_dir.join(db::VAULT_DATABASE_FILENAME))
+                        } else {
+                            eprintln!("secure vault unavailable: app data directory setup failed");
+                            db::VaultHandle::unavailable()
+                        }
+                    }
+                    Err(_) => {
+                        eprintln!("secure vault unavailable: app data directory resolve failed");
+                        db::VaultHandle::unavailable()
+                    }
+                };
+                if !app.manage(vault) {
+                    return Err(
+                        std::io::Error::other("secure vault state registration failed").into(),
+                    );
+                }
+            }
+
             #[cfg(not(mobile))]
             {
                 let handle = app.handle().clone();
