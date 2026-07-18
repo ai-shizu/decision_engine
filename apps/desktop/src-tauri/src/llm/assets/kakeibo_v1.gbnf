@@ -1,0 +1,6 @@
+# Kakeibo V1 Grammar Skeleton
+#
+# M5 Phase 0 placeholder — the exact-schema GBNF (date/amount/currency/category/
+# payee/memo, with "unknown" literals for gap safety per G0-C.2) is authored in
+# Phase 1/2. Kept as a comment-only skeleton so the asset path and include_str!
+# wiring can land first. GBNF comments use `#`.
