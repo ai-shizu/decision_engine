@@ -110,6 +110,16 @@ pub fn run() {
             commands_db::vault_lock,
             #[cfg(all(feature = "secure-vault", target_vendor = "apple"))]
             commands_db::check_db_health,
+            #[cfg(all(feature = "secure-vault", target_vendor = "apple"))]
+            commands_db::vault_chat_create,
+            #[cfg(all(feature = "secure-vault", target_vendor = "apple"))]
+            commands_db::vault_chat_delete,
+            #[cfg(all(feature = "secure-vault", target_vendor = "apple"))]
+            commands_db::vault_chats_list,
+            #[cfg(all(feature = "secure-vault", target_vendor = "apple"))]
+            commands_db::vault_message_append,
+            #[cfg(all(feature = "secure-vault", target_vendor = "apple"))]
+            commands_db::vault_messages_list,
         ])
         .setup(move |app| {
             #[cfg(all(feature = "secure-vault", target_vendor = "apple"))]

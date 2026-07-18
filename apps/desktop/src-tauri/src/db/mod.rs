@@ -19,7 +19,11 @@ pub(crate) mod secure_vault;
 mod worker;
 
 #[cfg(target_vendor = "apple")]
-pub(crate) use worker::{VaultErrorCode, VaultHandle, VaultStatus, VAULT_DATABASE_FILENAME};
+pub(crate) use repository::{ChatCreate, ChatRecord, MessageAppend, MessageCursor, MessageRecord};
+#[cfg(target_vendor = "apple")]
+pub(crate) use worker::{
+    VaultErrorCode, VaultHandle, VaultStatus, REPOSITORY_CONTENT_MAX_BYTES, VAULT_DATABASE_FILENAME,
+};
 
 use rusqlite::Connection;
 use zeroize::Zeroizing;

@@ -257,10 +257,6 @@ impl VaultHandle {
     }
 }
 
-// Phase 2-C adds only the worker-internal repository capability. IPC wiring is
-// deliberately deferred, so these crate-visible methods are not called by the
-// production command layer yet.
-#[allow(dead_code)]
 impl VaultHandle {
     pub(crate) fn chat_create(&self, input: ChatCreate) -> Result<ChatRecord, VaultErrorCode> {
         let (reply, receiver) = mpsc::sync_channel(1);
