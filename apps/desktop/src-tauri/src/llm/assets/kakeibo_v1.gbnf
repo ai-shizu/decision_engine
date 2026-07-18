@@ -1,0 +1,33 @@
+# KakeiboEntryV1 — exact JSON grammar (M5 Phase 1)
+#
+# Forces a single object with fixed key order matching KakeiboEntryV1:
+#   date (YYYY-MM-DD | "unknown"), amount (integer | null),
+#   category / payee / memo (JSON string; "unknown" allowed).
+# Comments use `#`. Root must be the start symbol for LlamaSampler::grammar.
+
+root ::= object
+
+object ::= "{" ws date-kv "," ws amount-kv "," ws category-kv "," ws payee-kv "," ws memo-kv ws "}"
+
+date-kv     ::= "\"date\"" ws ":" ws date-val
+amount-kv   ::= "\"amount\"" ws ":" ws amount-val
+category-kv ::= "\"category\"" ws ":" ws string-val
+payee-kv    ::= "\"payee\"" ws ":" ws string-val
+memo-kv     ::= "\"memo\"" ws ":" ws string-val
+
+date-val ::= "\"unknown\"" | date-iso
+date-iso ::= "\"" year "-" month "-" day "\""
+year  ::= digit digit digit digit
+month ::= digit digit
+day   ::= digit digit
+
+amount-val ::= "null" | integer
+integer ::= "-"? digit+
+
+string-val ::= "\"unknown\"" | json-string
+json-string ::= "\"" json-char* "\""
+json-char ::= [^"\\] | "\\" (["\\/bfnrt] | "u" hex hex hex hex)
+
+digit ::= [0-9]
+hex ::= [0-9a-fA-F]
+ws ::= [ \t\n\r]*

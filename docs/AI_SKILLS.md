@@ -27,6 +27,7 @@
 | 永続化境界・シリアライズ・runtime検証・IPC契約 | §1, §16 (SKILL-PKB-BOUNDARY-V3), `docs/architecture/INCIDENT_LEDGER.md` |
 | macOS ビルド・配布・コード署名 | §1, §2.3, §4 |
 | Tauri iOS (M0〜) 初期化・シミュレータ | §1, §2.3, §4.4, `docs/M0_IOS_INIT_INSTRUCTIONS.md` |
+| Pocket Brain / on-device LLM (M4〜M5) | §1, §4.5, §4.6, §4.7, §5, `docs/m5_action_plan.md` |
 | LLM モデル選定・consult/KV キャッシュ | §1, §5, §7, §8 |
 | 検索エンジン・mmap・LSM 索引 | §1, §9, §10 |
 | LINE インポート・データ層・冪等性 | §1, §14 (IMP-1/IMP-2 as-built, T-20〜T-25) |
@@ -378,6 +379,64 @@ python3 -c "import platform; print(platform.machine())"  # Python 自体のア�
 4. **desktop の `create:false` は iOS で webview 未生成になる。** base を書き換えず、`tauri.ios.conf.json` の `app.windows[0].create: true` で上書きする（M0 で検証済み）。
 5. **App.tsx の boot gate は `engine_ready` 待ち。** M0 では engine が無いため LoadingScreen（漆黒）→120s 後に失敗メッセージで止まる。7タブ本体は engine 接続後（M2）まで出ない。これは UI 凍結下の既定挙動であり、「クラッシュしていない」ことと混同するな。
 6. **ホスト要件:** Xcode（`xcode-select` が Xcode.app）、CocoaPods、iOS Simulator runtime（SDK だけでは足りない。`xcodebuild -downloadPlatform iOS`）、Rust targets `aarch64-apple-ios` / `aarch64-apple-ios-sim`。`tauri ios dev --open` は Xcode を開くだけでデプロイしない — デバイス名を引数に渡せ。
+
+### 4.5 M5 Phase 1 — GBNF 構造化抽出の純 Rust 層 (2026-07-18)
+
+**射程:** `pocket-brain` feature 配下の schema / GBNF asset / PromptSpec / chat-template ヘルパーのみ。Tauri command 登録・UI・grammar サンプラ合成は Phase 2/3。
+
+**as-built:**
+1. `llm/schema.rs` — `KakeiboEntryV1`（`deny_unknown_fields`）。文字列不明値は `"unknown"`、`amount` は `Option<i64>`（null=不明）。`normalize()` は NFKC＋カンマ除去の決定論的補正（新規クレート禁止、既存 `unicode-normalization` のみ）。
+2. `llm/assets/kakeibo_v1.gbnf` — 固定キー順の厳密文法（date ISO|unknown、amount int|null、残り string|unknown）。
+3. `llm/prompt.rs` — `build_prompt(task_id, input) -> (system, user)`。既知 task は `kakeibo_v1` のみ、未知は Err。
+4. `llm/service.rs::render_chat_prompt` — 実在 API のみ: `model.chat_template(None)` → `LlamaChatMessage::new` → `model.apply_chat_template(..., add_ass=true)`。生成ループは未接続。
+
+**不変条件:** 全新規コードは `lib.rs` の `#[cfg(feature = "pocket-brain")]` 配下。default `cargo check` を壊すな。amount の文字列形（`"1,000"` / `"１０００"`）は serde カスタムデシリアライザ＋`parse_amount_token` で吸収し、GBNF 経路の数値出力と両立させる。
+
+### 4.6 M5 Phase 2 — grammar サンプラ合成 (2026-07-18)
+
+**射程:** worker 内生成ループへの task_id 分岐＋grammar+greedy。M5 UI変更なし / 既存invoke_handler登録は維持 / DB未着手。
+
+**as-built / 不変条件:**
+1. **task_id 正本は `LlmCommand::Generate.task_id` のみ。** `GenerationParams` へ複製するな。JS キーは `taskId`。
+2. **ルーティング:** `None` → 既存チャット（prompt 直渡し、temp 分岐サンプラ）。`Some("kakeibo_v1")` → `build_prompt` → `render_chat_prompt` → `LlamaSampler::grammar(KAKEIBO_V1_GBNF, "root")` + `greedy` 固定順。その他 → fail-closed（context/生成開始禁止）。
+3. **GBNF は `include_str!` 静的埋め込みのみ。** runtime fs / frontend 文法渡し禁止。
+4. **成功条件:** 抽出完了イベントだけ `validated = Some(KakeiboEntryV1)`。ストリーム途中・チャット完了・エラー・キャンセルはすべて `validated = None`。パース失敗で成功 done を送るな。
+5. **通常チャット経路のトークン列（temp/top_k/top_p/dist）を変えるな。** 抽出経路では temp 系を無視。
+6. **検証ゲート実測:** クレート全体には既存のフォーマット乖離（pre-existing drift）があるため、Phase 2 の対象ファイルのみ `cargo fmt --check` 相当の check が成功。`cargo test -p pkb-desktop --features pocket-brain --lib` / `cargo check` / `cargo check --features pocket-brain` / `npx tsc --noEmit` / `tauri ios dev … -f pocket-brain` の `BUILD SUCCEEDED`。
+7. **非ブロッカーの未解決事項:** GGUFモデル不在のため、`LlamaSampler::grammar` のランタイム初期化および実際のJSON拘束推論は未実施。iOSの `BUILD SUCCEEDED` はリンク成功を証明するが、grammarの実行成功までは証明しない。
+
+### 4.7 M5 Phase 3 — フロントエンドReducer / ExtractionPanel (2026-07-18)
+
+**射程:** フロントエンドのみ。Rust / Cargo / `gen/apple` / package-lock / DB 永続化は触らない。
+
+**as-built / 不変条件:**
+1. **`extractionReducer` は純関数。** React / Tauri / clipboard / DOM 依存ゼロ。状態は `idle | extracting | success | error` の discriminated union。副作用（invoke・時刻・乱数）禁止。
+2. **信頼境界は `TokenEvent.validated` のみ。** raw トークン列 / `streamedText` を `JSON.parse` して結果採用するな。完了時 `validated == null` は fail-closed で `extractionFailed`。
+3. **API 通信は `llm.ts` ラッパーのみ。** 抽出は `taskId: "kakeibo_v1"`（camelCase）。通常チャットは `taskId` 省略/`null`。コンポーネントから直接 `invoke()` するな。
+4. **`ExtractionSink` の実装は clipboard のみ**（`navigator.clipboard.writeText`）。DB / localStorage / IndexedDB は未実装（M3）。
+5. **UI:** `ExtractionPanel` を `PocketBrainPanel` 直下に合成。M4 のモデルロード / MemoryMonitor / phys_footprint / Cancel / 通常チャット経路は維持。入力欄は抽出中も編集可（二重送信のみ送信側で防止）。抽出中の `inputChanged` は `phase`/`requestId` を維持して入力だけ更新。`idle`/`success`/`error` では `requestId: null`。Cancel IPC 失敗時は idle へ落とさず `extracting` 維持＋`cancelError` 表示。
+6. **検証ゲート実測 (2026-07-18):**
+   - `npx tsc --noEmit` (apps/desktop): exit 0
+   - lint script: package.json に未定義（実行せず）
+   - Reducer 境界テスト: 下記「ESM/CJS 手順」で実行 → PASS
+   - `npm run build` (PowerShell 入口): `powershell: command not found`（実ビルド未実行）
+   - 同等手順 `node node_modules/typescript/bin/tsc` + `node node_modules/vite/bin/vite.js build`: **GREEN**
+   - `git diff --check`: 問題なし。Rust / Cargo / gen/apple / package-lock は Phase 3 で未変更（pre-existing の schema.rs / package-lock 差分は維持）
+7. **非ブロッカー:** GGUF 不在のため実推論 E2E は未実施。Reducer / tsc / vite build ゲートのみが Phase 3 の証明範囲。
+8. **Reducer テストの ESM/CJS 不整合（実測と解決手順）:**
+   - **現象:** `apps/desktop/package.json` は `"type": "module"`。`tsconfig.boundary.json` は `module: "CommonJS"` で `.boundary-tests-out/**/*.test.js` を emit する。このまま `node .boundary-tests-out/tests-runtime/*.test.js` を実行すると、Node が親の ESM package を継承し `ReferenceError: exports is not defined in ES module scope` で **exit 1** になる（実測）。
+   - **解決（既存 `scripts/run-boundary-tests.ps1` と同型）:** コンパイル出力ディレクトリ直下に **scoped** `package.json` を置き、そのツリーだけ CommonJS 扱いにする。
+
+```bash
+cd apps/desktop
+rm -rf .boundary-tests-out
+node ./node_modules/typescript/bin/tsc -p tsconfig.boundary.json
+printf '%s\n' '{"type":"commonjs"}' > .boundary-tests-out/package.json
+node .boundary-tests-out/tests-runtime/extractionReducer.test.js
+rm -rf .boundary-tests-out
+```
+
+   - scoped `package.json` の中身は `{"type":"commonjs"}` のみでよい。リポジトリ直下や `apps/desktop/package.json` を書き換えないこと（本番 ESM 契約を壊す）。
 
 ---
 
@@ -2471,4 +2530,3 @@ latest commit **後**にだけ `_prune_retrieval_manifests` を実行する。
   必ず含めよ。越境検証 (Python 実出力 → TS parser 受理) で片側実装の思い込みを排除せよ。
 - **実装より先に RED 契約を書け。** テストを通すために型・検証を緩和した時点で不合格。緩和が
   必要に見えたら実装を止めて報告せよ。
-

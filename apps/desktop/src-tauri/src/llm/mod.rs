@@ -11,6 +11,8 @@
 pub mod commands_llm;
 pub mod model_path;
 pub mod params;
+pub mod prompt;
+pub mod schema;
 pub mod service;
 
 // Re-exported for `lib.rs`'s `llm::LlmHandle::spawn(...)` wiring. Other types are
