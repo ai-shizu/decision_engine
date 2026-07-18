@@ -42,6 +42,8 @@ const VAULT_ERROR_MESSAGES = {
   not_found: "対象のデータを確認できませんでした。",
   conflict: "同じ識別子の異なるデータが存在するため、保存を停止しました。",
   storage_failed: "保管庫の処理結果を確認できませんでした。状態を確認してください。",
+  os_lock_engaged:
+    "端末のロックにより保管庫が保護され、切断されました。ロックを解除して再度お試しください。",
   unknown: "保管庫の処理結果を確認できませんでした。",
 } as const satisfies Record<VaultErrorCode, string>;
 

@@ -736,6 +736,12 @@ fn classify_connection_error(error: VaultConnectionError) -> (VaultStatus, Vault
         VaultConnectionError::SecureVault(SecureVaultError::InteractionNotAllowed) => {
             (VaultStatus::Locked, VaultErrorCode::InteractionNotAllowed)
         }
+        // OS-sealed storage (iOS Data Protection) is recoverable: fall back to
+        // Locked and require re-authentication. It must NOT quarantine, which is
+        // reserved for true corruption / wrong-key states.
+        VaultConnectionError::OsAccessDenied => {
+            (VaultStatus::Locked, VaultErrorCode::OsLockEngaged)
+        }
         VaultConnectionError::SchemaVerificationFailed
         | VaultConnectionError::KeyApplicationFailed
         | VaultConnectionError::InvalidKeyLength { .. } => {
@@ -969,5 +975,19 @@ mod tests {
         );
         assert_eq!(snapshot_status(&status), VaultStatus::Locked);
         Ok(())
+    }
+
+    #[test]
+    fn os_access_denied_open_error_locks_without_quarantine() {
+        // A device-locked open/verify must be recoverable (Locked), never
+        // misclassified as corruption (Quarantined).
+        assert_eq!(
+            classify_connection_error(VaultConnectionError::OsAccessDenied),
+            (VaultStatus::Locked, VaultErrorCode::OsLockEngaged)
+        );
+        assert_eq!(
+            classify_connection_error(VaultConnectionError::SchemaVerificationFailed),
+            (VaultStatus::Quarantined, VaultErrorCode::CorruptOrWrongKey)
+        );
     }
 }

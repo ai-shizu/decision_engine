@@ -79,6 +79,7 @@ const ERROR_CODES: readonly Exclude<VaultErrorCode, "unknown">[] = [
   "not_found",
   "conflict",
   "storage_failed",
+  "os_lock_engaged",
 ];
 
 const CHAT_ID = "00000000-0000-4000-8000-000000000001";
@@ -95,7 +96,7 @@ test("V-B02 rejects unknown and non-string vault statuses", () => {
   assertParseError(() => parseVaultStatus(null), "null status");
 });
 
-test("V-B03 preserves all fifteen known error codes", () => {
+test("V-B03 preserves all sixteen known error codes", () => {
   for (const code of ERROR_CODES) {
     assertEq(parseVaultErrorCode(code), code, code);
   }

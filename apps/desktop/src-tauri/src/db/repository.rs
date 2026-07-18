@@ -9,6 +9,8 @@ use std::{error::Error, fmt};
 
 use rusqlite::{ffi, params, Connection, OptionalExtension, Row, Transaction};
 
+use super::sqlite_error::is_data_protection_error;
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct ChatCreate {
     pub(crate) id: String,
@@ -68,24 +70,6 @@ impl fmt::Display for RepositoryError {
         };
         formatter.write_str(message)
     }
-}
-
-/// True when the error signals OS-level storage access denial rather than a
-/// logical failure. iOS Data Protection seals the vault file while the device
-/// is locked, so subsequent I/O surfaces as one of these platform-independent
-/// SQLite primary result codes. Detection uses the primary code only, so it is
-/// identical on every target (no iOS-specific error handling).
-pub(crate) fn is_data_protection_error(error: &rusqlite::Error) -> bool {
-    matches!(
-        error,
-        rusqlite::Error::SqliteFailure(ffi_error, _)
-            if matches!(
-                ffi_error.code,
-                rusqlite::ErrorCode::SystemIoFailure
-                    | rusqlite::ErrorCode::PermissionDenied
-                    | rusqlite::ErrorCode::CannotOpen
-            )
-    )
 }
 
 /// Classify a storage error, preferring the fail-closed `DataProtection` code.
@@ -326,23 +310,6 @@ mod tests {
 
     fn sqlite_failure(primary_code: i32) -> rusqlite::Error {
         rusqlite::Error::SqliteFailure(ffi::Error::new(primary_code), None)
-    }
-
-    #[test]
-    fn detects_os_access_denied_codes_only() {
-        assert!(is_data_protection_error(&sqlite_failure(ffi::SQLITE_IOERR)));
-        assert!(is_data_protection_error(&sqlite_failure(ffi::SQLITE_PERM)));
-        assert!(is_data_protection_error(&sqlite_failure(
-            ffi::SQLITE_CANTOPEN
-        )));
-
-        assert!(!is_data_protection_error(&sqlite_failure(ffi::SQLITE_BUSY)));
-        assert!(!is_data_protection_error(&sqlite_failure(
-            ffi::SQLITE_CONSTRAINT
-        )));
-        assert!(!is_data_protection_error(
-            &rusqlite::Error::QueryReturnedNoRows
-        ));
     }
 
     #[test]

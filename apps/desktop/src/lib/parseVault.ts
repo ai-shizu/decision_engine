@@ -44,6 +44,7 @@ const KNOWN_VAULT_ERROR_CODES = [
   "not_found",
   "conflict",
   "storage_failed",
+  "os_lock_engaged",
 ] as const;
 
 export type KnownVaultErrorCode = (typeof KNOWN_VAULT_ERROR_CODES)[number];

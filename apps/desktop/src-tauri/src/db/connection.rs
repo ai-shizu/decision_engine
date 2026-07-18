@@ -13,6 +13,7 @@ use rusqlite::{Connection, OpenFlags};
 use zeroize::Zeroizing;
 
 use super::secure_vault::{SecureVault, SecureVaultError};
+use super::sqlite_error::is_data_protection_error;
 
 const KEY_LENGTH_BYTES: usize = 32;
 const HEX_KEY_LENGTH: usize = KEY_LENGTH_BYTES * 2;
@@ -30,6 +31,10 @@ pub enum VaultConnectionError {
     KeyApplicationFailed,
     SchemaVerificationFailed,
     CipherIdentityUnavailable,
+    // OS-level storage access denial (iOS Data Protection sealed the file while
+    // the device is locked). Recoverable and distinct from corruption: it must
+    // fail closed to `Locked`, never `Quarantined`.
+    OsAccessDenied,
 }
 
 impl fmt::Display for VaultConnectionError {
@@ -47,6 +52,7 @@ impl fmt::Display for VaultConnectionError {
             Self::CipherIdentityUnavailable => {
                 formatter.write_str("SQLCipher identity is unavailable")
             }
+            Self::OsAccessDenied => formatter.write_str("storage access denied by the OS"),
         }
     }
 }
@@ -94,8 +100,8 @@ fn open_encrypted_database_with_key(
     let flags = OpenFlags::SQLITE_OPEN_READ_WRITE
         | OpenFlags::SQLITE_OPEN_CREATE
         | OpenFlags::SQLITE_OPEN_NO_MUTEX;
-    let connection =
-        Connection::open_with_flags(path, flags).map_err(|_| VaultConnectionError::OpenFailed)?;
+    let connection = Connection::open_with_flags(path, flags)
+        .map_err(|error| classify_sqlite_error(error, VaultConnectionError::OpenFailed))?;
 
     apply_sqlcipher_key(&connection, key)?;
     verify_encrypted_connection(&connection)?;
@@ -123,7 +129,9 @@ fn apply_sqlcipher_key(connection: &Connection, key: &[u8]) -> Result<(), VaultC
         // no secret-bearing SQL is retained by this module after return.
         connection
             .execute_batch(key_pragma.as_str())
-            .map_err(|_| VaultConnectionError::KeyApplicationFailed)?;
+            .map_err(|error| {
+                classify_sqlite_error(error, VaultConnectionError::KeyApplicationFailed)
+            })?;
     }
 
     Ok(())
@@ -134,11 +142,15 @@ pub(crate) fn verify_encrypted_connection(
 ) -> Result<(), VaultConnectionError> {
     let _: i64 = connection
         .query_row(SCHEMA_VERIFICATION_SQL, [], |row| row.get(0))
-        .map_err(|_| VaultConnectionError::SchemaVerificationFailed)?;
+        .map_err(|error| {
+            classify_sqlite_error(error, VaultConnectionError::SchemaVerificationFailed)
+        })?;
 
     let cipher_version: String = connection
         .query_row(CIPHER_VERSION_SQL, [], |row| row.get(0))
-        .map_err(|_| VaultConnectionError::CipherIdentityUnavailable)?;
+        .map_err(|error| {
+            classify_sqlite_error(error, VaultConnectionError::CipherIdentityUnavailable)
+        })?;
     if cipher_version.trim().is_empty() {
         return Err(VaultConnectionError::CipherIdentityUnavailable);
     }
@@ -151,6 +163,21 @@ fn validate_key_length(key: &[u8]) -> Result<(), VaultConnectionError> {
         Ok(())
     } else {
         Err(VaultConnectionError::InvalidKeyLength { actual: key.len() })
+    }
+}
+
+/// Prefer the recoverable `OsAccessDenied` classification when the OS sealed the
+/// file (iOS Data Protection); otherwise use the caller's fallback. The raw
+/// error is inspected by primary code only and then dropped, so no SQL or key
+/// material is ever retained or surfaced.
+fn classify_sqlite_error(
+    error: rusqlite::Error,
+    fallback: VaultConnectionError,
+) -> VaultConnectionError {
+    if is_data_protection_error(&error) {
+        VaultConnectionError::OsAccessDenied
+    } else {
+        fallback
     }
 }
 
