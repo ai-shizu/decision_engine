@@ -27,7 +27,7 @@
 | 永続化境界・シリアライズ・runtime検証・IPC契約 | §1, §16 (SKILL-PKB-BOUNDARY-V3), `docs/architecture/INCIDENT_LEDGER.md` |
 | macOS ビルド・配布・コード署名 | §1, §2.3, §4 |
 | Tauri iOS (M0〜) 初期化・シミュレータ | §1, §2.3, §4.4, `docs/M0_IOS_INIT_INSTRUCTIONS.md` |
-| Pocket Brain / on-device LLM (M4〜M5) | §1, §4.5, §5, `docs/m5_action_plan.md` |
+| Pocket Brain / on-device LLM (M4〜M5) | §1, §4.5, §4.6, §5, `docs/m5_action_plan.md` |
 | LLM モデル選定・consult/KV キャッシュ | §1, §5, §7, §8 |
 | 検索エンジン・mmap・LSM 索引 | §1, §9, §10 |
 | LINE インポート・データ層・冪等性 | §1, §14 (IMP-1/IMP-2 as-built, T-20〜T-25) |
@@ -391,6 +391,19 @@ python3 -c "import platform; print(platform.machine())"  # Python 自体のア�
 4. `llm/service.rs::render_chat_prompt` — 実在 API のみ: `model.chat_template(None)` → `LlamaChatMessage::new` → `model.apply_chat_template(..., add_ass=true)`。生成ループは未接続。
 
 **不変条件:** 全新規コードは `lib.rs` の `#[cfg(feature = "pocket-brain")]` 配下。default `cargo check` を壊すな。amount の文字列形（`"1,000"` / `"１０００"`）は serde カスタムデシリアライザ＋`parse_amount_token` で吸収し、GBNF 経路の数値出力と両立させる。
+
+### 4.6 M5 Phase 2 — grammar サンプラ合成 (2026-07-18)
+
+**射程:** worker 内生成ループへの task_id 分岐＋grammar+greedy。M5 UI変更なし / 既存invoke_handler登録は維持 / DB未着手。
+
+**as-built / 不変条件:**
+1. **task_id 正本は `LlmCommand::Generate.task_id` のみ。** `GenerationParams` へ複製するな。JS キーは `taskId`。
+2. **ルーティング:** `None` → 既存チャット（prompt 直渡し、temp 分岐サンプラ）。`Some("kakeibo_v1")` → `build_prompt` → `render_chat_prompt` → `LlamaSampler::grammar(KAKEIBO_V1_GBNF, "root")` + `greedy` 固定順。その他 → fail-closed（context/生成開始禁止）。
+3. **GBNF は `include_str!` 静的埋め込みのみ。** runtime fs / frontend 文法渡し禁止。
+4. **成功条件:** 抽出完了イベントだけ `validated = Some(KakeiboEntryV1)`。ストリーム途中・チャット完了・エラー・キャンセルはすべて `validated = None`。パース失敗で成功 done を送るな。
+5. **通常チャット経路のトークン列（temp/top_k/top_p/dist）を変えるな。** 抽出経路では temp 系を無視。
+6. **検証ゲート実測:** クレート全体には既存のフォーマット乖離（pre-existing drift）があるため、Phase 2 の対象ファイルのみ `cargo fmt --check` 相当の check が成功。`cargo test -p pkb-desktop --features pocket-brain --lib` / `cargo check` / `cargo check --features pocket-brain` / `npx tsc --noEmit` / `tauri ios dev … -f pocket-brain` の `BUILD SUCCEEDED`。
+7. **非ブロッカーの未解決事項:** GGUFモデル不在のため、`LlamaSampler::grammar` のランタイム初期化および実際のJSON拘束推論は未実施。iOSの `BUILD SUCCEEDED` はリンク成功を証明するが、grammarの実行成功までは証明しない。
 
 ---
 
@@ -2484,4 +2497,3 @@ latest commit **後**にだけ `_prune_retrieval_manifests` を実行する。
   必ず含めよ。越境検証 (Python 実出力 → TS parser 受理) で片側実装の思い込みを排除せよ。
 - **実装より先に RED 契約を書け。** テストを通すために型・検証を緩和した時点で不合格。緩和が
   必要に見えたら実装を止めて報告せよ。
-

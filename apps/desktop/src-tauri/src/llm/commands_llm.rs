@@ -1,9 +1,6 @@
 //! [C] Tauri command bindings (docs/architecture_blueprint.md §3.7).
 //!
-//! Phase 1: bodies delegate to the real worker / monitor logic. These commands are
-//! NOT yet registered in `lib.rs`'s `invoke_handler` and their State is not managed
-//! — that wiring lands with the frontend-integration step (hence the dead-code
-//! warnings under `--features pocket-brain`).
+// M5 Phase 2: Maintains the existing invoke_handler registration from M4, only adding the task_id argument.
 
 use std::sync::Arc;
 
@@ -27,13 +24,15 @@ pub async fn llm_load_model(
 }
 
 /// Start a generation, streaming `TokenEvent`s over `on_token`.
+/// `task_id` selects extraction mode (`kakeibo_v1`) or plain chat (`None`).
 #[tauri::command]
 pub async fn llm_generate(
     handle: State<'_, LlmHandle>,
     params: GenerationParams,
+    task_id: Option<String>,
     on_token: Channel<TokenEvent>,
 ) -> Result<(), String> {
-    handle.generate(params, on_token)
+    handle.generate(params, task_id, on_token)
 }
 
 /// Cancel an in-flight generation.
