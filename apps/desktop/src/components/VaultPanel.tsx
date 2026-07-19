@@ -24,6 +24,7 @@ import {
   type VaultMessageCursor,
   type VaultMessageRecord,
 } from "../lib/vault";
+import { cancelGeneration, generate } from "../lib/llm";
 import {
   vaultErrorMessage,
   vaultStatusDescription,
@@ -38,6 +39,17 @@ import {
 
 const CHAT_LIST_LIMIT = 50;
 const MESSAGE_PAGE_SIZE = 2;
+
+// Fixed generation parameters for the vault chat assistant reply. Mirrors the
+// PocketBrain defaults; tuning is a later concern.
+const ASSISTANT_GENERATION = {
+  n_ctx: 2048,
+  max_tokens: 256,
+  temp: 0.7,
+  top_k: 40,
+  top_p: 0.95,
+  seed: 0,
+} as const;
 
 function errorCode(error: unknown): VaultErrorCode {
   return error instanceof VaultIpcError ? error.code : "unknown";
@@ -67,7 +79,24 @@ function UnlockedVault(props: UnlockedVaultProps): ReactElement {
   const [title, setTitle] = useState("");
   const [selectedChatId, setSelectedChatId] = useState<string | null>(null);
   const [message, setMessage] = useState("");
+  // Streaming assistant reply lives ONLY in local state during generation; the
+  // DB is never written per token (Phase 6-A Approach B).
+  const [draft, setDraft] = useState("");
+  const [streaming, setStreaming] = useState(false);
+  const [assistantFailed, setAssistantFailed] = useState(false);
   const pendingSave = useRef<VaultMessageAppendInput | null>(null);
+  const mounted = useRef(true);
+
+  // On unmount — which is how a fail-closed lock (`lockEngaged` → status ≠
+  // "unlocked") tears down this view — force-stop any in-flight generation and
+  // block the post-stream persist, so nothing is written to a locked vault.
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+      void cancelGeneration();
+    };
+  }, []);
 
   useEffect(() => {
     let active = true;
@@ -145,10 +174,11 @@ function UnlockedVault(props: UnlockedVaultProps): ReactElement {
     await loadMessages(chatId, null);
   }
 
+  // Single vault write (Approach B). Returns whether the append committed.
   async function persistMessage(
     input: VaultMessageAppendInput,
     retry: boolean,
-  ): Promise<void> {
+  ): Promise<boolean> {
     if (retry) {
       dispatch({ type: "saveRetried" });
     } else {
@@ -158,34 +188,89 @@ function UnlockedVault(props: UnlockedVaultProps): ReactElement {
       const record = await vaultMessageAppend(input);
       dispatch({ type: "saveSucceeded", messageId: input.id, record });
       pendingSave.current = null;
-      setMessage("");
+      return true;
     } catch (error: unknown) {
       dispatch({
         type: "saveFailed",
         messageId: input.id,
         code: errorCode(error),
       });
+      return false;
     }
   }
 
-  async function onSaveMessage(): Promise<void> {
+  // Stream the assistant reply into local `draft` only, then persist the whole
+  // completed text with ONE append — on normal finish and on cancel alike.
+  async function streamAssistant(chatId: string, prompt: string): Promise<void> {
+    setAssistantFailed(false);
+    setDraft("");
+    setStreaming(true);
+    const chunks: string[] = [];
+    try {
+      await generate({ prompt, ...ASSISTANT_GENERATION }, (event) => {
+        if (event.error !== null || event.done) {
+          return;
+        }
+        chunks.push(event.text);
+        setDraft((previous) => previous + event.text);
+      });
+    } catch {
+      // Generation failed or was cancelled; persist whatever streamed so far.
+    } finally {
+      setStreaming(false);
+      // The view may have been unmounted by a lock while streaming — never
+      // write to a now-locked vault, and never persist orphaned plaintext.
+      if (mounted.current) {
+        const full = chunks.join("");
+        if (full.length > 0) {
+          const assistantInput: VaultMessageAppendInput = {
+            id: crypto.randomUUID(),
+            chatId,
+            role: "assistant",
+            content: full,
+            timestamp: Date.now(),
+          };
+          pendingSave.current = assistantInput;
+          const saved = await persistMessage(assistantInput, false);
+          if (saved && mounted.current) {
+            setDraft("");
+            await loadMessages(chatId, null);
+          }
+        } else {
+          setAssistantFailed(true);
+          setDraft("");
+        }
+      }
+    }
+  }
+
+  async function onSend(): Promise<void> {
     const content = message.trim();
     if (
       selectedChatId === null ||
       content.length === 0 ||
+      streaming ||
       state.save.phase === "pending"
     ) {
       return;
     }
-    const input: VaultMessageAppendInput = {
+    setMessage("");
+    const userInput: VaultMessageAppendInput = {
       id: crypto.randomUUID(),
       chatId: selectedChatId,
       role: "user",
       content,
       timestamp: Date.now(),
     };
-    pendingSave.current = input;
-    await persistMessage(input, false);
+    pendingSave.current = userInput;
+    const saved = await persistMessage(userInput, false);
+    if (saved && mounted.current) {
+      await streamAssistant(selectedChatId, content);
+    }
+  }
+
+  function onCancelStream(): void {
+    void cancelGeneration();
   }
 
   async function onRetrySave(): Promise<void> {
@@ -242,7 +327,7 @@ function UnlockedVault(props: UnlockedVaultProps): ReactElement {
                 aria-pressed={selectedChatId === chat.id}
                 aria-label={`チャットを選択: ${chat.title}`}
                 onClick={() => void onSelectChat(chat.id)}
-                disabled={state.messages.phase === "loading"}
+                disabled={state.messages.phase === "loading" || streaming}
               >
                 <span>{chat.title}</span>
                 <time>{messageTime(chat.created_at)}</time>
@@ -274,12 +359,28 @@ function UnlockedVault(props: UnlockedVaultProps): ReactElement {
             ))}
           </ol>
 
+          {streaming && (
+            <div className="vault-draft" aria-live="polite" data-role="assistant-draft">
+              <header>
+                <span>assistant</span>
+                <span>生成中…</span>
+              </header>
+              <p>{draft}</p>
+            </div>
+          )}
+
+          {assistantFailed && (
+            <p className="error-text vault-error" role="alert">
+              応答を生成できませんでした。もう一度お試しください。
+            </p>
+          )}
+
           {state.messages.cursor !== null && (
             <button
               type="button"
               className="ghost"
               onClick={() => void loadMessages(selectedChatId, state.messages.cursor)}
-              disabled={state.messages.phase === "loading"}
+              disabled={state.messages.phase === "loading" || streaming}
             >
               続きを読む
             </button>
@@ -293,15 +394,25 @@ function UnlockedVault(props: UnlockedVaultProps): ReactElement {
               value={message}
               onChange={(event) => setMessage(event.target.value)}
               maxLength={65_536}
+              disabled={streaming}
             />
             <button
               type="button"
               className="primary"
-              onClick={() => void onSaveMessage()}
-              disabled={message.trim().length === 0 || state.save.phase === "pending"}
+              onClick={() => void onSend()}
+              disabled={
+                message.trim().length === 0 ||
+                streaming ||
+                state.save.phase === "pending"
+              }
             >
-              {state.save.phase === "pending" ? "保存中…" : "保存"}
+              {state.save.phase === "pending" ? "保存中…" : "送信"}
             </button>
+            {streaming && (
+              <button type="button" className="ghost" onClick={onCancelStream}>
+                停止
+              </button>
+            )}
           </div>
 
           {state.save.phase === "failed" && state.save.error !== null && (
