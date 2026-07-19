@@ -18,6 +18,7 @@ use std::{
 use objc2::rc::autoreleasepool;
 use rusqlite::{Connection, Transaction, TransactionBehavior};
 use serde::Serialize;
+use tauri::ipc::Channel;
 
 use crate::ipc_contract::MAX_TEXT_BYTES;
 
@@ -86,6 +87,24 @@ pub(crate) enum VaultErrorCode {
     OsLockEngaged,
 }
 
+/// Push payload sent to the frontend when the worker's public state changes.
+///
+/// `Status` mirrors every lifecycle transition (including out-of-band ones such
+/// as background auto-lock). `Error` additionally flags a fail-closed event the
+/// UI must act on immediately (e.g. Data-Protection self-lock). No SQL, path,
+/// key, or native error detail is ever included.
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "snake_case", tag = "kind")]
+pub(crate) enum VaultLifecycleEvent {
+    Status {
+        status: VaultStatus,
+    },
+    Error {
+        code: VaultErrorCode,
+        status: VaultStatus,
+    },
+}
+
 #[derive(Clone)]
 pub(crate) struct VaultHandle {
     inner: Arc<VaultHandleInner>,
@@ -150,6 +169,11 @@ enum VaultRequest {
         control: RequestControl,
         reply: SyncSender<VaultReply>,
     },
+    RegisterEvents {
+        channel: Channel<VaultLifecycleEvent>,
+        control: RequestControl,
+        reply: SyncSender<VaultReply>,
+    },
 }
 
 impl VaultHandle {
@@ -203,6 +227,29 @@ impl VaultHandle {
 
     pub(crate) fn check_health(&self) -> Result<VaultStatus, VaultErrorCode> {
         self.request(VaultOperation::Health, SHORT_OPERATION_TIMEOUT)
+    }
+
+    /// Register a frontend event sink and return the current status. The worker
+    /// keeps only one sink; a later registration replaces the earlier one, so
+    /// re-mounts never accumulate senders.
+    pub(crate) fn register_events(
+        &self,
+        channel: Channel<VaultLifecycleEvent>,
+    ) -> Result<VaultStatus, VaultErrorCode> {
+        let (reply, receiver) = mpsc::sync_channel(1);
+        let cancelled = Arc::new(AtomicBool::new(false));
+        let request = VaultRequest::RegisterEvents {
+            channel,
+            control: RequestControl {
+                deadline: Instant::now() + SHORT_OPERATION_TIMEOUT,
+                cancelled: Arc::clone(&cancelled),
+            },
+            reply,
+        };
+        match self.submit(request, receiver, cancelled, SHORT_OPERATION_TIMEOUT)? {
+            VaultReply::Lifecycle(result) => result,
+            _ => Err(VaultErrorCode::Unavailable),
+        }
     }
 
     fn request(
@@ -362,6 +409,7 @@ struct VaultWorker {
     database_path: PathBuf,
     connection: Option<Connection>,
     status: Arc<Mutex<VaultStatus>>,
+    event_sink: Option<Channel<VaultLifecycleEvent>>,
 }
 
 impl VaultWorker {
@@ -370,6 +418,7 @@ impl VaultWorker {
             database_path,
             connection: None,
             status,
+            event_sink: None,
         }
     }
 
@@ -450,11 +499,53 @@ impl VaultWorker {
                     };
                     let _ = reply.send(VaultReply::MessagesList(result));
                 }
+                VaultRequest::RegisterEvents {
+                    channel,
+                    control,
+                    reply,
+                } => {
+                    let result = if request_expired(&control) {
+                        Err(VaultErrorCode::Timeout)
+                    } else {
+                        Ok(self.register_events(channel))
+                    };
+                    let _ = reply.send(VaultReply::Lifecycle(result));
+                }
             }
         }
 
         self.connection.take();
-        publish_status(&self.status, VaultStatus::Locked);
+        self.set_status(VaultStatus::Locked);
+    }
+
+    /// Store the frontend event sink (replacing any prior one) and immediately
+    /// push the current status so a freshly-subscribed UI syncs at once.
+    fn register_events(&mut self, channel: Channel<VaultLifecycleEvent>) -> VaultStatus {
+        let current = snapshot_status(&self.status);
+        self.event_sink = Some(channel);
+        self.emit(VaultLifecycleEvent::Status { status: current });
+        current
+    }
+
+    /// Update the public status and push a `Status` lifecycle event.
+    fn set_status(&self, next: VaultStatus) {
+        publish_status(&self.status, next);
+        self.emit(VaultLifecycleEvent::Status { status: next });
+    }
+
+    /// Update the public status and push an `Error` lifecycle event the UI must
+    /// act on immediately (fail-closed).
+    fn emit_error(&self, code: VaultErrorCode, next: VaultStatus) {
+        publish_status(&self.status, next);
+        self.emit(VaultLifecycleEvent::Error { code, status: next });
+    }
+
+    /// Fail-open push: a torn-down receiver must never panic or block the
+    /// worker, so a send error is intentionally ignored.
+    fn emit(&self, event: VaultLifecycleEvent) {
+        if let Some(channel) = &self.event_sink {
+            let _ = channel.send(event);
+        }
     }
 
     fn unlock(&mut self, control: &RequestControl) -> Result<VaultStatus, VaultErrorCode> {
@@ -462,7 +553,7 @@ impl VaultWorker {
             return Ok(VaultStatus::Unlocked);
         }
 
-        publish_status(&self.status, VaultStatus::Unlocking);
+        self.set_status(VaultStatus::Unlocking);
         let database_path = self.database_path.clone();
         let open_result = autoreleasepool(move |_| {
             let context = SecureVault::new_authentication_context();
@@ -471,7 +562,7 @@ impl VaultWorker {
 
         if request_expired(control) {
             drop(open_result);
-            publish_status(&self.status, VaultStatus::Locked);
+            self.set_status(VaultStatus::Locked);
             return Err(VaultErrorCode::Timeout);
         }
 
@@ -480,31 +571,31 @@ impl VaultWorker {
                 if let Err(error) = run_migrations(&mut connection) {
                     let (status, code) = classify_migration_error(error);
                     drop(connection);
-                    publish_status(&self.status, status);
+                    self.set_status(status);
                     return Err(code);
                 }
                 if request_expired(control) {
                     drop(connection);
-                    publish_status(&self.status, VaultStatus::Locked);
+                    self.set_status(VaultStatus::Locked);
                     return Err(VaultErrorCode::Timeout);
                 }
 
                 self.connection = Some(connection);
-                publish_status(&self.status, VaultStatus::Unlocked);
+                self.set_status(VaultStatus::Unlocked);
                 Ok(VaultStatus::Unlocked)
             }
             Err(error) => {
                 let (status, code) = classify_connection_error(error);
-                publish_status(&self.status, status);
+                self.set_status(status);
                 Err(code)
             }
         }
     }
 
     fn lock(&mut self) -> Result<VaultStatus, VaultErrorCode> {
-        publish_status(&self.status, VaultStatus::Locking);
+        self.set_status(VaultStatus::Locking);
         self.connection.take();
-        publish_status(&self.status, VaultStatus::Locked);
+        self.set_status(VaultStatus::Locked);
         Ok(VaultStatus::Locked)
     }
 
@@ -514,7 +605,7 @@ impl VaultWorker {
         if let Err(error) = verify_encrypted_connection(connection) {
             let (status, code) = classify_connection_error(error);
             self.connection.take();
-            publish_status(&self.status, status);
+            self.set_status(status);
             return Err(code);
         }
 
@@ -615,7 +706,7 @@ impl VaultWorker {
             Some(Ok(value)) => Ok(value),
             Some(Err(RepositoryError::DataProtection)) => {
                 self.connection.take();
-                publish_status(&self.status, VaultStatus::Locked);
+                self.emit_error(VaultErrorCode::OsLockEngaged, VaultStatus::Locked);
                 Err(VaultErrorCode::OsLockEngaged)
             }
             Some(Err(other)) => Err(map_repository_error(other)),
@@ -932,6 +1023,7 @@ mod tests {
             database_path: PathBuf::new(),
             connection: Some(connection),
             status: Arc::clone(&status),
+            event_sink: None,
         };
 
         let created = worker.create_chat(ChatCreate {
@@ -960,6 +1052,7 @@ mod tests {
             database_path: PathBuf::new(),
             connection: Some(connection),
             status: Arc::clone(&status),
+            event_sink: None,
         };
 
         // Model an OS access denial surfacing mid-operation (iOS Data Protection

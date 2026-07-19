@@ -120,6 +120,8 @@ pub fn run() {
             commands_db::vault_message_append,
             #[cfg(all(feature = "secure-vault", target_vendor = "apple"))]
             commands_db::vault_messages_list,
+            #[cfg(all(feature = "secure-vault", target_vendor = "apple"))]
+            commands_db::vault_events,
         ])
         .setup(move |app| {
             #[cfg(all(feature = "secure-vault", target_vendor = "apple"))]

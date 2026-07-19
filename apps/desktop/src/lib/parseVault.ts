@@ -240,6 +240,35 @@ export function parseVaultUnit(value: unknown): void {
   }
 }
 
+/** Push event from the worker's lifecycle sink (mirrors the Rust enum). */
+export type VaultLifecycleEvent =
+  | { readonly kind: "status"; readonly status: VaultStatus }
+  | { readonly kind: "error"; readonly code: VaultErrorCode; readonly status: VaultStatus };
+
+/**
+ * Strictly parse a lifecycle event. Malformed/unknown shapes throw
+ * `VaultParseError` (the caller ignores them); a status field must be one of the
+ * closed states, while an error code is normalized (never throws for the code).
+ */
+export function parseVaultLifecycleEvent(value: unknown): VaultLifecycleEvent {
+  const object = asObject(value, "vault.event");
+  requireFields(object, ["kind"], "vault.event");
+  const kind = asString(object.kind, "vault.event.kind");
+  if (kind === "status") {
+    requireFields(object, ["status"], "vault.event");
+    return { kind: "status", status: parseVaultStatus(object.status) };
+  }
+  if (kind === "error") {
+    requireFields(object, ["code", "status"], "vault.event");
+    return {
+      kind: "error",
+      code: parseVaultErrorCode(object.code),
+      status: parseVaultStatus(object.status),
+    };
+  }
+  return fail("vault.event.kind", "unexpected kind");
+}
+
 export function buildChatCreateRequest(
   input: VaultChatCreateInput,
 ): VaultChatCreateRequest {

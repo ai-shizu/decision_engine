@@ -86,7 +86,12 @@ export type VaultAction =
       readonly messageId: string;
       readonly code: VaultErrorCode;
     }
-  | { readonly type: "saveRetried" };
+  | { readonly type: "saveRetried" }
+  | {
+      readonly type: "lockEngaged";
+      readonly code: VaultErrorCode;
+      readonly status: VaultStatus;
+    };
 
 function idleOperation(): VaultOperationState {
   return { phase: "idle", error: null };
@@ -395,6 +400,14 @@ export function vaultReducer(state: VaultState, action: VaultAction): VaultState
           error: null,
         },
       };
+
+    case "lockEngaged": {
+      // A worker-pushed fail-closed event (e.g. OS Data-Protection self-lock).
+      // Force the reported status; withStatus purges plaintext when it is not
+      // "unlocked", unmounting the unlocked view. Surface the code via unlock.
+      const next = withStatus(state, action.status);
+      return { ...next, unlock: { phase: "failed", error: action.code } };
+    }
 
     default: {
       const exhaustive: never = action;

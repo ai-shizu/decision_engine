@@ -359,6 +359,19 @@ test("V-R17 message cap drops the oldest side and keeps ascending order", () => 
   }
 });
 
+test("V-R18 lockEngaged purges plaintext and surfaces the code", () => {
+  const state = vaultReducer(unlockedWithPlaintext(), {
+    type: "lockEngaged",
+    code: "os_lock_engaged",
+    status: "locked",
+  });
+  assertEq(state.status, "locked", "status forced to locked");
+  assertEq(state.chats.items.length, 0, "chats purged");
+  assertEq(state.messages.items.length, 0, "messages purged");
+  assertEq(state.unlock.phase, "failed", "unlock surfaced as failed");
+  assertEq(state.unlock.error, "os_lock_engaged", "code surfaced");
+});
+
 let failed = 0;
 for (const { name, fn } of tests) {
   try {

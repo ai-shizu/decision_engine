@@ -28,7 +28,8 @@ mod worker;
 pub(crate) use repository::{ChatCreate, ChatRecord, MessageAppend, MessageCursor, MessageRecord};
 #[cfg(target_vendor = "apple")]
 pub(crate) use worker::{
-    VaultErrorCode, VaultHandle, VaultStatus, REPOSITORY_CONTENT_MAX_BYTES, VAULT_DATABASE_FILENAME,
+    VaultErrorCode, VaultHandle, VaultLifecycleEvent, VaultStatus, REPOSITORY_CONTENT_MAX_BYTES,
+    VAULT_DATABASE_FILENAME,
 };
 
 use rusqlite::Connection;

@@ -278,6 +278,21 @@ pub async fn vault_messages_list(
     Ok(records.into_iter().map(VaultMessageRecord::from).collect())
 }
 
+/// Register a frontend event sink and return the current status. The worker
+/// keeps a single sink, so re-invocation replaces (never accumulates) it. No
+/// SQL, key, path, or native error crosses this boundary.
+#[cfg(target_vendor = "apple")]
+#[tauri::command]
+pub async fn vault_events(
+    state: tauri::State<'_, db::VaultHandle>,
+    channel: tauri::ipc::Channel<db::VaultLifecycleEvent>,
+) -> Result<db::VaultStatus, db::VaultErrorCode> {
+    let handle = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || handle.register_events(channel))
+        .await
+        .map_err(|_| db::VaultErrorCode::Unavailable)?
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

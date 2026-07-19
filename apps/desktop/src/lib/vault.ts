@@ -1,6 +1,6 @@
 /** The sole frontend owner of M3 secure-vault Tauri IPC calls. */
 
-import { invoke } from "@tauri-apps/api/core";
+import { Channel, invoke } from "@tauri-apps/api/core";
 
 import {
   buildChatCreateRequest,
@@ -11,6 +11,7 @@ import {
   parseVaultChatRecord,
   parseVaultChatRecords,
   parseVaultErrorCode,
+  parseVaultLifecycleEvent,
   parseVaultMessageRecord,
   parseVaultMessageRecords,
   parseVaultStatus,
@@ -20,6 +21,7 @@ import {
   type VaultChatRecord,
   type VaultChatsListInput,
   type VaultErrorCode,
+  type VaultLifecycleEvent,
   type VaultMessageAppendInput,
   type VaultMessageRecord,
   type VaultMessagesListInput,
@@ -32,6 +34,7 @@ export type {
   VaultChatRecord,
   VaultChatsListInput,
   VaultErrorCode,
+  VaultLifecycleEvent,
   VaultMessageAppendInput,
   VaultMessageCursor,
   VaultMessageRecord,
@@ -92,6 +95,27 @@ export function vaultLock(): Promise<VaultStatus> {
 
 export function checkDbHealth(): Promise<VaultStatus> {
   return invokeVault("check_db_health", parseVaultStatus);
+}
+
+/**
+ * Subscribe to worker-pushed lifecycle events and return the current status.
+ * Creates exactly one `Channel`; the caller must invoke this once (e.g. a
+ * mount-only effect) so the worker never accumulates sinks. Malformed events
+ * are dropped by the strict parser.
+ */
+export async function subscribeVaultEvents(
+  onEvent: (event: VaultLifecycleEvent) => void,
+): Promise<VaultStatus> {
+  const channel = new Channel<unknown>((raw) => {
+    onEvent(parseVaultLifecycleEvent(raw));
+  });
+  let raw: unknown;
+  try {
+    raw = await invoke<unknown>("vault_events", { channel });
+  } catch (error: unknown) {
+    throw new VaultIpcError(parseVaultErrorCode(error));
+  }
+  return parseVaultStatus(raw);
 }
 
 export function vaultChatCreate(

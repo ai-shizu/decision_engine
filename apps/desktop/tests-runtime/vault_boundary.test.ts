@@ -8,6 +8,7 @@ import {
   parseVaultChatRecord,
   parseVaultChatRecords,
   parseVaultErrorCode,
+  parseVaultLifecycleEvent,
   parseVaultMessageRecord,
   parseVaultMessageRecords,
   parseVaultStatus,
@@ -230,6 +231,30 @@ test("V-B10 optional request fields become explicit nulls", () => {
 test("V-B11 unit responses require Rust unit's null encoding", () => {
   parseVaultUnit(null);
   assertParseError(() => parseVaultUnit(undefined), "undefined unit");
+});
+
+test("V-B12 parses status and error lifecycle events", () => {
+  const status = parseVaultLifecycleEvent({ kind: "status", status: "locked" });
+  assertEq(status.kind, "status", "status kind");
+  assertEq(status.kind === "status" ? status.status : "", "locked", "status value");
+
+  const error = parseVaultLifecycleEvent({
+    kind: "error",
+    code: "os_lock_engaged",
+    status: "locked",
+  });
+  assertEq(error.kind, "error", "error kind");
+  assertEq(error.kind === "error" ? error.code : "", "os_lock_engaged", "error code");
+});
+
+test("V-B13 rejects malformed and unknown lifecycle events", () => {
+  assertParseError(() => parseVaultLifecycleEvent({ kind: "boom" }), "unknown kind");
+  assertParseError(
+    () => parseVaultLifecycleEvent({ kind: "status", status: "sideways" }),
+    "invalid status literal",
+  );
+  assertParseError(() => parseVaultLifecycleEvent({ status: "locked" }), "missing kind");
+  assertParseError(() => parseVaultLifecycleEvent(null), "null event");
 });
 
 let failed = 0;

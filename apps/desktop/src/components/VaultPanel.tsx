@@ -11,6 +11,7 @@ import {
 
 import {
   VaultIpcError,
+  subscribeVaultEvents,
   vaultChatCreate,
   vaultChatsList,
   vaultLock,
@@ -369,6 +370,33 @@ export function VaultPanel(): ReactElement | null {
     return () => {
       active = false;
       document.removeEventListener("visibilitychange", onVisibility);
+    };
+  }, [probe]);
+
+  // Subscribe once to worker-pushed lifecycle events (the "nervous system").
+  // The single Channel is created only after the initial probe succeeds; the
+  // worker keeps one sink, so this never accumulates registrations. An OS
+  // self-lock arrives as an `error` event → `lockEngaged` forces the unlocked
+  // view (and any streaming it hosts) to unmount immediately.
+  useEffect(() => {
+    if (probe !== "ready") {
+      return;
+    }
+    let active = true;
+    void subscribeVaultEvents((event) => {
+      if (!active) {
+        return;
+      }
+      if (event.kind === "status") {
+        dispatch({ type: "statusReceived", status: event.status });
+      } else {
+        dispatch({ type: "lockEngaged", code: event.code, status: event.status });
+      }
+    }).catch(() => {
+      // No event sink available (e.g. desktop without the vault command).
+    });
+    return () => {
+      active = false;
     };
   }, [probe]);
 
