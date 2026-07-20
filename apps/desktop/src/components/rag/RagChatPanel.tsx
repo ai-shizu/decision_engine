@@ -17,7 +17,6 @@ interface RagChatPanelProps {
   onBusyChange: (busy: boolean) => void;
   /** M20-C messenger: sticky composer + bubbles; ingest moved to action sheet. */
   variant?: "default" | "messenger";
-  onActionClick?: () => void;
 }
 
 let nextMsgId = 1;
@@ -36,7 +35,6 @@ export function RagChatPanel({
   onError,
   onBusyChange,
   variant = "default",
-  onActionClick,
 }: RagChatPanelProps) {
   const [state, dispatch] = useReducer(ragChatReducer, undefined, initialRagChatState);
   const assistantIdRef = useRef<string | null>(null);
@@ -115,7 +113,6 @@ export function RagChatPanel({
         streaming={state.streaming}
         modelReady={modelReady}
         variant={variant}
-        onActionClick={onActionClick}
       />
       {!messenger ? <RagIngestPanel modelReady={modelReady} /> : null}
       {state.error ? (

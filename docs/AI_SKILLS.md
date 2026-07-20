@@ -780,6 +780,19 @@ Pocket Brain 経路は M14 tensor + M15 pulse/Rasch + gap sufficiency から loa
    - **INTERVIEW Foundation / Pressure（および legacy `start_interview_session`）:** Vault / Gap / Tensor 自動探索**禁止**。企業ファクト + セッション対話のみ。
 4. 検証: `cargo test -p pkb-desktop --features "pocket-brain,secure-vault" --lib`（hashed / consult_context / interview_machine）; `npx tsc --noEmit`。
 
+### 4.35 M20-K — Mobile consumer UX polish (jargon / ES toggle / SETTINGS fail-open) (2026-07-20)
+
+**射程:** 実機で致命的だった「開発者用語露出」「SETTINGS フリーズ」「CONSULT + 残存」「ES 強制」をモバイル向けに解消。デスクトップ Foxtrot は非破壊。コミットは指揮官指示待ち。
+
+**as-built:**
+1. CONSULT messenger: `+` / `RagActionSheet` 撤去（自動 RAG 前提）。デスクトップ default RAG は維持。
+2. `.mobile-content-rag` / messenger list / interview chat にドック・composer クリア用 `padding-bottom`。
+3. Finding 13: `PB_UI_FAIL` / `PB_UI_BUSY`（`uiFailure.ts`）で PROBE / Gap catch を無菌化。`[cmd] locked` を UI に出さない。
+4. INTERVIEW: `InterviewConfig.useRegisteredEs`（既定 true）+ Toggle。Python `_consult_interview_sim` は false なら `select_es` をスキップしてゼロベース面接。
+5. PROFILE / Gap / PROBE / Menu: `SOURCE_CODE` 等を `.mobile-only` 日本語化（思考のソース／対話・行動指標／将来予測／6次元バランス分析 等）。
+6. SETTINGS: `engineReady` を最大 3s probe 後に **fail-open** で `loadSettings`。永久ゲート禁止。「待機をスキップして再読込」を併設。
+7. 検証: `npx tsc --noEmit`（apps/desktop）。
+
 ### 4.8 M3 Phase 0-A — SQLCipher / Security.framework iOS link gate (2026-07-18)
 
 **射程（Phase 0-A のみ）:** `secure-vault` feature、依存解決、in-memory SQLCipher identity（`PRAGMA key` + `cipher_version`）、Security.framework シンボル（`SecRandom` / `SecAccessControl`）、Tauri command 登録、iOS Simulator 最終リンク証明。スキーマ・repository・UI・本番 Keychain item 作成は対象外。

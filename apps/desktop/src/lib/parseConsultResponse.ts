@@ -368,6 +368,7 @@ const CONFIG_ALLOWED_KEYS: ReadonlySet<string> = new Set([
   "difficulty",
   "stance",
   "customTheme",
+  "useRegisteredEs",
 ]);
 const DIFFICULTY_VALUES = ["standard", "hard", "extreme"] as const;
 const STANCE_VALUES = ["adversarial", "standard"] as const;
@@ -419,6 +420,12 @@ function parseInterviewConfig(raw: unknown, path: string): Partial<InterviewConf
   }
   if ("customTheme" in raw) {
     result.customTheme = parseConfigStringField(raw.customTheme, `${path}.customTheme`);
+  }
+  if ("useRegisteredEs" in raw) {
+    if (typeof raw.useRegisteredEs !== "boolean") {
+      throw new ConsultResponseParseError(`${path}.useRegisteredEs`, "boolean");
+    }
+    result.useRegisteredEs = raw.useRegisteredEs;
   }
 
   return result;

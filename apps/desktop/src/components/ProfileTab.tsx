@@ -108,7 +108,7 @@ export function ProfileTab() {
         <div>
           <h2>
             <span className="desktop-only">プロファイル分析 (PROFILE)</span>
-            <span className="mobile-only">PROFILE</span>
+            <span className="mobile-only">プロフィール</span>
           </h2>
           <p className="hint dev-noise">
             Source Code / Echo メトリクスはマウント時に無菌データのみ読み込みます。
@@ -116,13 +116,21 @@ export function ProfileTab() {
           </p>
         </div>
         <button type="button" className="ghost" disabled={busy !== null} onClick={() => void loadSterile()}>
-          {busy === "refresh" ? "更新中…" : "無菌データを再読込"}
+          {busy === "refresh" ? "更新中…" : (
+            <>
+              <span className="desktop-only">無菌データを再読込</span>
+              <span className="mobile-only">データを再読込</span>
+            </>
+          )}
         </button>
       </div>
 
       <div className="profile-grid">
         <div className="profile-section">
-          <p className="term-header">SOURCE_CODE</p>
+          <p className="term-header">
+            <span className="desktop-only">SOURCE_CODE</span>
+            <span className="mobile-only">思考のソース（生ログ）</span>
+          </p>
           {source ? (
             <div className="profile-axis-list">
               {Object.entries(source.axes).map(([axisId, axis]) => (
@@ -144,7 +152,10 @@ export function ProfileTab() {
         </div>
 
         <div className="profile-section">
-          <p className="term-header">ECHO_METRICS</p>
+          <p className="term-header">
+            <span className="desktop-only">ECHO_METRICS</span>
+            <span className="mobile-only">対話・行動指標</span>
+          </p>
           {oracle ? (
             <>
               <div className="profile-metric-row">
@@ -215,15 +226,28 @@ export function ProfileTab() {
       </div>
 
       <div className="profile-section">
-        <p className="term-header">ORACLE_REPORT</p>
-        <p className="hint">7B 言語化レポート。数値表示には使わない。明示クリックでのみ生成。</p>
+        <p className="term-header">
+          <span className="desktop-only">ORACLE_REPORT</span>
+          <span className="mobile-only">予測の解説レポート</span>
+        </p>
+        <p className="hint mobile-only">
+          数値の代わりに、いまの傾向を文章で説明します。ボタンを押したときだけ生成します。
+        </p>
+        <p className="hint dev-noise desktop-only">
+          7B 言語化レポート。数値表示には使わない。明示クリックでのみ生成。
+        </p>
         <button
           type="button"
           className="primary"
           disabled={busy !== null}
           onClick={() => void handleOracleReport()}
         >
-          {busy === "oracle" ? "生成中…" : "Oracle 言語化レポートを生成"}
+          {busy === "oracle" ? "生成中…" : (
+            <>
+              <span className="desktop-only">Oracle 言語化レポートを生成</span>
+              <span className="mobile-only">解説レポートを生成</span>
+            </>
+          )}
         </button>
         {oracleAnalysis && (
           <pre className="profile-report">{oracleAnalysis}</pre>
@@ -231,10 +255,14 @@ export function ProfileTab() {
       </div>
 
       <div className="profile-section">
-        <p className="term-header">TWIN_FORECAST</p>
+        <p className="term-header">
+          <span className="desktop-only">TWIN_FORECAST</span>
+          <span className="mobile-only">将来予測シミュレーション</span>
+        </p>
         <div className="profile-form-row">
           <label>
-            horizon_days
+            <span className="desktop-only">horizon_days</span>
+            <span className="mobile-only">予測日数</span>
             <input
               type="number"
               min={1}
@@ -244,14 +272,16 @@ export function ProfileTab() {
             />
           </label>
           <label>
-            mode
+            <span className="desktop-only">mode</span>
+            <span className="mobile-only">モード</span>
             <select value={twinMode} onChange={(e) => setTwinMode(e.target.value as "daily" | "interview")}>
-              <option value="daily">daily</option>
-              <option value="interview">interview</option>
+              <option value="daily">日常</option>
+              <option value="interview">面接</option>
             </select>
           </label>
           <label>
-            interview_turns
+            <span className="desktop-only">interview_turns</span>
+            <span className="mobile-only">面接ターン数</span>
             <input
               type="number"
               min={0}
@@ -267,7 +297,14 @@ export function ProfileTab() {
           disabled={busy !== null}
           onClick={() => void handleTwinForecast()}
         >
-          {busy === "twin" ? "計算中…" : "Twin 予測を実行"}
+          {busy === "twin" ? (
+            "計算中…"
+          ) : (
+            <>
+              <span className="desktop-only">Twin 予測を実行</span>
+              <span className="mobile-only">将来予測を実行</span>
+            </>
+          )}
         </button>
         {forecast && (
           <>
@@ -300,14 +337,25 @@ export function ProfileTab() {
       </div>
 
       <div className="profile-section">
-        <p className="term-header">TENSOR_DIAGNOSTICS</p>
-        <p className="hint">結合テンソルの再構築。明示ボタンのみ。</p>
+        <p className="term-header">
+          <span className="desktop-only">TENSOR_DIAGNOSTICS</span>
+          <span className="mobile-only">バランス分析の再構築</span>
+        </p>
+        <p className="hint desktop-only">結合テンソルの再構築。明示ボタンのみ。</p>
+        <p className="hint mobile-only">バランス分析データを明示的に再構築します。</p>
         <button
           type="button"
           disabled={busy !== null}
           onClick={() => void handleTensorRebuild()}
         >
-          {busy === "tensor" ? "再構築中…" : "Tensor を再構築"}
+          {busy === "tensor" ? (
+            "再構築中…"
+          ) : (
+            <>
+              <span className="desktop-only">Tensor を再構築</span>
+              <span className="mobile-only">分析データを再構築</span>
+            </>
+          )}
         </button>
         {tensorResult && (
           <div className="profile-metric-row">
@@ -320,10 +368,16 @@ export function ProfileTab() {
       </div>
 
       <div className="profile-section">
-        <p className="term-header">CONTEXT_OBSERVATORY</p>
-        <p className="hint">
+        <p className="term-header">
+          <span className="desktop-only">CONTEXT_OBSERVATORY</span>
+          <span className="mobile-only">相談コンテキストの内訳</span>
+        </p>
+        <p className="hint desktop-only">
           直近の相談で 12,000 字コンテキストが何を採用・棄却したかの決定論的マニフェスト。
           明示ボタンでのみ取得し、生本文・実名・quote は表示しません。
+        </p>
+        <p className="hint mobile-only">
+          直近の相談でどの情報を採用・見送ったかの内訳です。ボタンを押したときだけ取得します。
         </p>
         <ContextObservatoryContainer />
       </div>

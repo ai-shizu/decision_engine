@@ -2275,9 +2275,16 @@ button.secondary {
   display: flex;
   flex-direction: column;
   padding: 0;
-  /* Dock + fixed composer + safe-area — keep messages clear of chrome */
-  padding-bottom: calc(56px + 56px + env(safe-area-inset-bottom, 0px));
+  /* Dock + composer (~64) + safe-area — keep last messages clear of chrome */
+  padding-bottom: calc(56px + 72px + env(safe-area-inset-bottom, 0px));
   overflow: hidden;
+}
+
+/* Interview / Probe chat logs: clear bottom dock so last bubble stays visible */
+.mobile-chrome .chat-log,
+.mobile-chrome .multistage-message-list,
+.mobile-chrome .es-review-message-list {
+  padding-bottom: calc(24px + env(safe-area-inset-bottom, 0px));
 }
 
 .mobile-panel {
@@ -2569,6 +2576,8 @@ button.secondary {
   list-style: none;
   margin: 0;
   padding: 12px;
+  /* Extra bottom inset so last bubble clears fixed composer */
+  padding-bottom: calc(24px + env(safe-area-inset-bottom, 0px));
   flex: 1;
   min-height: 0;
   overflow-y: auto;

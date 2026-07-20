@@ -20,7 +20,7 @@ export const MOBILE_MENU_DESTINATIONS: {
   label: string;
   caption: string;
 }[] = [
-  { id: "profile", label: "PROFILE", caption: "Gap/Tensor" },
+  { id: "profile", label: "PROFILE", caption: "プロフィール" },
   { id: "import", label: "IMPORT", caption: "取込" },
   { id: "settings", label: "SETTINGS", caption: "設定" },
 ];

@@ -14,7 +14,6 @@ import {
   type MemSample,
 } from "../lib/llm";
 import { ExtractionPanel } from "./ExtractionPanel";
-import { RagActionSheet } from "./rag/RagActionSheet";
 import { RagChatPanel } from "./rag/RagChatPanel";
 
 // A17 Pro / 8GB jetsam design budget ≈ 4.8 GB (blueprint §G0-C.1, 60% band).
@@ -30,14 +29,9 @@ export interface PocketBrainPanelProps {
   variant?: "default" | "messenger";
 }
 
-function softLoadError(raw: string): string {
-  if (/GGUF not found/i.test(raw)) {
-    return "モデル未配置です。シミュレータへ GGUF を注入してから Load してください。";
-  }
-  if (raw.length > 120) {
-    return `${raw.slice(0, 100)}…`;
-  }
-  return raw;
+function softLoadError(_raw: string): string {
+  // Finding 13: never surface exception text / path / GGUF details.
+  return "モデルの準備に失敗しました。配置を確認してから再読込してください。";
 }
 
 export function PocketBrainPanel({ variant = "default" }: PocketBrainPanelProps) {
@@ -45,7 +39,6 @@ export function PocketBrainPanel({ variant = "default" }: PocketBrainPanelProps)
   const [modelReady, setModelReady] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [actionOpen, setActionOpen] = useState(false);
   const messenger = variant === "messenger";
 
   useEffect(() => {
@@ -116,7 +109,7 @@ export function PocketBrainPanel({ variant = "default" }: PocketBrainPanelProps)
               onClick={() => void onLoad()}
               disabled={busy || modelReady}
             >
-              {modelReady ? "Ready" : "Load"}
+              {modelReady ? "準備完了" : "読込"}
             </button>
             <button
               type="button"
@@ -124,7 +117,7 @@ export function PocketBrainPanel({ variant = "default" }: PocketBrainPanelProps)
               onClick={() => void cancelGeneration()}
               disabled={!busy}
             >
-              Stop
+              停止
             </button>
           </div>
         </header>
@@ -138,13 +131,6 @@ export function PocketBrainPanel({ variant = "default" }: PocketBrainPanelProps)
           modelReady={modelReady}
           onError={setError}
           onBusyChange={setBusy}
-          onActionClick={() => setActionOpen(true)}
-        />
-
-        <RagActionSheet
-          open={actionOpen}
-          modelReady={modelReady}
-          onClose={() => setActionOpen(false)}
         />
       </section>
     );

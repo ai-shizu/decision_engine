@@ -4,10 +4,10 @@ import { todayIso } from "../lib/dateUtils";
 import {
   getProbeQuestions,
   getProbeStatus,
-  isPocketBrainInvokeError,
   probeNextQuestion,
   probeSubmitAnswer,
 } from "../lib/pocketBrain";
+import { PB_UI_BUSY, PB_UI_FAIL } from "../lib/pocketBrain/uiFailure";
 import {
   initialProbePanelState,
   probeBusy,
@@ -23,6 +23,12 @@ const AXIS_LABELS: Record<string, string> = {
 };
 
 const STAGE_ORDER = ["FACT", "CONTEXT", "EMOTION", "MEANING"] as const;
+const STAGE_LABELS_JA: Record<(typeof STAGE_ORDER)[number], string> = {
+  FACT: "事実",
+  CONTEXT: "文脈",
+  EMOTION: "感情",
+  MEANING: "意味",
+};
 
 /**
  * M15 PROBE funnel via Pocket Brain Tauri commands (useReducer state machine).
@@ -45,11 +51,8 @@ export function PocketProbePanel() {
         getProbeQuestions(),
       ]);
       dispatch({ type: "load_success", status, bank });
-    } catch (e) {
-      const message = isPocketBrainInvokeError(e)
-        ? e.message
-        : "状態の読み込みに失敗しました。しばらくしてからもう一度お試しください。";
-      dispatch({ type: "load_failure", message });
+    } catch {
+      dispatch({ type: "load_failure", message: PB_UI_FAIL.probeStatus });
     }
   }
 
@@ -66,11 +69,8 @@ export function PocketProbePanel() {
       const status = await getProbeStatus(today);
       dispatch({ type: "next_success", question, status });
       requestAnimationFrame(() => answerRef.current?.focus());
-    } catch (e) {
-      const message = isPocketBrainInvokeError(e)
-        ? e.message
-        : "次の質問を取得できませんでした。しばらくしてからもう一度お試しください。";
-      dispatch({ type: "next_failure", message });
+    } catch {
+      dispatch({ type: "next_failure", message: PB_UI_FAIL.probeNext });
     }
   }
 
@@ -90,11 +90,8 @@ export function PocketProbePanel() {
       if (result.next_question) {
         requestAnimationFrame(() => answerRef.current?.focus());
       }
-    } catch (e) {
-      const message = isPocketBrainInvokeError(e)
-        ? e.message
-        : "回答の送信に失敗しました。しばらくしてからもう一度お試しください。";
-      dispatch({ type: "submit_failure", message });
+    } catch {
+      dispatch({ type: "submit_failure", message: PB_UI_FAIL.probeSubmit });
     }
   }
 
@@ -108,7 +105,7 @@ export function PocketProbePanel() {
         <div>
           <p className="term-header">
             <span className="desktop-only">PROBE_FUNNEL (Pocket Brain / M15)</span>
-            <span className="mobile-only">PROBE</span>
+            <span className="mobile-only">自己探索</span>
           </p>
           <p className="hint">
             進捗{" "}
@@ -130,9 +127,15 @@ export function PocketProbePanel() {
           disabled={busy}
           onClick={() => void refreshAll()}
         >
-          {state.phase === "loading" ? "読込中…" : "状態を更新"}
+          {state.phase === "loading" ? "確認中…" : "状態を更新"}
         </button>
       </div>
+
+      {state.phase === "loading" && (
+        <p className="hint ambient-spinner" role="status">
+          {PB_UI_BUSY.probeStatus}
+        </p>
+      )}
 
       <div
         className="probe-progress-track"
@@ -161,7 +164,8 @@ export function PocketProbePanel() {
               key={stage}
               className={`probe-step${active ? " active" : ""}${done ? " done" : ""}`}
             >
-              {stage}
+              <span className="desktop-only">{stage}</span>
+              <span className="mobile-only">{STAGE_LABELS_JA[stage]}</span>
             </span>
           );
         })}

@@ -7,7 +7,6 @@ import { redactHiddenReasoning } from "../../lib/redactHiddenReasoning";
 import {
   advanceInterviewStage,
   getInterviewSession,
-  isPocketBrainInvokeError,
   startMultistageInterview,
 } from "../../lib/pocketBrain";
 import type { CompanyFacts, MultistageInterviewResult } from "../../lib/pocketBrain/types";
@@ -15,6 +14,7 @@ import {
   initialMultistageInterviewState,
   multistageInterviewReducer,
 } from "../../lib/multistageInterviewReducer";
+import { uiErrorMessage } from "../../lib/uiErrorMessages";
 import { useThrottledStream } from "../../lib/useThrottledStream";
 
 let nextMsgId = 1;
@@ -118,11 +118,17 @@ export function MultistageInterviewPanel({
         },
         (event) => {
           if (event.error) {
-            dispatch({ type: "token_error", message: event.error });
+            dispatch({
+              type: "token_error",
+              message: uiErrorMessage("INTERVIEW_RESPONSE"),
+            });
             return;
           }
-          handleTokenStream(event, throttle, (message) =>
-            dispatch({ type: "token_error", message }),
+          handleTokenStream(event, throttle, () =>
+            dispatch({
+              type: "token_error",
+              message: uiErrorMessage("INTERVIEW_RESPONSE"),
+            }),
           );
         },
       );
@@ -130,12 +136,12 @@ export function MultistageInterviewPanel({
       throttle.flushAndStop();
       dispatch({ type: "start_success", assistantId, result });
       await hydrateAfter(result);
-    } catch (e) {
+    } catch {
       throttle.flushAndStop();
-      const message = isPocketBrainInvokeError(e)
-        ? e.message
-        : `multistage start: ${String(e)}`;
-      dispatch({ type: "send_failure", message });
+      dispatch({
+        type: "send_failure",
+        message: uiErrorMessage("INTERVIEW_RESPONSE"),
+      });
     } finally {
       assistantIdRef.current = null;
       dispatch({ type: "send_end" });
@@ -160,8 +166,11 @@ export function MultistageInterviewPanel({
       const result = await advanceInterviewStage(
         { sessionId: state.sessionId, candidateAnswer: answer },
         (event) => {
-          handleTokenStream(event, throttle, (message) =>
-            dispatch({ type: "token_error", message }),
+          handleTokenStream(event, throttle, () =>
+            dispatch({
+              type: "token_error",
+              message: uiErrorMessage("INTERVIEW_RESPONSE"),
+            }),
           );
         },
       );
@@ -174,12 +183,12 @@ export function MultistageInterviewPanel({
         dispatch({ type: "advance_success", assistantId, result });
       }
       await hydrateAfter(result);
-    } catch (err) {
+    } catch {
       throttle.flushAndStop();
-      const message = isPocketBrainInvokeError(err)
-        ? err.message
-        : `multistage advance: ${String(err)}`;
-      dispatch({ type: "send_failure", message });
+      dispatch({
+        type: "send_failure",
+        message: uiErrorMessage("INTERVIEW_RESPONSE"),
+      });
     } finally {
       assistantIdRef.current = null;
       dispatch({ type: "send_end" });

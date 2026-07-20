@@ -169,6 +169,11 @@ export interface InterviewConfig {
   difficulty: "standard" | "hard" | "extreme";
   stance: "adversarial" | "standard";
   customTheme?: string;
+  /**
+   * When true (default), registered ES drives interview if present.
+   * When false, force case/config path even if active ES exists.
+   */
+  useRegisteredEs?: boolean;
 }
 
 /** F4b: 成績表の1軸分の評価 (バックエンドで軸ホワイトリスト・evidence必須を検証済み) */

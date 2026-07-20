@@ -21,6 +21,7 @@ import { CompanyFactsForm } from "./interview/CompanyFactsForm";
 import { EsReviewPanel } from "./interview/EsReviewPanel";
 import { MultistageInterviewPanel } from "./interview/MultistageInterviewPanel";
 import { TensorProfilePanel } from "./TensorProfilePanel";
+import { Toggle } from "./Toggle";
 
 // F-17 (SPEC_FOXTROT_UI.md §10.3): es_review は思考速度を計測も評価もしない
 // (latency 構造的皆無)。hint はモード別に単一定義し、二重定義を作らない
@@ -109,6 +110,7 @@ const DEFAULT_CONFIG: InterviewConfig = {
   difficulty: "standard",
   stance: "adversarial",
   customTheme: "",
+  useRegisteredEs: true,
 };
 
 // F4b (SPEC_FOXTROT_UI.md §7 裁定3): スコア 0-100 を TensionMeter と同型の
@@ -655,8 +657,19 @@ export function InterviewTab() {
           </div>
           {mode === "interview_sim" && (
           <>
+          <div className="term-row config-row interview-es-toggle-row">
+            <span className="term-source-name">登録済みESを前提にする</span>
+            <Toggle
+              id="interview-use-registered-es"
+              checked={config.useRegisteredEs !== false}
+              disabled={busy}
+              onChange={(v) => setConfig((c) => ({ ...c, useRegisteredEs: v }))}
+            />
+          </div>
           <p className="hint">
-            登録済みのESがある場合、その内容を踏まえた面接が優先されます。この設定は記録用に保持されます。
+            {config.useRegisteredEs !== false
+              ? "オン：登録済みESがある場合、その内容を踏まえた面接を優先します。"
+              : "オフ：ESを使わず、下の業界・ジャンル設定でゼロベースの面接にします。"}
           </p>
           <div className="action-row">
             <button type="button" className="ghost" onClick={() => setConfig(DEFAULT_CONFIG)}>

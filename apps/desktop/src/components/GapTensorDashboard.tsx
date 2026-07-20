@@ -16,8 +16,8 @@ import {
   ensureAuthoritativeTensorProfile,
   getLatestGapAnalysis,
   getLatestTensorProfile,
-  isPocketBrainInvokeError,
 } from "../lib/pocketBrain";
+import { PB_UI_BUSY, PB_UI_FAIL } from "../lib/pocketBrain/uiFailure";
 import {
   isPocketTensorProfile,
   pocketTensorDimensionRows,
@@ -64,11 +64,8 @@ export function GapTensorDashboard() {
         getLatestGapAnalysis(),
       ]);
       dispatch({ type: "load_success", tensor, gap });
-    } catch (e) {
-      const message = isPocketBrainInvokeError(e)
-        ? e.message
-        : `gap/tensor load: ${String(e)}`;
-      dispatch({ type: "load_failure", message });
+    } catch {
+      dispatch({ type: "load_failure", message: PB_UI_FAIL.gapTensorLoad });
     }
   }
 
@@ -97,11 +94,8 @@ export function GapTensorDashboard() {
           payload: result.payload,
         },
       });
-    } catch (e) {
-      const message = isPocketBrainInvokeError(e)
-        ? e.message
-        : `calculate_gap_analysis: ${String(e)}`;
-      dispatch({ type: "recalc_failure", message });
+    } catch {
+      dispatch({ type: "recalc_failure", message: PB_UI_FAIL.gapRecalc });
     }
   }
 
@@ -114,11 +108,8 @@ export function GapTensorDashboard() {
         ? ensured
         : await getLatestTensorProfile();
       dispatch({ type: "ensure_success", tensor });
-    } catch (e) {
-      const message = isPocketBrainInvokeError(e)
-        ? e.message
-        : `ensure_authoritative_tensor_profile: ${String(e)}`;
-      dispatch({ type: "ensure_failure", message });
+    } catch {
+      dispatch({ type: "ensure_failure", message: PB_UI_FAIL.tensorEnsure });
     }
   }
 
@@ -137,9 +128,12 @@ export function GapTensorDashboard() {
         <div>
           <p className="term-header">
             <span className="desktop-only">GAP_TENSOR_DASHBOARD (M14 / M18-C)</span>
-            <span className="mobile-only">Gap / Tensor</span>
+            <span className="mobile-only">ギャップ分析</span>
           </p>
-          <p className="hint dev-noise">
+          <p className="hint mobile-only">
+            日記と行動記録のずれを可視化します。再計算は数値アルゴリズムのみです。
+          </p>
+          <p className="hint dev-noise desktop-only">
             Vault の最新 Gap 分析と 6D テンソルを表示。権威テンソルは N/A 固定（LLM は権威を更新しない）。
             再計算は決定論アルゴリズムのみ（LLM 非呼び出し）。
           </p>
@@ -159,16 +153,21 @@ export function GapTensorDashboard() {
             disabled={busy}
             onClick={() => void onEnsureTensor()}
           >
-            {state.phase === "ensuring_tensor"
-              ? "確定中…"
-              : "権威テンソルを確定"}
+            {state.phase === "ensuring_tensor" ? (
+              "確定中…"
+            ) : (
+              <>
+                <span className="desktop-only">権威テンソルを確定</span>
+                <span className="mobile-only">バランス分析を確定</span>
+              </>
+            )}
           </button>
         </div>
       </div>
 
       {state.phase === "loading" && (
         <p className="hint ambient-spinner" role="status">
-          Gap / Tensor を読込中…
+          {PB_UI_BUSY.gapTensorLoad}
         </p>
       )}
 
@@ -176,7 +175,7 @@ export function GapTensorDashboard() {
         <div className="term-panel gap-tensor-col">
           <p className="term-header">
             <span className="desktop-only">TENSOR_PROFILE_6D</span>
-            <span className="mobile-only">6D テンソル</span>
+            <span className="mobile-only">6次元バランス分析</span>
           </p>
           {state.tensor ? (
             <>
@@ -209,12 +208,18 @@ export function GapTensorDashboard() {
               </ul>
             </>
           ) : (
-            <p className="hint">テンソル未取得</p>
+            <p className="hint">
+              <span className="desktop-only">テンソル未取得</span>
+              <span className="mobile-only">バランス分析データがまだありません</span>
+            </p>
           )}
         </div>
 
         <div className="term-panel gap-tensor-col">
-          <p className="term-header">GAP_ANALYSIS</p>
+          <p className="term-header">
+            <span className="desktop-only">GAP_ANALYSIS</span>
+            <span className="mobile-only">主観×客観ギャップ分析</span>
+          </p>
           {sufficiency !== null && (
             <div className="gap-sufficiency-block">
               <div className="term-row">
@@ -272,7 +277,10 @@ export function GapTensorDashboard() {
 
           {gapView && (gapView.subjective.length > 0 || gapView.objective.length > 0) && (
             <div className="gap-theme-scores">
-              <p className="term-header">THEME_SCORES</p>
+              <p className="term-header">
+                <span className="desktop-only">THEME_SCORES</span>
+                <span className="mobile-only">テーマ別スコア</span>
+              </p>
               {gapView.subjective.map((s) => (
                 <div key={`s-${s.theme}`} className="term-row mission-result-row">
                   <span className="term-source-name">主観 · {s.theme}</span>
@@ -293,8 +301,14 @@ export function GapTensorDashboard() {
       </div>
 
       <div className="term-panel">
-        <p className="term-header">RECALCULATE_EVIDENCE</p>
-        <p className="hint">
+        <p className="term-header">
+          <span className="desktop-only">RECALCULATE_EVIDENCE</span>
+          <span className="mobile-only">根拠を入力して再計算</span>
+        </p>
+        <p className="hint mobile-only">
+          日記（主観）と行動記録（LINE・支出・予定）を入れて、ギャップを再計算します。
+        </p>
+        <p className="hint dev-noise desktop-only">
           `calculate_gap_analysis` は days[] 必須。Vault から日記を自動ロードするコマンドは無いため、
           ここに主観（日記）と客観（LINE自己発話・支出・予定）を注入して再計算する。
         </p>

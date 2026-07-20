@@ -165,7 +165,7 @@ export function MobileBottomNav({
           onClick={() => onMenuOpenChange(!menuOpen)}
         >
           <NavIcon kind="menu" />
-          <span className="mobile-nav-label">Menu</span>
+          <span className="mobile-nav-label">MENU</span>
           <span className="mobile-nav-caption">他</span>
         </button>
       </nav>
@@ -185,7 +185,7 @@ export function MobileBottomNav({
             onClick={(e) => e.stopPropagation()}
           >
             <div className="mobile-menu-sheet-head">
-              <h2 id={titleId}>Navigate</h2>
+              <h2 id={titleId}>メニュー</h2>
               <button
                 ref={closeRef}
                 type="button"
@@ -193,7 +193,7 @@ export function MobileBottomNav({
                 aria-label="メニューを閉じる"
                 onClick={() => onMenuOpenChange(false)}
               >
-                Close
+                閉じる
               </button>
             </div>
             <p className="hint mobile-menu-hint">

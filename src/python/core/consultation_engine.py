@@ -1242,7 +1242,12 @@ class ConsultationEngine:
                 )
             else:
                 es = select_es(None)
-                if es is not None:
+                use_registered_es = cfg.get("useRegisteredEs", cfg.get("use_registered_es", True))
+                if isinstance(use_registered_es, str):
+                    use_registered_es = use_registered_es.strip().lower() not in (
+                        "0", "false", "no", "off",
+                    )
+                if es is not None and use_registered_es:
                     # ES 駆動: 面接官の専門性は ES のターゲットドメインに動的追従
                     # F-18: stance は config から読む (既定 adversarial)。
                     system = build_interviewer_persona(
@@ -1258,6 +1263,8 @@ class ConsultationEngine:
                         "悪意を持った圧迫質問 (Adversarial Attack) を1つだけ投げること。"
                     )
                 else:
+                    if es is not None and not use_registered_es:
+                        say("登録ESをスキップ: ゼロベース（config/ケース）面接")
                     industry_id = str(cfg.get("industry") or "").strip()
                     genre_id = str(cfg.get("genre") or "").strip()
                     difficulty_id = str(cfg.get("difficulty") or "").strip()

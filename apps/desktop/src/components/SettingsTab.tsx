@@ -13,6 +13,13 @@ import { uiErrorMessage } from "../lib/uiErrorMessages";
 import { BirthdayPicker } from "./BirthdayPicker";
 import { Toggle } from "./Toggle";
 
+/** M20-K: never block SETTINGS forever — budget then fail-open into loadSettings. */
+const ENGINE_READY_BUDGET_MS = 3000;
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((r) => setTimeout(r, ms));
+}
+
 export function SettingsTab({ engineReady = true }: { engineReady?: boolean }) {
   const [settings, setSettings] = useState<SettingsData | null>(null);
   const [attrs, setAttrs] = useState<Record<string, string>>({});
@@ -25,27 +32,37 @@ export function SettingsTab({ engineReady = true }: { engineReady?: boolean }) {
   const [loadError, setLoadError] = useState("");
   const [knowledgeResearchEnabled, setKnowledgeResearchEnabled] = useState(false);
   const [policyBusy, setPolicyBusy] = useState(false);
+  const [waitingEngine, setWaitingEngine] = useState(false);
 
-  async function fetchSettings() {
+  async function probeReady(budgetMs: number): Promise<boolean> {
+    if (engineReady) return true;
+    const deadline = Date.now() + budgetMs;
+    while (Date.now() < deadline) {
+      try {
+        if (await checkEngineReady()) return true;
+      } catch {
+        /* keep probing */
+      }
+      await sleep(250);
+    }
+    try {
+      return await checkEngineReady();
+    } catch {
+      return false;
+    }
+  }
+
+  async function fetchSettings(opts?: { skipWait?: boolean }) {
     setLoadError("");
     setStatus("");
     setStatusKind("info");
-    // Prop may lag; also probe live readiness (M20 LoadingScreen race).
-    let ready = engineReady;
-    if (!ready) {
-      try {
-        ready = await checkEngineReady();
-      } catch {
-        ready = false;
-      }
-    }
-    if (!ready) {
-      setSettings(null);
-      setLoadError(
-        "エンジンの準備完了後に設定を読み込みます。しばらく待つか、再読み込みしてください。",
-      );
-      return;
-    }
+    setWaitingEngine(true);
+    const ready = opts?.skipWait
+      ? engineReady || (await checkEngineReady().catch(() => false))
+      : await probeReady(ENGINE_READY_BUDGET_MS);
+    setWaitingEngine(false);
+
+    // Fail-open: always attempt load after budget (do not return early on !ready).
     try {
       const s = await loadSettings();
       const merged = { ...s.fixed_attributes };
@@ -54,16 +71,23 @@ export function SettingsTab({ engineReady = true }: { engineReady?: boolean }) {
       }
       setSettings(s);
       setAttrs(merged);
-      // Policy is optional for SETTINGS shell — failure must not wipe loaded settings.
       try {
         const policy = await getKnowledgeResearchPolicy();
         setKnowledgeResearchEnabled(policy.enabled);
       } catch {
         /* best-effort */
       }
+      if (!ready) {
+        setStatusKind("info");
+        setStatus("エンジン接続は未確認です。保存など一部操作は失敗する場合があります。");
+      }
     } catch {
       setSettings(null);
-      setLoadError(uiErrorMessage("SETTINGS_LOAD"));
+      setLoadError(
+        ready
+          ? uiErrorMessage("SETTINGS_LOAD")
+          : "設定を読み込めませんでした。「再試行」または「待機をスキップして再読込」を試してください。",
+      );
     }
   }
 
@@ -125,7 +149,13 @@ export function SettingsTab({ engineReady = true }: { engineReady?: boolean }) {
   if (!settings) {
     return (
       <section className="panel">
-        <p className="hint">{loadError ? "" : "設定を読み込み中…"}</p>
+        <p className="hint">
+          {waitingEngine
+            ? "エンジン接続を確認しています（最大数秒）…"
+            : loadError
+              ? ""
+              : "設定を読み込み中…"}
+        </p>
         {loadError && (
           <>
             <p className="status-line error-text" role="alert">
@@ -133,12 +163,19 @@ export function SettingsTab({ engineReady = true }: { engineReady?: boolean }) {
             </p>
             <div className="action-row">
               <button type="button" className="primary" onClick={() => void fetchSettings()}>
-                再読み込み
+                再試行
+              </button>
+              <button
+                type="button"
+                className="ghost"
+                onClick={() => void fetchSettings({ skipWait: true })}
+              >
+                待機をスキップして再読込
               </button>
             </div>
           </>
         )}
-        {!loadError && (
+        {!loadError && !waitingEngine && (
           <p className="hint">初回はエンジンの準備に数十秒かかることがあります。</p>
         )}
       </section>
@@ -147,7 +184,10 @@ export function SettingsTab({ engineReady = true }: { engineReady?: boolean }) {
 
   return (
     <section className="panel settings-panel">
-      <h2>設定 (SETTINGS)</h2>
+      <h2>
+        <span className="desktop-only">設定 (SETTINGS)</span>
+        <span className="mobile-only">設定</span>
+      </h2>
 
       <div className="settings-block">
         <h3>基本情報</h3>
