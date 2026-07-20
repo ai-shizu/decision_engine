@@ -90,7 +90,7 @@ fn validate_source_id(source_id: &str) -> Result<(), String> {
     Ok(())
 }
 
-fn search_sync(
+pub(crate) fn search_sync(
     vault: &VaultHandle,
     llm: &LlmHandle,
     query: &str,
@@ -243,7 +243,14 @@ pub async fn send_rag_chat(
                 text: hit.text_content.as_str(),
             })
             .collect();
-        let prompt = build_rag_prompt(&message_for_search, &refs);
+        let rag_prompt = build_rag_prompt(&message_for_search, &refs);
+        // M17: fail-safe Gap/Oracle injection (missing vault analytics → soft notes).
+        let prompt = match crate::llm::consult_context::load_mentor_context(&vault) {
+            Ok(mentor) => {
+                crate::llm::consult_context::append_mentor_sections(&rag_prompt, &mentor)
+            }
+            Err(_) => rag_prompt,
+        };
         let ids: Vec<String> = hits.into_iter().map(|hit| hit.id).collect();
         Ok::<_, String>((prompt, ids))
     })

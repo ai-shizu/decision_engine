@@ -7,6 +7,7 @@
 //! `lib.rs` under `#[cfg(feature = "pocket-brain")]`. M7 adds the lock-free
 //! `LlmMemoryGovernor` + out-of-band `LlmLifecycleEvent::MemoryPurged` channel.
 //! M12 adds interview/ES prompt assembly (`prompt_sim`) and gated sim commands.
+//! M17 adds mentor consult context + multi-stage interview machine.
 
 pub mod commands_llm;
 pub mod embed;
@@ -17,11 +18,14 @@ pub mod prompt_sim;
 pub mod schema;
 pub mod service;
 
-#[cfg(all(
-    feature = "secure-vault",
-    target_vendor = "apple"
-))]
+#[cfg(all(feature = "secure-vault", target_vendor = "apple"))]
+pub mod commands_consult;
+#[cfg(all(feature = "secure-vault", target_vendor = "apple"))]
 pub mod commands_sim;
+#[cfg(all(feature = "secure-vault", target_vendor = "apple"))]
+pub mod consult_context;
+#[cfg(all(feature = "secure-vault", target_vendor = "apple"))]
+pub mod interview_machine;
 
 // Re-exported for `lib.rs`'s `llm::LlmHandle::spawn(...)` wiring. Other types
 // (e.g. `LlmMemoryGovernor`, `LlmLifecycleEvent`) are referenced through their

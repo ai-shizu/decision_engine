@@ -178,6 +178,12 @@ pub fn run() {
                 feature = "secure-vault",
                 target_vendor = "apple"
             ))]
+            llm::commands_consult::consult_with_oracle_context,
+            #[cfg(all(
+                feature = "pocket-brain",
+                feature = "secure-vault",
+                target_vendor = "apple"
+            ))]
             llm::commands_sim::fetch_edinet_company_facts,
             #[cfg(all(
                 feature = "pocket-brain",
@@ -191,6 +197,24 @@ pub fn run() {
                 target_vendor = "apple"
             ))]
             llm::commands_sim::review_es_draft,
+            #[cfg(all(
+                feature = "pocket-brain",
+                feature = "secure-vault",
+                target_vendor = "apple"
+            ))]
+            llm::commands_sim::start_multistage_interview,
+            #[cfg(all(
+                feature = "pocket-brain",
+                feature = "secure-vault",
+                target_vendor = "apple"
+            ))]
+            llm::commands_sim::advance_interview_stage,
+            #[cfg(all(
+                feature = "pocket-brain",
+                feature = "secure-vault",
+                target_vendor = "apple"
+            ))]
+            llm::commands_sim::get_interview_session,
             #[cfg(all(feature = "secure-vault", target_vendor = "apple"))]
             commands_db::vault_status,
             #[cfg(all(feature = "secure-vault", target_vendor = "apple"))]

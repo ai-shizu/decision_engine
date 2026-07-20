@@ -8,7 +8,7 @@ use std::{error::Error, fmt};
 
 use rusqlite::{Connection, TransactionBehavior};
 
-pub(crate) const LATEST_SCHEMA_VERSION: i64 = 5;
+pub(crate) const LATEST_SCHEMA_VERSION: i64 = 6;
 
 /// Canonical embedding width for `knowledge_chunks.embedding` (M9 foundation).
 /// Matches the historical PKBVEC01 384-d space; a future 768-d migration would
@@ -130,6 +130,19 @@ CREATE INDEX IF NOT EXISTS idx_oracle_runs_created
     ON oracle_payload_runs(created_at DESC, id DESC);
 "#;
 
+const MIGRATION_V6_SQL: &str = r#"
+CREATE TABLE IF NOT EXISTS interview_sessions (
+    id TEXT PRIMARY KEY NOT NULL,
+    updated_at INTEGER NOT NULL,
+    stage TEXT NOT NULL,
+    status TEXT NOT NULL,
+    payload_json TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_interview_sessions_updated
+    ON interview_sessions(updated_at DESC, id DESC);
+"#;
+
 const READ_CHATS_COLUMNS_SQL: &str =
     "SELECT name, type, \"notnull\", pk FROM pragma_table_info('chats') ORDER BY cid;";
 const READ_MESSAGES_COLUMNS_SQL: &str =
@@ -176,6 +189,11 @@ const MIGRATIONS: &[Migration] = &[
         version: 5,
         sql: MIGRATION_V5_SQL,
         verify: verify_v5_schema,
+    },
+    Migration {
+        version: 6,
+        sql: MIGRATION_V6_SQL,
+        verify: verify_v6_schema,
     },
 ];
 
@@ -463,6 +481,29 @@ fn verify_v2_schema(connection: &Connection) -> Result<(), MigrationError> {
     // Debug assert keeps the constant and DDL string in lockstep.
     debug_assert_eq!(KNOWLEDGE_EMBEDDING_DIMS, 384);
 
+    Ok(())
+}
+
+fn verify_v6_schema(connection: &Connection) -> Result<(), MigrationError> {
+    verify_v5_schema(connection).map_err(|_| MigrationError::SchemaMismatch { version: 6 })?;
+
+    let cols = read_columns(
+        connection,
+        "SELECT name, type, \"notnull\", pk FROM pragma_table_info('interview_sessions') ORDER BY cid;",
+    )
+    .map_err(|_| MigrationError::SchemaMismatch { version: 6 })?;
+    if !columns_match(
+        &cols,
+        &[
+            ("id", "TEXT", true, 1),
+            ("updated_at", "INTEGER", true, 0),
+            ("stage", "TEXT", true, 0),
+            ("status", "TEXT", true, 0),
+            ("payload_json", "TEXT", true, 0),
+        ],
+    ) {
+        return Err(MigrationError::SchemaMismatch { version: 6 });
+    }
     Ok(())
 }
 

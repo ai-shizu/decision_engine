@@ -27,7 +27,7 @@ use super::{
     connection::{open_encrypted_database, verify_encrypted_connection, VaultConnectionError},
     knowledge_repo::{self, KnowledgeChunkRow, KnowledgeSearchHit},
     migrations::{run_migrations, MigrationError},
-    oracle_repo::{self, OracleRunRow, TwinRunRow},
+    oracle_repo::{self, InterviewSessionRow, OracleRunRow, TwinRunRow},
     psychometrics_repo::{self, PulseRunRow, ProbeStoreRow, RaschRunRow},
     repository::{
         self, ChatCreate, ChatRecord, MessageAppend, MessageCursor, MessageRecord, RepositoryError,
@@ -152,6 +152,9 @@ enum VaultReply {
     PulseRunLatest(Result<Option<PulseRunRow>, VaultErrorCode>),
     TwinRunInsert(Result<(), VaultErrorCode>),
     OracleRunInsert(Result<(), VaultErrorCode>),
+    OracleRunLatest(Result<Option<OracleRunRow>, VaultErrorCode>),
+    InterviewSessionPut(Result<(), VaultErrorCode>),
+    InterviewSessionGet(Result<Option<InterviewSessionRow>, VaultErrorCode>),
 }
 
 enum VaultRequest {
@@ -251,6 +254,20 @@ enum VaultRequest {
     },
     OracleRunInsert {
         row: OracleRunRow,
+        control: RequestControl,
+        reply: SyncSender<VaultReply>,
+    },
+    OracleRunLatest {
+        control: RequestControl,
+        reply: SyncSender<VaultReply>,
+    },
+    InterviewSessionPut {
+        row: InterviewSessionRow,
+        control: RequestControl,
+        reply: SyncSender<VaultReply>,
+    },
+    InterviewSessionGet {
+        id: String,
         control: RequestControl,
         reply: SyncSender<VaultReply>,
     },
@@ -740,6 +757,62 @@ impl VaultHandle {
             _ => Err(VaultErrorCode::Unavailable),
         }
     }
+
+    pub(crate) fn oracle_run_latest(&self) -> Result<Option<OracleRunRow>, VaultErrorCode> {
+        let (reply_sender, receiver) = mpsc::sync_channel(1);
+        let cancelled = Arc::new(AtomicBool::new(false));
+        let request = VaultRequest::OracleRunLatest {
+            control: RequestControl {
+                deadline: Instant::now() + SHORT_OPERATION_TIMEOUT,
+                cancelled: Arc::clone(&cancelled),
+            },
+            reply: reply_sender,
+        };
+        match self.submit(request, receiver, cancelled, SHORT_OPERATION_TIMEOUT)? {
+            VaultReply::OracleRunLatest(result) => result,
+            _ => Err(VaultErrorCode::Unavailable),
+        }
+    }
+
+    pub(crate) fn interview_session_put(
+        &self,
+        row: InterviewSessionRow,
+    ) -> Result<(), VaultErrorCode> {
+        let (reply_sender, receiver) = mpsc::sync_channel(1);
+        let cancelled = Arc::new(AtomicBool::new(false));
+        let request = VaultRequest::InterviewSessionPut {
+            row,
+            control: RequestControl {
+                deadline: Instant::now() + SHORT_OPERATION_TIMEOUT,
+                cancelled: Arc::clone(&cancelled),
+            },
+            reply: reply_sender,
+        };
+        match self.submit(request, receiver, cancelled, SHORT_OPERATION_TIMEOUT)? {
+            VaultReply::InterviewSessionPut(result) => result,
+            _ => Err(VaultErrorCode::Unavailable),
+        }
+    }
+
+    pub(crate) fn interview_session_get(
+        &self,
+        id: String,
+    ) -> Result<Option<InterviewSessionRow>, VaultErrorCode> {
+        let (reply_sender, receiver) = mpsc::sync_channel(1);
+        let cancelled = Arc::new(AtomicBool::new(false));
+        let request = VaultRequest::InterviewSessionGet {
+            id,
+            control: RequestControl {
+                deadline: Instant::now() + SHORT_OPERATION_TIMEOUT,
+                cancelled: Arc::clone(&cancelled),
+            },
+            reply: reply_sender,
+        };
+        match self.submit(request, receiver, cancelled, SHORT_OPERATION_TIMEOUT)? {
+            VaultReply::InterviewSessionGet(result) => result,
+            _ => Err(VaultErrorCode::Unavailable),
+        }
+    }
 }
 
 struct VaultWorker {
@@ -985,6 +1058,38 @@ impl VaultWorker {
                         self.insert_oracle_run(row)
                     };
                     let _ = reply.send(VaultReply::OracleRunInsert(result));
+                }
+                VaultRequest::OracleRunLatest { control, reply } => {
+                    let result = if request_expired(&control) {
+                        Err(VaultErrorCode::Timeout)
+                    } else {
+                        self.latest_oracle_run()
+                    };
+                    let _ = reply.send(VaultReply::OracleRunLatest(result));
+                }
+                VaultRequest::InterviewSessionPut {
+                    row,
+                    control,
+                    reply,
+                } => {
+                    let result = if request_expired(&control) {
+                        Err(VaultErrorCode::Timeout)
+                    } else {
+                        self.put_interview_session(row)
+                    };
+                    let _ = reply.send(VaultReply::InterviewSessionPut(result));
+                }
+                VaultRequest::InterviewSessionGet {
+                    id,
+                    control,
+                    reply,
+                } => {
+                    let result = if request_expired(&control) {
+                        Err(VaultErrorCode::Timeout)
+                    } else {
+                        self.get_interview_session(id)
+                    };
+                    let _ = reply.send(VaultReply::InterviewSessionGet(result));
                 }
                 VaultRequest::RegisterEvents {
                     channel,
@@ -1292,6 +1397,33 @@ impl VaultWorker {
         }
         let outcome =
             self.read_repository(|connection| oracle_repo::insert_oracle_run(connection, &row));
+        self.resolve_repository(outcome)
+    }
+
+    fn latest_oracle_run(&mut self) -> Result<Option<OracleRunRow>, VaultErrorCode> {
+        gate(snapshot_status(&self.status))?;
+        let outcome =
+            self.read_repository(|connection| oracle_repo::latest_oracle_run(connection));
+        self.resolve_repository(outcome)
+    }
+
+    fn put_interview_session(&mut self, row: InterviewSessionRow) -> Result<(), VaultErrorCode> {
+        gate(snapshot_status(&self.status))?;
+        if row.payload_json.len() > MAX_TEXT_BYTES * 4 {
+            return Err(VaultErrorCode::InvalidInput);
+        }
+        let outcome = self
+            .read_repository(|connection| oracle_repo::put_interview_session(connection, &row));
+        self.resolve_repository(outcome)
+    }
+
+    fn get_interview_session(
+        &mut self,
+        id: String,
+    ) -> Result<Option<InterviewSessionRow>, VaultErrorCode> {
+        gate(snapshot_status(&self.status))?;
+        let outcome = self
+            .read_repository(|connection| oracle_repo::get_interview_session(connection, &id));
         self.resolve_repository(outcome)
     }
 

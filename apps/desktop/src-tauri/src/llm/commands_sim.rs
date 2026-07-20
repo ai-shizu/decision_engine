@@ -312,3 +312,294 @@ pub async fn review_es_draft(
         facts_source: facts.source,
     })
 }
+
+// ─── M17 multi-stage interview machine ───────────────────────────────────────
+
+use std::time::{SystemTime, UNIX_EPOCH};
+
+use crate::db::InterviewSessionRow;
+use crate::knowledge::edinet_client::render_company_facts_block;
+use crate::llm::consult_context::load_mentor_context;
+use crate::llm::interview_machine::{
+    apply_candidate_answer, build_stage_prompt_prefix, record_interviewer_utterance,
+    AdvanceOutcome, InterviewSession, InterviewStage,
+};
+
+fn now_unix() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
+}
+
+fn persist_session(vault: &VaultHandle, session: &InterviewSession) -> Result<(), String> {
+    let payload_json =
+        serde_json::to_string(session).map_err(|_| "interview session serialize failed".to_string())?;
+    vault
+        .interview_session_put(InterviewSessionRow {
+            id: session.id.clone(),
+            updated_at: now_unix(),
+            stage: session.stage.as_str().into(),
+            status: session.status.clone(),
+            payload_json,
+        })
+        .map_err(map_vault_err)
+}
+
+fn load_session(vault: &VaultHandle, id: &str) -> Result<InterviewSession, String> {
+    let row = vault
+        .interview_session_get(id.to_string())
+        .map_err(map_vault_err)?
+        .ok_or_else(|| "interview_session_not_found".to_string())?;
+    serde_json::from_str(&row.payload_json).map_err(|_| "interview session parse failed".into())
+}
+
+fn build_machine_prompt(
+    vault: &VaultHandle,
+    llm: &LlmHandle,
+    session: &InterviewSession,
+    facts: &CompanyFacts,
+    user_message: &str,
+    context_limit: u32,
+) -> Result<(String, Vec<String>), String> {
+    let hits = search_sync(vault, llm, user_message, context_limit).unwrap_or_default();
+    let refs: Vec<ExperienceRef<'_>> = hits
+        .iter()
+        .map(|hit| ExperienceRef {
+            id: hit.id.as_str(),
+            text: hit.text_content.as_str(),
+        })
+        .collect();
+
+    let mut prompt = build_stage_prompt_prefix(session, session.stage == InterviewStage::Debrief);
+    prompt.push_str("\n## 企業ファクト（EDINET）\n");
+    prompt.push_str(&render_company_facts_block(facts));
+    prompt.push_str("\n## 候補者の過去経験（個人知識ベース）\n");
+    if refs.is_empty() {
+        prompt.push_str("（該当する知識チャンクは見つかりませんでした）\n");
+    } else {
+        for (i, hit) in refs.iter().enumerate() {
+            prompt.push_str(&format!(
+                "[{}] (id={})\n{}\n\n",
+                i + 1,
+                hit.id,
+                hit.text.trim()
+            ));
+        }
+    }
+
+    // I-22: Gap/Oracle only in debrief, never foundation/pressure.
+    if session.stage == InterviewStage::Debrief {
+        match load_mentor_context(vault) {
+            Ok(mentor) => {
+                prompt.push_str("\n## 主観×客観ギャップ（講評専用）\n");
+                prompt.push_str(&mentor.gap_block);
+                prompt.push_str("\n## Oracle予測（講評専用）\n");
+                prompt.push_str(&mentor.oracle_block);
+            }
+            Err(_) => {
+                prompt.push_str("\n（Gap/Oracle 取得不可 — 講評は企業ファクトと会話ログのみ）\n");
+            }
+        }
+    }
+
+    prompt.push_str("\n## 候補者の発話\n");
+    prompt.push_str(user_message.trim());
+    prompt.push('\n');
+
+    let ids: Vec<String> = hits.into_iter().map(|h| h.id).collect();
+    Ok((prompt, ids))
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StartMultistageInterviewParams {
+    pub opening_message: Option<String>,
+    pub company_facts: Option<CompanyFacts>,
+    pub edinet_code: Option<String>,
+    pub edinet_date: Option<String>,
+    pub filing_text: Option<String>,
+    pub gen: Option<SimGenParams>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub struct MultistageInterviewResult {
+    pub session_id: String,
+    pub stage: String,
+    pub status: String,
+    pub turn_in_stage: u32,
+    pub total_turns: u32,
+    pub context_ids: Vec<String>,
+    pub company_name: String,
+    pub outcome: String,
+}
+
+/// Start Foundation stage; streams first interviewer question.
+#[tauri::command]
+pub async fn start_multistage_interview(
+    vault: State<'_, VaultHandle>,
+    llm: State<'_, LlmHandle>,
+    store: State<'_, NetworkPolicyStore>,
+    params: StartMultistageInterviewParams,
+    on_token: Channel<TokenEvent>,
+) -> Result<MultistageInterviewResult, String> {
+    let facts = resolve_company_facts(
+        store.inner(),
+        params.company_facts,
+        params.edinet_code,
+        params.edinet_date,
+        params.filing_text,
+    )
+    .await?;
+    let facts_json =
+        serde_json::to_string(&facts).map_err(|_| "facts serialize failed".to_string())?;
+    let session_id = format!("iv-{}", now_unix());
+    let mut session =
+        InterviewSession::new(session_id.clone(), facts.company_name.clone(), facts_json);
+    let opening = params
+        .opening_message
+        .unwrap_or_else(|| "自己紹介と、志望動機を簡潔に述べてください。".into());
+
+    let (context_limit, mut gen) = resolve_gen(params.gen.as_ref());
+    let vault_c = vault.inner().clone();
+    let llm_s = llm.inner().clone();
+    let facts_c = facts.clone();
+    let session_snapshot = session.clone();
+    let opening_c = opening.clone();
+
+    let (prompt, context_ids) = tauri::async_runtime::spawn_blocking(move || {
+        build_machine_prompt(
+            &vault_c,
+            &llm_s,
+            &session_snapshot,
+            &facts_c,
+            &opening_c,
+            context_limit,
+        )
+    })
+    .await
+    .map_err(|_| "multistage start join failed".to_string())??;
+
+    record_interviewer_utterance(&mut session, &opening);
+    persist_session(vault.inner(), &session)?;
+
+    gen.prompt = prompt;
+    llm.generate(gen, None, on_token)?;
+
+    Ok(MultistageInterviewResult {
+        session_id,
+        stage: session.stage.as_str().into(),
+        status: session.status,
+        turn_in_stage: session.turn_in_stage,
+        total_turns: session.total_turns,
+        context_ids,
+        company_name: facts.company_name,
+        outcome: "started".into(),
+    })
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AdvanceInterviewParams {
+    pub session_id: String,
+    pub candidate_answer: String,
+    pub gen: Option<SimGenParams>,
+}
+
+/// Apply candidate answer, advance FSM, stream next interviewer turn (or debrief).
+#[tauri::command]
+pub async fn advance_interview_stage(
+    vault: State<'_, VaultHandle>,
+    llm: State<'_, LlmHandle>,
+    params: AdvanceInterviewParams,
+    on_token: Channel<TokenEvent>,
+) -> Result<MultistageInterviewResult, String> {
+    let answer = params.candidate_answer.trim().to_string();
+    if answer.is_empty() || answer.len() > MAX_TEXT_BYTES {
+        return Err("invalid candidate_answer".into());
+    }
+    let session_id = params.session_id.trim().to_string();
+    if session_id.is_empty() {
+        return Err("invalid session_id".into());
+    }
+
+    let vault_h = vault.inner().clone();
+    let mut session = load_session(&vault_h, &session_id)?;
+    let outcome = apply_candidate_answer(&mut session, &answer)?;
+    let outcome_label = match &outcome {
+        AdvanceOutcome::ContinueQuestion => "continue",
+        AdvanceOutcome::EnteredStage(s) => match s {
+            InterviewStage::Pressure => "entered_pressure",
+            InterviewStage::Debrief => "entered_debrief",
+            _ => "entered_stage",
+        },
+        AdvanceOutcome::Closed => "closed",
+    };
+
+    if matches!(outcome, AdvanceOutcome::Closed) {
+        persist_session(&vault_h, &session)?;
+        return Ok(MultistageInterviewResult {
+            session_id,
+            stage: session.stage.as_str().into(),
+            status: session.status,
+            turn_in_stage: session.turn_in_stage,
+            total_turns: session.total_turns,
+            context_ids: vec![],
+            company_name: session.company_name,
+            outcome: outcome_label.into(),
+        });
+    }
+
+    let facts: CompanyFacts = serde_json::from_str(&session.facts_json)
+        .map_err(|_| "stored facts parse failed".to_string())?;
+    let (context_limit, mut gen) = resolve_gen(params.gen.as_ref());
+    let llm_s = llm.inner().clone();
+    let session_snap = session.clone();
+    let answer_c = answer.clone();
+    let facts_c = facts.clone();
+    let vault_c = vault_h.clone();
+
+    let (prompt, context_ids) = tauri::async_runtime::spawn_blocking(move || {
+        build_machine_prompt(
+            &vault_c,
+            &llm_s,
+            &session_snap,
+            &facts_c,
+            &answer_c,
+            context_limit,
+        )
+    })
+    .await
+    .map_err(|_| "multistage advance join failed".to_string())??;
+
+    persist_session(&vault_h, &session)?;
+    gen.prompt = prompt;
+    llm.generate(gen, None, on_token)?;
+
+    Ok(MultistageInterviewResult {
+        session_id,
+        stage: session.stage.as_str().into(),
+        status: session.status,
+        turn_in_stage: session.turn_in_stage,
+        total_turns: session.total_turns,
+        context_ids,
+        company_name: session.company_name,
+        outcome: outcome_label.into(),
+    })
+}
+
+#[tauri::command]
+pub async fn get_interview_session(
+    vault: State<'_, VaultHandle>,
+    session_id: String,
+) -> Result<InterviewSession, String> {
+    let id = session_id.trim().to_string();
+    if id.is_empty() {
+        return Err("invalid session_id".into());
+    }
+    let vault = vault.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || load_session(&vault, &id))
+        .await
+        .map_err(|_| "get_interview_session join failed".to_string())?
+}

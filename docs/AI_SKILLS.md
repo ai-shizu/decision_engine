@@ -27,7 +27,7 @@
 | 永続化境界・シリアライズ・runtime検証・IPC契約 | §1, §16 (SKILL-PKB-BOUNDARY-V3), `docs/architecture/INCIDENT_LEDGER.md` |
 | macOS ビルド・配布・コード署名 | §1, §2.3, §4 |
 | Tauri iOS (M0〜) 初期化・シミュレータ | §1, §2.3, §4.4, `docs/M0_IOS_INIT_INSTRUCTIONS.md` |
-| Pocket Brain / on-device LLM (M4〜M5) / OOM defense (M7) / 浄化 (M8) / local RAG (M9〜M13) / Gap·Tensor (M14) / Psychometrics (M15) / Twin·Oracle (M16) | §1, §1.1, §4.5〜§4.16, §5, §6, §7.1, §12, `docs/m5_action_plan.md` |
+| Pocket Brain / on-device LLM (M4〜M5) / OOM defense (M7) / 浄化 (M8) / local RAG (M9〜M13) / Gap·Tensor (M14) / Psychometrics (M15) / Twin·Oracle (M16) / Consult·Interview parity (M17) | §1, §1.1, §4.5〜§4.17, §5, §6, §7.1, §12, `docs/m5_action_plan.md` |
 | SQLCipher vault / Keychain (M3) | §1, §4.8, `docs/m3_action_plan.md` |
 | LLM モデル選定・consult/KV キャッシュ | §1, §5, §7, §8 |
 | 検索エンジン・mmap・LSM 索引 | §1, §9, §10 |
@@ -588,6 +588,16 @@ Pocket Brain 経路は M14 tensor + M15 pulse/Rasch + gap sufficiency から loa
 **コマンド:** `evaluate_digital_twin_scenario` / `generate_oracle_payload`。
 
 **不変条件:** 面接/GD 議論へ Echo 不出 (I-22)。乱数禁止（決定論バンド）。既存 M7/Vault/RAG コマンド非破壊。
+
+### 4.17 M17 — Consult Gap/Oracle 注入 + 面接多段 FSM (2026-07-20)
+
+**射程:** M14/M16 成果を mentor consult / RAG chat に強制注入。面接を Foundation→Pressure→Debrief→Closed の FSM 化。UI・LINE telemetry・フル DailyContext は対象外。
+
+**consult 注入:** `llm/consult_context.rs` が Vault 最新 gap/oracle を fail-safe 読込。`send_rag_chat` は常に注入、`consult_with_oracle_context` はメンター専用 preamble。欠測時は「なし」注記でクラッシュしない。
+
+**面接 FSM:** `llm/interview_machine.rs`。議論フェーズに Gap/Oracle 禁止、Debrief のみ注入 (I-22)。Vault schema v6 `interview_sessions`。
+
+**コマンド:** `consult_with_oracle_context` / `start_multistage_interview` / `advance_interview_stage` / `get_interview_session`。
 
 ### 4.8 M3 Phase 0-A — SQLCipher / Security.framework iOS link gate (2026-07-18)
 

@@ -39,7 +39,7 @@ pub(crate) use analytics_repo::{GapAnalysisRow, TensorProfileRow};
 #[cfg(target_vendor = "apple")]
 pub(crate) use knowledge_repo::{KnowledgeChunkRow, KnowledgeSearchHit};
 #[cfg(target_vendor = "apple")]
-pub(crate) use oracle_repo::{OracleRunRow, TwinRunRow};
+pub(crate) use oracle_repo::{InterviewSessionRow, OracleRunRow, TwinRunRow};
 #[cfg(target_vendor = "apple")]
 pub(crate) use psychometrics_repo::{PulseRunRow, ProbeStoreRow, RaschRunRow};
 #[cfg(target_vendor = "apple")]
