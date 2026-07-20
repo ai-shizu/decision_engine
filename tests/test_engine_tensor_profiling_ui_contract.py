@@ -65,7 +65,8 @@ def _redact_hidden_reasoning(raw: str, streaming: bool = False) -> str:
 
 def test_redactor_exported_and_used_before_render() -> None:
     tab = _read("components/InterviewTab.tsx")
-    assert "export function redactHiddenReasoning" in tab
+    lib = _read("lib/redactHiddenReasoning.ts")
+    assert "export function redactHiddenReasoning" in lib
     assert "redactHiddenReasoning(" in tab
     render_block = tab.split("messages.map", 1)[1].split("MISSION_RESULT", 1)[0]
     assert "redactHiddenReasoning" in render_block
@@ -150,9 +151,8 @@ def test_profile_tab_has_no_tensor_preview() -> None:
 
 def test_forbidden_tokens_on_changed_surface() -> None:
     tab = _read("components/InterviewTab.tsx")
-    redactor_slice = tab.split("export function redactHiddenReasoning", 1)[1].split(
-        "export function parseGdSpeakerTurns", 1
-    )[0]
+    lib = _read("lib/redactHiddenReasoning.ts")
+    redactor_slice = lib.split("export function redactHiddenReasoning", 1)[1]
     render_slice = tab.split("const visibleText = redactHiddenReasoning", 1)[1].split(
         "MISSION_RESULT", 1
     )[0]

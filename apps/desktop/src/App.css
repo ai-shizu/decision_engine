@@ -1987,3 +1987,73 @@ button.secondary {
     grid-template-columns: 1fr;
   }
 }
+
+/* M18-B: multistage interview stage rail */
+.interview-stage-rail {
+  margin: 0 0 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  background: var(--bg-info);
+}
+
+.stage-rail-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 14px;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.stage-rail-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-muted);
+  font-size: 0.82rem;
+  font-weight: 600;
+}
+
+.stage-rail-dot {
+  width: 10px;
+  height: 10px;
+  border: 2px solid var(--border);
+  background: transparent;
+}
+
+.stage-rail-item.is-done {
+  color: var(--ok);
+}
+
+.stage-rail-item.is-done .stage-rail-dot {
+  border-color: var(--ok);
+  background: var(--ok);
+}
+
+.stage-rail-item.is-active {
+  color: var(--accent);
+}
+
+.stage-rail-item.is-active .stage-rail-dot {
+  border-color: var(--accent);
+  background: var(--accent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 28%, transparent);
+}
+
+.stage-rail-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-top: 8px;
+  font-size: 0.75rem;
+  color: var(--text-muted);
+}
+
+.ambient-spinner {
+  color: var(--accent);
+}
+
+.company-facts-form textarea,
+.es-review-panel .custom-theme-textarea {
+  width: 100%;
+}

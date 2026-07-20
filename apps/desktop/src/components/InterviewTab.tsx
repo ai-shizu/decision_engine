@@ -11,21 +11,32 @@ import type {
   InterviewMode,
   InterviewReport,
 } from "../lib/types";
+import { redactHiddenReasoning } from "../lib/redactHiddenReasoning";
 import { uiErrorMessage } from "../lib/uiErrorMessages";
 import { useCorrelationId } from "../lib/useCorrelationId";
+import { EsReviewPanel } from "./interview/EsReviewPanel";
+import { MultistageInterviewPanel } from "./interview/MultistageInterviewPanel";
 import { TensorProfilePanel } from "./TensorProfilePanel";
 
 // F-17 (SPEC_FOXTROT_UI.md §10.3): es_review は思考速度を計測も評価もしない
 // (latency 構造的皆無)。hint はモード別に単一定義し、二重定義を作らない
 // (line ~319 は currentMode.hint をそのまま描画するのみ)。
-const MODES: { id: InterviewMode; label: string; hint: string }[] = [
+//
+// M18-B: multistage / es_pocket は Pocket Brain Tauri 経路（Python consult 非経由）。
+type InterviewSurface = InterviewMode | "multistage" | "es_pocket";
+
+function isLegacyInterviewMode(surface: InterviewSurface): surface is InterviewMode {
+  return surface === "interview_sim" || surface === "es_review" || surface === "gd_sim";
+}
+
+const MODES: { id: InterviewSurface; label: string; hint: string }[] = [
   {
     id: "interview_sim", label: "ケース/ES面接",
     hint: "ES があれば敵対的 ES 面接、無ければケース面接。"
       + "回答時間を計測し、思考速度も講評対象になります。",
   },
   {
-    id: "es_review", label: "ES添削",
+    id: "es_review", label: "ES添削 (legacy)",
     hint: "data/es/ の ES を採用責任者ペルソナで容赦なく添削。"
       + "書類単体の論理的強度のみを評価します (思考速度は評価しません)。",
   },
@@ -33,6 +44,15 @@ const MODES: { id: InterviewMode; label: string; hint: string }[] = [
     id: "gd_sim", label: "グループディスカッション",
     hint: "厄介な参加者たちとのカオス GD。"
       + "回答時間を計測し、思考速度も講評対象になります。",
+  },
+  {
+    id: "multistage", label: "多段面接 (PB)",
+    hint: "M17 FSM: Foundation → Pressure → Debrief → Closed。"
+      + "start_multistage_interview / advance_interview_stage をストリーミング結合。",
+  },
+  {
+    id: "es_pocket", label: "ES添削 (PB)",
+    hint: "review_es_draft: オフライン企業ファクト注入 + RAG 経験 + 採用責任者ストリーム添削。",
   },
 ];
 
@@ -120,53 +140,6 @@ function avatarColor(name: string): string {
 
 const GD_SPEAKER_HEADER_RE = /^\[([^\][:\n]{1,24})\]:\s*(.*)$/;
 
-const REDACT_OPEN_TAG = "<think>";
-const REDACT_CLOSE_TAG = "</think>";
-
-function matchRedactTag(raw: string, pos: number, tag: string): number {
-  const remain = raw.length - pos;
-  if (remain <= 0) return -1;
-  const n = Math.min(tag.length, remain);
-  for (let i = 0; i < n; i++) {
-    if (raw[pos + i].toLowerCase() !== tag[i].toLowerCase()) return -1;
-  }
-  if (n < tag.length) return 0;
-  return tag.length;
-}
-
-function isPartialOpenPrefix(raw: string, pos: number): boolean {
-  const fragment = raw.slice(pos);
-  if (!fragment || fragment.length >= REDACT_OPEN_TAG.length) return false;
-  return fragment.toLowerCase() === REDACT_OPEN_TAG.slice(0, fragment.length).toLowerCase();
-}
-
-/** Hidden-reasoning blocks are removed before any AI/feedback text reaches the DOM. */
-export function redactHiddenReasoning(raw: string, streaming = false): string {
-  const out: string[] = [];
-  let depth = 0;
-  let i = 0;
-  while (i < raw.length) {
-    const openFull = matchRedactTag(raw, i, REDACT_OPEN_TAG);
-    if (openFull === REDACT_OPEN_TAG.length) {
-      depth += 1;
-      i += REDACT_OPEN_TAG.length;
-      continue;
-    }
-    const closeFull = matchRedactTag(raw, i, REDACT_CLOSE_TAG);
-    if (closeFull === REDACT_CLOSE_TAG.length) {
-      if (depth > 0) depth -= 1;
-      i += REDACT_CLOSE_TAG.length;
-      continue;
-    }
-    if (depth === 0) {
-      if (streaming && isPartialOpenPrefix(raw, i)) break;
-      out.push(raw[i]);
-    }
-    i += 1;
-  }
-  return out.join("");
-}
-
 /** GD_FORMAT_V1: 行頭 [話者名]: のみを認識し、文中の [学生A] は分割しない */
 export function parseGdSpeakerTurns(raw: string): GdSpeakerTurn[] {
   const normalized = raw.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
@@ -228,7 +201,8 @@ function GdThreadMessage({ text, streaming }: { text: string; streaming?: boolea
 type SessionPhase = "idle" | "active" | "debrief";
 
 export function InterviewTab() {
-  const [mode, setMode] = useState<InterviewMode>("interview_sim");
+  const [surface, setSurface] = useState<InterviewSurface>("interview_sim");
+  const mode: InterviewMode = isLegacyInterviewMode(surface) ? surface : "interview_sim";
   const [phase, setPhase] = useState<SessionPhase>("idle");
   const [messages, setMessages] = useState<InterviewMessage[]>([]);
   const [personas, setPersonas] = useState<GdPersona[]>(DEFAULT_PERSONAS);
@@ -249,6 +223,8 @@ export function InterviewTab() {
   // chunk が混線し得た。相関ID (cid) 照合で自分の in-flight リクエストの
   // イベントのみ処理する (F4a/F4b の config/report ロジックには無変更)。
   const cid = useCorrelationId();
+  const pocketBrainSurface =
+    surface === "multistage" || surface === "es_pocket";
 
   function scrollToBottom() {
     requestAnimationFrame(() => {
@@ -257,6 +233,7 @@ export function InterviewTab() {
   }
 
   useEffect(() => {
+    if (pocketBrainSurface) return;
     const unlisten = listen<unknown>("pkb-engine-event", ({ payload: raw }) => {
       let payload: EngineEvent;
       try {
@@ -282,12 +259,12 @@ export function InterviewTab() {
     return () => {
       void unlisten.then((fn) => fn());
     };
-  }, []);
+  }, [pocketBrainSurface]);
 
-  function switchMode(next: InterviewMode) {
-    if (busy || next === mode) return;
+  function switchSurface(next: InterviewSurface) {
+    if (busy || next === surface) return;
     // モード切替 = 新しいセッション。バックエンドの状態は「開始」で上書きされる
-    setMode(next);
+    setSurface(next);
     setPhase("idle");
     setMessages([]);
     setStatus("");
@@ -459,18 +436,20 @@ export function InterviewTab() {
     }
   }
 
-  const showLobby = mode === "gd_sim" && phase === "idle";
+  const showLobby = !pocketBrainSurface && mode === "gd_sim" && phase === "idle";
   // F4a: 開始前のみ表示。セッション中は条件レンダリングで unmount する
   // (F-11 — display:none 等の keep-alive 化はしない)。
   const showSessionConfig =
-    phase === "idle" && (mode === "interview_sim" || mode === "gd_sim");
-  const currentMode = MODES.find((m) => m.id === mode)!;
+    !pocketBrainSurface &&
+    phase === "idle" &&
+    (mode === "interview_sim" || mode === "gd_sim");
+  const currentMode = MODES.find((m) => m.id === surface)!;
 
   return (
     <section className="panel interview-panel">
       <div className="consult-header">
         <h2>面接・GD シミュレーター (INTERVIEW)</h2>
-        {phase === "active" && (
+        {!pocketBrainSurface && phase === "active" && (
           <button
             type="button"
             className="feedback-btn"
@@ -480,7 +459,7 @@ export function InterviewTab() {
             講評 (Feedback)
           </button>
         )}
-        {phase === "debrief" && (
+        {!pocketBrainSurface && phase === "debrief" && (
           <button
             type="button"
             className="feedback-btn"
@@ -497,8 +476,8 @@ export function InterviewTab() {
           <button
             key={m.id}
             type="button"
-            className={mode === m.id ? "active" : ""}
-            onClick={() => switchMode(m.id)}
+            className={surface === m.id ? "active" : ""}
+            onClick={() => switchSurface(m.id)}
             disabled={busy}
           >
             {m.label}
@@ -506,6 +485,12 @@ export function InterviewTab() {
         ))}
       </div>
       <p className="hint">{currentMode.hint}</p>
+
+      {surface === "multistage" && <MultistageInterviewPanel />}
+      {surface === "es_pocket" && <EsReviewPanel />}
+
+      {!pocketBrainSurface && (
+      <>
 
       {showSessionConfig && (
         <div className="term-panel">
@@ -888,6 +873,8 @@ export function InterviewTab() {
         >
           {status}
         </p>
+      )}
+      </>
       )}
     </section>
   );

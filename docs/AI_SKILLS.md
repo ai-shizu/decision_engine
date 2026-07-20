@@ -27,7 +27,7 @@
 | 永続化境界・シリアライズ・runtime検証・IPC契約 | §1, §16 (SKILL-PKB-BOUNDARY-V3), `docs/architecture/INCIDENT_LEDGER.md` |
 | macOS ビルド・配布・コード署名 | §1, §2.3, §4 |
 | Tauri iOS (M0〜) 初期化・シミュレータ | §1, §2.3, §4.4, `docs/M0_IOS_INIT_INSTRUCTIONS.md` |
-| Pocket Brain / on-device LLM (M4〜M5) / OOM defense (M7) / 浄化 (M8) / local RAG (M9〜M13) / Gap·Tensor (M14) / Psychometrics (M15) / Twin·Oracle (M16) / Consult·Interview parity (M17) / Frontend API (M18) | §1, §1.1, §4.5〜§4.18, §5, §6, §7.1, §12, `docs/m5_action_plan.md` |
+| Pocket Brain / on-device LLM (M4〜M5) / OOM defense (M7) / 浄化 (M8) / local RAG (M9〜M13) / Gap·Tensor (M14) / Psychometrics (M15) / Twin·Oracle (M16) / Consult·Interview parity (M17) / Frontend API (M18) | §1, §1.1, §4.5〜§4.19, §5, §6, §7.1, §12, `docs/m5_action_plan.md` |
 | SQLCipher vault / Keychain (M3) | §1, §4.8, `docs/m3_action_plan.md` |
 | LLM モデル選定・consult/KV キャッシュ | §1, §5, §7, §8 |
 | 検索エンジン・mmap・LSM 索引 | §1, §9, §10 |
@@ -607,6 +607,15 @@ Pocket Brain 経路は M14 tensor + M15 pulse/Rasch + gap sufficiency から loa
 1. `lib/pocketBrain/{types,invoke,api,index}.ts` — 25 コマンドの typed wrappers（RAG/Gap/Psychometrics/Twin/Oracle/Interview/Consult）。
 2. `lib/ragChatReducer.ts` + `RagChatPanel` — `send_rag_chat` を `useThrottledStream` 経由で描画。`ingest_knowledge` は `RagIngestPanel`。
 3. レガシー `lib/rag.ts` は pocketBrain への thin re-export。
+
+### 4.19 M18-B — Multistage Interview + ES Review UI binding (2026-07-20)
+
+**射程:** M17 FSM (`start_multistage_interview` / `advance_interview_stage` / `get_interview_session`) と `review_es_draft` を React に配線。Rust 変更なし。Zustand 禁止。
+
+**as-built:**
+1. `lib/multistageInterviewReducer.ts` + `InterviewStageRail` + `MultistageInterviewPanel` — Foundation→Pressure→Debrief→Closed を純 reducer で同期。Channel ストリームは `useThrottledStream`（M18-A と同型）。完了後 `get_interview_session` で best-effort hydrate。
+2. `lib/esReviewReducer.ts` + `EsReviewPanel` — オフライン `CompanyFacts` 注入 + `review_es_draft` ストリーム。FACTS_PREVIEW / REVIEW_META / ambient スピナー。
+3. `InterviewTab` に surface `multistage` / `es_pocket` を追加（legacy Python consult 経路は非破壊）。`redactHiddenReasoning` は `lib/redactHiddenReasoning.ts` へ抽出（循環 import 回避）。
 
 ### 4.8 M3 Phase 0-A — SQLCipher / Security.framework iOS link gate (2026-07-18)
 
