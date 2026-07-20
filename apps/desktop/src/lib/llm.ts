@@ -1,4 +1,4 @@
-// [D] Pocket Brain frontend client (docs/architecture_blueprint.md §3.8).
+// [D] Coraxis on-device frontend client (docs/architecture_blueprint.md §3.8).
 //
 // invoke wrappers + Channel listeners for the M4/M5 on-device LLM commands.
 // Command arg keys are camelCase: Tauri v2 converts snake_case Rust parameter

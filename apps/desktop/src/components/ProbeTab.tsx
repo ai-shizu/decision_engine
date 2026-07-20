@@ -65,7 +65,7 @@ export function ProbeTab() {
             <span className="mobile-only">PROBE</span>
           </h2>
           <p className="hint dev-noise">
-            M18-D: Pocket Brain の PROBE ファネルと Romance/Rasch パルスを配線。
+            M18-D: Coraxis の PROBE ファネルと Romance/Rasch パルスを配線。
             legacy は Python sidecar 経路（非破壊で残置）。
           </p>
         </div>

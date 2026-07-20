@@ -27,7 +27,7 @@ function LoadingScreen({ message }: { message: string }) {
     <div className="shell">
       <TitleBar />
       <main className="app loading desktop-chrome">
-        <h1>PKB</h1>
+        <h1>Coraxis</h1>
         <p className="status-line">{message}</p>
         <p className="hint">初回起動はエンジン展開に 30 秒ほどかかることがあります。</p>
         <PocketBrainPanel />
@@ -113,7 +113,7 @@ function handleTabKeyDown(
 
 export default function App() {
   const [ready, setReady] = useState(false);
-  const [status, setStatus] = useState("PKB を起動しています…");
+  const [status, setStatus] = useState("Coraxis を起動しています…");
   const [tab, setTab] = useState<MainTab>("record");
   const isNarrow = useIsNarrowViewport();
 
@@ -229,7 +229,7 @@ export default function App() {
       <div className="desktop-chrome">
         <header className="topbar">
           <div>
-            <h1>PKB</h1>
+            <h1>Coraxis</h1>
             <p className="subtitle">{status}</p>
           </div>
           <nav

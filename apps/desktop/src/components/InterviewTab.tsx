@@ -28,7 +28,7 @@ import { TensorProfilePanel } from "./TensorProfilePanel";
 // (latency 構造的皆無)。hint はモード別に単一定義し、二重定義を作らない
 // (line ~319 は currentMode.hint をそのまま描画するのみ)。
 //
-// M18-B: multistage / es_pocket は Pocket Brain Tauri 経路（Python consult 非経由）。
+// M18-B: multistage / es_pocket は Coraxis on-device Tauri 経路（Python consult 非経由）。
 type InterviewSurface = InterviewMode | "multistage" | "es_pocket";
 
 function isLegacyInterviewMode(surface: InterviewSurface): surface is InterviewMode {
@@ -52,12 +52,12 @@ const MODES: { id: InterviewSurface; label: string; shortLabel: string; hint: st
       + "回答時間を計測し、思考速度も講評対象になります。",
   },
   {
-    id: "multistage", label: "多段面接 (PB)", shortLabel: "多段",
+    id: "multistage", label: "多段面接", shortLabel: "多段",
     hint: "M17 FSM: Foundation → Pressure → Debrief → Closed。"
       + "start_multistage_interview / advance_interview_stage をストリーミング結合。",
   },
   {
-    id: "es_pocket", label: "ES添削 (PB)", shortLabel: "ES",
+    id: "es_pocket", label: "ES添削", shortLabel: "ES",
     hint: "review_es_draft: オフライン企業ファクト注入 + RAG 経験 + 採用責任者ストリーム添削。",
   },
 ];

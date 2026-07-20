@@ -1,4 +1,4 @@
-//! Pure reducer for Pocket Brain ES review streaming UI (no Zustand — E0b).
+//! Pure reducer for Coraxis ES review streaming UI (no Zustand — E0b).
 
 import { emptyCompanyFacts } from "./interviewStage";
 import type { CompanyFacts, SimSessionResult } from "./pocketBrain/types";

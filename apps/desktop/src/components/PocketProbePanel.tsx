@@ -31,7 +31,7 @@ const STAGE_LABELS_JA: Record<(typeof STAGE_ORDER)[number], string> = {
 };
 
 /**
- * M15 PROBE funnel via Pocket Brain Tauri commands (useReducer state machine).
+ * M15 PROBE funnel via Coraxis on-device Tauri commands (useReducer state machine).
  */
 export function PocketProbePanel() {
   const [state, dispatch] = useReducer(
@@ -104,7 +104,7 @@ export function PocketProbePanel() {
       <div className="probe-topline">
         <div>
           <p className="term-header">
-            <span className="desktop-only">PROBE_FUNNEL (Pocket Brain / M15)</span>
+            <span className="desktop-only">PROBE_FUNNEL (Coraxis / M15)</span>
             <span className="mobile-only">自己探索</span>
           </p>
           <p className="hint">

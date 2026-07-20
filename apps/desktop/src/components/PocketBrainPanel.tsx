@@ -1,4 +1,5 @@
-// [D] Pocket Brain UI (docs/architecture_blueprint.md §3.9).
+// [D] Coraxis on-device UI (docs/architecture_blueprint.md §3.9).
+// Display name: Coraxis. Internal module/path identifiers remain pocket-brain / PKB.
 //
 // M20-P: Load/Stop ボタン撤廃。マウント時に自動ロードし、メモリ purge 後も再ウォーム。
 // M20-C: variant="messenger" for mobile LINE-like chat (desktop layout intact).
@@ -155,7 +156,7 @@ export function PocketBrainPanel({ variant = "default" }: PocketBrainPanelProps)
           fontVariantNumeric: "tabular-nums",
         }}
       >
-        <strong>Pocket Brain · RAG</strong>
+        <strong>Coraxis · RAG</strong>
         <span>
           {mem
             ? `${fmtMiB(mem.phys_footprint_bytes)} / ${fmtMiB(mem.threshold_bytes)} · ${mem.phase}`

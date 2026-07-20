@@ -9,7 +9,7 @@ export function TitleBar() {
   return (
     <div className="titlebar">
       <div className="titlebar-drag" data-tauri-drag-region>
-        <span className="titlebar-label">PKB</span>
+        <span className="titlebar-label">Coraxis</span>
       </div>
       {isTauri && (
         <div className="titlebar-controls">

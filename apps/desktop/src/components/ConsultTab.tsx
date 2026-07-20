@@ -340,7 +340,7 @@ export function ConsultTab() {
         ) : (
           messages.map((m, i) => (
             <div key={i} className={`chat-bubble ${m.role}`}>
-              <span className="chat-role">{m.role === "user" ? "あなた" : "PKB"}</span>
+              <span className="chat-role">{m.role === "user" ? "あなた" : "Coraxis"}</span>
               <pre className={`chat-text${m.streaming ? " streaming" : ""}`}>
                 {m.text}
                 {m.streaming && <span className="chat-cursor">▌</span>}

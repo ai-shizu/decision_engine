@@ -1,4 +1,4 @@
-//! Pocket Brain IPC types (M11–M17). Mirror Rust serde shapes.
+//! Coraxis on-device IPC types (M11–M17). Mirror Rust serde shapes.
 //!
 //! Responses use snake_case (Rust `rename_all = "snake_case"`).
 //! Request payloads follow each command's rename_all (documented per field).
@@ -376,7 +376,7 @@ export interface MultistageInterviewResult {
   outcome: string;
 }
 
-/** Canonical list of M11–M17 Pocket Brain Tauri commands (invoke names). */
+/** Canonical list of M11–M17 Coraxis on-device Tauri commands (invoke names). */
 export const POCKET_BRAIN_COMMANDS = [
   "ingest_knowledge",
   "search_knowledge",

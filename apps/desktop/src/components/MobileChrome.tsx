@@ -81,7 +81,7 @@ export function MobileChrome({
     <div className="mobile-chrome">
       <header className="mobile-topbar">
         <div className="mobile-topbar-row">
-          <h1>PKB</h1>
+          <h1>Coraxis</h1>
           {!showBanner && statusLine && !isAlarmStatus(statusLine) ? (
             <p className="subtitle">{statusLine}</p>
           ) : null}

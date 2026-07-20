@@ -1,5 +1,5 @@
 /**
- * Pocket Brain UI failure copy (Finding 13).
+ * Coraxis on-device UI failure copy (Finding 13). Internal invoke path: pocket-brain.
  * Call-site keyed sterile strings only — never pass exception values.
  */
 export const PB_UI_FAIL = {

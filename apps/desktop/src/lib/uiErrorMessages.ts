@@ -116,7 +116,7 @@ export const UI_ERROR_SPECS = {
       "プロフィール再解析の結果を確認できませんでした。現在の状態を確認し、必要な場合だけ再実行してください。",
     retryPolicy: "verify-first",
   },
-  /** Pocket Brain RAG chat (send_rag_chat) — never surface raw embedding/IPC text. */
+  /** Coraxis on-device RAG chat (send_rag_chat) — never surface raw embedding/IPC text. */
   RAG_CHAT: {
     message: "AIモデルの形式が一致しません。自動再準備を待つか、配置を確認してください。",
     retryPolicy: "retry-safe",

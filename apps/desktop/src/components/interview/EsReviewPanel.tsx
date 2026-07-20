@@ -23,7 +23,7 @@ function allocId(prefix: string): string {
 }
 
 /**
- * Pocket Brain ES review: review_es_draft + offline CompanyFacts + streaming feedback.
+ * Coraxis ES review: review_es_draft + offline CompanyFacts + streaming feedback.
  */
 export function EsReviewPanel({
   sharedFacts,
@@ -141,7 +141,7 @@ export function EsReviewPanel({
   return (
     <div className="es-review-panel">
       <p className="hint dev-noise">
-        Pocket Brain ES 添削 (`review_es_draft`): 企業ファクト + RAG 経験チャンクを根拠に採用責任者ペルソナが添削します。
+        Coraxis ES 添削 (`review_es_draft`): 企業ファクト + RAG 経験チャンクを根拠に採用責任者ペルソナが添削します。
       </p>
 
       {!hideEmbeddedFactsForm && (

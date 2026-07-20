@@ -1,4 +1,4 @@
-//! Pure reducer for Pocket Brain PROBE funnel (M15 / M18-D). No Zustand.
+//! Pure reducer for Coraxis PROBE funnel (M15 / M18-D). No Zustand.
 
 import type {
   ProbeAnswerResultV1,

@@ -1,7 +1,7 @@
 [package]
 name = "pkb-desktop"
 version = "0.1.0"
-description = "PKB — Personal Knowledge Base desktop app"
+description = "Coraxis — offline decision support desktop app"
 authors = ["ai-shizu"]
 edition = "2021"
 default-run = "pkb-desktop"

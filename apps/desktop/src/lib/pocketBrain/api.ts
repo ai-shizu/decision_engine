@@ -1,4 +1,4 @@
-//! Typed Tauri clients for M11–M17 Pocket Brain commands.
+//! Typed Tauri clients for M11–M17 Coraxis on-device commands.
 //!
 //! Streaming commands accept an `onToken` callback and open one `Channel`
 //! (same M6 contract as `llm_generate`). No `any`.

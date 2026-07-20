@@ -1,4 +1,4 @@
-//! Display transform: Pocket Brain `TensorProfile` → radar chart data.
+//! Display transform: Coraxis on-device `TensorProfile` → radar chart data.
 //! score=null stays null — never coerced to 0 (AI_SKILLS / FSA-05).
 //! No React/component imports (boundary-safe pure module).
 

@@ -1,4 +1,4 @@
-//! Unified Pocket Brain invoke error + typed invoke helper.
+//! Unified Coraxis on-device invoke error + typed invoke helper.
 
 import { invoke } from "@tauri-apps/api/core";
 

@@ -877,6 +877,17 @@ Pocket Brain 経路は M14 tensor + M15 pulse/Rasch + gap sufficiency から loa
 4. デスクトップ Foxtrot chrome（非 `.mobile-chrome`）の配色を変えるな。
 5. タッチ sticky `:hover` で idle を明るくするな — `@media (hover: hover)` のみ。
 
+### 4.44 Coraxis display rebrand (A+1) (2026-07-21)
+
+**射程:** ユーザー可視のプロダクト名を Coraxis に揃える。内部基盤は PKB のまま。
+
+**不変条件（交渉不可）:**
+1. ワイヤ magic (`PKBVEC01` / `PKBSCR01` / `PKBTEN01`)、診断ヘッダ (`[PKB_DIAG_V1]` 等)、`PKB_*` 環境変数、データディレクトリ名 (`Application Support/PKB`)、bundle `identifier` (`com.ai-shizu.pkb`)、`binaries/pkb-engine`、Cargo/npm パッケージ名 (`pkb-desktop`) を変更するな。
+2. フロント `pocketBrain/` モジュールパスと CSS セレクタ `pocket-brain-*` は維持（表示文言だけ Coraxis）。
+3. デッドコード削除は未使用 import / 参照ゼロ証明済みのみ。コンポーネント積極削除禁止。
+
+**as-built:** `productName` / window title / UI 見出し・CONSULT 表示名・Interview モードラベルを Coraxis。`docs` 歴史全文の PKB 置換はしない。
+
 ### 4.8 M3 Phase 0-A — SQLCipher / Security.framework iOS link gate (2026-07-18)
 
 **射程（Phase 0-A のみ）:** `secure-vault` feature、依存解決、in-memory SQLCipher identity（`PRAGMA key` + `cipher_version`）、Security.framework シンボル（`SecRandom` / `SecAccessControl`）、Tauri command 登録、iOS Simulator 最終リンク証明。スキーマ・repository・UI・本番 Keychain item 作成は対象外。

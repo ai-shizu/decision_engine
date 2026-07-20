@@ -1,4 +1,4 @@
-// M11 RAG frontend client — thin re-export over Pocket Brain API (M18).
+// M11 RAG frontend client — thin re-export over Coraxis on-device API (M18).
 
 export type {
   IngestKnowledgeResult,

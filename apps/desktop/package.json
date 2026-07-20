@@ -2,6 +2,7 @@
   "name": "pkb-desktop",
   "private": true,
   "version": "0.1.0",
+  "description": "Coraxis desktop (Tauri) — internal package name remains pkb-desktop",
   "type": "module",
   "scripts": {
     "dev": "node scripts/run-os.mjs run-dev",
