@@ -8,7 +8,7 @@ use std::{error::Error, fmt};
 
 use rusqlite::{Connection, TransactionBehavior};
 
-pub(crate) const LATEST_SCHEMA_VERSION: i64 = 2;
+pub(crate) const LATEST_SCHEMA_VERSION: i64 = 3;
 
 /// Canonical embedding width for `knowledge_chunks.embedding` (M9 foundation).
 /// Matches the historical PKBVEC01 384-d space; a future 768-d migration would
@@ -47,6 +47,30 @@ CREATE VIRTUAL TABLE IF NOT EXISTS knowledge_chunks USING vec0(
 );
 "#;
 
+const MIGRATION_V3_SQL: &str = r#"
+CREATE TABLE IF NOT EXISTS gap_analysis_runs (
+    id TEXT PRIMARY KEY NOT NULL,
+    created_at INTEGER NOT NULL,
+    schema_version TEXT NOT NULL,
+    data_sufficiency REAL NOT NULL,
+    payload_json TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_gap_analysis_created
+    ON gap_analysis_runs(created_at DESC, id DESC);
+
+CREATE TABLE IF NOT EXISTS tensor_profiles (
+    id TEXT PRIMARY KEY NOT NULL,
+    created_at INTEGER NOT NULL,
+    schema_version TEXT NOT NULL,
+    model_hash TEXT NOT NULL,
+    payload_json TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_tensor_profiles_created
+    ON tensor_profiles(created_at DESC, id DESC);
+"#;
+
 const READ_CHATS_COLUMNS_SQL: &str =
     "SELECT name, type, \"notnull\", pk FROM pragma_table_info('chats') ORDER BY cid;";
 const READ_MESSAGES_COLUMNS_SQL: &str =
@@ -78,6 +102,11 @@ const MIGRATIONS: &[Migration] = &[
         version: 2,
         sql: MIGRATION_V2_SQL,
         verify: verify_v2_schema,
+    },
+    Migration {
+        version: 3,
+        sql: MIGRATION_V3_SQL,
+        verify: verify_v3_schema,
     },
 ];
 
@@ -364,6 +393,48 @@ fn verify_v2_schema(connection: &Connection) -> Result<(), MigrationError> {
 
     // Debug assert keeps the constant and DDL string in lockstep.
     debug_assert_eq!(KNOWLEDGE_EMBEDDING_DIMS, 384);
+
+    Ok(())
+}
+
+fn verify_v3_schema(connection: &Connection) -> Result<(), MigrationError> {
+    verify_v2_schema(connection).map_err(|_| MigrationError::SchemaMismatch { version: 3 })?;
+
+    let gap_cols = read_columns(
+        connection,
+        "SELECT name, type, \"notnull\", pk FROM pragma_table_info('gap_analysis_runs') ORDER BY cid;",
+    )
+    .map_err(|_| MigrationError::SchemaMismatch { version: 3 })?;
+    if !columns_match(
+        &gap_cols,
+        &[
+            ("id", "TEXT", true, 1),
+            ("created_at", "INTEGER", true, 0),
+            ("schema_version", "TEXT", true, 0),
+            ("data_sufficiency", "REAL", true, 0),
+            ("payload_json", "TEXT", true, 0),
+        ],
+    ) {
+        return Err(MigrationError::SchemaMismatch { version: 3 });
+    }
+
+    let tensor_cols = read_columns(
+        connection,
+        "SELECT name, type, \"notnull\", pk FROM pragma_table_info('tensor_profiles') ORDER BY cid;",
+    )
+    .map_err(|_| MigrationError::SchemaMismatch { version: 3 })?;
+    if !columns_match(
+        &tensor_cols,
+        &[
+            ("id", "TEXT", true, 1),
+            ("created_at", "INTEGER", true, 0),
+            ("schema_version", "TEXT", true, 0),
+            ("model_hash", "TEXT", true, 0),
+            ("payload_json", "TEXT", true, 0),
+        ],
+    ) {
+        return Err(MigrationError::SchemaMismatch { version: 3 });
+    }
 
     Ok(())
 }

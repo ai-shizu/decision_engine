@@ -28,6 +28,9 @@ mod db;
 #[cfg(feature = "secure-vault")]
 mod commands_db;
 
+#[cfg(all(feature = "secure-vault", target_vendor = "apple"))]
+mod analytics;
+
 // M10 local RAG (chunk → embed → sqlite-vec). Needs both LLM worker and vault.
 #[cfg(all(
     feature = "pocket-brain",
@@ -142,6 +145,14 @@ pub fn run() {
                 target_vendor = "apple"
             ))]
             rag::commands_daily::sync_daily_context,
+            #[cfg(all(feature = "secure-vault", target_vendor = "apple"))]
+            analytics::commands::calculate_gap_analysis,
+            #[cfg(all(feature = "secure-vault", target_vendor = "apple"))]
+            analytics::commands::get_latest_gap_analysis,
+            #[cfg(all(feature = "secure-vault", target_vendor = "apple"))]
+            analytics::commands::get_latest_tensor_profile,
+            #[cfg(all(feature = "secure-vault", target_vendor = "apple"))]
+            analytics::commands::ensure_authoritative_tensor_profile,
             #[cfg(all(
                 feature = "pocket-brain",
                 feature = "secure-vault",

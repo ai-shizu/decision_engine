@@ -27,7 +27,7 @@
 | 永続化境界・シリアライズ・runtime検証・IPC契約 | §1, §16 (SKILL-PKB-BOUNDARY-V3), `docs/architecture/INCIDENT_LEDGER.md` |
 | macOS ビルド・配布・コード署名 | §1, §2.3, §4 |
 | Tauri iOS (M0〜) 初期化・シミュレータ | §1, §2.3, §4.4, `docs/M0_IOS_INIT_INSTRUCTIONS.md` |
-| Pocket Brain / on-device LLM (M4〜M5) / OOM defense (M7) / 浄化 (M8) / local RAG (M9〜M11) / ES·面接+EDINET (M12) / DailyContext (M13) | §1, §1.1, §4.5, §4.6, §4.7, §4.7b, §4.7c, §4.9, §4.10, §4.11, §4.12, §4.13, §5, §7.1, §7.2.1〜7.2.3, `docs/m5_action_plan.md` |
+| Pocket Brain / on-device LLM (M4〜M5) / OOM defense (M7) / 浄化 (M8) / local RAG (M9〜M13) / Gap·Tensor (M14) | §1, §1.1, §4.5〜§4.14, §5, §6, §7.1, `docs/m5_action_plan.md` |
 | SQLCipher vault / Keychain (M3) | §1, §4.8, `docs/m3_action_plan.md` |
 | LLM モデル選定・consult/KV キャッシュ | §1, §5, §7, §8 |
 | 検索エンジン・mmap・LSM 索引 | §1, §9, §10 |
@@ -538,6 +538,19 @@ rm -rf .boundary-tests-out
 4. 空（予定も日誌も無し）は `EmptyContext` で拒否。RECORD 経路から profiler を呼ばない。
 
 **ハマりどころ:** `source_id` に `_` / `%` / `::` を入れるな（M10 ingest バリデーションと同型）。日付は厳密 `YYYY-MM-DD`。
+
+### 4.14 M14 — Gap Analysis & Tensor Profile (Rust) (2026-07-20)
+
+**射程:** `analytics/` に Python `gap_analysis.py` / `tensor_profile.py` の決定論コアを移植。Vault schema v3 で永続化。UI・LLM 権威更新は対象外。
+
+**計算モデル:**
+1. 線形: 8 テーマ × 主観(日記+相談) vs 客観(支出+予定+LINE自己発話) → `intention_gap` / `blind_spot`（閾値 0.25）。LINE は主観に混入禁止。
+2. 非線形: `task_avoidance`（双曲 `V=1/(1+0.3D)`）、`true_gakuchika`、`intellectualization_gap`（action==0 必須）、`stabilizer_effect`（事後生産性向上・唯一のポジティブ）。
+3. 6D Tensor: `authoritative_profile()` は全 score=N/A / `model_hash=no-llm-authority`（FSA-05）。
+
+**スキーマ v3:** `gap_analysis_runs(id, created_at, schema_version, data_sufficiency, payload_json)` / `tensor_profiles(id, created_at, schema_version, model_hash, payload_json)`。
+
+**コマンド:** `calculate_gap_analysis` / `get_latest_gap_analysis` / `get_latest_tensor_profile` / `ensure_authoritative_tensor_profile`。言語化は `build_gap_languageization_prompt` のみ（発見はコード）。
 
 ### 4.8 M3 Phase 0-A — SQLCipher / Security.framework iOS link gate (2026-07-18)
 

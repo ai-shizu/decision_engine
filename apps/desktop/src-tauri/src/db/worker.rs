@@ -23,6 +23,7 @@ use tauri::ipc::Channel;
 use crate::ipc_contract::MAX_TEXT_BYTES;
 
 use super::{
+    analytics_repo::{self, GapAnalysisRow, TensorProfileRow},
     connection::{open_encrypted_database, verify_encrypted_connection, VaultConnectionError},
     knowledge_repo::{self, KnowledgeChunkRow, KnowledgeSearchHit},
     migrations::{run_migrations, MigrationError},
@@ -137,6 +138,10 @@ enum VaultReply {
     MessagesList(Result<Vec<MessageRecord>, VaultErrorCode>),
     KnowledgeReplace(Result<usize, VaultErrorCode>),
     KnowledgeSearch(Result<Vec<KnowledgeSearchHit>, VaultErrorCode>),
+    GapAnalysisInsert(Result<(), VaultErrorCode>),
+    GapAnalysisLatest(Result<Option<GapAnalysisRow>, VaultErrorCode>),
+    TensorProfileInsert(Result<(), VaultErrorCode>),
+    TensorProfileLatest(Result<Option<TensorProfileRow>, VaultErrorCode>),
 }
 
 enum VaultRequest {
@@ -181,6 +186,24 @@ enum VaultRequest {
     KnowledgeSearch {
         embedding: Vec<f32>,
         limit: u32,
+        control: RequestControl,
+        reply: SyncSender<VaultReply>,
+    },
+    GapAnalysisInsert {
+        row: GapAnalysisRow,
+        control: RequestControl,
+        reply: SyncSender<VaultReply>,
+    },
+    GapAnalysisLatest {
+        control: RequestControl,
+        reply: SyncSender<VaultReply>,
+    },
+    TensorProfileInsert {
+        row: TensorProfileRow,
+        control: RequestControl,
+        reply: SyncSender<VaultReply>,
+    },
+    TensorProfileLatest {
         control: RequestControl,
         reply: SyncSender<VaultReply>,
     },
@@ -464,6 +487,79 @@ impl VaultHandle {
             _ => Err(VaultErrorCode::Unavailable),
         }
     }
+
+    pub(crate) fn gap_analysis_insert(&self, row: GapAnalysisRow) -> Result<(), VaultErrorCode> {
+        let (reply_sender, receiver) = mpsc::sync_channel(1);
+        let cancelled = Arc::new(AtomicBool::new(false));
+        let request = VaultRequest::GapAnalysisInsert {
+            row,
+            control: RequestControl {
+                deadline: Instant::now() + SHORT_OPERATION_TIMEOUT,
+                cancelled: Arc::clone(&cancelled),
+            },
+            reply: reply_sender,
+        };
+        match self.submit(request, receiver, cancelled, SHORT_OPERATION_TIMEOUT)? {
+            VaultReply::GapAnalysisInsert(result) => result,
+            _ => Err(VaultErrorCode::Unavailable),
+        }
+    }
+
+    pub(crate) fn gap_analysis_latest(
+        &self,
+    ) -> Result<Option<GapAnalysisRow>, VaultErrorCode> {
+        let (reply_sender, receiver) = mpsc::sync_channel(1);
+        let cancelled = Arc::new(AtomicBool::new(false));
+        let request = VaultRequest::GapAnalysisLatest {
+            control: RequestControl {
+                deadline: Instant::now() + SHORT_OPERATION_TIMEOUT,
+                cancelled: Arc::clone(&cancelled),
+            },
+            reply: reply_sender,
+        };
+        match self.submit(request, receiver, cancelled, SHORT_OPERATION_TIMEOUT)? {
+            VaultReply::GapAnalysisLatest(result) => result,
+            _ => Err(VaultErrorCode::Unavailable),
+        }
+    }
+
+    pub(crate) fn tensor_profile_insert(
+        &self,
+        row: TensorProfileRow,
+    ) -> Result<(), VaultErrorCode> {
+        let (reply_sender, receiver) = mpsc::sync_channel(1);
+        let cancelled = Arc::new(AtomicBool::new(false));
+        let request = VaultRequest::TensorProfileInsert {
+            row,
+            control: RequestControl {
+                deadline: Instant::now() + SHORT_OPERATION_TIMEOUT,
+                cancelled: Arc::clone(&cancelled),
+            },
+            reply: reply_sender,
+        };
+        match self.submit(request, receiver, cancelled, SHORT_OPERATION_TIMEOUT)? {
+            VaultReply::TensorProfileInsert(result) => result,
+            _ => Err(VaultErrorCode::Unavailable),
+        }
+    }
+
+    pub(crate) fn tensor_profile_latest(
+        &self,
+    ) -> Result<Option<TensorProfileRow>, VaultErrorCode> {
+        let (reply_sender, receiver) = mpsc::sync_channel(1);
+        let cancelled = Arc::new(AtomicBool::new(false));
+        let request = VaultRequest::TensorProfileLatest {
+            control: RequestControl {
+                deadline: Instant::now() + SHORT_OPERATION_TIMEOUT,
+                cancelled: Arc::clone(&cancelled),
+            },
+            reply: reply_sender,
+        };
+        match self.submit(request, receiver, cancelled, SHORT_OPERATION_TIMEOUT)? {
+            VaultReply::TensorProfileLatest(result) => result,
+            _ => Err(VaultErrorCode::Unavailable),
+        }
+    }
 }
 
 struct VaultWorker {
@@ -585,6 +681,46 @@ impl VaultWorker {
                         self.search_knowledge(embedding, limit)
                     };
                     let _ = reply.send(VaultReply::KnowledgeSearch(result));
+                }
+                VaultRequest::GapAnalysisInsert {
+                    row,
+                    control,
+                    reply,
+                } => {
+                    let result = if request_expired(&control) {
+                        Err(VaultErrorCode::Timeout)
+                    } else {
+                        self.insert_gap_analysis(row)
+                    };
+                    let _ = reply.send(VaultReply::GapAnalysisInsert(result));
+                }
+                VaultRequest::GapAnalysisLatest { control, reply } => {
+                    let result = if request_expired(&control) {
+                        Err(VaultErrorCode::Timeout)
+                    } else {
+                        self.latest_gap_analysis()
+                    };
+                    let _ = reply.send(VaultReply::GapAnalysisLatest(result));
+                }
+                VaultRequest::TensorProfileInsert {
+                    row,
+                    control,
+                    reply,
+                } => {
+                    let result = if request_expired(&control) {
+                        Err(VaultErrorCode::Timeout)
+                    } else {
+                        self.insert_tensor_profile(row)
+                    };
+                    let _ = reply.send(VaultReply::TensorProfileInsert(result));
+                }
+                VaultRequest::TensorProfileLatest { control, reply } => {
+                    let result = if request_expired(&control) {
+                        Err(VaultErrorCode::Timeout)
+                    } else {
+                        self.latest_tensor_profile()
+                    };
+                    let _ = reply.send(VaultReply::TensorProfileLatest(result));
                 }
                 VaultRequest::RegisterEvents {
                     channel,
@@ -778,6 +914,42 @@ impl VaultWorker {
         }
         let outcome = self
             .read_repository(|connection| knowledge_repo::search_chunks(connection, &embedding, limit));
+        self.resolve_repository(outcome)
+    }
+
+    fn insert_gap_analysis(&mut self, row: GapAnalysisRow) -> Result<(), VaultErrorCode> {
+        gate(snapshot_status(&self.status))?;
+        if row.payload_json.len() > MAX_TEXT_BYTES * 4 {
+            return Err(VaultErrorCode::InvalidInput);
+        }
+        let outcome = self.read_repository(|connection| {
+            analytics_repo::insert_gap_analysis(connection, &row)
+        });
+        self.resolve_repository(outcome)
+    }
+
+    fn latest_gap_analysis(&mut self) -> Result<Option<GapAnalysisRow>, VaultErrorCode> {
+        gate(snapshot_status(&self.status))?;
+        let outcome =
+            self.read_repository(|connection| analytics_repo::latest_gap_analysis(connection));
+        self.resolve_repository(outcome)
+    }
+
+    fn insert_tensor_profile(&mut self, row: TensorProfileRow) -> Result<(), VaultErrorCode> {
+        gate(snapshot_status(&self.status))?;
+        if row.payload_json.len() > MAX_TEXT_BYTES * 2 {
+            return Err(VaultErrorCode::InvalidInput);
+        }
+        let outcome = self.read_repository(|connection| {
+            analytics_repo::insert_tensor_profile(connection, &row)
+        });
+        self.resolve_repository(outcome)
+    }
+
+    fn latest_tensor_profile(&mut self) -> Result<Option<TensorProfileRow>, VaultErrorCode> {
+        gate(snapshot_status(&self.status))?;
+        let outcome =
+            self.read_repository(|connection| analytics_repo::latest_tensor_profile(connection));
         self.resolve_repository(outcome)
     }
 
