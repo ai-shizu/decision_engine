@@ -267,14 +267,16 @@ export function generateOraclePayload(args: {
 // ─── Interview / Consult ────────────────────────────────────────────────────
 
 export function fetchEdinetCompanyFacts(args: {
-  edinetCode: string;
-  edinetDate: string;
+  companyName?: string;
+  edinetCode?: string;
+  edinetDate?: string;
   filingText?: string;
 }): Promise<CompanyFacts> {
   return pocketInvoke("fetch_edinet_company_facts", {
     params: {
-      edinetCode: args.edinetCode,
-      edinetDate: args.edinetDate,
+      companyName: args.companyName ?? null,
+      edinetCode: args.edinetCode ?? null,
+      edinetDate: args.edinetDate ?? null,
       filingText: args.filingText ?? null,
     },
   });

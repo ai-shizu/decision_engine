@@ -862,9 +862,19 @@ Pocket Brain 経路は M14 tensor + M15 pulse/Rasch + gap sufficiency から loa
 2. `external_research_id` を `interview_sim` / 議論フェーズへ渡すな。補強テキストは `CompanyFacts` にマージしてから `start_multistage_interview` / `review_es_draft` へ注入。
 3. 待機中に入力を `disabled` にするな。`researching-ambient` + スピナーのみ。Zustand 禁止。
 4. `resolve_company_facts`: injected に空 `business_summary` + edinet_code/date があるときだけ EDINET を試し、失敗時は企業名付き inject へ soft-fail。
-5. 自動レーン順: ローカル vault RAG →（policy On）`knowledge_research` →（コードあり）EDINET。手動検索ボタン不要。
+5. 自動レーン順: ローカル vault RAG →（policy On）`knowledge_research` → **企業名から EDINET 自動突合**（コード手動入力禁止）。手動検索ボタン不要。
 
 **as-built:** `lib/companyFactsEnrich.ts` / `useCompanyFactsEnrichment` / Multistage·EsReview·InterviewTab 配線 / `commands_sim.resolve_company_facts` merge。
+
+### 4.43 M20-R — EDINET name auto-lookup + dock contrast (2026-07-21)
+
+**射程:** EDINET コード入力欄撤廃、filer 名からの自動特定、ボトムナビ非アクティブ減光。
+
+**不変条件:**
+1. UI に EDINET コード入力を再導入するな。コードは `fetch_company_facts_by_name` / enrich が裏側で埋める。
+2. ネットは引き続き E0b 二要素。失敗時は企業名だけの offline inject で面接継続。
+3. `.mobile-nav-item-priority` で非アクティブを明るくするな。inactive=`#484f58`、active=`var(--accent)`。
+4. デスクトップ Foxtrot chrome（非 `.mobile-chrome`）の配色を変えるな。
 
 ### 4.8 M3 Phase 0-A — SQLCipher / Security.framework iOS link gate (2026-07-18)
 

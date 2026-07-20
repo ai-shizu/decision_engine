@@ -99,14 +99,13 @@ export function EsReviewPanel({
       // proceed with typed facts
     }
 
-    const edinetCode = factsPayload.edinetCode.trim();
+    const edinetDate = todayIso();
     try {
       const result = await reviewEsDraft(
         {
           esDraft: draft,
           companyFacts: factsPayload,
-          edinetCode: edinetCode || undefined,
-          edinetDate: edinetCode ? todayIso() : undefined,
+          edinetDate,
           experienceQuery: state.experienceQuery.trim() || undefined,
         },
         (event) => {

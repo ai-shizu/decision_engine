@@ -47,14 +47,16 @@ function genPayload(gen?: SimGenParams) {
 
 /** Dual-gated EDINET list fetch → CompanyFacts (fails closed without Live∧egress-live). */
 export function fetchEdinetCompanyFacts(args: {
-  edinetCode: string;
-  edinetDate: string;
+  companyName?: string;
+  edinetCode?: string;
+  edinetDate?: string;
   filingText?: string;
 }): Promise<CompanyFacts> {
   return invoke("fetch_edinet_company_facts", {
     params: {
-      edinetCode: args.edinetCode,
-      edinetDate: args.edinetDate,
+      companyName: args.companyName ?? null,
+      edinetCode: args.edinetCode ?? null,
+      edinetDate: args.edinetDate ?? null,
       filingText: args.filingText ?? null,
     },
   });

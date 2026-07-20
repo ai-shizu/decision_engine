@@ -28,8 +28,11 @@ function liveDeps() {
     knowledgeResearch,
     searchKnowledge: (query: string, limit?: number) =>
       searchKnowledge(query, limit),
-    fetchEdinet: (args: { edinetCode: string; edinetDate: string }) =>
-      fetchEdinetCompanyFacts(args),
+    fetchEdinetByName: (args: { companyName: string; edinetDate: string }) =>
+      fetchEdinetCompanyFacts({
+        companyName: args.companyName,
+        edinetDate: args.edinetDate,
+      }),
     todayIso,
   };
 }
@@ -89,8 +92,8 @@ export function useCompanyFactsEnrichment(
     return () => {
       window.clearTimeout(timer);
     };
-    // Re-run only when identity keys change — not when summary fills (loop guard).
-  }, [enabled, facts.companyName, facts.edinetCode]);
+    // Re-run only when company name changes — EDINET code is auto-resolved.
+  }, [enabled, facts.companyName]);
 
   async function enrichNow(): Promise<CompanyFactsEnrichResult> {
     const seq = seqRef.current + 1;

@@ -326,6 +326,145 @@ pub fn select_yuho_document<'a>(
     })
 }
 
+/// Strip corporate suffixes / whitespace for filer-name matching (no industry if-elif).
+pub fn normalize_filer_key(name: &str) -> String {
+    let mut s = name.trim().to_string();
+    for suffix in [
+        "株式会社",
+        "有限会社",
+        "合同会社",
+        "合名会社",
+        "合資会社",
+        "(株)",
+        "（株）",
+        "(有)",
+        "（有）",
+        "㈱",
+        "㈲",
+        "Inc.",
+        "Inc",
+        "Corp.",
+        "Corp",
+        "Ltd.",
+        "Ltd",
+        "LLC",
+        "Co., Ltd.",
+        "Co.,Ltd.",
+        "Co. Ltd.",
+    ] {
+        s = s.replace(suffix, "");
+    }
+    let mut out = String::with_capacity(s.len());
+    for ch in s.chars() {
+        if matches!(ch, ' ' | '\u{3000}' | '・' | '･' | '.' | '/' | '／' | '-' | 'ー' | '—' | '_')
+        {
+            continue;
+        }
+        for c in ch.to_lowercase() {
+            out.push(c);
+        }
+    }
+    out
+}
+
+fn is_yuho_type(doc_type: &str) -> bool {
+    doc_type == DOC_TYPE_YUHO || doc_type == DOC_TYPE_YUHO_CORRECTION
+}
+
+/// Match EDINET list rows by filer name (exact normalized key, then containment).
+pub fn select_yuho_by_filer_name<'a>(
+    docs: &'a [EdinetDocumentMeta],
+    company_name: &str,
+) -> Option<&'a EdinetDocumentMeta> {
+    let q = normalize_filer_key(company_name);
+    if q.len() < 2 {
+        return None;
+    }
+
+    let mut best: Option<(i32, &'a EdinetDocumentMeta)> = None;
+    for d in docs {
+        let f = normalize_filer_key(&d.filer_name);
+        if f.len() < 2 {
+            continue;
+        }
+        let score = if f == q {
+            100
+        } else if f.contains(&q) || q.contains(&f) {
+            let shorter = f.len().min(q.len());
+            let longer = f.len().max(q.len()).max(1);
+            70 + ((shorter * 20) / longer) as i32
+        } else {
+            continue;
+        };
+        let score = if is_yuho_type(&d.doc_type_code) {
+            score + 10
+        } else {
+            score
+        };
+        match best {
+            Some((prev, _)) if prev >= score => {}
+            _ => best = Some((score, d)),
+        }
+    }
+    best.map(|(_, d)| d)
+}
+
+fn days_in_month(year: i32, month: u32) -> u32 {
+    match month {
+        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
+        4 | 6 | 9 | 11 => 30,
+        2 => {
+            let leap = year % 4 == 0 && (year % 100 != 0 || year % 400 == 0);
+            if leap {
+                29
+            } else {
+                28
+            }
+        }
+        _ => 30,
+    }
+}
+
+/// Previous calendar day for `YYYY-MM-DD` (no chrono dependency).
+pub fn prev_ymd(date: &str) -> Option<String> {
+    if !is_ymd(date) {
+        return None;
+    }
+    let y: i32 = date.get(0..4)?.parse().ok()?;
+    let m: u32 = date.get(5..7)?.parse().ok()?;
+    let d: u32 = date.get(8..10)?.parse().ok()?;
+    if d > 1 {
+        return Some(format!("{y:04}-{m:02}-{:02}", d - 1));
+    }
+    let (py, pm) = if m > 1 {
+        (y, m - 1)
+    } else {
+        (y - 1, 12)
+    };
+    let pd = days_in_month(py, pm);
+    Some(format!("{py:04}-{pm:02}-{pd:02}"))
+}
+
+/// Anchor date plus up to `days_back` previous calendar days (inclusive of anchor).
+pub fn recent_filing_dates(anchor: &str, days_back: u32) -> Vec<String> {
+    let mut out = Vec::new();
+    if !is_ymd(anchor) {
+        return out;
+    }
+    out.push(anchor.to_string());
+    let mut cur = anchor.to_string();
+    for _ in 0..days_back {
+        match prev_ymd(&cur) {
+            Some(prev) => {
+                out.push(prev.clone());
+                cur = prev;
+            }
+            None => break,
+        }
+    }
+    out
+}
+
 /// Build sparse facts from list metadata (no body text yet).
 pub fn facts_from_document_meta(meta: &EdinetDocumentMeta) -> CompanyFacts {
     let summary = format!(
@@ -521,6 +660,32 @@ pub async fn fetch_company_facts_by_code<T: HttpTransport>(
     merge_company_facts(meta, body_text)
 }
 
+/// Resolve company facts by filer name: scan recent filing dates until a match.
+pub async fn fetch_company_facts_by_name<T: HttpTransport>(
+    transport: &T,
+    anchor_date: &str,
+    company_name: &str,
+    subscription_key: &str,
+    body_text: Option<&str>,
+    deadline: std::time::Duration,
+    days_back: u32,
+) -> Result<CompanyFacts, EdinetError> {
+    let name = company_name.trim();
+    if name.is_empty() || normalize_filer_key(name).len() < 2 {
+        return Err(EdinetError::InvalidArgument);
+    }
+    for date in recent_filing_dates(anchor_date, days_back) {
+        let docs = match fetch_documents_list(transport, &date, subscription_key, deadline).await {
+            Ok(d) => d,
+            Err(_) => continue,
+        };
+        if let Some(meta) = select_yuho_by_filer_name(&docs, name) {
+            return merge_company_facts(meta, body_text);
+        }
+    }
+    Err(EdinetError::Malformed)
+}
+
 /// Drain a response body with cancel/deadline (re-export helper for document bytes).
 pub async fn fetch_document_bytes<T: HttpTransport>(
     transport: &T,
@@ -600,6 +765,11 @@ mod tests {
         assert_eq!(meta.doc_id, "S100TEST1");
         let facts = facts_from_document_meta(meta);
         assert!(facts.company_name.contains("テスト"));
+        let by_name = select_yuho_by_filer_name(&docs, "テスト").expect("name");
+        assert_eq!(by_name.edinet_code, "E02144");
+        assert_eq!(normalize_filer_key("テスト株式会社"), "テスト");
+        assert_eq!(prev_ymd("2024-06-01").as_deref(), Some("2024-05-31"));
+        assert_eq!(recent_filing_dates("2024-06-03", 2).len(), 3);
     }
 
     #[test]

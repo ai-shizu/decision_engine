@@ -140,11 +140,7 @@ export function MobileBottomNav({
               aria-controls={`mobile-panel-${id}`}
               id={`mobile-tab-${id}`}
               className={
-                selected
-                  ? "mobile-nav-item active"
-                  : id === "record" || id === "interview"
-                    ? "mobile-nav-item mobile-nav-item-priority"
-                    : "mobile-nav-item"
+                selected ? "mobile-nav-item active" : "mobile-nav-item"
               }
               onClick={() => select(id)}
             >

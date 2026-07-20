@@ -2391,7 +2391,8 @@ button.secondary {
   border: none;
   border-radius: 0;
   background: transparent;
-  color: var(--text-muted);
+  /* Inactive dock: deliberately muted so only .active reads as selected */
+  color: #484f58;
   font-family: var(--font-ui);
   cursor: pointer;
   -webkit-tap-highlight-color: transparent;
@@ -2400,16 +2401,12 @@ button.secondary {
 
 .mobile-nav-item:hover {
   background: var(--bg-hover);
-  color: var(--text);
+  color: #6e7681;
 }
 
 .mobile-nav-item.active {
   color: var(--accent);
   background: var(--bg-selected);
-}
-
-.mobile-nav-item-priority:not(.active) {
-  color: var(--text);
 }
 
 .mobile-nav-item:focus-visible {

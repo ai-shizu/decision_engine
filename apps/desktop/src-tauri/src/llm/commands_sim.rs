@@ -30,6 +30,8 @@ const MAX_CONTEXT_LIMIT: u32 = 20;
 const DEFAULT_N_CTX: u32 = 2048;
 const DEFAULT_MAX_TOKENS: u32 = 256;
 const EDINET_FETCH_DEADLINE: Duration = Duration::from_secs(15);
+/// How many calendar days before anchor to scan when resolving by filer name.
+const EDINET_NAME_LOOKBACK_DAYS: u32 = 21;
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -74,8 +76,12 @@ pub struct ReviewEsParams {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FetchEdinetFactsParams {
-    pub edinet_code: String,
-    pub edinet_date: String,
+    /// Preferred: resolve EDINET code from filer name (UI never asks for code).
+    pub company_name: Option<String>,
+    /// Optional explicit code (legacy / internal). Prefer company_name.
+    pub edinet_code: Option<String>,
+    /// Filing date YYYY-MM-DD (anchor for list scan).
+    pub edinet_date: Option<String>,
     pub filing_text: Option<String>,
 }
 
@@ -137,48 +143,98 @@ async fn resolve_company_facts(
     edinet_date: Option<String>,
     filing_text: Option<String>,
 ) -> Result<CompanyFacts, String> {
-    let code = edinet_code.unwrap_or_default();
-    let date = edinet_date.unwrap_or_default();
-    let can_fetch = !code.trim().is_empty() && !date.trim().is_empty();
-
     let injected_sanitized = match injected {
         Some(facts) => Some(sanitize_company_facts(&facts).map_err(map_edinet_err)?),
         None => None,
     };
 
-    // Prefer offline inject when summary already present; otherwise dual-gated EDINET.
+    let mut code = edinet_code.unwrap_or_default();
+    if code.trim().is_empty() {
+        if let Some(base) = injected_sanitized.as_ref() {
+            code = base.edinet_code.clone();
+        }
+    }
+    let date = edinet_date.unwrap_or_default();
+    let lookup_name = injected_sanitized
+        .as_ref()
+        .map(|f| f.company_name.trim().to_string())
+        .unwrap_or_default();
+
+    let can_fetch_by_code = !code.trim().is_empty() && !date.trim().is_empty();
+    let can_fetch_by_name = !lookup_name.is_empty() && !date.trim().is_empty();
+
     if let Some(base) = injected_sanitized.as_ref() {
-        let needs_net = base.business_summary.trim().is_empty() && can_fetch;
-        if !needs_net {
+        let summary_ok = !base.business_summary.trim().is_empty();
+        let code_ok = !base.edinet_code.trim().is_empty();
+        if summary_ok && code_ok {
             return Ok(base.clone());
         }
-    } else if !can_fetch {
+        if summary_ok && !can_fetch_by_code && !can_fetch_by_name {
+            return Ok(base.clone());
+        }
+        if !can_fetch_by_code && !can_fetch_by_name {
+            if !base.company_name.trim().is_empty() {
+                return Ok(base.clone());
+            }
+            return Err("company_facts_or_edinet_code_required".into());
+        }
+    } else if !can_fetch_by_code && !can_fetch_by_name {
         return Err("company_facts_or_edinet_code_required".into());
     }
 
-    if !can_fetch {
-        return injected_sanitized.ok_or_else(|| "company_facts_or_edinet_code_required".into());
+    // Policy/egress off → soft-fail to injected company name (interview must not die).
+    if refuse_if_policy_off(store.get()).is_err() || refuse_if_egress_unavailable().is_err() {
+        if let Some(base) = injected_sanitized {
+            if !base.company_name.trim().is_empty() {
+                return Ok(base);
+            }
+        }
+        return Err("EGRESS_LIVE_NOT_READY".into());
     }
-
-    refuse_if_policy_off(store.get()).map_err(map_orch_err)?;
-    refuse_if_egress_unavailable().map_err(map_orch_err)?;
-    let key = subscription_key_from_env().map_err(map_edinet_err)?;
+    let key = match subscription_key_from_env() {
+        Ok(k) => k,
+        Err(err) => {
+            if let Some(base) = injected_sanitized {
+                if !base.company_name.trim().is_empty() {
+                    return Ok(base);
+                }
+            }
+            return Err(map_edinet_err(err));
+        }
+    };
 
     #[cfg(feature = "egress-live")]
     {
-        use crate::knowledge::edinet_client::fetch_company_facts_by_code;
+        use crate::knowledge::edinet_client::{
+            fetch_company_facts_by_code, fetch_company_facts_by_name,
+        };
         use crate::knowledge::net_gateway::ReqwestTransport;
         let transport = ReqwestTransport::new().map_err(|e| e.to_string())?;
-        match fetch_company_facts_by_code(
-            &transport,
-            date.trim(),
-            code.trim(),
-            &key,
-            filing_text.as_deref(),
-            EDINET_FETCH_DEADLINE,
-        )
-        .await
-        {
+
+        let fetched = if can_fetch_by_code {
+            fetch_company_facts_by_code(
+                &transport,
+                date.trim(),
+                code.trim(),
+                &key,
+                filing_text.as_deref(),
+                EDINET_FETCH_DEADLINE,
+            )
+            .await
+        } else {
+            fetch_company_facts_by_name(
+                &transport,
+                date.trim(),
+                &lookup_name,
+                &key,
+                filing_text.as_deref(),
+                EDINET_FETCH_DEADLINE,
+                EDINET_NAME_LOOKBACK_DAYS,
+            )
+            .await
+        };
+
+        match fetched {
             Ok(fetched) => {
                 if let Some(base) = injected_sanitized {
                     Ok(merge_company_facts_prefer_filled(&base, &fetched))
@@ -187,7 +243,6 @@ async fn resolve_company_facts(
                 }
             }
             Err(err) => {
-                // Soft-fail only when offline inject already has a company name.
                 if let Some(base) = injected_sanitized {
                     if !base.company_name.trim().is_empty() {
                         return Ok(base);
@@ -200,7 +255,17 @@ async fn resolve_company_facts(
 
     #[cfg(not(feature = "egress-live"))]
     {
-        let _ = (filing_text, key, EDINET_FETCH_DEADLINE);
+        let _ = (
+            filing_text,
+            key,
+            EDINET_FETCH_DEADLINE,
+            EDINET_NAME_LOOKBACK_DAYS,
+            can_fetch_by_code,
+            can_fetch_by_name,
+            lookup_name,
+            code,
+            date,
+        );
         if let Some(base) = injected_sanitized {
             if !base.company_name.trim().is_empty() {
                 return Ok(base);
@@ -244,11 +309,22 @@ pub async fn fetch_edinet_company_facts(
     store: State<'_, NetworkPolicyStore>,
     params: FetchEdinetFactsParams,
 ) -> Result<CompanyFacts, String> {
+    let injected = params.company_name.as_ref().and_then(|n| {
+        let name = n.trim();
+        if name.is_empty() {
+            None
+        } else {
+            Some(CompanyFacts {
+                company_name: name.to_string(),
+                ..CompanyFacts::default()
+            })
+        }
+    });
     resolve_company_facts(
         store.inner(),
-        None,
-        Some(params.edinet_code),
-        Some(params.edinet_date),
+        injected,
+        params.edinet_code,
+        params.edinet_date,
         params.filing_text,
     )
     .await

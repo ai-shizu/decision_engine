@@ -128,14 +128,13 @@ export function MultistageInterviewPanel({
       // Ambient enrich soft-fail — proceed with typed facts.
     }
 
-    const edinetCode = factsPayload.edinetCode.trim();
+    const edinetDate = todayIso();
     try {
       const result = await startMultistageInterview(
         {
           openingMessage: state.openingMessage.trim() || undefined,
           companyFacts: factsPayload,
-          edinetCode: edinetCode || undefined,
-          edinetDate: edinetCode ? todayIso() : undefined,
+          edinetDate,
         },
         (event) => {
           if (event.error) {

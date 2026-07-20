@@ -10,7 +10,8 @@ interface CompanyFactsFormProps {
 }
 
 /**
- * Offline-inject CompanyFacts editor (preferred over live EDINET when egress is Off).
+ * Offline-inject CompanyFacts editor.
+ * EDINET code is resolved automatically from company name (no manual field).
  * Dumb view — no invoke. Ambient enrichment is owned by the parent / hook.
  */
 export function CompanyFactsForm({
@@ -30,8 +31,8 @@ export function CompanyFactsForm({
         <span className="mobile-only">共通企業コンテキスト</span>
       </p>
       <p className="hint dev-noise">
-        企業名入力でローカル RAG /（設定オン時）E0b ネット補強が自動で走る。
-        外向き EDINET は二要素 egress が必要。手動検索ボタンは不要。
+        企業名入力で EDINET コードを自動特定し、ローカル RAG /（設定オン時）E0b ネット補強が走る。
+        コードの手動入力は不要。
       </p>
       {researching && (
         <p className="consult-research-ambient" role="status">
@@ -50,15 +51,6 @@ export function CompanyFactsForm({
           disabled={disabled}
           onChange={(e) => onPatch({ companyName: e.target.value })}
           placeholder="例: サンプル株式会社"
-        />
-      </div>
-      <div className="term-row config-row">
-        <span className="term-source-name">EDINET コード</span>
-        <input
-          value={facts.edinetCode}
-          disabled={disabled}
-          onChange={(e) => onPatch({ edinetCode: e.target.value })}
-          placeholder="任意（あれば自動取得）"
         />
       </div>
       <div className="term-row config-row">

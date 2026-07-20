@@ -85,13 +85,12 @@ test("E-05 enrich: local rag without policy", async () => {
   assertOk(result.attemptedNet === false, "no net");
 });
 
-test("E-06 enrich: policy on runs research then edinet", async () => {
+test("E-06 enrich: policy on runs research then edinet-by-name", async () => {
   let researchCalled = false;
   let edinetCalled = false;
   const result = await enrichCompanyFacts(
     emptyCompanyFacts({
       companyName: "公開企業",
-      edinetCode: "E02144",
     }),
     {
       getPolicy: async () => ({ enabled: true }),
@@ -104,8 +103,9 @@ test("E-06 enrich: policy on runs research then edinet", async () => {
         };
       },
       searchKnowledge: async () => ({ hits: [] }),
-      fetchEdinet: async () => {
+      fetchEdinetByName: async (args) => {
         edinetCalled = true;
+        assertOk(args.companyName === "公開企業", "name passed");
         return emptyCompanyFacts({
           companyName: "公開企業",
           edinetCode: "E02144",
@@ -118,6 +118,7 @@ test("E-06 enrich: policy on runs research then edinet", async () => {
   );
   assertOk(researchCalled && edinetCalled, "both lanes");
   assertOk(result.facts.businessSummary.includes("EDINET"), "edinet summary");
+  assertOk(result.facts.edinetCode === "E02144", "auto code");
   assertOk(result.attemptedNet === true, "net attempted");
   assertOk(result.provenanceLabel !== null, "provenance");
 });

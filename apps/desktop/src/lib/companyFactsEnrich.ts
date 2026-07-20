@@ -3,6 +3,7 @@
 //! Net paths require Settings NetworkPolicy On ∧ egress-live (same as Consult).
 //! Python knowledge_fetcher remains E0a-locked — do not call it from here.
 //! Never bind external_research_id into interview_sim / discussion prompts.
+//! EDINET codes are resolved from company name (no manual code UI).
 
 import type { CompanyFacts } from "./pocketBrain/types";
 import type { KnowledgeResearchReceipt } from "./parseEngineResponse";
@@ -88,8 +89,9 @@ export interface CompanyFactsEnrichDeps {
     query: string,
     limit?: number,
   ) => Promise<{ hits: Array<{ text_content: string }> }>;
-  fetchEdinet?: (args: {
-    edinetCode: string;
+  /** Auto-resolve EDINET code from company name (no manual code). */
+  fetchEdinetByName?: (args: {
+    companyName: string;
     edinetDate: string;
   }) => Promise<CompanyFacts>;
   todayIso: () => string;
@@ -154,7 +156,6 @@ export async function enrichCompanyFacts(
     const provenance = deriveProvenance(receipt);
     if (provenance) {
       provenanceLabel = provenanceChipText(provenance);
-      // Persisted chunks become searchable; pull text into CompanyFacts (sim-safe).
       if (deps.searchKnowledge && next.businessSummary.trim().length === 0) {
         try {
           const again = await deps.searchKnowledge(query, 3);
@@ -174,11 +175,11 @@ export async function enrichCompanyFacts(
     // EGRESS_LIVE_NOT_READY / policy race — continue
   }
 
-  const code = next.edinetCode.trim();
-  if (code && deps.fetchEdinet) {
+  // EDINET: company-name auto lookup (fills edinetCode + facts behind the scenes).
+  if (deps.fetchEdinetByName) {
     try {
-      const edinet = await deps.fetchEdinet({
-        edinetCode: code,
+      const edinet = await deps.fetchEdinetByName({
+        companyName: name,
         edinetDate: deps.todayIso(),
       });
       next = mergeCompanyFactsPreferFilled(next, edinet);
