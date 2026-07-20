@@ -118,7 +118,7 @@ export const UI_ERROR_SPECS = {
   },
   /** Pocket Brain RAG chat (send_rag_chat) — never surface raw embedding/IPC text. */
   RAG_CHAT: {
-    message: "AIモデルの形式が一致しません。設定から再ロードしてください。",
+    message: "AIモデルの形式が一致しません。自動再準備を待つか、配置を確認してください。",
     retryPolicy: "retry-safe",
   },
 } as const satisfies Record<string, UiErrorSpec>;

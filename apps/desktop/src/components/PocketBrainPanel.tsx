@@ -1,10 +1,9 @@
 // [D] Pocket Brain UI (docs/architecture_blueprint.md §3.9).
 //
-// M4 memory header + model load/cancel, plus M11 RAG chat/ingest surface.
-// Cancellation and Jetsam purge stay here so M7 governor wiring is unchanged.
+// M20-P: Load/Stop ボタン撤廃。マウント時に自動ロードし、メモリ purge 後も再ウォーム。
 // M20-C: variant="messenger" for mobile LINE-like chat (desktop layout intact).
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import {
   cancelGeneration,
@@ -31,7 +30,7 @@ export interface PocketBrainPanelProps {
 
 function softLoadError(_raw: string): string {
   // Finding 13: never surface exception text / path / GGUF details.
-  return "モデルの準備に失敗しました。配置を確認してから再読込してください。";
+  return "モデルの準備に失敗しました。バックグラウンドで再試行します。";
 }
 
 export function PocketBrainPanel({ variant = "default" }: PocketBrainPanelProps) {
@@ -39,7 +38,42 @@ export function PocketBrainPanel({ variant = "default" }: PocketBrainPanelProps)
   const [modelReady, setModelReady] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [phaseNote, setPhaseNote] = useState("モデル準備中…");
   const messenger = variant === "messenger";
+  const loadingRef = useRef(false);
+  const retryCountRef = useRef(0);
+
+  const ensureModelLoaded = useCallback(async () => {
+    if (loadingRef.current) return;
+    loadingRef.current = true;
+    setBusy(true);
+    setError(null);
+    setPhaseNote("モデル準備中…");
+    try {
+      await loadModel({ n_gpu_layers: 999, use_mmap: true });
+      setModelReady(true);
+      setPhaseNote("準備完了");
+      setError(null);
+      retryCountRef.current = 0;
+      loadingRef.current = false;
+    } catch (e) {
+      setModelReady(false);
+      setError(`load: ${String(e)}`);
+      setPhaseNote("再試行待機…");
+      if (retryCountRef.current < 3) {
+        retryCountRef.current += 1;
+        window.setTimeout(() => {
+          loadingRef.current = false;
+          void ensureModelLoaded();
+        }, 4000);
+      } else {
+        loadingRef.current = false;
+        setPhaseNote("準備に失敗");
+      }
+    } finally {
+      setBusy(false);
+    }
+  }, []);
 
   useEffect(() => {
     startMemoryMonitor(setMem, SAMPLE_INTERVAL_MS, THRESHOLD_BYTES).catch((e) =>
@@ -47,10 +81,12 @@ export function PocketBrainPanel({ variant = "default" }: PocketBrainPanelProps)
     );
   }, []);
 
-  // Subscribe once to worker-pushed LLM lifecycle events. On an out-of-band
-  // memory purge (iOS dropped the model to survive memory pressure), suspend the
-  // UI: stop any stream, mark the model unloaded, and prompt a reload. The
-  // native worker already dropped the model — this only re-syncs the UI.
+  // Auto-load on mount (no manual Load button).
+  useEffect(() => {
+    void ensureModelLoaded();
+  }, [ensureModelLoaded]);
+
+  // Memory purge → auto re-warm (no reload button).
   useEffect(() => {
     let active = true;
     void subscribeLlmEvents((event) => {
@@ -60,27 +96,16 @@ export function PocketBrainPanel({ variant = "default" }: PocketBrainPanelProps)
       void cancelGeneration();
       setBusy(false);
       setModelReady(false);
-      setError("メモリ保護のためモデルを解放しました。再ロードしてください。");
+      setError(null);
+      setPhaseNote("メモリ保護後に再準備中…");
+      void ensureModelLoaded();
     }).catch(() => {
       // No LLM event sink (e.g. desktop without the pocket-brain command).
     });
     return () => {
       active = false;
     };
-  }, []);
-
-  async function onLoad() {
-    setError(null);
-    setBusy(true);
-    try {
-      await loadModel({ n_gpu_layers: 999, use_mmap: true });
-      setModelReady(true);
-    } catch (e) {
-      setError(`load: ${String(e)}`);
-    } finally {
-      setBusy(false);
-    }
-  }
+  }, [ensureModelLoaded]);
 
   const over = mem?.over_threshold ?? false;
 
@@ -99,26 +124,8 @@ export function PocketBrainPanel({ variant = "default" }: PocketBrainPanelProps)
             >
               {mem
                 ? `${fmtMiB(mem.phys_footprint_bytes)} · ${mem.phase}`
-                : "mem —"}
+                : phaseNote}
             </span>
-          </div>
-          <div className="pocket-brain-messenger-actions">
-            <button
-              type="button"
-              className="pocket-brain-chip-btn"
-              onClick={() => void onLoad()}
-              disabled={busy || modelReady}
-            >
-              {modelReady ? "準備完了" : "読込"}
-            </button>
-            <button
-              type="button"
-              className="pocket-brain-chip-btn"
-              onClick={() => void cancelGeneration()}
-              disabled={!busy}
-            >
-              停止
-            </button>
           </div>
         </header>
 
@@ -144,7 +151,7 @@ export function PocketBrainPanel({ variant = "default" }: PocketBrainPanelProps)
           justifyContent: "space-between",
           padding: "8px 12px",
           borderBottom: "1px solid #333",
-          color: over ? "#ff5555" : "inherit",
+          color: over ? "var(--err)" : "inherit",
           fontVariantNumeric: "tabular-nums",
         }}
       >
@@ -152,20 +159,16 @@ export function PocketBrainPanel({ variant = "default" }: PocketBrainPanelProps)
         <span>
           {mem
             ? `${fmtMiB(mem.phys_footprint_bytes)} / ${fmtMiB(mem.threshold_bytes)} · ${mem.phase}`
-            : "mem —"}
+            : phaseNote}
+          {busy && !modelReady ? " · warming" : modelReady ? " · ready" : ""}
         </span>
       </header>
 
-      <div style={{ padding: 12, display: "flex", gap: 8 }}>
-        <button type="button" onClick={() => void onLoad()} disabled={busy || modelReady}>
-          {modelReady ? "Model loaded" : "Load model"}
-        </button>
-        <button type="button" onClick={() => void cancelGeneration()} disabled={!busy}>
-          Cancel
-        </button>
-      </div>
-
-      {error && <p style={{ color: "#ff5555", padding: "0 12px" }}>{error}</p>}
+      {error && (
+        <p className="pocket-brain-error" style={{ padding: "8px 12px" }}>
+          {softLoadError(error)}
+        </p>
+      )}
 
       <RagChatPanel
         modelReady={modelReady}

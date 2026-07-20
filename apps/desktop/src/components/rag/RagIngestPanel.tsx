@@ -95,13 +95,11 @@ export function RagIngestPanel({ modelReady, friendly = false }: RagIngestPanelP
         <p style={{ margin: 0, fontSize: 12, color: "#7dcea0" }}>{notice}</p>
       ) : null}
       {error ? (
-        <p style={{ margin: 0, fontSize: 12, color: "#ff5555" }}>{error}</p>
+        <p className="error-text" style={{ margin: 0, fontSize: 12 }}>{error}</p>
       ) : null}
       {!modelReady ? (
         <p style={{ margin: 0, fontSize: 12, opacity: 0.6 }}>
-          {friendly
-            ? "先にモデルを Load すると学習できます"
-            : "取り込みには 384 次元対応モデルのロードが必要です"}
+          モデル準備が終わるまでお待ちください
         </p>
       ) : null}
     </section>

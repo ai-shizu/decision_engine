@@ -1,5 +1,5 @@
 :root {
-  /* ---- Monochrome ladder: 黒 → 白 の 8 階調のみ。R=G=B 以外の色値は全域で禁止 ---- */
+  /* ---- Monochrome ladder: 黒 → 白 の 8 階調 (基調)。エラー/警告のみネオン許可 ---- */
   --bg:          #0a0a0a;   /* 基調: ほぼ黒。純黒 #000 は --bg-deep に予約 */
   --bg-raised:   #111111;   /* パネル・カード */
   --bg-deep:     #000000;   /* 入力欄・チャットログ = 最深部 */
@@ -10,11 +10,16 @@
   --text:        #f2f2f2;   /* 信号色 = ほぼ白 (対比 ~17:1) */
   --text-muted:  #8c8c8c;   /* 減光 (対比 ~5.6:1 — AA 維持) */
   --accent:      #ffffff;   /* 操作・選択・focus = 純白 */
-  --ok:          #d9d9d9;   /* 稼働表示。緑は捨てる。文言が意味を運ぶ */
-  --ok-strong:   #f2f2f2;
-  --err:         #ffffff;   /* エラーは色相でなく「反転」で表す */
-  --err-soft:    #d0d0d0;
-  --err-bg:      #161616;
+  --ok:          #3fb950;   /* システム正常: エメラルドグリーン */
+  --ok-strong:   #56d364;
+  --sys-cyan:    #39c5cf;   /* システム状態アクセント */
+  /* M20-P: ハッカー風エラー — 白反転を廃止しジェットブラック + ネオン */
+  --err:         #ff5555;   /* クリムゾン */
+  --err-soft:    #f0883e;   /* アンバー警告 */
+  --err-warn:    #ffb454;
+  --err-bg:      #0d1117;
+  --err-bg-raised: #161b22;
+  --err-border:  #f0883e;
 
   /* ---- タイポグラフィ (ローカル等幅のみ — CDN / 外部フォント取得禁止) ---- */
   --font-ui:   "Cascadia Mono", "BIZ UDGothic", "MS Gothic", Consolas, ui-monospace, monospace;
@@ -229,18 +234,31 @@ body::after {
 
 .status-line {
   margin-top: 12px;
-  color: var(--ok);
+  color: var(--sys-cyan);
   font-size: 0.95rem;
   font-family: var(--font-mono);
 }
 
-/* エラーは色相ではなく反転ビデオ（静止・最大音量） */
+/* M20-P: ハッカー風アラート — ジェットブラック背景 + ネオン枠・文字 */
 .error-text,
-.status-line.error-text {
-  background: var(--text);
-  color: var(--bg);
-  padding: 2px 6px;
-  display: inline-block;
+.status-line.error-text,
+.vault-error.error-text,
+.probe-error.error-text,
+.pocket-brain-error {
+  background: var(--err-bg-raised);
+  color: var(--err);
+  border: 1px solid var(--err-border);
+  box-shadow: inset 0 0 0 1px rgba(240, 136, 62, 0.12);
+  padding: 8px 10px;
+  display: block;
+  font-family: var(--font-mono);
+  letter-spacing: 0.02em;
+}
+
+.status-line.error-text,
+.probe-error.error-text,
+.vault-error {
+  color: var(--err);
 }
 
 /* Calendar */
@@ -525,6 +543,9 @@ body::after {
 
 .save-notice.error {
   color: var(--err-soft);
+  background: var(--err-bg);
+  border: 1px solid var(--err-border);
+  padding: 6px 8px;
 }
 
 button.primary {
@@ -681,6 +702,34 @@ button:disabled {
   max-width: 16rem;
   padding: 0.25rem 0.5rem;
   font: inherit;
+}
+
+.import-es-section {
+  border: 1px solid var(--border);
+  padding: var(--s4);
+  background: var(--bg-raised);
+}
+
+.import-es-library {
+  margin: var(--s3) 0;
+}
+
+.import-es-company-label {
+  display: block;
+  margin-top: var(--s2);
+  font-size: 0.85rem;
+  color: var(--text-muted);
+}
+
+.import-es-company-field {
+  display: block;
+  width: min(100%, 20rem);
+  max-width: 100%;
+  margin: var(--s1) 0 var(--s3);
+  padding: 0.4rem 0.6rem;
+  background: var(--bg-deep);
+  border: 1px solid var(--border);
+  color: var(--text);
 }
 
 .mode-row {
@@ -2570,11 +2619,12 @@ button.secondary {
 .pocket-brain-error,
 .rag-chat-panel-messenger .rag-chat-error {
   margin: 0;
-  padding: 6px 12px;
+  padding: 8px 12px;
   font-size: 0.72rem;
   color: var(--err);
-  background: var(--err-bg);
-  border-bottom: 1px solid var(--border);
+  background: var(--err-bg-raised);
+  border-bottom: 1px solid var(--err-border);
+  font-family: var(--font-mono);
 }
 
 .rag-chat-panel-messenger {
@@ -2712,9 +2762,10 @@ button.secondary {
   align-items: flex-start;
   gap: 8px;
   margin-top: 6px;
-  padding: 6px 8px;
-  border: 1px solid var(--border);
-  background: var(--err-bg);
+  padding: 8px 10px;
+  border: 1px solid var(--err-border);
+  background: var(--err-bg-raised);
+  box-shadow: inset 0 0 12px rgba(240, 136, 62, 0.08);
 }
 
 .mobile-status-banner-text {
@@ -2722,16 +2773,17 @@ button.secondary {
   margin: 0;
   font-size: 0.68rem;
   line-height: 1.35;
-  color: var(--err-soft);
+  color: var(--err-warn);
+  font-family: var(--font-mono);
 }
 
 .mobile-status-banner-dismiss {
   flex-shrink: 0;
   width: 28px;
   height: 28px;
-  border: 1px solid var(--border);
-  background: var(--bg);
-  color: var(--text);
+  border: 1px solid var(--err-border);
+  background: var(--err-bg);
+  color: var(--err-soft);
   font-size: 1rem;
   line-height: 1;
   cursor: pointer;

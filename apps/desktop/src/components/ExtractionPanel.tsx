@@ -274,9 +274,7 @@ export function ExtractionPanel(props: ExtractionPanelProps): ReactElement {
 
         {!modelReady && (
           <p role="status" style={{ opacity: 0.7, margin: 0 }}>
-            {friendly
-              ? "先にモデルを Load すると抽出できます"
-              : "モデルを読み込むと抽出できます"}
+            モデル準備が終わるまでお待ちください
           </p>
         )}
 

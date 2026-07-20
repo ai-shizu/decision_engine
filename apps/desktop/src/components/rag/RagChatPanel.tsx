@@ -116,15 +116,7 @@ export function RagChatPanel({
       />
       {!messenger ? <RagIngestPanel modelReady={modelReady} /> : null}
       {state.error ? (
-        <p
-          className="rag-chat-error"
-          role="alert"
-          style={
-            messenger
-              ? undefined
-              : { margin: "0 12px 8px", fontSize: 12, color: "#ff5555" }
-          }
-        >
+        <p className="rag-chat-error error-text" role="alert">
           {state.error}
         </p>
       ) : null}

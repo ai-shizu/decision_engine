@@ -31,7 +31,7 @@ export function RagChatInput({
             }
           }}
           placeholder={
-            modelReady ? "メッセージ…" : "モデルをロードしてください"
+            modelReady ? "メッセージ…" : "モデル準備中…すぐ送れます"
           }
           rows={1}
           aria-label="チャット入力"
@@ -65,7 +65,7 @@ export function RagChatInput({
         placeholder={
           modelReady
             ? "知識ベースに質問…"
-            : "先にモデルをロードしてください"
+            : "モデル準備中…完了後すぐ送れます"
         }
         rows={2}
         style={{ flex: 1, resize: "vertical", minHeight: 48 }}

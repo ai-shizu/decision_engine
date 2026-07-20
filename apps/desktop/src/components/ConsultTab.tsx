@@ -75,7 +75,7 @@ export function ConsultTab() {
       .then((res) => {
         if (cancelled) return;
         if (res.llm_probed || res.backend_ready) {
-          setWarmNote("相談エンジン準備済み — すぐ送れます");
+          setWarmNote("");
         }
       })
       .catch(() => {

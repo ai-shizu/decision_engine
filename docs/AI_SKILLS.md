@@ -843,6 +843,16 @@ Pocket Brain 経路は M14 tensor + M15 pulse/Rasch + gap sufficiency から loa
 
 **as-built:** `es_manager` 名寄せ / `import.document` 確認ゲート / ImportTab 置き換え UI / `llm.warm` + App・ConsultTab ウォーム / セッション保持。
 
+### 4.41 M20-P — ES dedicated import / auto model load / hacker alerts (2026-07-21)
+
+**射程:** ES 取込の独立化、Load/Stop 撤廃、白反転エラーのダーク化。コミットは指揮官指示待ち。
+
+**不変条件:**
+1. ES 取込は ImportTab の専用セクションのみ。「その他」から ES dest を出さない。
+2. Pocket Brain の Load/Stop ボタン禁止。マウント時 + purge 後は自動 `loadModel`（最大3回リトライ）。
+3. `.error-text` / 警告バナーは白反転禁止。`--err-bg-raised` (#161b22) + ネオン (`--err` / `--err-soft`) のみ。
+4. FSA-02 の単発 spawn / HTTP 復活は引き続き禁止。Python `llm.warm` は維持。
+
 ### 4.8 M3 Phase 0-A — SQLCipher / Security.framework iOS link gate (2026-07-18)
 
 **射程（Phase 0-A のみ）:** `secure-vault` feature、依存解決、in-memory SQLCipher identity（`PRAGMA key` + `cipher_version`）、Security.framework シンボル（`SecRandom` / `SecAccessControl`）、Tauri command 登録、iOS Simulator 最終リンク証明。スキーマ・repository・UI・本番 Keychain item 作成は対象外。
