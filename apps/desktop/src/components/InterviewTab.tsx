@@ -41,7 +41,7 @@ const MODES: { id: InterviewSurface; label: string; shortLabel: string; hint: st
   },
   {
     id: "es_review", label: "ES添削 (legacy)", shortLabel: "ES旧",
-    hint: "data/es/ の ES を採用責任者ペルソナで容赦なく添削。"
+    hint: "登録済みの ES を採用責任者ペルソナで容赦なく添削。"
       + "書類単体の論理的強度のみを評価します (思考速度は評価しません)。",
   },
   {
@@ -655,7 +655,9 @@ export function InterviewTab() {
           </div>
           {mode === "interview_sim" && (
           <>
-          <p className="hint">ES (data/es/) があれば ES 駆動の面接が優先され、この設定は記録用に保持されます。</p>
+          <p className="hint">
+            登録済みのESがある場合、その内容を踏まえた面接が優先されます。この設定は記録用に保持されます。
+          </p>
           <div className="action-row">
             <button type="button" className="ghost" onClick={() => setConfig(DEFAULT_CONFIG)}>
               既定値に戻す
@@ -732,9 +734,13 @@ export function InterviewTab() {
         </div>
       )}
 
-      {phase === "idle" && (
+      {/* ES草案生成は ES 添削 (legacy) モード専用 — ケース/GD への侵食禁止 */}
+      {phase === "idle" && surface === "es_review" && (
         <div className="term-panel narrative-panel">
-          <p className="term-header">NARRATIVE_DRAFT</p>
+          <p className="term-header">
+            <span className="desktop-only">NARRATIVE_DRAFT</span>
+            <span className="mobile-only">ES草案生成</span>
+          </p>
           <p className="hint">
             現在のスキルと目指す姿のギャップを分析し、自己PR・ESの草案を自動生成します（※模擬面接マウント中は実行不可）
           </p>
@@ -743,7 +749,7 @@ export function InterviewTab() {
             <input
               value={narrativeTarget}
               onChange={(e) => setNarrativeTarget(e.target.value)}
-              placeholder="空欄なら active ES / 既定ドメイン"
+              placeholder="空欄なら登録済み ES / 既定ドメイン"
             />
           </div>
           <button

@@ -757,6 +757,16 @@ Pocket Brain 経路は M14 tensor + M15 pulse/Rasch + gap sufficiency から loa
 5. ACTIONS: 見出し「AIへのデータ提供」+ lead 文。`friendly` で「メモの学習」「支出データの抽出」。`task: kakeibo_v1` はシート非表示。
 6. 検証: `npx tsc --noEmit` → exit 0。
 
+### 4.33 M20-I — Interview ES isolation + sterile RAG errors (2026-07-20)
+
+**射程:** NARRATIVE_DRAFT のモード隔離、パス表記除去、RAG UI の Finding 13 準拠無菌化。コミットは指揮官指示待ち。
+
+**as-built:**
+1. `InterviewTab`: `NARRATIVE_DRAFT` は `phase === "idle" && surface === "es_review"` のときのみ。ケース / GD / 多段では非表示（多段は元々 `pocketBrainSurface` 外だが、legacy idle 侵食を封鎖）。
+2. 設定ヒントから `data/es/` を除去。「登録済みのESがある場合…」の自然語へ。
+3. `uiErrorMessages.RAG_CHAT`（retry-safe）を追加。`RagChatPanel` は `event.error` / catch 値を UI に渡さず固定文言のみ（substring 分類禁止の Finding 13 を維持）。
+4. 検証: `npx tsc --noEmit` → exit 0。`tests-runtime/ui_error_boundary.test.ts` キー数 23。
+
 ### 4.8 M3 Phase 0-A — SQLCipher / Security.framework iOS link gate (2026-07-18)
 
 **射程（Phase 0-A のみ）:** `secure-vault` feature、依存解決、in-memory SQLCipher identity（`PRAGMA key` + `cipher_version`）、Security.framework シンボル（`SecRandom` / `SecAccessControl`）、Tauri command 登録、iOS Simulator 最終リンク証明。スキーマ・repository・UI・本番 Keychain item 作成は対象外。

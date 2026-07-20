@@ -1,13 +1,11 @@
 import { useReducer, useRef } from "react";
 
-import {
-  isPocketBrainInvokeError,
-  sendRagChat,
-} from "../../lib/pocketBrain";
+import { sendRagChat } from "../../lib/pocketBrain";
 import {
   initialRagChatState,
   ragChatReducer,
 } from "../../lib/ragChatReducer";
+import { uiErrorMessage } from "../../lib/uiErrorMessages";
 import { useThrottledStream } from "../../lib/useThrottledStream";
 import { RagChatInput } from "./RagChatInput";
 import { RagIngestPanel } from "./RagIngestPanel";
@@ -31,6 +29,7 @@ function allocId(prefix: string): string {
 /**
  * RAG chat surface: pure-reducer timeline + Channel streaming via pocketBrain API.
  * Cancellation / memory purge remain owned by the parent PocketBrainPanel.
+ * Finding 13: never pass raw IPC / embedding errors into UI state.
  */
 export function RagChatPanel({
   modelReady,
@@ -62,13 +61,16 @@ export function RagChatPanel({
     assistantIdRef.current = assistantId;
     dispatch({ type: "send_begin", userId, assistantId, prompt });
 
+    const sterile = uiErrorMessage("RAG_CHAT");
+
     try {
       const result = await sendRagChat(
         prompt,
         (event) => {
           if (event.error) {
-            dispatch({ type: "token_error", message: event.error });
-            onError(event.error);
+            // Ignore event.error body — operation-keyed sterile message only.
+            dispatch({ type: "token_error", message: sterile });
+            onError(sterile);
             return;
           }
           if (event.done) {
@@ -88,13 +90,10 @@ export function RagChatPanel({
         assistantId,
         contextCount: result.context_count,
       });
-    } catch (e) {
+    } catch {
       throttle.flushAndStop();
-      const message = isPocketBrainInvokeError(e)
-        ? e.message
-        : `rag: ${String(e)}`;
-      dispatch({ type: "send_failure", message });
-      onError(message);
+      dispatch({ type: "send_failure", message: sterile });
+      onError(sterile);
     } finally {
       assistantIdRef.current = null;
       dispatch({ type: "send_end" });
@@ -122,6 +121,7 @@ export function RagChatPanel({
       {state.error ? (
         <p
           className="rag-chat-error"
+          role="alert"
           style={
             messenger
               ? undefined

@@ -32,6 +32,7 @@ const RETRY_SAFE: UiErrorCode[] = [
   "PROFILE_LOAD",
   "TWIN_FORECAST",
   "SETTINGS_LOAD",
+  "RAG_CHAT",
 ];
 
 const VERIFY_FIRST: UiErrorCode[] = [
@@ -54,9 +55,9 @@ const VERIFY_FIRST: UiErrorCode[] = [
   "PROFILER_RUN",
 ];
 
-test("T-01 exact 22 keys", () => {
+test("T-01 exact 23 keys", () => {
   const keys = Object.keys(UI_ERROR_SPECS).sort();
-  assertEqual(keys.length, 22, "key count");
+  assertEqual(keys.length, 23, "key count");
   const expected = [...RETRY_SAFE, ...VERIFY_FIRST].sort();
   assertEqual(JSON.stringify(keys), JSON.stringify(expected), "key set");
 });

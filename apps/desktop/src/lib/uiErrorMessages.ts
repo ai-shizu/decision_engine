@@ -116,6 +116,11 @@ export const UI_ERROR_SPECS = {
       "プロフィール再解析の結果を確認できませんでした。現在の状態を確認し、必要な場合だけ再実行してください。",
     retryPolicy: "verify-first",
   },
+  /** Pocket Brain RAG chat (send_rag_chat) — never surface raw embedding/IPC text. */
+  RAG_CHAT: {
+    message: "AIモデルの形式が一致しません。設定から再ロードしてください。",
+    retryPolicy: "retry-safe",
+  },
 } as const satisfies Record<string, UiErrorSpec>;
 
 export type UiErrorCode = keyof typeof UI_ERROR_SPECS;
