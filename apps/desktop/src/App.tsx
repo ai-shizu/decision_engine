@@ -6,6 +6,7 @@ import {
 import { ConsultTab } from "./components/ConsultTab";
 import { ImportTab } from "./components/ImportTab";
 import { InterviewTab } from "./components/InterviewTab";
+import { MobileChrome } from "./components/MobileChrome";
 import { ProbeTab } from "./components/ProbeTab";
 import { ProfileTab } from "./components/ProfileTab";
 import { RecordTab } from "./components/RecordTab";
@@ -17,6 +18,7 @@ import "./App.css";
 // M4 pocket-brain (docs/architecture_blueprint.md §3.9). Mounted on the loading
 // screen because that is where the iOS shell sits (engine never becomes ready on
 // device). On desktop it shows briefly before the 7-tab UI takes over.
+// M20-A: MobileChrome also mounts PocketBrain on ≤768px (CSS-gated).
 import { PocketBrainPanel } from "./components/PocketBrainPanel";
 import { VaultPanel } from "./components/VaultPanel";
 
@@ -24,13 +26,14 @@ function LoadingScreen({ message }: { message: string }) {
   return (
     <div className="shell">
       <TitleBar />
-      <main className="app loading">
+      <main className="app loading desktop-chrome">
         <h1>PKB</h1>
         <p className="status-line">{message}</p>
         <p className="hint">初回起動はエンジン展開に 30 秒ほどかかることがあります。</p>
         <PocketBrainPanel />
         <VaultPanel />
       </main>
+      <MobileChrome statusLine={message} />
     </div>
   );
 }
@@ -167,50 +170,53 @@ export default function App() {
   return (
     <div className="shell">
       <TitleBar />
-      <header className="topbar">
-        <div>
-          <h1>PKB</h1>
-          <p className="subtitle">{status}</p>
-        </div>
-        <nav
-          className="tabs"
-          role="tablist"
-          aria-label="メインタブ"
-          aria-orientation="horizontal"
-        >
-          {TABS.map(({ id, label }, index) => (
-            <button
-              key={id}
-              id={tabButtonId(id)}
-              type="button"
-              role="tab"
-              aria-selected={tab === id}
-              aria-controls={tabPanelId(id)}
-              tabIndex={tab === id ? 0 : -1}
-              className={tab === id ? "active" : ""}
-              onClick={() => setTab(id)}
-              onKeyDown={(event) => handleTabKeyDown(event, index)}
-            >
-              {label}
-            </button>
-          ))}
-        </nav>
-      </header>
-      <main className="content">
-        {TABS.map(({ id }) => (
-          <div
-            key={id}
-            id={tabPanelId(id)}
-            className="main-tab-panel"
-            role="tabpanel"
-            aria-labelledby={tabButtonId(id)}
-            hidden={tab !== id}
-            tabIndex={tab === id ? 0 : -1}
-          >
-            {tab === id && renderMainTab(id)}
+      <div className="desktop-chrome">
+        <header className="topbar">
+          <div>
+            <h1>PKB</h1>
+            <p className="subtitle">{status}</p>
           </div>
-        ))}
-      </main>
+          <nav
+            className="tabs"
+            role="tablist"
+            aria-label="メインタブ"
+            aria-orientation="horizontal"
+          >
+            {TABS.map(({ id, label }, index) => (
+              <button
+                key={id}
+                id={tabButtonId(id)}
+                type="button"
+                role="tab"
+                aria-selected={tab === id}
+                aria-controls={tabPanelId(id)}
+                tabIndex={tab === id ? 0 : -1}
+                className={tab === id ? "active" : ""}
+                onClick={() => setTab(id)}
+                onKeyDown={(event) => handleTabKeyDown(event, index)}
+              >
+                {label}
+              </button>
+            ))}
+          </nav>
+        </header>
+        <main className="content">
+          {TABS.map(({ id }) => (
+            <div
+              key={id}
+              id={tabPanelId(id)}
+              className="main-tab-panel"
+              role="tabpanel"
+              aria-labelledby={tabButtonId(id)}
+              hidden={tab !== id}
+              tabIndex={tab === id ? 0 : -1}
+            >
+              {tab === id && renderMainTab(id)}
+            </div>
+          ))}
+        </main>
+      </div>
+      <MobileChrome statusLine={status} />
     </div>
   );
 }

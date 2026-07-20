@@ -61,6 +61,9 @@ export type MainTab =
   | "profile"
   | "settings";
 
+/** M20-A mobile bottom-nav surfaces (CSS ≤768px). Desktop MainTab は不変。 */
+export type MobileSurface = "rag" | "dashboard" | "probe";
+
 export type ProbeAxis =
   | "decision_threshold"
   | "reward_bias"
