@@ -141,6 +141,12 @@ pub fn run() {
                 feature = "secure-vault",
                 target_vendor = "apple"
             ))]
+            rag::commands_daily::sync_daily_context,
+            #[cfg(all(
+                feature = "pocket-brain",
+                feature = "secure-vault",
+                target_vendor = "apple"
+            ))]
             llm::commands_sim::fetch_edinet_company_facts,
             #[cfg(all(
                 feature = "pocket-brain",

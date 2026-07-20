@@ -27,7 +27,7 @@
 | 永続化境界・シリアライズ・runtime検証・IPC契約 | §1, §16 (SKILL-PKB-BOUNDARY-V3), `docs/architecture/INCIDENT_LEDGER.md` |
 | macOS ビルド・配布・コード署名 | §1, §2.3, §4 |
 | Tauri iOS (M0〜) 初期化・シミュレータ | §1, §2.3, §4.4, `docs/M0_IOS_INIT_INSTRUCTIONS.md` |
-| Pocket Brain / on-device LLM (M4〜M5) / OOM defense (M7) / 浄化 (M8) / local RAG (M9〜M11) / ES·面接+EDINET (M12) | §1, §1.1, §4.5, §4.6, §4.7, §4.7b, §4.7c, §4.9, §4.10, §4.11, §4.12, §5, §7.1, §7.2.1〜7.2.3, `docs/m5_action_plan.md` |
+| Pocket Brain / on-device LLM (M4〜M5) / OOM defense (M7) / 浄化 (M8) / local RAG (M9〜M11) / ES·面接+EDINET (M12) / DailyContext (M13) | §1, §1.1, §4.5, §4.6, §4.7, §4.7b, §4.7c, §4.9, §4.10, §4.11, §4.12, §4.13, §5, §7.1, §7.2.1〜7.2.3, `docs/m5_action_plan.md` |
 | SQLCipher vault / Keychain (M3) | §1, §4.8, `docs/m3_action_plan.md` |
 | LLM モデル選定・consult/KV キャッシュ | §1, §5, §7, §8 |
 | 検索エンジン・mmap・LSM 索引 | §1, §9, §10 |
@@ -526,6 +526,18 @@ rm -rf .boundary-tests-out
 - Subscription-Key はクエリに載るがログ・プロンプト・エラーへ絶対に出さない。
 - 書類 ZIP の XBRL 展開は未実装 — `filing_text` 注入または一覧メタデータの sparse facts で面接/ES を回す。
 - `prompt_sim` は `rag` feature に依存しない（`ExperienceRef` を自前定義）。
+
+### 4.13 M13 — Daily Context merger + auto-ingest (2026-07-20)
+
+**射程:** フロント/別経路から渡された予定 JSON + 日誌テキストを Daily Context Markdown に結合し、`chunk_markdown` → embed → `knowledge_replace` で同日 upsert。iOS EventKit 直接バインド・React UI・profiler 起動は対象外。
+
+**as-built:**
+1. `knowledge/context_merger.rs` — `normalize_date` / `parse_events_json` / `build_daily_context_markdown` / `daily_source_id`（`daily-YYYY-MM-DD`）。
+2. Markdown 構成: `# DailyContext: {date}` → `## {date}の記録` → `### 予定` → `### 日誌`（Python `_render_text` の Calendar/Diary 思想を Pocket Brain 向けに縮小）。
+3. `rag/commands_daily.rs::sync_daily_context` — `spawn_blocking` 内で chunk→embed→`VaultHandle::knowledge_replace`（DELETE `source_id::%` + INSERT を 1 トランザクション）。
+4. 空（予定も日誌も無し）は `EmptyContext` で拒否。RECORD 経路から profiler を呼ばない。
+
+**ハマりどころ:** `source_id` に `_` / `%` / `::` を入れるな（M10 ingest バリデーションと同型）。日付は厳密 `YYYY-MM-DD`。
 
 ### 4.8 M3 Phase 0-A — SQLCipher / Security.framework iOS link gate (2026-07-18)
 

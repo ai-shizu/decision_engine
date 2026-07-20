@@ -10,6 +10,7 @@
 
 pub mod attestation;
 pub mod canonicalize;
+pub mod context_merger;
 pub mod dns_guard;
 pub mod dual_run;
 pub mod edinet_client;
