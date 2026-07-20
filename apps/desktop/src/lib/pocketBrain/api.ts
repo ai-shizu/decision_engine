@@ -124,7 +124,7 @@ export function getLatestTensorProfile(): Promise<TensorProfile> {
   return pocketInvoke("get_latest_tensor_profile");
 }
 
-export function ensureAuthoritativeTensorProfile(): Promise<Record<string, unknown>> {
+export function ensureAuthoritativeTensorProfile(): Promise<TensorProfile> {
   return pocketInvoke("ensure_authoritative_tensor_profile");
 }
 

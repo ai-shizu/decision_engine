@@ -2057,3 +2057,77 @@ button.secondary {
 .es-review-panel .custom-theme-textarea {
   width: 100%;
 }
+
+/* M18-C: Gap / Tensor dashboard */
+.gap-tensor-dashboard {
+  margin-bottom: 20px;
+}
+
+.gap-tensor-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+@media (max-width: 56rem) {
+  .gap-tensor-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.gap-tensor-col {
+  min-width: 0;
+}
+
+.gap-sufficiency-block {
+  margin-bottom: 10px;
+}
+
+.gap-score-meter {
+  height: 8px;
+  margin: 4px 0 10px;
+  background: var(--border);
+  border: 1px solid var(--border);
+}
+
+.gap-score-meter-fill {
+  height: 100%;
+  background: var(--accent);
+}
+
+.gap-flag-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.gap-flag-item {
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  background: var(--bg-info);
+}
+
+.gap-flag-type {
+  display: inline-block;
+  margin-right: 8px;
+  font-size: 0.75rem;
+  font-weight: 700;
+  color: var(--err);
+}
+
+.gap-flag-theme {
+  font-weight: 600;
+  margin-right: 8px;
+}
+
+.gap-flag-insight {
+  margin: 6px 0 0;
+}
+
+.gap-theme-scores {
+  margin-top: 12px;
+}

@@ -12,6 +12,7 @@ import {
 import type { SourceCodeView } from "../lib/types";
 import { uiErrorMessage } from "../lib/uiErrorMessages";
 import { ContextObservatoryContainer } from "./ContextObservatoryContainer";
+import { GapTensorDashboard } from "./GapTensorDashboard";
 
 function evidenceCount(evidence: unknown): number {
   return Array.isArray(evidence) ? evidence.length : 0;
@@ -101,6 +102,8 @@ export function ProfileTab() {
 
   return (
     <section className="panel profile-panel">
+      <GapTensorDashboard />
+
       <div className="profile-topline">
         <div>
           <h2>プロファイル分析 (PROFILE)</h2>
