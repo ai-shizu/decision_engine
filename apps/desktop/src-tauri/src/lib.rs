@@ -136,6 +136,24 @@ pub fn run() {
                 target_vendor = "apple"
             ))]
             rag::commands_rag::send_rag_chat,
+            #[cfg(all(
+                feature = "pocket-brain",
+                feature = "secure-vault",
+                target_vendor = "apple"
+            ))]
+            llm::commands_sim::fetch_edinet_company_facts,
+            #[cfg(all(
+                feature = "pocket-brain",
+                feature = "secure-vault",
+                target_vendor = "apple"
+            ))]
+            llm::commands_sim::start_interview_session,
+            #[cfg(all(
+                feature = "pocket-brain",
+                feature = "secure-vault",
+                target_vendor = "apple"
+            ))]
+            llm::commands_sim::review_es_draft,
             #[cfg(all(feature = "secure-vault", target_vendor = "apple"))]
             commands_db::vault_status,
             #[cfg(all(feature = "secure-vault", target_vendor = "apple"))]

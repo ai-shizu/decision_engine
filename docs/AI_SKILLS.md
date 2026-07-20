@@ -27,7 +27,7 @@
 | 永続化境界・シリアライズ・runtime検証・IPC契約 | §1, §16 (SKILL-PKB-BOUNDARY-V3), `docs/architecture/INCIDENT_LEDGER.md` |
 | macOS ビルド・配布・コード署名 | §1, §2.3, §4 |
 | Tauri iOS (M0〜) 初期化・シミュレータ | §1, §2.3, §4.4, `docs/M0_IOS_INIT_INSTRUCTIONS.md` |
-| Pocket Brain / on-device LLM (M4〜M5) / OOM defense (M7) / 浄化 (M8) / local RAG (M9〜M11) | §1, §1.1, §4.5, §4.6, §4.7, §4.7b, §4.7c, §4.9, §4.10, §4.11, §5, `docs/m5_action_plan.md` |
+| Pocket Brain / on-device LLM (M4〜M5) / OOM defense (M7) / 浄化 (M8) / local RAG (M9〜M11) / ES·面接+EDINET (M12) | §1, §1.1, §4.5, §4.6, §4.7, §4.7b, §4.7c, §4.9, §4.10, §4.11, §4.12, §5, §7.1, §7.2.1〜7.2.3, `docs/m5_action_plan.md` |
 | SQLCipher vault / Keychain (M3) | §1, §4.8, `docs/m3_action_plan.md` |
 | LLM モデル選定・consult/KV キャッシュ | §1, §5, §7, §8 |
 | 検索エンジン・mmap・LSM 索引 | §1, §9, §10 |
@@ -510,6 +510,22 @@ rm -rf .boundary-tests-out
 **ハマりどころ:**
 - チャット用 7B と埋め込み 384-d は別能力。ingest/search/RAG は次元不一致で fail-closed — 384-d 対応モデル未ロード時は UI が案内する。
 - `llm_generate` と同様、`send_rag_chat` の invoke はキュー投入で返り、トークンは Channel 継続。Cancel は既存 `llm_cancel`。
+
+### 4.12 M12 — ES/面接シミュレータ & EDINET 連携基盤 (2026-07-20)
+
+**射程:** EDINET API v2 の固定テンプレート URL / 一覧パース / セクション抽出、`prompt_sim` 三層プロンプト、`start_interview_session` / `review_es_draft` / `fetch_edinet_company_facts`。XBRL ZIP 本格展開・面接 UI 本体は後続。
+
+**as-built / 不変条件:**
+1. **`reqwest::` は `net_gateway.rs` のみ**（憲法ガード）。`knowledge/edinet_client.rs` は URL・validate・JSON パース・UTF-8 ヒューリスティック抽出 + `HttpTransport` 経由の async fetch。ホスト固定 `api.edinet-fsa.go.jp`。
+2. **二要素 egress:** ライブ EDINET は `NetworkPolicy::Live` ∧ `egress-live` ∧ `PKB_EDINET_API_KEY`。それ以外は `company_facts` 注入（オフライン正本）。同意のみでは `EGRESS_LIVE_NOT_READY`。
+3. **プロンプト順:** ペルソナ → `## 企業ファクト（EDINET）` → `## 候補者の過去経験`（vault KNN）→ ユーザー発話/ES。gap_insights 注入禁止（§7.1 と同型）。
+4. **ストリーム:** `LlmHandle::generate` + `Channel<TokenEvent>`（M6）。Cancel/purge は M7 governor のまま。
+5. TS 準備: `apps/desktop/src/lib/sim.ts`（invoke ラッパのみ）。
+
+**ハマりどころ:**
+- Subscription-Key はクエリに載るがログ・プロンプト・エラーへ絶対に出さない。
+- 書類 ZIP の XBRL 展開は未実装 — `filing_text` 注入または一覧メタデータの sparse facts で面接/ES を回す。
+- `prompt_sim` は `rag` feature に依存しない（`ExperienceRef` を自前定義）。
 
 ### 4.8 M3 Phase 0-A — SQLCipher / Security.framework iOS link gate (2026-07-18)
 

@@ -12,6 +12,7 @@ pub mod attestation;
 pub mod canonicalize;
 pub mod dns_guard;
 pub mod dual_run;
+pub mod edinet_client;
 pub mod fsm;
 pub mod net_gateway;
 pub mod orchestrator;
