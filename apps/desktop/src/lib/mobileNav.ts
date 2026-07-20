@@ -1,51 +1,46 @@
-import type { MainTab, MobileSurface } from "./types";
+import type { MainTab } from "./types";
 
-/** Desktop MainTab order (SPEC_FOXTROT) — mobile must expose every id. */
-export const MAIN_TAB_ORDER: { id: MainTab; label: string }[] = [
-  { id: "record", label: "RECORD" },
-  { id: "import", label: "IMPORT" },
-  { id: "consult", label: "CONSULT" },
-  { id: "interview", label: "INTERVIEW" },
-  { id: "probe", label: "PROBE" },
-  { id: "profile", label: "PROFILE" },
-  { id: "settings", label: "SETTINGS" },
+/** Mobile surface = desktop MainTab (RAG id abolished in M20-D). */
+export type MobileSurface = MainTab;
+
+export const MOBILE_DOCK_PRIMARY: {
+  id: MobileSurface;
+  label: string;
+  caption: string;
+}[] = [
+  { id: "record", label: "RECORD", caption: "記録" },
+  { id: "consult", label: "CONSULT", caption: "チャット" },
+  { id: "interview", label: "INTERVIEW", caption: "面接" },
+  { id: "probe", label: "PROBE", caption: "Pulse" },
 ];
 
-/** RAG (Pocket Brain) + full desktop 7-tab parity for mobile. */
-export const MOBILE_DESTINATIONS: { id: MobileSurface; label: string; caption: string }[] =
-  [
-    { id: "rag", label: "RAG", caption: "Home" },
-    ...MAIN_TAB_ORDER.map(({ id, label }) => ({
-      id,
-      label,
-      caption:
-        id === "interview"
-          ? "面接"
-          : id === "profile"
-            ? "Gap/Tensor"
-            : id === "probe"
-              ? "Pulse"
-              : id === "consult"
-                ? "相談"
-                : id === "record"
-                  ? "記録"
-                  : id === "import"
-                    ? "取込"
-                    : "設定",
-    })),
-  ];
+/** Menu-only destinations — must not duplicate dock primaries. */
+export const MOBILE_MENU_DESTINATIONS: {
+  id: MobileSurface;
+  label: string;
+  caption: string;
+}[] = [
+  { id: "profile", label: "PROFILE", caption: "Gap/Tensor" },
+  { id: "import", label: "IMPORT", caption: "取込" },
+  { id: "settings", label: "SETTINGS", caption: "設定" },
+];
 
-/**
- * Bottom dock (Approach B): always-visible primaries.
- * Interview is slot 2 — one tap, never buried in Menu.
- */
-export const MOBILE_DOCK_PRIMARY: MobileSurface[] = [
-  "rag",
-  "interview",
-  "probe",
-  "profile",
+/** All mountable mobile panels (dock ∪ menu). */
+export const MOBILE_ALL_SURFACES: MobileSurface[] = [
+  ...MOBILE_DOCK_PRIMARY.map((d) => d.id),
+  ...MOBILE_MENU_DESTINATIONS.map((d) => d.id),
 ];
 
 export function isMobileDockPrimary(id: MobileSurface): boolean {
-  return (MOBILE_DOCK_PRIMARY as string[]).includes(id);
+  return MOBILE_DOCK_PRIMARY.some((d) => d.id === id);
+}
+
+export function mobileDestMeta(id: MobileSurface): {
+  label: string;
+  caption: string;
+} {
+  const hit =
+    MOBILE_DOCK_PRIMARY.find((d) => d.id === id) ??
+    MOBILE_MENU_DESTINATIONS.find((d) => d.id === id);
+  return hit ?? { label: id.toUpperCase(), caption: "" };
 }

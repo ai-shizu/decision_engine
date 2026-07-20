@@ -61,8 +61,8 @@ export type MainTab =
   | "profile"
   | "settings";
 
-/** M20-B: RAG (iOS Home) + desktop MainTab 全7面。M20-A の 3面省略は撤回。 */
-export type MobileSurface = "rag" | MainTab;
+/** @deprecated M20-D: use MainTab. Kept as alias so call sites stay readable. */
+export type MobileSurface = MainTab;
 
 export type ProbeAxis =
   | "decision_threshold"

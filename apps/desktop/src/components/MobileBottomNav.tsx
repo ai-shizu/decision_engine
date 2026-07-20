@@ -1,30 +1,45 @@
 import { useEffect, useId, useRef } from "react";
 import {
   isMobileDockPrimary,
-  MOBILE_DESTINATIONS,
   MOBILE_DOCK_PRIMARY,
+  MOBILE_MENU_DESTINATIONS,
 } from "../lib/mobileNav";
 import type { MobileSurface } from "../lib/types";
 
-type IconKind = "rag" | "interview" | "probe" | "profile" | "menu" | "generic";
+type IconKind =
+  | "record"
+  | "consult"
+  | "interview"
+  | "probe"
+  | "menu"
+  | "generic";
 
 function iconFor(id: MobileSurface | "menu"): IconKind {
   if (id === "menu") return "menu";
-  if (id === "rag") return "rag";
+  if (id === "record") return "record";
+  if (id === "consult") return "consult";
   if (id === "interview") return "interview";
   if (id === "probe") return "probe";
-  if (id === "profile") return "profile";
   return "generic";
 }
 
 function NavIcon({ kind }: { kind: IconKind }) {
-  // Inline SVG only — no icon packages.
-  if (kind === "rag") {
+  if (kind === "record") {
     return (
       <svg className="mobile-nav-icon" viewBox="0 0 24 24" aria-hidden="true">
         <path
           fill="currentColor"
-          d="M12 3.2 3.5 10.2V21h6.2v-6.5h4.6V21h6.2V10.2L12 3.2zm0 2.3 6.5 5.3V19h-3.2v-6.5H8.7V19H5.5v-8.2L12 5.5z"
+          d="M5 3h11l3 3v15H5V3zm2 2v14h10V7.8L14.2 5H7zm2 3h8v2H9V8zm0 4h8v2H9v-2zm0 4h5v2H9v-2z"
+        />
+      </svg>
+    );
+  }
+  if (kind === "consult") {
+    return (
+      <svg className="mobile-nav-icon" viewBox="0 0 24 24" aria-hidden="true">
+        <path
+          fill="currentColor"
+          d="M4 4h16v12H7.5L4 19.5V4zm2 2v9.2l1.8-1.7H18V6H6z"
         />
       </svg>
     );
@@ -34,7 +49,7 @@ function NavIcon({ kind }: { kind: IconKind }) {
       <svg className="mobile-nav-icon" viewBox="0 0 24 24" aria-hidden="true">
         <path
           fill="currentColor"
-          d="M4 4h16v12H7.5L4 19.5V4zm2 2v9.2l1.8-1.7H18V6H6zm2 2h8v2H8V8zm0 3h6v2H8v-2z"
+          d="M12 3a4 4 0 1 1 0 8 4 4 0 0 1 0-8zm0 10c3.9 0 7 2 7 4.5V20H5v-2.5C5 15 8.1 13 12 13z"
         />
       </svg>
     );
@@ -45,16 +60,6 @@ function NavIcon({ kind }: { kind: IconKind }) {
         <path
           fill="currentColor"
           d="M12 2a7 7 0 0 0-7 7c0 2.4 1.2 4.5 3 5.8V17h8v-2.2c1.8-1.3 3-3.4 3-5.8a7 7 0 0 0-7-7zm-3 17h6v2H9v-2z"
-        />
-      </svg>
-    );
-  }
-  if (kind === "profile") {
-    return (
-      <svg className="mobile-nav-icon" viewBox="0 0 24 24" aria-hidden="true">
-        <path
-          fill="currentColor"
-          d="M4 4h7v7H4V4zm9 0h7v5h-7V4zM4 13h7v7H4v-7zm9 3h7v4h-7v-4zm0-6h7v4h-7V10z"
         />
       </svg>
     );
@@ -76,10 +81,6 @@ function NavIcon({ kind }: { kind: IconKind }) {
   );
 }
 
-function destMeta(id: MobileSurface) {
-  return MOBILE_DESTINATIONS.find((d) => d.id === id);
-}
-
 export interface MobileBottomNavProps {
   active: MobileSurface;
   menuOpen: boolean;
@@ -88,8 +89,8 @@ export interface MobileBottomNavProps {
 }
 
 /**
- * M20-C: bottom dock + Menu drawer only (chip rail removed — nav congestion fix).
- * Interview remains a primary dock slot.
+ * M20-D: dock [RECORD, CONSULT, INTERVIEW, PROBE, MENU].
+ * Menu lists only PROFILE / IMPORT / SETTINGS (no dock duplicates).
  */
 export function MobileBottomNav({
   active,
@@ -118,8 +119,7 @@ export function MobileBottomNav({
     onMenuOpenChange(false);
   }
 
-  const menuHighlights =
-    menuOpen || !isMobileDockPrimary(active);
+  const menuHighlights = menuOpen || !isMobileDockPrimary(active);
 
   return (
     <>
@@ -129,8 +129,7 @@ export function MobileBottomNav({
         aria-label="モバイル主要タブ"
         aria-orientation="horizontal"
       >
-        {MOBILE_DOCK_PRIMARY.map((id) => {
-          const meta = destMeta(id);
+        {MOBILE_DOCK_PRIMARY.map(({ id, label, caption }) => {
           const selected = active === id && !menuOpen;
           return (
             <button
@@ -143,15 +142,15 @@ export function MobileBottomNav({
               className={
                 selected
                   ? "mobile-nav-item active"
-                  : id === "interview"
+                  : id === "record" || id === "interview"
                     ? "mobile-nav-item mobile-nav-item-priority"
                     : "mobile-nav-item"
               }
               onClick={() => select(id)}
             >
               <NavIcon kind={iconFor(id)} />
-              <span className="mobile-nav-label">{meta?.label ?? id}</span>
-              <span className="mobile-nav-caption">{meta?.caption ?? ""}</span>
+              <span className="mobile-nav-label">{label}</span>
+              <span className="mobile-nav-caption">{caption}</span>
             </button>
           );
         })}
@@ -167,7 +166,7 @@ export function MobileBottomNav({
         >
           <NavIcon kind="menu" />
           <span className="mobile-nav-label">Menu</span>
-          <span className="mobile-nav-caption">すべて</span>
+          <span className="mobile-nav-caption">他</span>
         </button>
       </nav>
 
@@ -198,10 +197,10 @@ export function MobileBottomNav({
               </button>
             </div>
             <p className="hint mobile-menu-hint">
-              デスクトップと同じ全タブ（RAG + 7）。Interview は下ドックからも即開きます。
+              PROFILE / IMPORT / SETTINGS（ドックと重複しない項目のみ）
             </p>
             <ul className="mobile-menu-list">
-              {MOBILE_DESTINATIONS.map(({ id, label, caption }) => {
+              {MOBILE_MENU_DESTINATIONS.map(({ id, label, caption }) => {
                 const selected = active === id;
                 return (
                   <li key={`menu-${id}`}>
@@ -210,9 +209,7 @@ export function MobileBottomNav({
                       className={
                         selected
                           ? "mobile-menu-item active"
-                          : id === "interview"
-                            ? "mobile-menu-item mobile-menu-item-priority"
-                            : "mobile-menu-item"
+                          : "mobile-menu-item"
                       }
                       aria-current={selected ? "page" : undefined}
                       onClick={() => select(id)}

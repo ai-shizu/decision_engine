@@ -33,7 +33,7 @@ function LoadingScreen({ message }: { message: string }) {
         <PocketBrainPanel />
         <VaultPanel />
       </main>
-      <MobileChrome statusLine={message} />
+      <MobileChrome statusLine={message} engineReady={false} />
     </div>
   );
 }
@@ -216,7 +216,7 @@ export default function App() {
           ))}
         </main>
       </div>
-      <MobileChrome statusLine={status} />
+      <MobileChrome statusLine={status} engineReady />
     </div>
   );
 }

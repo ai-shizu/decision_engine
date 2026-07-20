@@ -12,7 +12,7 @@ import { uiErrorMessage } from "../lib/uiErrorMessages";
 import { BirthdayPicker } from "./BirthdayPicker";
 import { Toggle } from "./Toggle";
 
-export function SettingsTab() {
+export function SettingsTab({ engineReady = true }: { engineReady?: boolean }) {
   const [settings, setSettings] = useState<SettingsData | null>(null);
   const [attrs, setAttrs] = useState<Record<string, string>>({});
   const [status, setStatus] = useState("");
@@ -29,6 +29,13 @@ export function SettingsTab() {
     setLoadError("");
     setStatus("");
     setStatusKind("info");
+    // M20-D: LoadingScreen mounts MobileChrome before Python engine is ready.
+    // Do not call settings_get yet — that produced a false "SETTINGS_LOAD" failure.
+    if (!engineReady) {
+      setSettings(null);
+      setLoadError("エンジンの準備完了後に設定を読み込みます。しばらく待つか、再読み込みしてください。");
+      return;
+    }
     try {
       const s = await loadSettings();
       const merged = { ...s.fixed_attributes };
@@ -37,16 +44,22 @@ export function SettingsTab() {
       }
       setSettings(s);
       setAttrs(merged);
-      const policy = await getKnowledgeResearchPolicy();
-      setKnowledgeResearchEnabled(policy.enabled);
+      // Policy is optional for SETTINGS shell — failure must not wipe loaded settings.
+      try {
+        const policy = await getKnowledgeResearchPolicy();
+        setKnowledgeResearchEnabled(policy.enabled);
+      } catch {
+        /* best-effort */
+      }
     } catch {
+      setSettings(null);
       setLoadError(uiErrorMessage("SETTINGS_LOAD"));
     }
   }
 
   useEffect(() => {
     void fetchSettings();
-  }, []);
+  }, [engineReady]);
 
   function updateAttr(key: string, value: string) {
     setAttrs((prev) => ({ ...prev, [key]: value }));
