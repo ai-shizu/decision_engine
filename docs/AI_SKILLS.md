@@ -873,8 +873,9 @@ Pocket Brain 経路は M14 tensor + M15 pulse/Rasch + gap sufficiency から loa
 **不変条件:**
 1. UI に EDINET コード入力を再導入するな。コードは `fetch_company_facts_by_name` / enrich が裏側で埋める。
 2. ネットは引き続き E0b 二要素。失敗時は企業名だけの offline inject で面接継続。
-3. `.mobile-nav-item-priority` で非アクティブを明るくするな。inactive=`#484f58`、active=`var(--accent)`。
+3. `.mobile-nav-item-priority` で非アクティブを明るくするな。idle=`#484f58`、active=`#ffffff`。クラスは `--active` / `--idle`（裸の `.active` 禁止）。
 4. デスクトップ Foxtrot chrome（非 `.mobile-chrome`）の配色を変えるな。
+5. タッチ sticky `:hover` で idle を明るくするな — `@media (hover: hover)` のみ。
 
 ### 4.8 M3 Phase 0-A — SQLCipher / Security.framework iOS link gate (2026-07-18)
 

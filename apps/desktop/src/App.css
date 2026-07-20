@@ -2379,7 +2379,8 @@ button.secondary {
   border-top: 1px solid var(--border);
 }
 
-.mobile-nav-item {
+/* Scoped under .mobile-bottom-nav so .tabs/.sub-tabs button.active never wins. */
+.mobile-bottom-nav > .mobile-nav-item {
   flex: 1;
   display: flex;
   flex-direction: column;
@@ -2391,33 +2392,63 @@ button.secondary {
   border: none;
   border-radius: 0;
   background: transparent;
-  /* Inactive dock: deliberately muted so only .active reads as selected */
-  color: #484f58;
   font-family: var(--font-ui);
   cursor: pointer;
   -webkit-tap-highlight-color: transparent;
+  -webkit-appearance: none;
+  appearance: none;
   transition: color var(--t-fast), background var(--t-fast);
 }
 
-.mobile-nav-item:hover {
-  background: var(--bg-hover);
-  color: #6e7681;
+.mobile-bottom-nav > .mobile-nav-item.mobile-nav-item--idle,
+.mobile-bottom-nav > .mobile-nav-item.mobile-nav-item--idle:focus,
+.mobile-bottom-nav > .mobile-nav-item.mobile-nav-item--idle:focus-visible {
+  color: #484f58;
+  background: transparent;
+  text-shadow: none;
 }
 
-.mobile-nav-item.active {
-  color: var(--accent);
+.mobile-bottom-nav > .mobile-nav-item.mobile-nav-item--active,
+.mobile-bottom-nav > .mobile-nav-item.mobile-nav-item--active:focus,
+.mobile-bottom-nav > .mobile-nav-item.mobile-nav-item--active:focus-visible {
+  color: #ffffff;
   background: var(--bg-selected);
+  text-shadow: none;
 }
 
-.mobile-nav-item:focus-visible {
+/* Touch devices: do not leave sticky :hover brightening idle tabs */
+@media (hover: hover) {
+  .mobile-bottom-nav > .mobile-nav-item.mobile-nav-item--idle:hover {
+    background: var(--bg-hover);
+    color: #6e7681;
+  }
+
+  .mobile-bottom-nav > .mobile-nav-item.mobile-nav-item--active:hover {
+    color: #ffffff;
+    background: var(--bg-selected);
+  }
+}
+
+.mobile-bottom-nav > .mobile-nav-item:focus-visible {
   outline: 1px solid var(--accent);
   outline-offset: -2px;
 }
 
-.mobile-nav-icon {
+.mobile-bottom-nav .mobile-nav-icon {
   width: 22px;
   height: 22px;
   display: block;
+  color: inherit;
+}
+
+.mobile-bottom-nav .mobile-nav-icon path {
+  fill: currentColor;
+}
+
+.mobile-bottom-nav .mobile-nav-label,
+.mobile-bottom-nav .mobile-nav-caption {
+  color: inherit;
+  opacity: 1;
 }
 
 .mobile-nav-label {
@@ -2430,9 +2461,16 @@ button.secondary {
 .mobile-nav-caption {
   font-size: 0.58rem;
   letter-spacing: 0.04em;
-  color: inherit;
-  opacity: 0.75;
   line-height: 1.1;
+  opacity: 0.85;
+}
+
+.mobile-bottom-nav > .mobile-nav-item.mobile-nav-item--idle .mobile-nav-caption {
+  opacity: 0.7;
+}
+
+.mobile-bottom-nav > .mobile-nav-item.mobile-nav-item--active .mobile-nav-caption {
+  opacity: 0.9;
 }
 
 /* Approach B — Menu overlay sheet */
@@ -2522,14 +2560,16 @@ button.secondary {
   background: var(--bg-hover);
 }
 
-.mobile-menu-item.active {
+.mobile-menu-item.mobile-menu-item--idle {
+  color: #8b949e;
+  background: var(--bg);
+  border-color: var(--border);
+}
+
+.mobile-menu-item.mobile-menu-item--active {
   background: var(--text);
   border-color: var(--text);
   color: var(--bg);
-}
-
-.mobile-menu-item-priority:not(.active) {
-  border-color: var(--accent);
 }
 
 .mobile-menu-item-label {

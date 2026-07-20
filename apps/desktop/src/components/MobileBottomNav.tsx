@@ -4,6 +4,11 @@ import {
   MOBILE_DOCK_PRIMARY,
   MOBILE_MENU_DESTINATIONS,
 } from "../lib/mobileNav";
+import {
+  dockItemClassName,
+  isDockPrimarySelected,
+  isMenuChromeSelected,
+} from "../lib/mobileDockSelection";
 import type { MobileSurface } from "../lib/types";
 
 type IconKind =
@@ -91,6 +96,7 @@ export interface MobileBottomNavProps {
 /**
  * M20-D: dock [RECORD, CONSULT, INTERVIEW, PROBE, MENU].
  * Menu lists only PROFILE / IMPORT / SETTINGS (no dock duplicates).
+ * Selection chrome uses `--active` / `--idle` (never bare `.active`).
  */
 export function MobileBottomNav({
   active,
@@ -119,7 +125,10 @@ export function MobileBottomNav({
     onMenuOpenChange(false);
   }
 
-  const menuHighlights = menuOpen || !isMobileDockPrimary(active);
+  const menuSelected = isMenuChromeSelected(
+    menuOpen,
+    isMobileDockPrimary(active),
+  );
 
   return (
     <>
@@ -130,7 +139,7 @@ export function MobileBottomNav({
         aria-orientation="horizontal"
       >
         {MOBILE_DOCK_PRIMARY.map(({ id, label, caption }) => {
-          const selected = active === id && !menuOpen;
+          const selected = isDockPrimarySelected(active, id, menuOpen);
           return (
             <button
               key={id}
@@ -139,9 +148,7 @@ export function MobileBottomNav({
               aria-selected={selected}
               aria-controls={`mobile-panel-${id}`}
               id={`mobile-tab-${id}`}
-              className={
-                selected ? "mobile-nav-item active" : "mobile-nav-item"
-              }
+              className={dockItemClassName(selected)}
               onClick={() => select(id)}
             >
               <NavIcon kind={iconFor(id)} />
@@ -152,9 +159,7 @@ export function MobileBottomNav({
         })}
         <button
           type="button"
-          className={
-            menuHighlights ? "mobile-nav-item active" : "mobile-nav-item"
-          }
+          className={dockItemClassName(menuSelected)}
           aria-haspopup="dialog"
           aria-expanded={menuOpen}
           aria-controls="mobile-menu-sheet"
@@ -204,8 +209,8 @@ export function MobileBottomNav({
                       type="button"
                       className={
                         selected
-                          ? "mobile-menu-item active"
-                          : "mobile-menu-item"
+                          ? "mobile-menu-item mobile-menu-item--active"
+                          : "mobile-menu-item mobile-menu-item--idle"
                       }
                       aria-current={selected ? "page" : undefined}
                       onClick={() => select(id)}
