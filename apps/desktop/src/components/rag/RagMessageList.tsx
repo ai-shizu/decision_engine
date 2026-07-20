@@ -1,11 +1,7 @@
+import type { RagChatMessage } from "../../lib/ragChatReducer";
 import { SimpleMarkdown } from "./SimpleMarkdown";
 
-export interface RagChatMessage {
-  id: string;
-  role: "user" | "assistant";
-  text: string;
-  contextCount?: number;
-}
+export type { RagChatMessage };
 
 export function RagMessageList({ messages }: { messages: RagChatMessage[] }) {
   return (
@@ -45,6 +41,7 @@ export function RagMessageList({ messages }: { messages: RagChatMessage[] }) {
               }}
             >
               {isUser ? "You" : "RAG"}
+              {m.streaming ? " · …" : null}
               {m.contextCount != null && m.contextCount > 0
                 ? ` · ctx ${m.contextCount}`
                 : null}

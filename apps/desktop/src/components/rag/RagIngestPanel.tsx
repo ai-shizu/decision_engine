@@ -1,6 +1,9 @@
 import { useState } from "react";
 
-import { ingestKnowledge } from "../../lib/rag";
+import {
+  ingestKnowledge,
+  isPocketBrainInvokeError,
+} from "../../lib/pocketBrain";
 
 interface RagIngestPanelProps {
   modelReady: boolean;
@@ -28,7 +31,9 @@ export function RagIngestPanel({ modelReady }: RagIngestPanelProps) {
       );
       setText("");
     } catch (e) {
-      setError(`ingest: ${String(e)}`);
+      setError(
+        isPocketBrainInvokeError(e) ? e.message : `ingest: ${String(e)}`,
+      );
     } finally {
       setBusy(false);
     }

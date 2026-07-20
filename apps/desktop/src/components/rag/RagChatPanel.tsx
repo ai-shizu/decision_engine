@@ -1,9 +1,17 @@
-import { useState } from "react";
+import { useReducer, useRef } from "react";
 
-import { sendRagChat } from "../../lib/rag";
+import {
+  isPocketBrainInvokeError,
+  sendRagChat,
+} from "../../lib/pocketBrain";
+import {
+  initialRagChatState,
+  ragChatReducer,
+} from "../../lib/ragChatReducer";
+import { useThrottledStream } from "../../lib/useThrottledStream";
 import { RagChatInput } from "./RagChatInput";
 import { RagIngestPanel } from "./RagIngestPanel";
-import { RagMessageList, type RagChatMessage } from "./RagMessageList";
+import { RagMessageList } from "./RagMessageList";
 
 interface RagChatPanelProps {
   modelReady: boolean;
@@ -18,7 +26,7 @@ function allocId(prefix: string): string {
 }
 
 /**
- * RAG chat surface: timeline + streaming send_rag_chat + ingest panel.
+ * RAG chat surface: pure-reducer timeline + Channel streaming via pocketBrain API.
  * Cancellation / memory purge remain owned by the parent PocketBrainPanel.
  */
 export function RagChatPanel({
@@ -26,80 +34,84 @@ export function RagChatPanel({
   onError,
   onBusyChange,
 }: RagChatPanelProps) {
-  const [messages, setMessages] = useState<RagChatMessage[]>([]);
-  const [input, setInput] = useState("");
-  const [streaming, setStreaming] = useState(false);
+  const [state, dispatch] = useReducer(ragChatReducer, undefined, initialRagChatState);
+  const assistantIdRef = useRef<string | null>(null);
+
+  const throttle = useThrottledStream((chunk) => {
+    const id = assistantIdRef.current;
+    if (!id) return;
+    dispatch({ type: "token", assistantId: id, text: chunk });
+  });
 
   async function onSend() {
-    const prompt = input.trim();
-    if (!prompt || streaming || !modelReady) return;
-    setInput("");
+    const prompt = state.input.trim();
+    if (!prompt || state.streaming || !modelReady) return;
+
     onError(null);
-    setStreaming(true);
+    dispatch({ type: "clear_error" });
     onBusyChange(true);
 
     const userId = allocId("u");
     const assistantId = allocId("a");
-    setMessages((m) => [
-      ...m,
-      { id: userId, role: "user", text: prompt },
-      { id: assistantId, role: "assistant", text: "" },
-    ]);
+    assistantIdRef.current = assistantId;
+    dispatch({ type: "send_begin", userId, assistantId, prompt });
 
     try {
       const result = await sendRagChat(
         prompt,
         (event) => {
           if (event.error) {
+            dispatch({ type: "token_error", message: event.error });
             onError(event.error);
             return;
           }
-          if (event.done) return;
-          setMessages((msgs) => {
-            const copy = msgs.slice();
-            const last = copy[copy.length - 1];
-            if (last && last.id === assistantId && last.role === "assistant") {
-              copy[copy.length - 1] = {
-                ...last,
-                text: last.text + event.text,
-              };
-            }
-            return copy;
-          });
+          if (event.done) {
+            throttle.flushAndStop();
+            return;
+          }
+          if (event.text) {
+            throttle.push(event.text);
+          }
         },
         { contextLimit: 5 },
       );
 
-      setMessages((msgs) => {
-        const copy = msgs.slice();
-        const last = copy[copy.length - 1];
-        if (last && last.id === assistantId) {
-          copy[copy.length - 1] = {
-            ...last,
-            contextCount: result.context_count,
-          };
-        }
-        return copy;
+      throttle.flushAndStop();
+      dispatch({
+        type: "send_success",
+        assistantId,
+        contextCount: result.context_count,
       });
     } catch (e) {
-      onError(`rag: ${String(e)}`);
+      throttle.flushAndStop();
+      const message = isPocketBrainInvokeError(e)
+        ? e.message
+        : `rag: ${String(e)}`;
+      dispatch({ type: "send_failure", message });
+      onError(message);
     } finally {
-      setStreaming(false);
+      assistantIdRef.current = null;
+      dispatch({ type: "send_end" });
       onBusyChange(false);
     }
   }
 
   return (
     <div className="rag-chat-panel">
-      <RagMessageList messages={messages} />
+      <RagMessageList messages={state.messages} />
       <RagChatInput
-        value={input}
-        onChange={setInput}
+        value={state.input}
+        onChange={(value) => dispatch({ type: "set_input", value })}
         onSend={() => void onSend()}
-        streaming={streaming}
+        streaming={state.streaming}
         modelReady={modelReady}
       />
       <RagIngestPanel modelReady={modelReady} />
+      {state.error ? (
+        <p style={{ margin: "0 12px 8px", fontSize: 12, color: "#ff5555" }}>
+          {state.error}
+        </p>
+      ) : null}
     </div>
   );
 }

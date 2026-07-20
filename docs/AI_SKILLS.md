@@ -27,7 +27,7 @@
 | 永続化境界・シリアライズ・runtime検証・IPC契約 | §1, §16 (SKILL-PKB-BOUNDARY-V3), `docs/architecture/INCIDENT_LEDGER.md` |
 | macOS ビルド・配布・コード署名 | §1, §2.3, §4 |
 | Tauri iOS (M0〜) 初期化・シミュレータ | §1, §2.3, §4.4, `docs/M0_IOS_INIT_INSTRUCTIONS.md` |
-| Pocket Brain / on-device LLM (M4〜M5) / OOM defense (M7) / 浄化 (M8) / local RAG (M9〜M13) / Gap·Tensor (M14) / Psychometrics (M15) / Twin·Oracle (M16) / Consult·Interview parity (M17) | §1, §1.1, §4.5〜§4.17, §5, §6, §7.1, §12, `docs/m5_action_plan.md` |
+| Pocket Brain / on-device LLM (M4〜M5) / OOM defense (M7) / 浄化 (M8) / local RAG (M9〜M13) / Gap·Tensor (M14) / Psychometrics (M15) / Twin·Oracle (M16) / Consult·Interview parity (M17) / Frontend API (M18) | §1, §1.1, §4.5〜§4.18, §5, §6, §7.1, §12, `docs/m5_action_plan.md` |
 | SQLCipher vault / Keychain (M3) | §1, §4.8, `docs/m3_action_plan.md` |
 | LLM モデル選定・consult/KV キャッシュ | §1, §5, §7, §8 |
 | 検索エンジン・mmap・LSM 索引 | §1, §9, §10 |
@@ -598,6 +598,15 @@ Pocket Brain 経路は M14 tensor + M15 pulse/Rasch + gap sufficiency から loa
 **面接 FSM:** `llm/interview_machine.rs`。議論フェーズに Gap/Oracle 禁止、Debrief のみ注入 (I-22)。Vault schema v6 `interview_sessions`。
 
 **コマンド:** `consult_with_oracle_context` / `start_multistage_interview` / `advance_interview_stage` / `get_interview_session`。
+
+### 4.18 M18-A — Pocket Brain Frontend API + RAG chat wiring (2026-07-20)
+
+**射程:** M11〜M17 の Tauri コマンド向け TypeScript 型 + 統一 `pocketInvoke` + `lib/pocketBrain/api.ts`。RAG チャットを pure reducer（Zustand 禁止）+ Channel ストリームへ再配線。Rust 変更なし。
+
+**as-built:**
+1. `lib/pocketBrain/{types,invoke,api,index}.ts` — 25 コマンドの typed wrappers（RAG/Gap/Psychometrics/Twin/Oracle/Interview/Consult）。
+2. `lib/ragChatReducer.ts` + `RagChatPanel` — `send_rag_chat` を `useThrottledStream` 経由で描画。`ingest_knowledge` は `RagIngestPanel`。
+3. レガシー `lib/rag.ts` は pocketBrain への thin re-export。
 
 ### 4.8 M3 Phase 0-A — SQLCipher / Security.framework iOS link gate (2026-07-18)
 
