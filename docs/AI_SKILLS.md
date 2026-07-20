@@ -853,6 +853,19 @@ Pocket Brain 経路は M14 tensor + M15 pulse/Rasch + gap sufficiency から loa
 3. `.error-text` / 警告バナーは白反転禁止。`--err-bg-raised` (#161b22) + ネオン (`--err` / `--err-soft`) のみ。
 4. FSA-02 の単発 spawn / HTTP 復活は引き続き禁止。Python `llm.warm` は維持。
 
+### 4.42 M20-Q — Interview company-name ambient enrichment (2026-07-21)
+
+**射程:** INTERVIEW / ES(PB) で企業名入力時にネット・ローカル補強を自動実行。iOS は Vite `base: "./"` + `beforeBuildCommand`（tsc→vite build）でフロントをバンドル。M20-P ソース（Load撤廃 / ES専用セクション / `--err-bg-raised`）は `apps/desktop/src` 正本。
+
+**不変条件:**
+1. Python `knowledge_fetcher` / `PKB_ALLOW_ONLINE_FETCH` を再開放するな（E0a）。ネットは E0b のみ: `NetworkPolicy::Live` ∧ `egress-live`。
+2. `external_research_id` を `interview_sim` / 議論フェーズへ渡すな。補強テキストは `CompanyFacts` にマージしてから `start_multistage_interview` / `review_es_draft` へ注入。
+3. 待機中に入力を `disabled` にするな。`researching-ambient` + スピナーのみ。Zustand 禁止。
+4. `resolve_company_facts`: injected に空 `business_summary` + edinet_code/date があるときだけ EDINET を試し、失敗時は企業名付き inject へ soft-fail。
+5. 自動レーン順: ローカル vault RAG →（policy On）`knowledge_research` →（コードあり）EDINET。手動検索ボタン不要。
+
+**as-built:** `lib/companyFactsEnrich.ts` / `useCompanyFactsEnrichment` / Multistage·EsReview·InterviewTab 配線 / `commands_sim.resolve_company_facts` merge。
+
 ### 4.8 M3 Phase 0-A — SQLCipher / Security.framework iOS link gate (2026-07-18)
 
 **射程（Phase 0-A のみ）:** `secure-vault` feature、依存解決、in-memory SQLCipher identity（`PRAGMA key` + `cipher_version`）、Security.framework シンボル（`SecRandom` / `SecAccessControl`）、Tauri command 登録、iOS Simulator 最終リンク証明。スキーマ・repository・UI・本番 Keychain item 作成は対象外。

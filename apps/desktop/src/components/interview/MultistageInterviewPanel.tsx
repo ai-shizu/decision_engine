@@ -2,6 +2,7 @@ import { useReducer, useRef } from "react";
 
 import { CompanyFactsForm } from "./CompanyFactsForm";
 import { InterviewStageRail } from "./InterviewStageRail";
+import { todayIso } from "../../lib/dateUtils";
 import { companyFactsReady } from "../../lib/interviewStage";
 import { redactHiddenReasoning } from "../../lib/redactHiddenReasoning";
 import {
@@ -15,6 +16,7 @@ import {
   multistageInterviewReducer,
 } from "../../lib/multistageInterviewReducer";
 import { uiErrorMessage } from "../../lib/uiErrorMessages";
+import { useCompanyFactsEnrichment } from "../../lib/useCompanyFactsEnrichment";
 import { useThrottledStream } from "../../lib/useThrottledStream";
 
 let nextMsgId = 1;
@@ -68,6 +70,13 @@ export function MultistageInterviewPanel({
     else dispatch({ type: "patch_facts", patch });
   }
 
+  // Shared form on narrow InterviewTab owns debounce; embedded form enriches here.
+  const { researching, provenanceLabel, enrichNow } = useCompanyFactsEnrichment(
+    facts,
+    patchFacts,
+    !hideEmbeddedFactsForm && !state.sessionId,
+  );
+
   const throttle = useThrottledStream((chunk) => {
     const id = assistantIdRef.current;
     if (!id) return;
@@ -105,16 +114,28 @@ export function MultistageInterviewPanel({
     dispatch({ type: "start_begin", assistantId });
     scrollToBottom();
 
-    const factsPayload: CompanyFacts = {
+    let factsPayload: CompanyFacts = {
       ...facts,
       source: facts.source.trim() || "injected",
     };
+    try {
+      const enriched = await enrichNow();
+      factsPayload = {
+        ...enriched.facts,
+        source: enriched.facts.source.trim() || "injected",
+      };
+    } catch {
+      // Ambient enrich soft-fail — proceed with typed facts.
+    }
 
+    const edinetCode = factsPayload.edinetCode.trim();
     try {
       const result = await startMultistageInterview(
         {
           openingMessage: state.openingMessage.trim() || undefined,
           companyFacts: factsPayload,
+          edinetCode: edinetCode || undefined,
+          edinetDate: edinetCode ? todayIso() : undefined,
         },
         (event) => {
           if (event.error) {
@@ -224,6 +245,8 @@ export function MultistageInterviewPanel({
               facts={facts}
               disabled={state.streaming}
               onPatch={patchFacts}
+              researching={researching}
+              provenanceLabel={provenanceLabel}
             />
           )}
           <div className="term-row config-row">

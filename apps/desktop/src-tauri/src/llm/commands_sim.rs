@@ -137,14 +137,27 @@ async fn resolve_company_facts(
     edinet_date: Option<String>,
     filing_text: Option<String>,
 ) -> Result<CompanyFacts, String> {
-    if let Some(facts) = injected {
-        return sanitize_company_facts(&facts).map_err(map_edinet_err);
-    }
-
     let code = edinet_code.unwrap_or_default();
     let date = edinet_date.unwrap_or_default();
-    if code.trim().is_empty() || date.trim().is_empty() {
+    let can_fetch = !code.trim().is_empty() && !date.trim().is_empty();
+
+    let injected_sanitized = match injected {
+        Some(facts) => Some(sanitize_company_facts(&facts).map_err(map_edinet_err)?),
+        None => None,
+    };
+
+    // Prefer offline inject when summary already present; otherwise dual-gated EDINET.
+    if let Some(base) = injected_sanitized.as_ref() {
+        let needs_net = base.business_summary.trim().is_empty() && can_fetch;
+        if !needs_net {
+            return Ok(base.clone());
+        }
+    } else if !can_fetch {
         return Err("company_facts_or_edinet_code_required".into());
+    }
+
+    if !can_fetch {
+        return injected_sanitized.ok_or_else(|| "company_facts_or_edinet_code_required".into());
     }
 
     refuse_if_policy_off(store.get()).map_err(map_orch_err)?;
@@ -156,7 +169,7 @@ async fn resolve_company_facts(
         use crate::knowledge::edinet_client::fetch_company_facts_by_code;
         use crate::knowledge::net_gateway::ReqwestTransport;
         let transport = ReqwestTransport::new().map_err(|e| e.to_string())?;
-        let facts = fetch_company_facts_by_code(
+        match fetch_company_facts_by_code(
             &transport,
             date.trim(),
             code.trim(),
@@ -165,14 +178,63 @@ async fn resolve_company_facts(
             EDINET_FETCH_DEADLINE,
         )
         .await
-        .map_err(map_edinet_err)?;
-        return Ok(facts);
+        {
+            Ok(fetched) => {
+                if let Some(base) = injected_sanitized {
+                    Ok(merge_company_facts_prefer_filled(&base, &fetched))
+                } else {
+                    Ok(fetched)
+                }
+            }
+            Err(err) => {
+                // Soft-fail only when offline inject already has a company name.
+                if let Some(base) = injected_sanitized {
+                    if !base.company_name.trim().is_empty() {
+                        return Ok(base);
+                    }
+                }
+                Err(map_edinet_err(err))
+            }
+        }
     }
 
     #[cfg(not(feature = "egress-live"))]
     {
         let _ = (filing_text, key, EDINET_FETCH_DEADLINE);
+        if let Some(base) = injected_sanitized {
+            if !base.company_name.trim().is_empty() {
+                return Ok(base);
+            }
+        }
         Err("EGRESS_LIVE_NOT_READY".into())
+    }
+}
+
+/// Fill empty fields on `base` from `incoming` (interview start merge).
+fn merge_company_facts_prefer_filled(base: &CompanyFacts, incoming: &CompanyFacts) -> CompanyFacts {
+    let pick = |cur: &str, next: &str| -> String {
+        if !cur.trim().is_empty() {
+            cur.to_string()
+        } else if !next.trim().is_empty() {
+            next.to_string()
+        } else {
+            cur.to_string()
+        }
+    };
+    let source = if base.business_summary.trim().is_empty() && !incoming.source.trim().is_empty()
+    {
+        incoming.source.clone()
+    } else {
+        base.source.clone()
+    };
+    CompanyFacts {
+        company_name: pick(&base.company_name, &incoming.company_name),
+        edinet_code: pick(&base.edinet_code, &incoming.edinet_code),
+        doc_id: pick(&base.doc_id, &incoming.doc_id),
+        business_summary: pick(&base.business_summary, &incoming.business_summary),
+        business_risks: pick(&base.business_risks, &incoming.business_risks),
+        performance_summary: pick(&base.performance_summary, &incoming.performance_summary),
+        source,
     }
 }
 

@@ -1,6 +1,7 @@
 import { useReducer, useRef } from "react";
 
 import { CompanyFactsForm } from "./CompanyFactsForm";
+import { todayIso } from "../../lib/dateUtils";
 import { companyFactsReady } from "../../lib/interviewStage";
 import { redactHiddenReasoning } from "../../lib/redactHiddenReasoning";
 import {
@@ -12,6 +13,7 @@ import {
   esReviewReducer,
   initialEsReviewState,
 } from "../../lib/esReviewReducer";
+import { useCompanyFactsEnrichment } from "../../lib/useCompanyFactsEnrichment";
 import { useThrottledStream } from "../../lib/useThrottledStream";
 
 let nextMsgId = 1;
@@ -46,6 +48,12 @@ export function EsReviewPanel({
     else dispatch({ type: "patch_facts", patch });
   }
 
+  const { researching, provenanceLabel, enrichNow } = useCompanyFactsEnrichment(
+    facts,
+    patchFacts,
+    !hideEmbeddedFactsForm,
+  );
+
   const throttle = useThrottledStream((chunk) => {
     const id = reviewerIdRef.current;
     if (!id) return;
@@ -77,16 +85,28 @@ export function EsReviewPanel({
     dispatch({ type: "review_begin", userId, reviewerId, draft });
     scrollToBottom();
 
-    const factsPayload: CompanyFacts = {
+    let factsPayload: CompanyFacts = {
       ...facts,
       source: facts.source.trim() || "injected",
     };
+    try {
+      const enriched = await enrichNow();
+      factsPayload = {
+        ...enriched.facts,
+        source: enriched.facts.source.trim() || "injected",
+      };
+    } catch {
+      // proceed with typed facts
+    }
 
+    const edinetCode = factsPayload.edinetCode.trim();
     try {
       const result = await reviewEsDraft(
         {
           esDraft: draft,
           companyFacts: factsPayload,
+          edinetCode: edinetCode || undefined,
+          edinetDate: edinetCode ? todayIso() : undefined,
           experienceQuery: state.experienceQuery.trim() || undefined,
         },
         (event) => {
@@ -130,6 +150,8 @@ export function EsReviewPanel({
           facts={facts}
           disabled={state.streaming}
           onPatch={patchFacts}
+          researching={researching}
+          provenanceLabel={provenanceLabel}
         />
       )}
 

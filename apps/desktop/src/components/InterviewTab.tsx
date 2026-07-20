@@ -4,6 +4,7 @@ import { consult, esList, narrativeCompile, type NarrativeCompileResult } from "
 import { emptyCompanyFacts } from "../lib/interviewStage";
 import { parseEngineEvent } from "../lib/parseEngineResponse";
 import type { CompanyFacts } from "../lib/pocketBrain/types";
+import { useCompanyFactsEnrichment } from "../lib/useCompanyFactsEnrichment";
 import type {
   EngineEvent,
   EsListItem,
@@ -236,6 +237,17 @@ export function InterviewTab() {
   const pocketBrainSurface =
     surface === "multistage" || surface === "es_pocket";
 
+  const patchSharedFacts = (patch: Partial<CompanyFacts>) => {
+    setSharedFacts((prev) => ({ ...prev, ...patch }));
+  };
+  const {
+    researching: sharedResearching,
+    provenanceLabel: sharedProvenance,
+  } = useCompanyFactsEnrichment(
+    sharedFacts,
+    patchSharedFacts,
+    isNarrow && pocketBrainSurface,
+  );
   // Mobile: ES旧 (es_review) abolished — single ES (es_pocket) only.
   const visibleModes = isNarrow
     ? MODES.filter((m) => m.id !== "es_review")
@@ -523,9 +535,9 @@ export function InterviewTab() {
         <div className="interview-shared-context">
           <CompanyFactsForm
             facts={sharedFacts}
-            onPatch={(patch) =>
-              setSharedFacts((prev) => ({ ...prev, ...patch }))
-            }
+            onPatch={patchSharedFacts}
+            researching={sharedResearching}
+            provenanceLabel={sharedProvenance}
           />
         </div>
       )}
@@ -533,22 +545,14 @@ export function InterviewTab() {
       {surface === "multistage" && (
         <MultistageInterviewPanel
           sharedFacts={isNarrow ? sharedFacts : undefined}
-          onSharedFactsPatch={
-            isNarrow
-              ? (patch) => setSharedFacts((prev) => ({ ...prev, ...patch }))
-              : undefined
-          }
+          onSharedFactsPatch={isNarrow ? patchSharedFacts : undefined}
           hideEmbeddedFactsForm={isNarrow}
         />
       )}
       {surface === "es_pocket" && (
         <EsReviewPanel
           sharedFacts={isNarrow ? sharedFacts : undefined}
-          onSharedFactsPatch={
-            isNarrow
-              ? (patch) => setSharedFacts((prev) => ({ ...prev, ...patch }))
-              : undefined
-          }
+          onSharedFactsPatch={isNarrow ? patchSharedFacts : undefined}
           hideEmbeddedFactsForm={isNarrow}
         />
       )}

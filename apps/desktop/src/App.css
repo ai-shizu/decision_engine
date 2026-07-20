@@ -839,7 +839,8 @@ button:disabled {
 }
 
 /* 白の呼吸 — research 中のみ (許可ループ b)。入力は塞がない */
-.consult-form.researching-ambient {
+.consult-form.researching-ambient,
+.company-facts-form.researching-ambient {
   border-radius: 0;
   box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.35);
   animation: research-breath 2.4s ease-in-out alternate infinite;
