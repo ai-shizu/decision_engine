@@ -50,7 +50,12 @@ llama-cpp-2 = { version = "=0.1.151", default-features = false, features = ["met
 # M3 SQLCipher vault (docs/m3_action_plan.md §2.1). Opt-in only — default desktop
 # builds must not pull SQLCipher. `bundled-sqlcipher` uses Apple CommonCrypto on
 # iOS/macOS; NEVER enable `bundled-sqlcipher-vendored-openssl` (OpenSSL link ban).
+# `auto_extension` is available without `load_extension` (dylib); M9 registers
+# sqlite-vec via static `sqlite3_auto_extension` so iOS never needs a .dylib.
 rusqlite = { version = "=0.40.1", default-features = false, features = ["bundled-sqlcipher"], optional = true }
+# M9 local RAG: sqlite-vec C sources compiled + statically linked at build time
+# (`SQLITE_CORE`). Never `load_extension` / never ship a separate vec dylib.
+sqlite-vec = { version = "=0.1.9", optional = true }
 
 [features]
 # NOTE: the blueprint prose says "reqwest/rustls-tls"; reqwest 0.13.4's actual
@@ -66,6 +71,7 @@ pocket-brain = ["llama-cpp-2", "libc"]
 # security-framework alongside them (docs/m3_action_plan.md §4.2.1).
 secure-vault = [
     "dep:rusqlite",
+    "dep:sqlite-vec",
     "dep:objc2",
     "dep:objc2-security",
     "dep:objc2-local-authentication",

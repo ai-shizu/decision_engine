@@ -103,6 +103,8 @@ pub fn run() {
             #[cfg(feature = "pocket-brain")]
             llm::commands_llm::llm_cancel,
             #[cfg(feature = "pocket-brain")]
+            llm::commands_llm::llm_embed,
+            #[cfg(feature = "pocket-brain")]
             llm::commands_llm::llm_events,
             #[cfg(feature = "pocket-brain")]
             llm::commands_llm::memory_monitor_start,

@@ -27,7 +27,7 @@
 | 永続化境界・シリアライズ・runtime検証・IPC契約 | §1, §16 (SKILL-PKB-BOUNDARY-V3), `docs/architecture/INCIDENT_LEDGER.md` |
 | macOS ビルド・配布・コード署名 | §1, §2.3, §4 |
 | Tauri iOS (M0〜) 初期化・シミュレータ | §1, §2.3, §4.4, `docs/M0_IOS_INIT_INSTRUCTIONS.md` |
-| Pocket Brain / on-device LLM (M4〜M5) / OOM defense (M7) / 浄化 (M8) | §1, §1.1, §4.5, §4.6, §4.7, §4.7b, §4.7c, §5, `docs/m5_action_plan.md` |
+| Pocket Brain / on-device LLM (M4〜M5) / OOM defense (M7) / 浄化 (M8) / local RAG (M9) | §1, §1.1, §4.5, §4.6, §4.7, §4.7b, §4.7c, §4.9, §5, `docs/m5_action_plan.md` |
 | SQLCipher vault / Keychain (M3) | §1, §4.8, `docs/m3_action_plan.md` |
 | LLM モデル選定・consult/KV キャッシュ | §1, §5, §7, §8 |
 | 検索エンジン・mmap・LSM 索引 | §1, §9, §10 |
@@ -476,6 +476,17 @@ rm -rf .boundary-tests-out
 2. `os_sandbox::take_standard_child` を `linux|macos` のみに cfg（iOS は unsupported stub）。
 3. `apps/desktop/src/` 監査: `console.log` 無し、`tsc --noUnusedLocals` クリーン（削除対象なし）。
 4. 検証ゲート: iOS sim `cargo +1.96.1 check …` は **warning 0**、`npx tsc --noEmit` GREEN。
+
+### 4.9 M9 — Local RAG foundation (sqlite-vec + embed) (2026-07-20)
+
+**射程:** SQLCipher vault への静的 `sqlite-vec` 登録、`knowledge_chunks` vec0 マイグレーション (v2)、`llama-cpp-2` の worker 委譲 `embed_text`。チャンク化アルゴリズム移植・React UI・EDINET は対象外。Python/C++ PKBVEC01 は iOS 経路では使用しない（新設が正本）。
+
+**as-built / 不変条件:**
+1. **静的ロードのみ。** `sqlite-vec = "=0.1.9"` を `secure-vault` で optional。`SQLITE_CORE` で静的リンクし、`register_auto_extension(sqlite3_vec_init)`（`db/sqlite_vec_ext.rs`）。`load_extension` / dylib 禁止（iOS）。
+2. **接続順:** `ensure_sqlite_vec_loaded` → SQLCipher open/key → `vec_version` 検証 → migrations。失敗は `VaultConnectionError::SqliteVecUnavailable`。
+3. **スキーマ v2:** `CREATE VIRTUAL TABLE knowledge_chunks USING vec0(embedding float[384], id TEXT, created_at INTEGER, +text_content TEXT)`。次元定数 `KNOWLEDGE_EMBEDDING_DIMS` / `EMBEDDING_DIMENSIONS` = 384。
+4. **Embedding:** `llm/embed.rs::embed_text` + `LlmHandle::embed`。生成用 context と共有しない短命 embeddings context。governor cancel を尊重。メインスレッド禁止。
+5. UI / チャンク化 / 検索コマンドは未配線（後続フェーズ）。
 
 ### 4.8 M3 Phase 0-A — SQLCipher / Security.framework iOS link gate (2026-07-18)
 

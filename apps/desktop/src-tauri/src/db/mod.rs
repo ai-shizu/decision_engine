@@ -22,6 +22,8 @@ pub(crate) mod secure_vault;
 #[cfg(target_vendor = "apple")]
 mod sqlite_error;
 #[cfg(target_vendor = "apple")]
+mod sqlite_vec_ext;
+#[cfg(target_vendor = "apple")]
 mod worker;
 
 #[cfg(target_vendor = "apple")]

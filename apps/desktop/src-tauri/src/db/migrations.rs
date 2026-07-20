@@ -8,7 +8,12 @@ use std::{error::Error, fmt};
 
 use rusqlite::{Connection, TransactionBehavior};
 
-pub(crate) const LATEST_SCHEMA_VERSION: i64 = 1;
+pub(crate) const LATEST_SCHEMA_VERSION: i64 = 2;
+
+/// Canonical embedding width for `knowledge_chunks.embedding` (M9 foundation).
+/// Matches the historical PKBVEC01 384-d space; a future 768-d migration would
+/// bump the schema version rather than silently reshaping the vec0 table.
+pub(crate) const KNOWLEDGE_EMBEDDING_DIMS: usize = 384;
 
 const MIGRATION_V1_SQL: &str = r#"
 CREATE TABLE IF NOT EXISTS chats (
@@ -28,6 +33,18 @@ CREATE TABLE IF NOT EXISTS messages (
 
 CREATE INDEX IF NOT EXISTS idx_messages_chat_timestamp
     ON messages(chat_id, timestamp, id);
+"#;
+
+// vec0 virtual table: vector column + metadata (`id`, `created_at`) + auxiliary
+// long text (`+text_content`). Requires sqlite-vec auto-extension (see
+// `sqlite_vec_ext`). Dimension is fixed at KNOWLEDGE_EMBEDDING_DIMS.
+const MIGRATION_V2_SQL: &str = r#"
+CREATE VIRTUAL TABLE IF NOT EXISTS knowledge_chunks USING vec0(
+    embedding float[384],
+    id TEXT,
+    created_at INTEGER,
+    +text_content TEXT
+);
 "#;
 
 const READ_CHATS_COLUMNS_SQL: &str =
@@ -51,11 +68,18 @@ struct Migration {
     verify: fn(&Connection) -> Result<(), MigrationError>,
 }
 
-const MIGRATIONS: &[Migration] = &[Migration {
-    version: 1,
-    sql: MIGRATION_V1_SQL,
-    verify: verify_v1_schema,
-}];
+const MIGRATIONS: &[Migration] = &[
+    Migration {
+        version: 1,
+        sql: MIGRATION_V1_SQL,
+        verify: verify_v1_schema,
+    },
+    Migration {
+        version: 2,
+        sql: MIGRATION_V2_SQL,
+        verify: verify_v2_schema,
+    },
+];
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum MigrationError {
@@ -114,6 +138,10 @@ impl Error for MigrationError {}
 /// uses `&mut Connection` to make nested transactions impossible at compile
 /// time. The dedicated vault worker is the sole caller and connection owner.
 pub(crate) fn run_migrations(connection: &mut Connection) -> Result<(), MigrationError> {
+    // vec0 DDL in v2 requires the statically linked extension on this handle.
+    crate::db::sqlite_vec_ext::activate_sqlite_vec(connection)
+        .map_err(|_| MigrationError::MigrationApplyFailed { version: 2 })?;
+
     enable_and_verify_foreign_keys(connection)?;
 
     let mut current = read_user_version(connection)?;
@@ -133,6 +161,41 @@ pub(crate) fn run_migrations(connection: &mut Connection) -> Result<(), Migratio
             .iter()
             .find(|migration| migration.version == expected)
             .ok_or(MigrationError::MissingMigration { expected })?;
+
+        // vec0 creates shadow tables and may not participate cleanly in an
+        // IMMEDIATE transaction; apply that DDL outside the checked txn, then
+        // stamp user_version in a short Immediate txn after verify.
+        if migration.version == 2 {
+            connection.execute_batch(migration.sql).map_err(|_| {
+                MigrationError::MigrationApplyFailed {
+                    version: migration.version,
+                }
+            })?;
+            (migration.verify)(connection)?;
+            let transaction = connection
+                .transaction_with_behavior(TransactionBehavior::Immediate)
+                .map_err(|_| MigrationError::TransactionBeginFailed {
+                    version: migration.version,
+                })?;
+            transaction
+                .pragma_update(None, "user_version", migration.version)
+                .map_err(|_| MigrationError::VersionWriteFailed {
+                    version: migration.version,
+                })?;
+            let written = read_user_version(&transaction)?;
+            if written != migration.version {
+                return Err(MigrationError::VersionWriteFailed {
+                    version: migration.version,
+                });
+            }
+            transaction
+                .commit()
+                .map_err(|_| MigrationError::CommitFailed {
+                    version: migration.version,
+                })?;
+            current = migration.version;
+            continue;
+        }
 
         let transaction = connection
             .transaction_with_behavior(TransactionBehavior::Immediate)
@@ -274,6 +337,37 @@ fn verify_v1_schema(connection: &Connection) -> Result<(), MigrationError> {
     Ok(())
 }
 
+fn verify_v2_schema(connection: &Connection) -> Result<(), MigrationError> {
+    // v2 is additive: chats/messages must still match v1.
+    verify_v1_schema(connection).map_err(|_| MigrationError::SchemaMismatch { version: 2 })?;
+
+    crate::db::sqlite_vec_ext::verify_vec_extension(connection)
+        .map_err(|_| MigrationError::SchemaMismatch { version: 2 })?;
+
+    let sql: String = connection
+        .query_row(
+            "SELECT sql FROM sqlite_schema WHERE type = 'table' AND name = 'knowledge_chunks'",
+            [],
+            |row| row.get(0),
+        )
+        .map_err(|_| MigrationError::SchemaMismatch { version: 2 })?;
+    let normalized = sql.to_ascii_lowercase();
+    if !(normalized.contains("vec0")
+        && normalized.contains("embedding")
+        && normalized.contains("float[384]")
+        && normalized.contains("text_content")
+        && normalized.contains("created_at")
+        && normalized.contains(" id "))
+    {
+        return Err(MigrationError::SchemaMismatch { version: 2 });
+    }
+
+    // Debug assert keeps the constant and DDL string in lockstep.
+    debug_assert_eq!(KNOWLEDGE_EMBEDDING_DIMS, 384);
+
+    Ok(())
+}
+
 fn read_columns(
     connection: &Connection,
     query: &'static str,
@@ -329,6 +423,7 @@ mod tests {
 
         assert_eq!(read_user_version(&connection)?, LATEST_SCHEMA_VERSION);
         verify_v1_schema(&connection)?;
+        verify_v2_schema(&connection)?;
 
         connection.execute(
             "INSERT INTO chats(id, title, created_at) VALUES (?1, ?2, ?3)",

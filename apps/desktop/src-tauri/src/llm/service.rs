@@ -194,6 +194,12 @@ enum LlmCommand {
         task_id: Option<String>,
         tokens: Channel<TokenEvent>,
     },
+    /// One-shot embedding on the worker (separate short-lived context).
+    Embed {
+        text: String,
+        n_ctx: u32,
+        reply: mpsc::Sender<Result<Vec<f32>, String>>,
+    },
     RegisterEvents {
         channel: Channel<LlmLifecycleEvent>,
     },
@@ -279,6 +285,24 @@ impl LlmHandle {
     pub fn cancel(&self) {
         self.governor.request_cancel();
     }
+
+    /// Blocking: embed `text` on the worker with a short-lived embeddings context.
+    /// Does not share the generation context; respects cancel/purge via governor.
+    pub fn embed(&self, text: String, n_ctx: u32) -> Result<Vec<f32>, String> {
+        self.governor.reset_cancel();
+        let (reply, ack) = mpsc::channel();
+        self.tx
+            .lock()
+            .map_err(|_| "llm tx poisoned".to_string())?
+            .send(LlmCommand::Embed {
+                text,
+                n_ctx,
+                reply,
+            })
+            .map_err(|_| "llm worker gone".to_string())?;
+        ack.recv()
+            .map_err(|_| "llm worker dropped reply".to_string())?
+    }
 }
 
 impl Drop for LlmHandle {
@@ -361,6 +385,28 @@ fn worker_loop(
                     let _ = tokens.send(error_done_event(0, e));
                 }
                 monitor.set_phase(MemPhase::Idle);
+            }
+            LlmCommand::Embed {
+                text,
+                n_ctx,
+                reply,
+            } => {
+                let result = match model.as_ref() {
+                    None => Err("model not loaded".into()),
+                    Some(model) => {
+                        monitor.set_phase(MemPhase::CtxCreated);
+                        let out = super::embed::embed_text(
+                            &backend,
+                            model.as_ref(),
+                            &text,
+                            n_ctx,
+                            || governor.is_cancelled(),
+                        );
+                        monitor.set_phase(MemPhase::Idle);
+                        out
+                    }
+                };
+                let _ = reply.send(result);
             }
             LlmCommand::RegisterEvents { channel } => {
                 events = Some(channel);

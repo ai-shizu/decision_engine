@@ -842,7 +842,9 @@ fn classify_connection_error(error: VaultConnectionError) -> (VaultStatus, Vault
             VaultStatus::Unavailable,
             VaultErrorCode::KeychainUnavailable,
         ),
-        VaultConnectionError::OpenFailed | VaultConnectionError::CipherIdentityUnavailable => {
+        VaultConnectionError::OpenFailed
+        | VaultConnectionError::CipherIdentityUnavailable
+        | VaultConnectionError::SqliteVecUnavailable => {
             (VaultStatus::Unavailable, VaultErrorCode::Unavailable)
         }
     }

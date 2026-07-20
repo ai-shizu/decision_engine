@@ -31,6 +31,8 @@ pub enum VaultConnectionError {
     KeyApplicationFailed,
     SchemaVerificationFailed,
     CipherIdentityUnavailable,
+    /// sqlite-vec static auto-extension failed to register or activate.
+    SqliteVecUnavailable,
     // OS-level storage access denial (iOS Data Protection sealed the file while
     // the device is locked). Recoverable and distinct from corruption: it must
     // fail closed to `Locked`, never `Quarantined`.
@@ -51,6 +53,9 @@ impl fmt::Display for VaultConnectionError {
             }
             Self::CipherIdentityUnavailable => {
                 formatter.write_str("SQLCipher identity is unavailable")
+            }
+            Self::SqliteVecUnavailable => {
+                formatter.write_str("sqlite-vec extension is unavailable")
             }
             Self::OsAccessDenied => formatter.write_str("storage access denied by the OS"),
         }
@@ -95,6 +100,11 @@ fn open_encrypted_database_with_key(
 ) -> Result<Connection, VaultConnectionError> {
     validate_key_length(key)?;
 
+    // Static sqlite-vec registration must precede Connection::open so the
+    // SQLCipher connection can inherit vec0 without load_extension (iOS-safe).
+    super::sqlite_vec_ext::ensure_sqlite_vec_loaded()
+        .map_err(|_| VaultConnectionError::SqliteVecUnavailable)?;
+
     // Do not enable SQLITE_OPEN_URI: the DB worker will supply a fixed local
     // app-container path, never a frontend-controlled URI.
     let flags = OpenFlags::SQLITE_OPEN_READ_WRITE
@@ -105,6 +115,8 @@ fn open_encrypted_database_with_key(
 
     apply_sqlcipher_key(&connection, key)?;
     verify_encrypted_connection(&connection)?;
+    super::sqlite_vec_ext::activate_sqlite_vec(&connection)
+        .map_err(|_| VaultConnectionError::SqliteVecUnavailable)?;
     Ok(connection)
 }
 
