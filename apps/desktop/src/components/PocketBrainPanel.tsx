@@ -2,6 +2,7 @@
 //
 // M4 memory header + model load/cancel, plus M11 RAG chat/ingest surface.
 // Cancellation and Jetsam purge stay here so M7 governor wiring is unchanged.
+// M20-C: variant="messenger" for mobile LINE-like chat (desktop layout intact).
 
 import { useEffect, useState } from "react";
 
@@ -13,6 +14,7 @@ import {
   type MemSample,
 } from "../lib/llm";
 import { ExtractionPanel } from "./ExtractionPanel";
+import { RagActionSheet } from "./rag/RagActionSheet";
 import { RagChatPanel } from "./rag/RagChatPanel";
 
 // A17 Pro / 8GB jetsam design budget ≈ 4.8 GB (blueprint §G0-C.1, 60% band).
@@ -23,11 +25,18 @@ function fmtMiB(bytes: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(0)} MiB`;
 }
 
-export function PocketBrainPanel() {
+export interface PocketBrainPanelProps {
+  /** default = desktop / loading chrome; messenger = M20-C mobile chat. */
+  variant?: "default" | "messenger";
+}
+
+export function PocketBrainPanel({ variant = "default" }: PocketBrainPanelProps) {
   const [mem, setMem] = useState<MemSample | null>(null);
   const [modelReady, setModelReady] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [actionOpen, setActionOpen] = useState(false);
+  const messenger = variant === "messenger";
 
   useEffect(() => {
     startMemoryMonitor(setMem, SAMPLE_INTERVAL_MS, THRESHOLD_BYTES).catch((e) =>
@@ -72,6 +81,63 @@ export function PocketBrainPanel() {
 
   const over = mem?.over_threshold ?? false;
 
+  if (messenger) {
+    return (
+      <section className="pocket-brain pocket-brain-messenger">
+        <header className="pocket-brain-messenger-bar">
+          <div className="pocket-brain-messenger-title">
+            <strong>RAG</strong>
+            <span
+              className={
+                over
+                  ? "pocket-brain-mem pocket-brain-mem-over"
+                  : "pocket-brain-mem"
+              }
+            >
+              {mem
+                ? `${fmtMiB(mem.phys_footprint_bytes)} · ${mem.phase}`
+                : "mem —"}
+            </span>
+          </div>
+          <div className="pocket-brain-messenger-actions">
+            <button
+              type="button"
+              className="pocket-brain-chip-btn"
+              onClick={() => void onLoad()}
+              disabled={busy || modelReady}
+            >
+              {modelReady ? "Loaded" : "Load"}
+            </button>
+            <button
+              type="button"
+              className="pocket-brain-chip-btn"
+              onClick={() => void cancelGeneration()}
+              disabled={!busy}
+            >
+              Cancel
+            </button>
+          </div>
+        </header>
+
+        {error ? <p className="pocket-brain-error">{error}</p> : null}
+
+        <RagChatPanel
+          variant="messenger"
+          modelReady={modelReady}
+          onError={setError}
+          onBusyChange={setBusy}
+          onActionClick={() => setActionOpen(true)}
+        />
+
+        <RagActionSheet
+          open={actionOpen}
+          modelReady={modelReady}
+          onClose={() => setActionOpen(false)}
+        />
+      </section>
+    );
+  }
+
   return (
     <section className="pocket-brain" style={{ textAlign: "left", width: "100%" }}>
       <header
@@ -93,7 +159,7 @@ export function PocketBrainPanel() {
       </header>
 
       <div style={{ padding: 12, display: "flex", gap: 8 }}>
-        <button type="button" onClick={onLoad} disabled={busy || modelReady}>
+        <button type="button" onClick={() => void onLoad()} disabled={busy || modelReady}>
           {modelReady ? "Model loaded" : "Load model"}
         </button>
         <button type="button" onClick={() => void cancelGeneration()} disabled={!busy}>

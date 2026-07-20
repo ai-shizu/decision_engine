@@ -61,8 +61,8 @@ export type MainTab =
   | "profile"
   | "settings";
 
-/** M20-A mobile bottom-nav surfaces (CSS ≤768px). Desktop MainTab は不変。 */
-export type MobileSurface = "rag" | "dashboard" | "probe";
+/** M20-B: RAG (iOS Home) + desktop MainTab 全7面。M20-A の 3面省略は撤回。 */
+export type MobileSurface = "rag" | MainTab;
 
 export type ProbeAxis =
   | "decision_threshold"

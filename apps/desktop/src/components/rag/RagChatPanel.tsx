@@ -17,6 +17,9 @@ interface RagChatPanelProps {
   modelReady: boolean;
   onError: (message: string | null) => void;
   onBusyChange: (busy: boolean) => void;
+  /** M20-C messenger: sticky composer + bubbles; ingest moved to action sheet. */
+  variant?: "default" | "messenger";
+  onActionClick?: () => void;
 }
 
 let nextMsgId = 1;
@@ -33,9 +36,12 @@ export function RagChatPanel({
   modelReady,
   onError,
   onBusyChange,
+  variant = "default",
+  onActionClick,
 }: RagChatPanelProps) {
   const [state, dispatch] = useReducer(ragChatReducer, undefined, initialRagChatState);
   const assistantIdRef = useRef<string | null>(null);
+  const messenger = variant === "messenger";
 
   const throttle = useThrottledStream((chunk) => {
     const id = assistantIdRef.current;
@@ -97,18 +103,31 @@ export function RagChatPanel({
   }
 
   return (
-    <div className="rag-chat-panel">
-      <RagMessageList messages={state.messages} />
+    <div
+      className={
+        messenger ? "rag-chat-panel rag-chat-panel-messenger" : "rag-chat-panel"
+      }
+    >
+      <RagMessageList messages={state.messages} variant={variant} />
       <RagChatInput
         value={state.input}
         onChange={(value) => dispatch({ type: "set_input", value })}
         onSend={() => void onSend()}
         streaming={state.streaming}
         modelReady={modelReady}
+        variant={variant}
+        onActionClick={onActionClick}
       />
-      <RagIngestPanel modelReady={modelReady} />
+      {!messenger ? <RagIngestPanel modelReady={modelReady} /> : null}
       {state.error ? (
-        <p style={{ margin: "0 12px 8px", fontSize: 12, color: "#ff5555" }}>
+        <p
+          className="rag-chat-error"
+          style={
+            messenger
+              ? undefined
+              : { margin: "0 12px 8px", fontSize: 12, color: "#ff5555" }
+          }
+        >
           {state.error}
         </p>
       ) : null}

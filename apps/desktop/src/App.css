@@ -2220,7 +2220,8 @@ button.secondary {
 }
 
 /* ==========================================================================
-   M20-A — Mobile chrome (≤768px). Desktop `.desktop-chrome` / TitleBar 非破壊。
+   M20-A/B — Mobile chrome (≤768px). Desktop `.desktop-chrome` / TitleBar 非破壊。
+   M20-B: RAG + desktop 7 tabs via dock + chip rail + Menu sheet.
    ========================================================================== */
 
 .mobile-chrome {
@@ -2263,9 +2264,26 @@ button.secondary {
   width: 100%;
 }
 
+.mobile-content-rag {
+  display: flex;
+  flex-direction: column;
+  padding: 0;
+  padding-bottom: calc(56px + env(safe-area-inset-bottom, 0px));
+  overflow: hidden;
+}
+
 .mobile-panel {
   width: 100%;
 }
+
+.mobile-panel-rag {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+/* Approach A chip rail removed in M20-C (nav congestion). */
 
 .mobile-bottom-nav {
   position: fixed;
@@ -2312,6 +2330,10 @@ button.secondary {
   background: var(--bg-selected);
 }
 
+.mobile-nav-item-priority:not(.active) {
+  color: var(--text);
+}
+
 .mobile-nav-item:focus-visible {
   outline: 1px solid var(--accent);
   outline-offset: -2px;
@@ -2336,6 +2358,378 @@ button.secondary {
   color: inherit;
   opacity: 0.75;
   line-height: 1.1;
+}
+
+/* Approach B — Menu overlay sheet */
+.mobile-menu-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 300;
+  background: rgba(0, 0, 0, 0.72);
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+}
+
+.mobile-menu-sheet {
+  width: 100%;
+  max-height: min(78dvh, 78vh);
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-raised);
+  border-top: 1px solid var(--accent);
+  padding: 12px 12px calc(12px + env(safe-area-inset-bottom, 0px));
+}
+
+.mobile-menu-sheet-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 4px;
+}
+
+.mobile-menu-sheet-head h2 {
+  margin: 0;
+  font-size: 1rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  border-bottom: 1px solid var(--border);
+  padding-bottom: var(--s1);
+}
+
+.mobile-menu-close {
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-ui);
+  font-size: 0.75rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  padding: 6px 10px;
+  cursor: pointer;
+}
+
+.mobile-menu-hint {
+  margin: 8px 0 12px;
+  text-align: left;
+}
+
+.mobile-menu-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  flex: 1;
+  min-height: 0;
+}
+
+.mobile-menu-item {
+  width: 100%;
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 0 0 8px;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-ui);
+  cursor: pointer;
+  text-align: left;
+}
+
+.mobile-menu-item:hover {
+  background: var(--bg-hover);
+}
+
+.mobile-menu-item.active {
+  background: var(--text);
+  border-color: var(--text);
+  color: var(--bg);
+}
+
+.mobile-menu-item-priority:not(.active) {
+  border-color: var(--accent);
+}
+
+.mobile-menu-item-label {
+  font-size: 0.85rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.mobile-menu-item-caption {
+  font-size: 0.72rem;
+  color: inherit;
+  opacity: 0.7;
+}
+
+/* ==========================================================================
+   M20-C — Messenger RAG (mobile variant only; desktop .pocket-brain untouched)
+   ========================================================================== */
+
+.pocket-brain-messenger {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  background: var(--bg);
+  text-align: left;
+}
+
+.pocket-brain-messenger-bar {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-raised);
+}
+
+.pocket-brain-messenger-title {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.pocket-brain-messenger-title strong {
+  font-size: 0.85rem;
+  letter-spacing: 0.08em;
+}
+
+.pocket-brain-mem {
+  font-size: 0.65rem;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.pocket-brain-mem-over {
+  color: var(--err);
+}
+
+.pocket-brain-messenger-actions {
+  display: flex;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.pocket-brain-chip-btn {
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-ui);
+  font-size: 0.68rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  padding: 6px 8px;
+  cursor: pointer;
+}
+
+.pocket-brain-chip-btn:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.pocket-brain-error,
+.rag-chat-panel-messenger .rag-chat-error {
+  margin: 0;
+  padding: 6px 12px;
+  font-size: 0.72rem;
+  color: var(--err);
+  background: var(--err-bg);
+  border-bottom: 1px solid var(--border);
+}
+
+.rag-chat-panel-messenger {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.rag-message-list-messenger {
+  list-style: none;
+  margin: 0;
+  padding: 12px;
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.rag-message-empty {
+  align-self: center;
+  color: var(--text-muted);
+  font-size: 0.8rem;
+  padding: 24px 12px;
+  text-align: center;
+}
+
+.rag-message-anchor {
+  height: 0;
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+}
+
+.rag-bubble {
+  max-width: 82%;
+  padding: 8px 12px;
+  border: 1px solid var(--border);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.rag-bubble-user {
+  align-self: flex-end;
+  background: var(--bg-selected);
+  border-color: var(--text-muted);
+}
+
+.rag-bubble-assistant {
+  align-self: flex-start;
+  background: var(--bg-raised);
+}
+
+.rag-bubble-meta {
+  font-size: 0.62rem;
+  color: var(--text-muted);
+  margin-bottom: 4px;
+  letter-spacing: 0.04em;
+}
+
+.rag-bubble-body {
+  font-size: 0.9rem;
+  line-height: 1.45;
+}
+
+.rag-composer {
+  flex-shrink: 0;
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+  padding: 8px 10px;
+  border-top: 1px solid var(--border);
+  background: var(--bg-raised);
+}
+
+.rag-composer-action {
+  width: 36px;
+  height: 36px;
+  flex-shrink: 0;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--accent);
+  font-size: 1.35rem;
+  line-height: 1;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.rag-composer-input {
+  flex: 1;
+  min-height: 36px;
+  max-height: 96px;
+  resize: none;
+  border: 1px solid var(--border);
+  background: var(--bg-deep);
+  color: var(--text);
+  font-family: var(--font-ui);
+  font-size: 0.9rem;
+  line-height: 1.35;
+  padding: 8px 10px;
+}
+
+.rag-composer-send {
+  flex-shrink: 0;
+  border: 1px solid var(--text);
+  background: var(--text);
+  color: var(--bg);
+  font-family: var(--font-ui);
+  font-size: 0.75rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  padding: 8px 12px;
+  min-height: 36px;
+  cursor: pointer;
+}
+
+.rag-composer-send:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.rag-action-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 320;
+  background: rgba(0, 0, 0, 0.72);
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+}
+
+.rag-action-sheet {
+  width: 100%;
+  max-height: min(82dvh, 82vh);
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-raised);
+  border-top: 1px solid var(--accent);
+  padding: 12px 12px calc(12px + env(safe-area-inset-bottom, 0px));
+}
+
+.rag-action-sheet-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 8px;
+  flex-shrink: 0;
+}
+
+.rag-action-sheet-head h2 {
+  margin: 0;
+  font-size: 1rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  border-bottom: 1px solid var(--border);
+  padding-bottom: var(--s1);
+}
+
+.rag-action-close {
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-ui);
+  font-size: 0.75rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  padding: 6px 10px;
+  cursor: pointer;
+}
+
+.rag-action-sheet-body {
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
 }
 
 @media (max-width: 768px) {

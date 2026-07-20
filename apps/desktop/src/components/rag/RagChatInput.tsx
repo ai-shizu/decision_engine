@@ -5,6 +5,9 @@ interface RagChatInputProps {
   /** Streaming in progress — Send is idle but textarea stays editable (ambient UX). */
   streaming: boolean;
   modelReady: boolean;
+  /** M20-C: messenger sticky composer; desktop keeps default when omitted. */
+  variant?: "default" | "messenger";
+  onActionClick?: () => void;
 }
 
 export function RagChatInput({
@@ -13,7 +16,48 @@ export function RagChatInput({
   onSend,
   streaming,
   modelReady,
+  variant = "default",
+  onActionClick,
 }: RagChatInputProps) {
+  if (variant === "messenger") {
+    return (
+      <div className="rag-composer">
+        <button
+          type="button"
+          className="rag-composer-action"
+          aria-label="取り込み・抽出メニュー"
+          onClick={onActionClick}
+        >
+          +
+        </button>
+        <textarea
+          className="rag-composer-input"
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" && !e.shiftKey) {
+              e.preventDefault();
+              if (!streaming && modelReady) onSend();
+            }
+          }}
+          placeholder={
+            modelReady ? "メッセージ…" : "モデルをロードしてください"
+          }
+          rows={1}
+          aria-label="チャット入力"
+        />
+        <button
+          type="button"
+          className="rag-composer-send"
+          onClick={onSend}
+          disabled={streaming || !modelReady || !value.trim()}
+        >
+          {streaming ? "…" : "送信"}
+        </button>
+      </div>
+    );
+  }
+
   return (
     <div
       className="rag-chat-input"
