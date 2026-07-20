@@ -29,29 +29,29 @@ function isLegacyInterviewMode(surface: InterviewSurface): surface is InterviewM
   return surface === "interview_sim" || surface === "es_review" || surface === "gd_sim";
 }
 
-const MODES: { id: InterviewSurface; label: string; hint: string }[] = [
+const MODES: { id: InterviewSurface; label: string; shortLabel: string; hint: string }[] = [
   {
-    id: "interview_sim", label: "ケース/ES面接",
+    id: "interview_sim", label: "ケース/ES面接", shortLabel: "ケース",
     hint: "ES があれば敵対的 ES 面接、無ければケース面接。"
       + "回答時間を計測し、思考速度も講評対象になります。",
   },
   {
-    id: "es_review", label: "ES添削 (legacy)",
+    id: "es_review", label: "ES添削 (legacy)", shortLabel: "ES旧",
     hint: "data/es/ の ES を採用責任者ペルソナで容赦なく添削。"
       + "書類単体の論理的強度のみを評価します (思考速度は評価しません)。",
   },
   {
-    id: "gd_sim", label: "グループディスカッション",
+    id: "gd_sim", label: "グループディスカッション", shortLabel: "GD",
     hint: "厄介な参加者たちとのカオス GD。"
       + "回答時間を計測し、思考速度も講評対象になります。",
   },
   {
-    id: "multistage", label: "多段面接 (PB)",
+    id: "multistage", label: "多段面接 (PB)", shortLabel: "多段",
     hint: "M17 FSM: Foundation → Pressure → Debrief → Closed。"
       + "start_multistage_interview / advance_interview_stage をストリーミング結合。",
   },
   {
-    id: "es_pocket", label: "ES添削 (PB)",
+    id: "es_pocket", label: "ES添削 (PB)", shortLabel: "ES",
     hint: "review_es_draft: オフライン企業ファクト注入 + RAG 経験 + 採用責任者ストリーム添削。",
   },
 ];
@@ -448,7 +448,10 @@ export function InterviewTab() {
   return (
     <section className="panel interview-panel">
       <div className="consult-header">
-        <h2>面接・GD シミュレーター (INTERVIEW)</h2>
+        <h2>
+          <span className="desktop-only">面接・GD シミュレーター (INTERVIEW)</span>
+          <span className="mobile-only">面接</span>
+        </h2>
         {!pocketBrainSurface && phase === "active" && (
           <button
             type="button"
@@ -471,20 +474,23 @@ export function InterviewTab() {
         )}
       </div>
 
-      <div className="sub-tabs">
+      <div className="sub-tabs sub-tabs-pills" role="tablist" aria-label="面接モード">
         {MODES.map((m) => (
           <button
             key={m.id}
             type="button"
+            role="tab"
+            aria-selected={surface === m.id}
             className={surface === m.id ? "active" : ""}
             onClick={() => switchSurface(m.id)}
             disabled={busy}
           >
-            {m.label}
+            <span className="desktop-only">{m.label}</span>
+            <span className="mobile-only">{m.shortLabel}</span>
           </button>
         ))}
       </div>
-      <p className="hint">{currentMode.hint}</p>
+      <p className="hint dev-noise">{currentMode.hint}</p>
 
       {surface === "multistage" && <MultistageInterviewPanel />}
       {surface === "es_pocket" && <EsReviewPanel />}
@@ -494,7 +500,10 @@ export function InterviewTab() {
 
       {showSessionConfig && (
         <div className="term-panel">
-          <p className="term-header">SESSION_CONFIG</p>
+          <p className="term-header">
+            <span className="desktop-only">SESSION_CONFIG</span>
+            <span className="mobile-only">設定</span>
+          </p>
           {mode === "interview_sim" && (
           <>
           <div className="term-row config-row">

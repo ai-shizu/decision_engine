@@ -106,18 +106,21 @@ export function PocketProbePanel() {
     <div className="pocket-probe-panel">
       <div className="probe-topline">
         <div>
-          <p className="term-header">PROBE_FUNNEL (Pocket Brain / M15)</p>
+          <p className="term-header">
+            <span className="desktop-only">PROBE_FUNNEL (Pocket Brain / M15)</span>
+            <span className="mobile-only">PROBE</span>
+          </p>
           <p className="hint">
             進捗{" "}
             <span className="term-metric">
               {progress !== null ? `${progress}%` : "—"}
             </span>
             {state.status && (
-              <>
+              <span className="dev-noise">
                 {" "}
                 ({state.status.completed_stages}/{state.status.total_stages}{" "}
                 stages)
-              </>
+              </span>
             )}
           </p>
         </div>

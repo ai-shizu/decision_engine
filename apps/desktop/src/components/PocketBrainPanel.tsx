@@ -30,6 +30,16 @@ export interface PocketBrainPanelProps {
   variant?: "default" | "messenger";
 }
 
+function softLoadError(raw: string): string {
+  if (/GGUF not found/i.test(raw)) {
+    return "モデル未配置です。シミュレータへ GGUF を注入してから Load してください。";
+  }
+  if (raw.length > 120) {
+    return `${raw.slice(0, 100)}…`;
+  }
+  return raw;
+}
+
 export function PocketBrainPanel({ variant = "default" }: PocketBrainPanelProps) {
   const [mem, setMem] = useState<MemSample | null>(null);
   const [modelReady, setModelReady] = useState(false);
@@ -86,7 +96,7 @@ export function PocketBrainPanel({ variant = "default" }: PocketBrainPanelProps)
       <section className="pocket-brain pocket-brain-messenger">
         <header className="pocket-brain-messenger-bar">
           <div className="pocket-brain-messenger-title">
-            <strong>RAG</strong>
+            <strong>CONSULT</strong>
             <span
               className={
                 over
@@ -106,7 +116,7 @@ export function PocketBrainPanel({ variant = "default" }: PocketBrainPanelProps)
               onClick={() => void onLoad()}
               disabled={busy || modelReady}
             >
-              {modelReady ? "Loaded" : "Load"}
+              {modelReady ? "Ready" : "Load"}
             </button>
             <button
               type="button"
@@ -114,12 +124,14 @@ export function PocketBrainPanel({ variant = "default" }: PocketBrainPanelProps)
               onClick={() => void cancelGeneration()}
               disabled={!busy}
             >
-              Cancel
+              Stop
             </button>
           </div>
         </header>
 
-        {error ? <p className="pocket-brain-error">{error}</p> : null}
+        {error ? (
+          <p className="pocket-brain-error">{softLoadError(error)}</p>
+        ) : null}
 
         <RagChatPanel
           variant="messenger"

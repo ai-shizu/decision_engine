@@ -46,35 +46,47 @@ export function ProbeTab() {
     <section className="panel probe-panel">
       <div className="probe-topline">
         <div>
-          <h2>PROBE (自己探索)</h2>
-          <p className="hint">
+          <h2>
+            <span className="desktop-only">PROBE (自己探索)</span>
+            <span className="mobile-only">PROBE</span>
+          </h2>
+          <p className="hint dev-noise">
             M18-D: Pocket Brain の PROBE ファネルと Romance/Rasch パルスを配線。
             legacy は Python sidecar 経路（非破壊で残置）。
           </p>
         </div>
       </div>
 
-      <div className="sub-tabs">
+      <div className="sub-tabs sub-tabs-pills" role="tablist" aria-label="PROBE面">
         <button
           type="button"
+          role="tab"
+          aria-selected={surface === "pb_probe"}
           className={surface === "pb_probe" ? "active" : ""}
           onClick={() => setSurface("pb_probe")}
         >
-          PROBE (PB)
+          <span className="desktop-only">PROBE (PB)</span>
+          <span className="mobile-only">PROBE</span>
         </button>
         <button
           type="button"
+          role="tab"
+          aria-selected={surface === "pulse_rasch"}
           className={surface === "pulse_rasch" ? "active" : ""}
           onClick={() => setSurface("pulse_rasch")}
         >
-          PULSE / RASCH
+          <span className="desktop-only">PULSE / RASCH</span>
+          <span className="mobile-only">PULSE</span>
         </button>
         <button
           type="button"
+          role="tab"
+          aria-selected={surface === "legacy"}
           className={surface === "legacy" ? "active" : ""}
           onClick={() => setSurface("legacy")}
         >
-          PROBE (legacy)
+          <span className="desktop-only">PROBE (legacy)</span>
+          <span className="mobile-only">旧</span>
         </button>
       </div>
 

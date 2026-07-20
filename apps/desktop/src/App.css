@@ -2732,6 +2732,185 @@ button.secondary {
   gap: 12px;
 }
 
+/* Dual labels: desktop-only by default; flipped inside .mobile-chrome */
+.mobile-only {
+  display: none;
+}
+
+/* ==========================================================================
+   M20-F — Mobile UX declutter (noise off, pill sub-tabs, dense layout)
+   Scoped to .mobile-chrome — desktop Foxtrot chrome untouched.
+   ========================================================================== */
+
+.mobile-chrome .desktop-only {
+  display: none !important;
+}
+
+.mobile-chrome .mobile-only {
+  display: inline;
+}
+
+.mobile-chrome .dev-noise {
+  display: none !important;
+}
+
+.mobile-chrome .mobile-topbar {
+  padding: 8px 12px;
+  padding-top: calc(8px + env(safe-area-inset-top, 0px));
+}
+
+.mobile-chrome .mobile-topbar h1 {
+  font-size: 1rem;
+  padding-bottom: 2px;
+}
+
+.mobile-chrome .mobile-topbar .subtitle {
+  font-size: 0.68rem;
+  margin: 2px 0 0;
+  /* Long engine-fail lines must not dominate the first viewport */
+  display: -webkit-box;
+  -webkit-line-clamp: 1;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.mobile-chrome .mobile-content {
+  padding: 8px 10px calc(64px + env(safe-area-inset-bottom, 0px));
+}
+
+.mobile-chrome .panel {
+  margin: 0;
+  padding: 0;
+}
+
+.mobile-chrome .panel h2,
+.mobile-chrome .panel h3 {
+  margin: 0 0 6px;
+  font-size: 0.95rem;
+  padding-bottom: 2px;
+}
+
+.mobile-chrome .panel h2::before,
+.mobile-chrome .panel h3::before {
+  content: none;
+}
+
+.mobile-chrome .term-header {
+  margin: 0 0 6px;
+  font-size: 0.72rem;
+  letter-spacing: 0.06em;
+}
+
+.mobile-chrome .term-header::before {
+  content: none;
+}
+
+.mobile-chrome .term-panel {
+  margin-bottom: 8px;
+  padding: 8px;
+}
+
+.mobile-chrome .term-panel::before,
+.mobile-chrome .term-panel::after {
+  display: none;
+}
+
+.mobile-chrome .probe-topline,
+.mobile-chrome .profile-topline,
+.mobile-chrome .consult-header {
+  margin-bottom: 8px;
+  gap: 8px;
+}
+
+.mobile-chrome .profile-topline .action-row,
+.mobile-chrome .probe-topline .action-row {
+  flex-wrap: wrap;
+}
+
+.mobile-chrome .action-row {
+  gap: 6px;
+}
+
+.mobile-chrome .action-row .ghost,
+.mobile-chrome .action-row .primary {
+  padding: 6px 10px;
+  font-size: 0.72rem;
+}
+
+/* Pill / segmented sub-nav — one row, swipe horizontally */
+.mobile-chrome .sub-tabs-pills,
+.mobile-chrome .sub-tabs {
+  display: flex;
+  flex-wrap: nowrap;
+  gap: 6px;
+  margin: 0 0 8px;
+  padding: 0 0 2px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: none;
+}
+
+.mobile-chrome .sub-tabs-pills::-webkit-scrollbar,
+.mobile-chrome .sub-tabs::-webkit-scrollbar {
+  display: none;
+}
+
+.mobile-chrome .sub-tabs-pills button,
+.mobile-chrome .sub-tabs button {
+  flex: 0 0 auto;
+  white-space: nowrap;
+  padding: 6px 12px;
+  font-size: 0.72rem;
+  letter-spacing: 0.04em;
+  text-transform: none;
+  min-height: 32px;
+  line-height: 1.2;
+}
+
+.mobile-chrome .sub-tabs-pills button::before,
+.mobile-chrome .sub-tabs-pills button::after,
+.mobile-chrome .sub-tabs button::before,
+.mobile-chrome .sub-tabs button::after {
+  content: none;
+}
+
+.mobile-chrome .gap-tensor-grid {
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.mobile-chrome textarea.pulse-transcript {
+  min-height: 96px;
+  max-height: 140px;
+}
+
+.mobile-chrome .pocket-brain-mem {
+  display: none;
+}
+
+.mobile-chrome .pocket-brain-messenger-bar {
+  padding: 6px 10px;
+}
+
+.mobile-chrome .pocket-brain-error {
+  font-size: 0.68rem;
+  padding: 4px 10px;
+  /* Paths / stack traces must not eat the chat viewport */
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.mobile-chrome .mobile-menu-hint {
+  display: none;
+}
+
+.mobile-chrome .interview-stage-rail {
+  margin-bottom: 8px;
+}
+
 @media (max-width: 768px) {
   /* Desktop window chrome is meaningless on iOS / narrow viewports. */
   .titlebar {

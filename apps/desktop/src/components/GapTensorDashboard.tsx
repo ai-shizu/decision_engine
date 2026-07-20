@@ -135,8 +135,11 @@ export function GapTensorDashboard() {
     <div className="gap-tensor-dashboard">
       <div className="profile-topline">
         <div>
-          <p className="term-header">GAP_TENSOR_DASHBOARD (M14 / M18-C)</p>
-          <p className="hint">
+          <p className="term-header">
+            <span className="desktop-only">GAP_TENSOR_DASHBOARD (M14 / M18-C)</span>
+            <span className="mobile-only">Gap / Tensor</span>
+          </p>
+          <p className="hint dev-noise">
             Vault の最新 Gap 分析と 6D テンソルを表示。権威テンソルは N/A 固定（LLM は権威を更新しない）。
             再計算は決定論アルゴリズムのみ（LLM 非呼び出し）。
           </p>
@@ -171,14 +174,17 @@ export function GapTensorDashboard() {
 
       <div className="gap-tensor-grid">
         <div className="term-panel gap-tensor-col">
-          <p className="term-header">TENSOR_PROFILE_6D</p>
+          <p className="term-header">
+            <span className="desktop-only">TENSOR_PROFILE_6D</span>
+            <span className="mobile-only">6D テンソル</span>
+          </p>
           {state.tensor ? (
             <>
-              <div className="term-row">
+              <div className="term-row dev-noise">
                 <span className="term-source-name">schema</span>
                 <span className="term-value">{state.tensor.schema}</span>
               </div>
-              <div className="term-row">
+              <div className="term-row dev-noise">
                 <span className="term-source-name">model_hash</span>
                 <span className="term-value">{state.tensor.model_hash}</span>
               </div>

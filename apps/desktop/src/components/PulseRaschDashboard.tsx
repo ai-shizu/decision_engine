@@ -193,15 +193,21 @@ export function PulseRaschDashboard() {
 
   return (
     <div className="pulse-rasch-dashboard">
-      <p className="term-header">PULSE_VIEW (Romance + Rasch)</p>
-      <p className="hint">
+      <p className="term-header">
+        <span className="desktop-only">PULSE_VIEW (Romance + Rasch)</span>
+        <span className="mobile-only">Pulse</span>
+      </p>
+      <p className="hint dev-noise">
         対人パルスは `[self]` / `[contact_alias]` 行のみ。生トランスクリプトは Vault に保存されません。
         Rasch は PCM・discrimination≡1.0・グリッド17点。外部チャートライブラリ不使用。
       </p>
 
       <div className="gap-tensor-grid">
         <div className="term-panel">
-          <p className="term-header">INTERACTION_PULSE</p>
+          <p className="term-header">
+            <span className="desktop-only">INTERACTION_PULSE</span>
+            <span className="mobile-only">対話</span>
+          </p>
           <textarea
             className="pulse-transcript"
             rows={8}

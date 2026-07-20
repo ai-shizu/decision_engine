@@ -106,8 +106,11 @@ export function ProfileTab() {
 
       <div className="profile-topline">
         <div>
-          <h2>プロファイル分析 (PROFILE)</h2>
-          <p className="hint">
+          <h2>
+            <span className="desktop-only">プロファイル分析 (PROFILE)</span>
+            <span className="mobile-only">PROFILE</span>
+          </h2>
+          <p className="hint dev-noise">
             Source Code / Echo メトリクスはマウント時に無菌データのみ読み込みます。
             言語化レポート・Twin・Tensor は明示ボタンのみ。
           </p>
