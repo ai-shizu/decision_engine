@@ -27,7 +27,7 @@
 | 永続化境界・シリアライズ・runtime検証・IPC契約 | §1, §16 (SKILL-PKB-BOUNDARY-V3), `docs/architecture/INCIDENT_LEDGER.md` |
 | macOS ビルド・配布・コード署名 | §1, §2.3, §4 |
 | Tauri iOS (M0〜) 初期化・シミュレータ | §1, §2.3, §4.4, `docs/M0_IOS_INIT_INSTRUCTIONS.md` |
-| Pocket Brain / on-device LLM (M4〜M5) / OOM defense (M7) / 浄化 (M8) / local RAG (M9) | §1, §1.1, §4.5, §4.6, §4.7, §4.7b, §4.7c, §4.9, §5, `docs/m5_action_plan.md` |
+| Pocket Brain / on-device LLM (M4〜M5) / OOM defense (M7) / 浄化 (M8) / local RAG (M9〜M10) | §1, §1.1, §4.5, §4.6, §4.7, §4.7b, §4.7c, §4.9, §4.10, §5, `docs/m5_action_plan.md` |
 | SQLCipher vault / Keychain (M3) | §1, §4.8, `docs/m3_action_plan.md` |
 | LLM モデル選定・consult/KV キャッシュ | §1, §5, §7, §8 |
 | 検索エンジン・mmap・LSM 索引 | §1, §9, §10 |
@@ -487,6 +487,16 @@ rm -rf .boundary-tests-out
 3. **スキーマ v2:** `CREATE VIRTUAL TABLE knowledge_chunks USING vec0(embedding float[384], id TEXT, created_at INTEGER, +text_content TEXT)`。次元定数 `KNOWLEDGE_EMBEDDING_DIMS` / `EMBEDDING_DIMENSIONS` = 384。
 4. **Embedding:** `llm/embed.rs::embed_text` + `LlmHandle::embed`。生成用 context と共有しない短命 embeddings context。governor cancel を尊重。メインスレッド禁止。
 5. UI / チャンク化 / 検索コマンドは未配線（後続フェーズ）。
+
+### 4.10 M10 — Local RAG pipeline (chunk / ingest / search) (2026-07-20)
+
+**射程:** `##` チャンク化、`ingest_knowledge` / `search_knowledge` Tauri コマンド、vault worker 経由の `knowledge_chunks` 書込・KNN。React UI は対象外。
+
+**as-built:**
+1. `rag/chunk.rs::chunk_markdown` — Python `load_knowledge_chunks` と同型の `^##\s+` 分割 + 段落フォールバック（`MAX_CHUNK_CHARS=4000` / `MAX_CHUNKS=128`）。
+2. `ingest_knowledge` — `spawn_blocking` 内で chunk → `LlmHandle::embed` ループ → `VaultHandle::knowledge_replace`（DELETE `source_id::%` + INSERT を 1 トランザクション）。
+3. `search_knowledge` — query embed → `SELECT id, text_content, distance FROM knowledge_chunks WHERE embedding MATCH ?1 AND k = ?2`。
+4. コマンド登録は `pocket-brain` ∧ `secure-vault` ∧ Apple。埋め込み次元は `require_knowledge_embedding_dims`（384）で fail-closed。
 
 ### 4.8 M3 Phase 0-A — SQLCipher / Security.framework iOS link gate (2026-07-18)
 

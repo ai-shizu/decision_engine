@@ -28,6 +28,14 @@ mod db;
 #[cfg(feature = "secure-vault")]
 mod commands_db;
 
+// M10 local RAG (chunk → embed → sqlite-vec). Needs both LLM worker and vault.
+#[cfg(all(
+    feature = "pocket-brain",
+    feature = "secure-vault",
+    target_vendor = "apple"
+))]
+mod rag;
+
 use std::sync::Arc;
 
 use engine::EngineManager;
@@ -110,6 +118,18 @@ pub fn run() {
             llm::commands_llm::memory_monitor_start,
             #[cfg(feature = "pocket-brain")]
             llm::commands_llm::memory_monitor_stop,
+            #[cfg(all(
+                feature = "pocket-brain",
+                feature = "secure-vault",
+                target_vendor = "apple"
+            ))]
+            rag::commands_rag::ingest_knowledge,
+            #[cfg(all(
+                feature = "pocket-brain",
+                feature = "secure-vault",
+                target_vendor = "apple"
+            ))]
+            rag::commands_rag::search_knowledge,
             #[cfg(all(feature = "secure-vault", target_vendor = "apple"))]
             commands_db::vault_status,
             #[cfg(all(feature = "secure-vault", target_vendor = "apple"))]

@@ -15,7 +15,6 @@ use llama_cpp_2::model::{AddBos, LlamaModel};
 /// Canonical storage width for vault `knowledge_chunks.embedding` (M9).
 /// Callers that ingest into the vault must ensure the returned vector length
 /// matches this constant (typically via a dedicated embedding GGUF).
-#[allow(dead_code)] // Consumed by the upcoming ingest/search phase.
 pub const EMBEDDING_DIMENSIONS: usize = 384;
 
 /// Default context window for a single embedding pass (kept small to bound
@@ -92,7 +91,6 @@ pub fn embed_text(
 }
 
 /// Fail closed when a vector cannot be stored in the M9 `float[384]` column.
-#[allow(dead_code)] // Consumed by the upcoming ingest/search phase.
 pub fn require_knowledge_embedding_dims(embedding: &[f32]) -> Result<(), String> {
     if embedding.len() == EMBEDDING_DIMENSIONS {
         Ok(())

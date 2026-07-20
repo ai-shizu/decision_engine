@@ -24,6 +24,7 @@ use crate::ipc_contract::MAX_TEXT_BYTES;
 
 use super::{
     connection::{open_encrypted_database, verify_encrypted_connection, VaultConnectionError},
+    knowledge_repo::{self, KnowledgeChunkRow, KnowledgeSearchHit},
     migrations::{run_migrations, MigrationError},
     repository::{
         self, ChatCreate, ChatRecord, MessageAppend, MessageCursor, MessageRecord, RepositoryError,
@@ -134,6 +135,8 @@ enum VaultReply {
     ChatsList(Result<Vec<ChatRecord>, VaultErrorCode>),
     MessageAppend(Result<MessageRecord, VaultErrorCode>),
     MessagesList(Result<Vec<MessageRecord>, VaultErrorCode>),
+    KnowledgeReplace(Result<usize, VaultErrorCode>),
+    KnowledgeSearch(Result<Vec<KnowledgeSearchHit>, VaultErrorCode>),
 }
 
 enum VaultRequest {
@@ -166,6 +169,18 @@ enum VaultRequest {
         chat_id: String,
         cursor: Option<MessageCursor>,
         limit: Option<u32>,
+        control: RequestControl,
+        reply: SyncSender<VaultReply>,
+    },
+    KnowledgeReplace {
+        source_id: String,
+        rows: Vec<KnowledgeChunkRow>,
+        control: RequestControl,
+        reply: SyncSender<VaultReply>,
+    },
+    KnowledgeSearch {
+        embedding: Vec<f32>,
+        limit: u32,
         control: RequestControl,
         reply: SyncSender<VaultReply>,
     },
@@ -403,6 +418,52 @@ impl VaultHandle {
             _ => Err(VaultErrorCode::Unavailable),
         }
     }
+
+    /// Replace all chunks for `source_id` then insert `rows` in one transaction.
+    pub(crate) fn knowledge_replace(
+        &self,
+        source_id: String,
+        rows: Vec<KnowledgeChunkRow>,
+    ) -> Result<usize, VaultErrorCode> {
+        let (reply_sender, receiver) = mpsc::sync_channel(1);
+        let cancelled = Arc::new(AtomicBool::new(false));
+        let request = VaultRequest::KnowledgeReplace {
+            source_id,
+            rows,
+            control: RequestControl {
+                deadline: Instant::now() + SHORT_OPERATION_TIMEOUT,
+                cancelled: Arc::clone(&cancelled),
+            },
+            reply: reply_sender,
+        };
+        match self.submit(request, receiver, cancelled, SHORT_OPERATION_TIMEOUT)? {
+            VaultReply::KnowledgeReplace(result) => result,
+            _ => Err(VaultErrorCode::Unavailable),
+        }
+    }
+
+    /// KNN search over `knowledge_chunks`.
+    pub(crate) fn knowledge_search(
+        &self,
+        embedding: Vec<f32>,
+        limit: u32,
+    ) -> Result<Vec<KnowledgeSearchHit>, VaultErrorCode> {
+        let (reply_sender, receiver) = mpsc::sync_channel(1);
+        let cancelled = Arc::new(AtomicBool::new(false));
+        let request = VaultRequest::KnowledgeSearch {
+            embedding,
+            limit,
+            control: RequestControl {
+                deadline: Instant::now() + SHORT_OPERATION_TIMEOUT,
+                cancelled: Arc::clone(&cancelled),
+            },
+            reply: reply_sender,
+        };
+        match self.submit(request, receiver, cancelled, SHORT_OPERATION_TIMEOUT)? {
+            VaultReply::KnowledgeSearch(result) => result,
+            _ => Err(VaultErrorCode::Unavailable),
+        }
+    }
 }
 
 struct VaultWorker {
@@ -498,6 +559,32 @@ impl VaultWorker {
                         self.list_messages(chat_id, cursor, limit)
                     };
                     let _ = reply.send(VaultReply::MessagesList(result));
+                }
+                VaultRequest::KnowledgeReplace {
+                    source_id,
+                    rows,
+                    control,
+                    reply,
+                } => {
+                    let result = if request_expired(&control) {
+                        Err(VaultErrorCode::Timeout)
+                    } else {
+                        self.replace_knowledge(source_id, rows)
+                    };
+                    let _ = reply.send(VaultReply::KnowledgeReplace(result));
+                }
+                VaultRequest::KnowledgeSearch {
+                    embedding,
+                    limit,
+                    control,
+                    reply,
+                } => {
+                    let result = if request_expired(&control) {
+                        Err(VaultErrorCode::Timeout)
+                    } else {
+                        self.search_knowledge(embedding, limit)
+                    };
+                    let _ = reply.send(VaultReply::KnowledgeSearch(result));
                 }
                 VaultRequest::RegisterEvents {
                     channel,
@@ -658,6 +745,39 @@ impl VaultWorker {
         let outcome = self.read_repository(|connection| {
             repository::messages_list(connection, &chat_id, cursor.as_ref(), clamp_limit(limit))
         });
+        self.resolve_repository(outcome)
+    }
+
+    fn replace_knowledge(
+        &mut self,
+        source_id: String,
+        rows: Vec<KnowledgeChunkRow>,
+    ) -> Result<usize, VaultErrorCode> {
+        gate(snapshot_status(&self.status))?;
+        if source_id.is_empty() || source_id.len() > TITLE_MAX_BYTES {
+            return Err(VaultErrorCode::InvalidInput);
+        }
+        if source_id.contains('%') || source_id.contains('_') {
+            // LIKE metacharacters would broaden DELETE — reject rather than escape.
+            return Err(VaultErrorCode::InvalidInput);
+        }
+        let outcome = self.write_repository(|transaction| {
+            knowledge_repo::replace_source_chunks(transaction, &source_id, &rows)
+        });
+        self.resolve_repository(outcome)
+    }
+
+    fn search_knowledge(
+        &mut self,
+        embedding: Vec<f32>,
+        limit: u32,
+    ) -> Result<Vec<KnowledgeSearchHit>, VaultErrorCode> {
+        gate(snapshot_status(&self.status))?;
+        if !(1..=MAX_LIST_LIMIT).contains(&limit) {
+            return Err(VaultErrorCode::InvalidInput);
+        }
+        let outcome = self
+            .read_repository(|connection| knowledge_repo::search_chunks(connection, &embedding, limit));
         self.resolve_repository(outcome)
     }
 

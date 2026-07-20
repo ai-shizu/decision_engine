@@ -207,8 +207,9 @@ enum LlmCommand {
 }
 
 /// Send + Sync handle placed in Tauri `State`.
+#[derive(Clone)]
 pub struct LlmHandle {
-    tx: Mutex<mpsc::Sender<LlmCommand>>,
+    tx: Arc<Mutex<mpsc::Sender<LlmCommand>>>,
     governor: Arc<LlmMemoryGovernor>,
 }
 
@@ -225,7 +226,7 @@ impl LlmHandle {
             .spawn(move || worker_loop(rx, governor_worker, monitor))
             .expect("spawn pocket-brain llm worker");
         Self {
-            tx: Mutex::new(tx),
+            tx: Arc::new(Mutex::new(tx)),
             governor,
         }
     }

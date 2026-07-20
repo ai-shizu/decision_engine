@@ -14,6 +14,8 @@ mod keychain_probe;
 #[cfg(target_os = "ios")]
 pub(crate) mod lifecycle;
 #[cfg(target_vendor = "apple")]
+mod knowledge_repo;
+#[cfg(target_vendor = "apple")]
 mod migrations;
 #[cfg(target_vendor = "apple")]
 mod repository;
@@ -26,6 +28,8 @@ mod sqlite_vec_ext;
 #[cfg(target_vendor = "apple")]
 mod worker;
 
+#[cfg(target_vendor = "apple")]
+pub(crate) use knowledge_repo::KnowledgeChunkRow;
 #[cfg(target_vendor = "apple")]
 pub(crate) use repository::{ChatCreate, ChatRecord, MessageAppend, MessageCursor, MessageRecord};
 #[cfg(target_vendor = "apple")]
