@@ -84,6 +84,44 @@ export function cancelGeneration(): Promise<void> {
   return invoke("llm_cancel");
 }
 
+/**
+ * Persistent LLM lifecycle event pushed by the worker (mirrors the Rust
+ * `LlmLifecycleEvent`). `memory_purged` means iOS memory pressure forced the
+ * model to be dropped; the UI must suspend and await an explicit reload.
+ */
+export type LlmLifecycleEvent = { readonly kind: "memory_purged" };
+
+/** Strictly parse a lifecycle event; unknown shapes throw and are ignored. */
+export function parseLlmLifecycleEvent(value: unknown): LlmLifecycleEvent {
+  if (
+    typeof value === "object" &&
+    value !== null &&
+    !Array.isArray(value) &&
+    (value as { kind?: unknown }).kind === "memory_purged"
+  ) {
+    return { kind: "memory_purged" };
+  }
+  throw new Error("llm.event: unexpected shape");
+}
+
+/**
+ * Subscribe once to worker-pushed LLM lifecycle events. Creates exactly one
+ * `Channel`; call from a mount-only effect so the worker never accumulates
+ * sinks. Malformed events are dropped by the strict parser.
+ */
+export function subscribeLlmEvents(
+  onEvent: (event: LlmLifecycleEvent) => void,
+): Promise<void> {
+  const channel = new Channel<unknown>((raw) => {
+    try {
+      onEvent(parseLlmLifecycleEvent(raw));
+    } catch {
+      // Fail-closed: drop malformed / unexpected shapes.
+    }
+  });
+  return invoke("llm_events", { onEvent: channel });
+}
+
 /** Start the Jetsam monitor; `onSample` receives each `MemSample`. */
 export function startMemoryMonitor(
   onSample: (sample: MemSample) => void,

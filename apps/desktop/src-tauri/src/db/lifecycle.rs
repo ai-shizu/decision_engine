@@ -23,10 +23,17 @@ use objc2::{
     sel, AnyThread, DefinedClass,
 };
 use objc2_foundation::NSNotificationCenter;
+#[cfg(feature = "pocket-brain")]
+use objc2_ui_kit::UIApplicationDidReceiveMemoryWarningNotification;
 use objc2_ui_kit::{
     UIApplicationDidEnterBackgroundNotification, UIApplicationProtectedDataWillBecomeUnavailable,
 };
 
+#[cfg(feature = "pocket-brain")]
+use std::sync::Arc;
+
+#[cfg(feature = "pocket-brain")]
+use crate::llm::service::LlmMemoryGovernor;
 use super::{VaultErrorCode, VaultHandle};
 
 /// Bounded lock retries. A backgrounded iOS app has only a short window before
@@ -39,6 +46,11 @@ const AUTO_LOCK_RETRY_DELAY: Duration = Duration::from_millis(100);
 
 struct ObserverIvars {
     vault: VaultHandle,
+    // Present only under `pocket-brain`: the lock-free governor the observer
+    // signals on memory pressure / backgrounding. Both ivars are `Send + Sync`,
+    // so the observer class stays thread-safe.
+    #[cfg(feature = "pocket-brain")]
+    llm: Arc<LlmMemoryGovernor>,
 }
 
 define_class!(
@@ -61,6 +73,19 @@ define_class!(
             let _ = thread::Builder::new()
                 .name("pkb-vault-autolock".to_string())
                 .spawn(move || run_bounded_lock(&vault));
+            // Backgrounding is also an aggressive-reclaim moment: purge the LLM.
+            // `request_purge` is two lock-free atomic stores — safe on the main
+            // thread; the heavy model Drop happens later on the worker thread.
+            #[cfg(feature = "pocket-brain")]
+            self.ivars().llm.request_purge();
+        }
+
+        // iOS memory-pressure warning. Purge the LLM only (not a security event,
+        // so the vault is not locked). Lock-free: two atomic stores, no block.
+        #[cfg(feature = "pocket-brain")]
+        #[unsafe(method(onMemoryWarning:))]
+        fn on_memory_warning(&self, _notification: *mut AnyObject) {
+            self.ivars().llm.request_purge();
         }
     }
 
@@ -90,8 +115,16 @@ fn run_bounded_lock(vault: &VaultHandle) {
 /// observer is intentionally leaked: `addObserver:selector:name:object:` keeps
 /// only an unretained reference, so the observer must live for the whole
 /// process. It is never unregistered because it dies with the process.
-pub(crate) fn install_auto_lock(vault: VaultHandle) {
-    let this = LifecycleObserver::alloc().set_ivars(ObserverIvars { vault });
+pub(crate) fn install_auto_lock(
+    vault: VaultHandle,
+    #[cfg(feature = "pocket-brain")] llm: Arc<LlmMemoryGovernor>,
+) {
+    let ivars = ObserverIvars {
+        vault,
+        #[cfg(feature = "pocket-brain")]
+        llm,
+    };
+    let this = LifecycleObserver::alloc().set_ivars(ivars);
     // SAFETY: `init` on our NSObject subclass; `set_ivars` was called first.
     let observer: Retained<LifecycleObserver> = unsafe { msg_send![super(this), init] };
 
@@ -111,6 +144,18 @@ pub(crate) fn install_auto_lock(vault: VaultHandle) {
             &*observer,
             sel!(onVaultLifecycleEvent:),
             Some(UIApplicationProtectedDataWillBecomeUnavailable),
+            None,
+        );
+    }
+
+    // SAFETY: same invariants; the `onMemoryWarning:` selector exists on the
+    // class under `pocket-brain`, and the name is a framework-owned NSString.
+    #[cfg(feature = "pocket-brain")]
+    unsafe {
+        center.addObserver_selector_name_object(
+            &*observer,
+            sel!(onMemoryWarning:),
+            Some(UIApplicationDidReceiveMemoryWarningNotification),
             None,
         );
     }

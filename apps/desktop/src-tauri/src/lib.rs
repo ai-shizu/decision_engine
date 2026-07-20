@@ -51,12 +51,16 @@ pub fn run() {
 
     // M4 pocket-brain: spawn the LLM worker + memory monitor and register them in
     // State. Entirely feature-gated — the default desktop build is byte-identical.
+    // The governor clone is captured so the iOS lifecycle observer (M7) can signal
+    // a memory purge. `llm_governor` is only consumed on the iOS/secure-vault
+    // build; the allow keeps other feature combinations warning-clean.
     #[cfg(feature = "pocket-brain")]
-    let builder = {
+    #[allow(unused_variables)]
+    let (builder, llm_governor) = {
         let monitor = Arc::new(monitor::MemoryMonitor::new());
-        builder
-            .manage(Arc::clone(&monitor))
-            .manage(llm::LlmHandle::spawn(Arc::clone(&monitor)))
+        let handle = llm::LlmHandle::spawn(Arc::clone(&monitor));
+        let governor = handle.governor();
+        (builder.manage(Arc::clone(&monitor)).manage(handle), governor)
     };
 
     builder
@@ -98,6 +102,8 @@ pub fn run() {
             llm::commands_llm::llm_generate,
             #[cfg(feature = "pocket-brain")]
             llm::commands_llm::llm_cancel,
+            #[cfg(feature = "pocket-brain")]
+            llm::commands_llm::llm_events,
             #[cfg(feature = "pocket-brain")]
             llm::commands_llm::memory_monitor_start,
             #[cfg(feature = "pocket-brain")]
@@ -154,7 +160,11 @@ pub fn run() {
                     );
                 }
                 #[cfg(target_os = "ios")]
-                db::lifecycle::install_auto_lock(vault_for_lifecycle);
+                db::lifecycle::install_auto_lock(
+                    vault_for_lifecycle,
+                    #[cfg(feature = "pocket-brain")]
+                    llm_governor.clone(),
+                );
             }
 
             #[cfg(not(mobile))]

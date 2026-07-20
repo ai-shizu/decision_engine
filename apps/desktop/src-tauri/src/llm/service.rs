@@ -20,6 +20,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
 use std::thread;
+use std::time::Duration;
 
 use serde::Serialize;
 use tauri::ipc::Channel;
@@ -35,6 +36,74 @@ use super::params::{GenerationParams, LoadParams};
 use super::prompt::{build_prompt, TASK_KAKEIBO_V1};
 use super::schema::{KakeiboEntryV1, KAKEIBO_V1_GBNF};
 use crate::monitor::{MemPhase, MemoryMonitor};
+
+/// Idle wake cadence for the worker's command loop. Bounds how long the worker
+/// may sit blocked before it observes a purge request and frees the model when
+/// no command arrives to wake it. Short enough to be prompt, long enough to be
+/// a negligible idle cost.
+const PURGE_POLL_INTERVAL: Duration = Duration::from_millis(250);
+
+/// Lock-free memory governor shared between the Tauri `State` handle, the LLM
+/// worker thread, and the iOS lifecycle observer.
+///
+/// The iOS memory-warning / background callback runs on the main thread and may
+/// ONLY touch this via [`request_purge`](Self::request_purge): two atomic
+/// stores, no lock, no blocking. The heavy work — dropping the multi-GB model —
+/// happens later on the worker thread, never in the callback.
+pub struct LlmMemoryGovernor {
+    /// Breaks the in-flight decode loop within one token (checked per token).
+    cancel: AtomicBool,
+    /// Instructs the worker to drop the model/context and return memory to iOS.
+    purge_requested: AtomicBool,
+}
+
+impl LlmMemoryGovernor {
+    fn new() -> Self {
+        Self {
+            cancel: AtomicBool::new(false),
+            purge_requested: AtomicBool::new(false),
+        }
+    }
+
+    /// Cancel the in-flight generation only (user "stop"). Lock-free.
+    pub fn request_cancel(&self) {
+        self.cancel.store(true, Ordering::SeqCst);
+    }
+
+    /// Request a full memory purge: cancel the in-flight generation AND drop the
+    /// model. Safe to call from the iOS main-thread callback or the Jetsam
+    /// sampler's `over_threshold` rising edge — two atomic stores, no lock, no
+    /// blocking (satisfies the no-heavy-work-in-callback rule). The heavy model
+    /// `Drop` happens later on the worker via [`take_purge`](Self::take_purge).
+    pub fn request_purge(&self) {
+        self.cancel.store(true, Ordering::SeqCst);
+        self.purge_requested.store(true, Ordering::SeqCst);
+    }
+
+    fn is_cancelled(&self) -> bool {
+        self.cancel.load(Ordering::SeqCst)
+    }
+
+    fn reset_cancel(&self) {
+        self.cancel.store(false, Ordering::SeqCst);
+    }
+
+    /// Consume a pending purge request (true at most once per request).
+    fn take_purge(&self) -> bool {
+        self.purge_requested.swap(false, Ordering::SeqCst)
+    }
+}
+
+/// Persistent lifecycle event pushed to the frontend over a registered
+/// `tauri::ipc::Channel` (mirrors M6's `VaultLifecycleEvent`). Out-of-band from
+/// any single generation, so it uses its own sink rather than the token channel.
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "snake_case", tag = "kind")]
+pub enum LlmLifecycleEvent {
+    /// The model was dropped to survive memory pressure; the UI must suspend and
+    /// await an explicit reload.
+    MemoryPurged,
+}
 
 /// One streamed token pushed to the frontend over `tauri::ipc::Channel`.
 #[derive(Clone, Serialize)]
@@ -125,13 +194,16 @@ enum LlmCommand {
         task_id: Option<String>,
         tokens: Channel<TokenEvent>,
     },
+    RegisterEvents {
+        channel: Channel<LlmLifecycleEvent>,
+    },
     Shutdown,
 }
 
 /// Send + Sync handle placed in Tauri `State`.
 pub struct LlmHandle {
     tx: Mutex<mpsc::Sender<LlmCommand>>,
-    cancel: Arc<AtomicBool>,
+    governor: Arc<LlmMemoryGovernor>,
 }
 
 impl LlmHandle {
@@ -140,16 +212,31 @@ impl LlmHandle {
     /// CtxCreated / Inference / Idle) as it progresses.
     pub fn spawn(monitor: Arc<MemoryMonitor>) -> Self {
         let (tx, rx) = mpsc::channel::<LlmCommand>();
-        let cancel = Arc::new(AtomicBool::new(false));
-        let cancel_worker = Arc::clone(&cancel);
+        let governor = Arc::new(LlmMemoryGovernor::new());
+        let governor_worker = Arc::clone(&governor);
         thread::Builder::new()
             .name("pocket-brain-llm".into())
-            .spawn(move || worker_loop(rx, cancel_worker, monitor))
+            .spawn(move || worker_loop(rx, governor_worker, monitor))
             .expect("spawn pocket-brain llm worker");
         Self {
             tx: Mutex::new(tx),
-            cancel,
+            governor,
         }
+    }
+
+    /// Clone of the lock-free governor, to hand to the iOS lifecycle observer.
+    pub fn governor(&self) -> Arc<LlmMemoryGovernor> {
+        Arc::clone(&self.governor)
+    }
+
+    /// Register the frontend lifecycle event sink (single sink; a later call
+    /// replaces the earlier one). Mirrors M6's `vault_events`.
+    pub fn register_events(&self, channel: Channel<LlmLifecycleEvent>) -> Result<(), String> {
+        self.tx
+            .lock()
+            .map_err(|_| "llm tx poisoned".to_string())?
+            .send(LlmCommand::RegisterEvents { channel })
+            .map_err(|_| "llm worker gone".to_string())
     }
 
     /// Blocking: mmap-load the GGUF on the worker thread and await the result.
@@ -176,7 +263,7 @@ impl LlmHandle {
         task_id: Option<String>,
         tokens: Channel<TokenEvent>,
     ) -> Result<(), String> {
-        self.cancel.store(false, Ordering::SeqCst);
+        self.governor.reset_cancel();
         self.tx
             .lock()
             .map_err(|_| "llm tx poisoned".to_string())?
@@ -190,7 +277,7 @@ impl LlmHandle {
 
     /// Request cancellation of the in-flight generation (checked each token).
     pub fn cancel(&self) {
-        self.cancel.store(true, Ordering::SeqCst);
+        self.governor.request_cancel();
     }
 }
 
@@ -204,7 +291,7 @@ impl Drop for LlmHandle {
 
 fn worker_loop(
     rx: mpsc::Receiver<LlmCommand>,
-    cancel: Arc<AtomicBool>,
+    governor: Arc<LlmMemoryGovernor>,
     monitor: Arc<MemoryMonitor>,
 ) {
     let backend = match LlamaBackend::init() {
@@ -215,8 +302,29 @@ fn worker_loop(
         }
     };
     let mut model: Option<Arc<LlamaModel>> = None;
+    let mut events: Option<Channel<LlmLifecycleEvent>> = None;
 
-    while let Ok(cmd) = rx.recv() {
+    loop {
+        // Commit any pending purge FIRST — including after a generation the
+        // memory warning cancel-broke, and on the timeout wake when idle. The
+        // heavy `Drop` of the multi-GB model happens here, on the worker thread,
+        // never in the OS callback. Any in-flight `ctx`/`Arc` clone was already
+        // dropped when `generate` returned, so `take()` releases the last ref.
+        if governor.take_purge() && model.take().is_some() {
+            monitor.set_phase(MemPhase::Baseline);
+            if let Some(sink) = events.as_ref() {
+                let _ = sink.send(LlmLifecycleEvent::MemoryPurged);
+            }
+        }
+
+        let cmd = match rx.recv_timeout(PURGE_POLL_INTERVAL) {
+            Ok(cmd) => cmd,
+            // Idle wake: loop back to re-check the purge flag with no lock/send
+            // required on the callback side.
+            Err(mpsc::RecvTimeoutError::Timeout) => continue,
+            Err(mpsc::RecvTimeoutError::Disconnected) => break,
+        };
+
         match cmd {
             LlmCommand::Load {
                 model_path,
@@ -247,12 +355,15 @@ fn worker_loop(
                     &params,
                     task_id.as_deref(),
                     &tokens,
-                    &cancel,
+                    &governor,
                     &monitor,
                 ) {
                     let _ = tokens.send(error_done_event(0, e));
                 }
                 monitor.set_phase(MemPhase::Idle);
+            }
+            LlmCommand::RegisterEvents { channel } => {
+                events = Some(channel);
             }
             LlmCommand::Shutdown => break,
         }
@@ -295,7 +406,7 @@ fn generate(
     g: &GenerationParams,
     task_id: Option<&str>,
     tokens: &Channel<TokenEvent>,
-    cancel: &AtomicBool,
+    governor: &LlmMemoryGovernor,
     monitor: &MemoryMonitor,
 ) -> Result<(), String> {
     // Fail closed before allocating context / sampling for unknown tasks.
@@ -352,7 +463,7 @@ fn generate(
     let mut cancelled = false;
     let mut n_cur = batch.n_tokens();
     for seq in 0..g.max_tokens {
-        if cancel.load(Ordering::SeqCst) {
+        if governor.is_cancelled() {
             cancelled = true;
             break;
         }
@@ -400,6 +511,26 @@ fn generate(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn governor_request_purge_sets_cancel_and_purge() {
+        let g = LlmMemoryGovernor::new();
+        assert!(!g.is_cancelled());
+        assert!(!g.take_purge());
+        g.request_purge();
+        assert!(g.is_cancelled());
+        assert!(g.take_purge());
+        // Consumed once.
+        assert!(!g.take_purge());
+    }
+
+    #[test]
+    fn governor_request_cancel_does_not_purge() {
+        let g = LlmMemoryGovernor::new();
+        g.request_cancel();
+        assert!(g.is_cancelled());
+        assert!(!g.take_purge());
+    }
 
     #[test]
     fn mode_none_is_chat() {

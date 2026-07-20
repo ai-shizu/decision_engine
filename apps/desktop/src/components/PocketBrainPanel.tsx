@@ -11,6 +11,7 @@ import {
   generate,
   loadModel,
   startMemoryMonitor,
+  subscribeLlmEvents,
   type MemSample,
 } from "../lib/llm";
 import { ExtractionPanel } from "./ExtractionPanel";
@@ -40,6 +41,28 @@ export function PocketBrainPanel() {
     startMemoryMonitor(setMem, SAMPLE_INTERVAL_MS, THRESHOLD_BYTES).catch((e) =>
       setError(`monitor: ${String(e)}`),
     );
+  }, []);
+
+  // Subscribe once to worker-pushed LLM lifecycle events. On an out-of-band
+  // memory purge (iOS dropped the model to survive memory pressure), suspend the
+  // UI: stop any stream, mark the model unloaded, and prompt a reload. The
+  // native worker already dropped the model — this only re-syncs the UI.
+  useEffect(() => {
+    let active = true;
+    void subscribeLlmEvents((event) => {
+      if (!active || event.kind !== "memory_purged") {
+        return;
+      }
+      void cancelGeneration();
+      setBusy(false);
+      setModelReady(false);
+      setError("メモリ保護のためモデルを解放しました。再ロードしてください。");
+    }).catch(() => {
+      // No LLM event sink (e.g. desktop without the pocket-brain command).
+    });
+    return () => {
+      active = false;
+    };
   }, []);
 
   async function onLoad() {

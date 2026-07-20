@@ -27,7 +27,7 @@
 | 永続化境界・シリアライズ・runtime検証・IPC契約 | §1, §16 (SKILL-PKB-BOUNDARY-V3), `docs/architecture/INCIDENT_LEDGER.md` |
 | macOS ビルド・配布・コード署名 | §1, §2.3, §4 |
 | Tauri iOS (M0〜) 初期化・シミュレータ | §1, §2.3, §4.4, `docs/M0_IOS_INIT_INSTRUCTIONS.md` |
-| Pocket Brain / on-device LLM (M4〜M5) | §1, §4.5, §4.6, §4.7, §5, `docs/m5_action_plan.md` |
+| Pocket Brain / on-device LLM (M4〜M5) / OOM defense (M7) | §1, §4.5, §4.6, §4.7, §4.7b, §5, `docs/m5_action_plan.md` |
 | SQLCipher vault / Keychain (M3) | §1, §4.8, `docs/m3_action_plan.md` |
 | LLM モデル選定・consult/KV キャッシュ | §1, §5, §7, §8 |
 | 検索エンジン・mmap・LSM 索引 | §1, §9, §10 |
@@ -438,6 +438,17 @@ rm -rf .boundary-tests-out
 ```
 
    - scoped `package.json` の中身は `{"type":"commonjs"}` のみでよい。リポジトリ直下や `apps/desktop/package.json` を書き換えないこと（本番 ESM 契約を壊す）。
+
+### 4.7b M7 Phase 7-B — OOM killer defense / LLM lifecycle purge (2026-07-20)
+
+**射程:** `pocket-brain` の `LlmMemoryGovernor` + worker `recv_timeout` purge、`secure-vault` iOS `lifecycle.rs` の MemoryWarning／background → `request_purge`、Jetsam `over_threshold` 立上りエッジ、`llm_events` Channel、フロント `subscribeLlmEvents`／`MemoryPurged` UI。M8 整理は対象外。
+
+**as-built / 不変条件:**
+1. **ObjC コールバックはロックフリーのみ。** `request_purge` = `cancel` + `purge_requested` の atomic store 2 回。Mutex／モデル Drop／同期 IPC 禁止。重い Drop は LLM worker のみ。
+2. **worker は `recv_timeout(250ms)`。** ループ先頭で `take_purge()` → `model.take()` → `MemPhase::Baseline` → `LlmLifecycleEvent::MemoryPurged`。
+3. **トリガー3系統:** (a) `UIApplicationDidReceiveMemoryWarningNotification` (b) background／protected-data（既存 vault auto-lock と同セレクタ経路で LLM purge も発火）(c) Jetsam sampler の `over_threshold` 立上りエッジ → hook → `request_purge`。
+4. **`lifecycle.rs` の `llm: Arc<LlmMemoryGovernor>` は `#[cfg(feature = "pocket-brain")]` のみ。** `install_auto_lock` 引数も同様。
+5. **フロント:** `parseLlmLifecycleEvent` 厳格パーサ、`subscribeLlmEvents`、`PocketBrainPanel` が `memory_purged` で cancel + `modelReady=false` + 再ロード待機メッセージ。
 
 ### 4.8 M3 Phase 0-A — SQLCipher / Security.framework iOS link gate (2026-07-18)
 

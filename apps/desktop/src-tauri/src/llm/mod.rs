@@ -3,10 +3,9 @@
 //! Compiled only under the `pocket-brain` feature (gated in `lib.rs`), so the
 //! default desktop build never sees it and stays byte-identical.
 //!
-//! Phase 1 status: worker + monitor logic implemented; commands defined and
-//! delegating to that logic, but NOT yet registered in the `invoke_handler` and
-//! State not managed (frontend not connected). Registration lands with the
-//! frontend-integration step.
+//! Commands (`llm_*`, `memory_monitor_*`, `llm_events`) are registered from
+//! `lib.rs` under `#[cfg(feature = "pocket-brain")]`. M7 adds the lock-free
+//! `LlmMemoryGovernor` + out-of-band `LlmLifecycleEvent::MemoryPurged` channel.
 
 pub mod commands_llm;
 pub mod model_path;
@@ -15,6 +14,7 @@ pub mod prompt;
 pub mod schema;
 pub mod service;
 
-// Re-exported for `lib.rs`'s `llm::LlmHandle::spawn(...)` wiring. Other types are
-// referenced through their submodules directly, so they are not re-exported here.
+// Re-exported for `lib.rs`'s `llm::LlmHandle::spawn(...)` wiring. Other types
+// (e.g. `LlmMemoryGovernor`, `LlmLifecycleEvent`) are referenced through their
+// `service` submodule directly, so they are not re-exported here.
 pub use service::LlmHandle;

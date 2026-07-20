@@ -1,9 +1,8 @@
 //! [B] Jetsam Monitor (docs/architecture_blueprint.md §3.3).
 //!
-//! Phase 1: Rust logic only — the sampler thread + phase attribution are real, but
-//! nothing is connected to the frontend yet (commands are not registered in the
-//! `invoke_handler`; State is not managed). Compiled only under the `pocket-brain`
-//! feature (gated in `lib.rs`).
+//! Sampler thread + phase attribution. Tauri commands live in
+//! `llm::commands_llm::{memory_monitor_start, memory_monitor_stop}` and are
+//! registered from `lib.rs` under `#[cfg(feature = "pocket-brain")]` only.
 
 mod probe;
 
@@ -62,6 +61,10 @@ pub struct MemSample {
     pub t_ms: u64,
 }
 
+/// Lock-free hook invoked on the rising edge of `over_threshold`.
+/// Typically wired to `LlmMemoryGovernor::request_purge` (two atomic stores).
+pub type OverThresholdHook = Arc<dyn Fn() + Send + Sync + 'static>;
+
 /// Background footprint monitor. `phase`/`baseline`/`running` are shared with the
 /// sampler thread via atomics so the LLM worker can mark phase transitions without
 /// locking.
@@ -83,8 +86,17 @@ impl MemoryMonitor {
     /// Spawn the sampler thread. Records the baseline footprint from the first
     /// reading, then emits a `MemSample` every `interval_ms` until `stop()`.
     /// `threshold_bytes` is the jetsam budget (e.g. A17 Pro/8GB ≈ 4.8 GB = 60%).
-    /// Caller should `stop()` a previous run before starting a new one.
-    pub fn start(&self, channel: Channel<MemSample>, interval_ms: u64, threshold_bytes: u64) {
+    ///
+    /// On the rising edge of `over_threshold`, `over_threshold_hook` is invoked
+    /// (lock-free expected). Caller should `stop()` a previous run before
+    /// starting a new one.
+    pub fn start(
+        &self,
+        channel: Channel<MemSample>,
+        interval_ms: u64,
+        threshold_bytes: u64,
+        over_threshold_hook: Option<OverThresholdHook>,
+    ) {
         let base = phys_footprint_bytes().unwrap_or(0);
         self.baseline.store(base, Ordering::SeqCst);
         self.phase.store(MemPhase::Baseline.as_u8(), Ordering::SeqCst);
@@ -97,15 +109,24 @@ impl MemoryMonitor {
 
         thread::spawn(move || {
             let t0 = Instant::now();
+            let mut was_over = false;
             while running.load(Ordering::SeqCst) {
                 let cur = phys_footprint_bytes().unwrap_or(0);
                 let base = baseline.load(Ordering::SeqCst);
+                let over = cur >= threshold_bytes;
+                // Rising-edge only: continuous over-threshold must not spam purge.
+                if over && !was_over {
+                    if let Some(ref hook) = over_threshold_hook {
+                        hook();
+                    }
+                }
+                was_over = over;
                 let sample = MemSample {
                     phase: MemPhase::from_u8(phase.load(Ordering::SeqCst)),
                     phys_footprint_bytes: cur,
                     delta_from_baseline_bytes: cur as i64 - base as i64,
                     threshold_bytes,
-                    over_threshold: cur >= threshold_bytes,
+                    over_threshold: over,
                     headroom_bytes: threshold_bytes as i64 - cur as i64,
                     t_ms: t0.elapsed().as_millis() as u64,
                 };

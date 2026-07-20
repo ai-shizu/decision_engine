@@ -9,7 +9,7 @@ use tauri::{AppHandle, State};
 
 use super::model_path::resolve_model_path;
 use super::params::{GenerationParams, LoadParams};
-use super::service::{LlmHandle, TokenEvent};
+use super::service::{LlmHandle, LlmLifecycleEvent, TokenEvent};
 use crate::monitor::{MemSample, MemoryMonitor};
 
 /// Resolve the App-Container model path and load the GGUF (blocking on the worker).
@@ -42,15 +42,37 @@ pub async fn llm_cancel(handle: State<'_, LlmHandle>) -> Result<(), String> {
     Ok(())
 }
 
+/// Register a persistent frontend sink for LLM lifecycle events (e.g. an
+/// out-of-band memory purge). One sink; a later call replaces it. Mirrors M6's
+/// `vault_events`.
+#[tauri::command]
+pub async fn llm_events(
+    handle: State<'_, LlmHandle>,
+    on_event: Channel<LlmLifecycleEvent>,
+) -> Result<(), String> {
+    handle.register_events(on_event)
+}
+
 /// Start the Jetsam monitor, streaming `MemSample`s over `on_sample`.
+/// Rising-edge `over_threshold` lock-free-signals the LLM governor to purge.
 #[tauri::command]
 pub async fn memory_monitor_start(
     monitor: State<'_, Arc<MemoryMonitor>>,
+    handle: State<'_, LlmHandle>,
     on_sample: Channel<MemSample>,
     interval_ms: u64,
     threshold_bytes: u64,
 ) -> Result<(), String> {
-    monitor.start(on_sample, interval_ms, threshold_bytes);
+    let governor = handle.governor();
+    let hook: crate::monitor::OverThresholdHook = Arc::new(move || {
+        governor.request_purge();
+    });
+    monitor.start(
+        on_sample,
+        interval_ms,
+        threshold_bytes,
+        Some(hook),
+    );
     Ok(())
 }
 
