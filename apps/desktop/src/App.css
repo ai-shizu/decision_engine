@@ -2268,7 +2268,8 @@ button.secondary {
   display: flex;
   flex-direction: column;
   padding: 0;
-  padding-bottom: calc(56px + env(safe-area-inset-bottom, 0px));
+  /* Room for fixed composer + bottom dock */
+  padding-bottom: calc(56px + 52px + env(safe-area-inset-bottom, 0px));
   overflow: hidden;
 }
 
@@ -2281,6 +2282,7 @@ button.secondary {
   min-height: 0;
   display: flex;
   flex-direction: column;
+  height: 100%;
 }
 
 /* Approach A chip rail removed in M20-C (nav congestion). */
@@ -2623,6 +2625,78 @@ button.secondary {
   padding: 8px 10px;
   border-top: 1px solid var(--border);
   background: var(--bg-raised);
+}
+
+/* M20-G: never let overflow clip the messenger composer behind the dock */
+.mobile-chrome .rag-composer {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: calc(56px + env(safe-area-inset-bottom, 0px));
+  z-index: 190;
+  display: flex !important;
+  visibility: visible !important;
+  opacity: 1 !important;
+  background: var(--bg-raised);
+  border-top: 1px solid var(--border);
+  padding-bottom: calc(8px + env(safe-area-inset-bottom, 0px));
+}
+
+.mobile-chrome .rag-message-list-messenger {
+  padding-bottom: 8px;
+}
+
+.mobile-chrome .rag-chat-panel-messenger {
+  padding-bottom: 0;
+}
+
+.mobile-topbar-row {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.mobile-status-banner {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin-top: 6px;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  background: var(--err-bg);
+}
+
+.mobile-status-banner-text {
+  flex: 1;
+  margin: 0;
+  font-size: 0.68rem;
+  line-height: 1.35;
+  color: var(--err-soft);
+}
+
+.mobile-status-banner-dismiss {
+  flex-shrink: 0;
+  width: 28px;
+  height: 28px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text);
+  font-size: 1rem;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.mobile-chrome .interview-shared-context {
+  margin-bottom: 8px;
+}
+
+.mobile-chrome .interview-shared-context .company-facts-form textarea {
+  min-height: 48px;
+  max-height: 72px;
+}
+
+.mobile-chrome .probe-panel-mobile h2 {
+  margin-bottom: 8px;
 }
 
 .rag-composer-action {

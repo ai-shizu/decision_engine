@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import type { MobileSurface } from "../lib/types";
 import { MOBILE_ALL_SURFACES } from "../lib/mobileNav";
 import { useIsNarrowViewport } from "../lib/useIsNarrowViewport";
@@ -16,7 +16,6 @@ function renderMobileSurface(id: MobileSurface, engineReady: boolean) {
     case "record":
       return <RecordTab />;
     case "consult":
-      // M20-D: RAG tab abolished — messenger UI lives on CONSULT (mobile only).
       return <PocketBrainPanel variant="messenger" />;
     case "interview":
       return <InterviewTab />;
@@ -35,18 +34,17 @@ function renderMobileSurface(id: MobileSurface, engineReady: boolean) {
   }
 }
 
+function isAlarmStatus(line: string): boolean {
+  return /失敗|エラー|再起動/.test(line);
+}
+
 export interface MobileChromeProps {
   statusLine: string;
-  /** When false (LoadingScreen), engine IPC tabs show wait/retry instead of hard fail. */
   engineReady?: boolean;
 }
 
 /**
- * M20-D/E: default RECORD; dock RECORD/CONSULT/INTERVIEW/PROBE/MENU;
- * Menu = PROFILE/IMPORT/SETTINGS only. Desktop chrome untouched.
- *
- * `engineReady` must be the live App poll result — never hard-code false
- * under LoadingScreen (that froze SETTINGS on iOS).
+ * M20-G: dismissible status banner; CONSULT composer stays fixed above dock.
  */
 export function MobileChrome({
   statusLine,
@@ -55,18 +53,46 @@ export function MobileChrome({
   const isNarrow = useIsNarrowViewport();
   const [surface, setSurface] = useState<MobileSurface>("record");
   const [menuOpen, setMenuOpen] = useState(false);
+  const [bannerDismissed, setBannerDismissed] = useState(false);
+
+  useEffect(() => {
+    setBannerDismissed(false);
+  }, [statusLine]);
+
+  useEffect(() => {
+    if (!isAlarmStatus(statusLine) || bannerDismissed) return;
+    const t = window.setTimeout(() => setBannerDismissed(true), 8000);
+    return () => window.clearTimeout(t);
+  }, [statusLine, bannerDismissed]);
 
   if (!isNarrow) return null;
 
   const chatActive = surface === "consult";
+  const showBanner =
+    Boolean(statusLine) && !bannerDismissed && isAlarmStatus(statusLine);
 
   return (
     <div className="mobile-chrome">
       <header className="mobile-topbar">
-        <div>
+        <div className="mobile-topbar-row">
           <h1>PKB</h1>
-          <p className="subtitle">{statusLine}</p>
+          {!showBanner && statusLine && !isAlarmStatus(statusLine) ? (
+            <p className="subtitle">{statusLine}</p>
+          ) : null}
         </div>
+        {showBanner ? (
+          <div className="mobile-status-banner" role="status">
+            <p className="mobile-status-banner-text">{statusLine}</p>
+            <button
+              type="button"
+              className="mobile-status-banner-dismiss"
+              aria-label="バナーを閉じる"
+              onClick={() => setBannerDismissed(true)}
+            >
+              ×
+            </button>
+          </div>
+        ) : null}
       </header>
       <main
         className={

@@ -1,7 +1,9 @@
 import { useEffect, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { consult, narrativeCompile, type NarrativeCompileResult } from "../lib/engine";
+import { emptyCompanyFacts } from "../lib/interviewStage";
 import { parseEngineEvent } from "../lib/parseEngineResponse";
+import type { CompanyFacts } from "../lib/pocketBrain/types";
 import type {
   EngineEvent,
   GdPersona,
@@ -14,6 +16,8 @@ import type {
 import { redactHiddenReasoning } from "../lib/redactHiddenReasoning";
 import { uiErrorMessage } from "../lib/uiErrorMessages";
 import { useCorrelationId } from "../lib/useCorrelationId";
+import { useIsNarrowViewport } from "../lib/useIsNarrowViewport";
+import { CompanyFactsForm } from "./interview/CompanyFactsForm";
 import { EsReviewPanel } from "./interview/EsReviewPanel";
 import { MultistageInterviewPanel } from "./interview/MultistageInterviewPanel";
 import { TensorProfilePanel } from "./TensorProfilePanel";
@@ -201,6 +205,7 @@ function GdThreadMessage({ text, streaming }: { text: string; streaming?: boolea
 type SessionPhase = "idle" | "active" | "debrief";
 
 export function InterviewTab() {
+  const isNarrow = useIsNarrowViewport();
   const [surface, setSurface] = useState<InterviewSurface>("interview_sim");
   const mode: InterviewMode = isLegacyInterviewMode(surface) ? surface : "interview_sim";
   const [phase, setPhase] = useState<SessionPhase>("idle");
@@ -215,6 +220,8 @@ export function InterviewTab() {
   const [busy, setBusy] = useState(false);
   const [status, setStatus] = useState("");
   const [statusKind, setStatusKind] = useState<"info" | "error">("info");
+  // M20-G: shared offline company facts (EDINET inject) for all mobile modes.
+  const [sharedFacts, setSharedFacts] = useState<CompanyFacts>(() => emptyCompanyFacts());
   const logRef = useRef<HTMLDivElement>(null);
   // AI メッセージ表示完了時刻 — 次のユーザー送信までの経過が response_time_sec
   const aiShownAtRef = useRef<number | null>(null);
@@ -225,6 +232,17 @@ export function InterviewTab() {
   const cid = useCorrelationId();
   const pocketBrainSurface =
     surface === "multistage" || surface === "es_pocket";
+
+  // Mobile: ES旧 (es_review) abolished — single ES (es_pocket) only.
+  const visibleModes = isNarrow
+    ? MODES.filter((m) => m.id !== "es_review")
+    : MODES;
+
+  useEffect(() => {
+    if (isNarrow && surface === "es_review") {
+      setSurface("es_pocket");
+    }
+  }, [isNarrow, surface]);
 
   function scrollToBottom() {
     requestAnimationFrame(() => {
@@ -475,7 +493,7 @@ export function InterviewTab() {
       </div>
 
       <div className="sub-tabs sub-tabs-pills" role="tablist" aria-label="面接モード">
-        {MODES.map((m) => (
+        {visibleModes.map((m) => (
           <button
             key={m.id}
             type="button"
@@ -492,8 +510,39 @@ export function InterviewTab() {
       </div>
       <p className="hint dev-noise">{currentMode.hint}</p>
 
-      {surface === "multistage" && <MultistageInterviewPanel />}
-      {surface === "es_pocket" && <EsReviewPanel />}
+      {isNarrow && (
+        <div className="interview-shared-context">
+          <CompanyFactsForm
+            facts={sharedFacts}
+            onPatch={(patch) =>
+              setSharedFacts((prev) => ({ ...prev, ...patch }))
+            }
+          />
+        </div>
+      )}
+
+      {surface === "multistage" && (
+        <MultistageInterviewPanel
+          sharedFacts={isNarrow ? sharedFacts : undefined}
+          onSharedFactsPatch={
+            isNarrow
+              ? (patch) => setSharedFacts((prev) => ({ ...prev, ...patch }))
+              : undefined
+          }
+          hideEmbeddedFactsForm={isNarrow}
+        />
+      )}
+      {surface === "es_pocket" && (
+        <EsReviewPanel
+          sharedFacts={isNarrow ? sharedFacts : undefined}
+          onSharedFactsPatch={
+            isNarrow
+              ? (patch) => setSharedFacts((prev) => ({ ...prev, ...patch }))
+              : undefined
+          }
+          hideEmbeddedFactsForm={isNarrow}
+        />
+      )}
 
       {!pocketBrainSurface && (
       <>

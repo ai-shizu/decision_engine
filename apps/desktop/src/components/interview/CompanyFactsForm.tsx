@@ -17,8 +17,11 @@ export function CompanyFactsForm({
 }: CompanyFactsFormProps) {
   return (
     <div className="term-panel company-facts-form">
-      <p className="term-header">COMPANY_FACTS (offline inject)</p>
-      <p className="hint">
+      <p className="term-header">
+        <span className="desktop-only">COMPANY_FACTS (offline inject)</span>
+        <span className="mobile-only">共通企業コンテキスト</span>
+      </p>
+      <p className="hint dev-noise">
         外向き EDINET 取得は二要素 egress が必要。オフラインではここに企業ファクトを直接注入する。
       </p>
       <div className="term-row config-row">

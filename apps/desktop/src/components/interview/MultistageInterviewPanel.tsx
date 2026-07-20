@@ -45,7 +45,15 @@ function handleTokenStream(
  * M17 multistage interview surface: Foundation → Pressure → Debrief → Closed.
  * Streams interviewer turns via Channel + useThrottledStream (M18-A pattern).
  */
-export function MultistageInterviewPanel() {
+export function MultistageInterviewPanel({
+  sharedFacts,
+  onSharedFactsPatch,
+  hideEmbeddedFactsForm = false,
+}: {
+  sharedFacts?: CompanyFacts;
+  onSharedFactsPatch?: (patch: Partial<CompanyFacts>) => void;
+  hideEmbeddedFactsForm?: boolean;
+} = {}) {
   const [state, dispatch] = useReducer(
     multistageInterviewReducer,
     undefined,
@@ -53,6 +61,12 @@ export function MultistageInterviewPanel() {
   );
   const assistantIdRef = useRef<string | null>(null);
   const logRef = useRef<HTMLDivElement>(null);
+
+  const facts = sharedFacts ?? state.facts;
+  function patchFacts(patch: Partial<CompanyFacts>) {
+    if (onSharedFactsPatch) onSharedFactsPatch(patch);
+    else dispatch({ type: "patch_facts", patch });
+  }
 
   const throttle = useThrottledStream((chunk) => {
     const id = assistantIdRef.current;
@@ -77,7 +91,7 @@ export function MultistageInterviewPanel() {
 
   async function onStart() {
     if (state.streaming || state.sessionId) return;
-    if (!companyFactsReady(state.facts)) {
+    if (!companyFactsReady(facts)) {
       dispatch({
         type: "send_failure",
         message: "企業名を入力してから開始してください。",
@@ -91,16 +105,16 @@ export function MultistageInterviewPanel() {
     dispatch({ type: "start_begin", assistantId });
     scrollToBottom();
 
-    const facts: CompanyFacts = {
-      ...state.facts,
-      source: state.facts.source.trim() || "injected",
+    const factsPayload: CompanyFacts = {
+      ...facts,
+      source: facts.source.trim() || "injected",
     };
 
     try {
       const result = await startMultistageInterview(
         {
           openingMessage: state.openingMessage.trim() || undefined,
-          companyFacts: facts,
+          companyFacts: factsPayload,
         },
         (event) => {
           if (event.error) {
@@ -193,11 +207,13 @@ export function MultistageInterviewPanel() {
 
       {!inSession && (
         <>
-          <CompanyFactsForm
-            facts={state.facts}
-            disabled={state.streaming}
-            onPatch={(patch) => dispatch({ type: "patch_facts", patch })}
-          />
+          {!hideEmbeddedFactsForm && (
+            <CompanyFactsForm
+              facts={facts}
+              disabled={state.streaming}
+              onPatch={patchFacts}
+            />
+          )}
           <div className="term-row config-row">
             <span className="term-source-name">開始プロンプト (任意)</span>
             <input
@@ -213,7 +229,7 @@ export function MultistageInterviewPanel() {
             <button
               type="button"
               className="primary"
-              disabled={state.streaming || !companyFactsReady(state.facts)}
+              disabled={state.streaming || !companyFactsReady(facts)}
               onClick={() => void onStart()}
             >
               {state.streaming ? "開始中…" : "多段面接を開始"}

@@ -23,7 +23,15 @@ function allocId(prefix: string): string {
 /**
  * Pocket Brain ES review: review_es_draft + offline CompanyFacts + streaming feedback.
  */
-export function EsReviewPanel() {
+export function EsReviewPanel({
+  sharedFacts,
+  onSharedFactsPatch,
+  hideEmbeddedFactsForm = false,
+}: {
+  sharedFacts?: CompanyFacts;
+  onSharedFactsPatch?: (patch: Partial<CompanyFacts>) => void;
+  hideEmbeddedFactsForm?: boolean;
+} = {}) {
   const [state, dispatch] = useReducer(
     esReviewReducer,
     undefined,
@@ -31,6 +39,12 @@ export function EsReviewPanel() {
   );
   const reviewerIdRef = useRef<string | null>(null);
   const logRef = useRef<HTMLDivElement>(null);
+
+  const facts = sharedFacts ?? state.facts;
+  function patchFacts(patch: Partial<CompanyFacts>) {
+    if (onSharedFactsPatch) onSharedFactsPatch(patch);
+    else dispatch({ type: "patch_facts", patch });
+  }
 
   const throttle = useThrottledStream((chunk) => {
     const id = reviewerIdRef.current;
@@ -48,7 +62,7 @@ export function EsReviewPanel() {
     e.preventDefault();
     const draft = state.esDraft.trim();
     if (!draft || state.streaming) return;
-    if (!companyFactsReady(state.facts)) {
+    if (!companyFactsReady(facts)) {
       dispatch({
         type: "review_failure",
         message: "企業名を入力してから添削してください。",
@@ -63,16 +77,16 @@ export function EsReviewPanel() {
     dispatch({ type: "review_begin", userId, reviewerId, draft });
     scrollToBottom();
 
-    const facts: CompanyFacts = {
-      ...state.facts,
-      source: state.facts.source.trim() || "injected",
+    const factsPayload: CompanyFacts = {
+      ...facts,
+      source: facts.source.trim() || "injected",
     };
 
     try {
       const result = await reviewEsDraft(
         {
           esDraft: draft,
-          companyFacts: facts,
+          companyFacts: factsPayload,
           experienceQuery: state.experienceQuery.trim() || undefined,
         },
         (event) => {
@@ -107,25 +121,27 @@ export function EsReviewPanel() {
 
   return (
     <div className="es-review-panel">
-      <p className="hint">
+      <p className="hint dev-noise">
         Pocket Brain ES 添削 (`review_es_draft`): 企業ファクト + RAG 経験チャンクを根拠に採用責任者ペルソナが添削します。
       </p>
 
-      <CompanyFactsForm
-        facts={state.facts}
-        disabled={state.streaming}
-        onPatch={(patch) => dispatch({ type: "patch_facts", patch })}
-      />
+      {!hideEmbeddedFactsForm && (
+        <CompanyFactsForm
+          facts={facts}
+          disabled={state.streaming}
+          onPatch={patchFacts}
+        />
+      )}
 
-      {state.facts.companyName.trim() && (
+      {facts.companyName.trim() && (
         <div className="term-panel company-facts-preview">
           <p className="term-header">FACTS_PREVIEW</p>
           <div className="term-row">
             <span className="term-source-name">company</span>
-            <span className="term-value">{state.facts.companyName}</span>
+            <span className="term-value">{facts.companyName}</span>
           </div>
-          {state.facts.businessSummary.trim() && (
-            <pre className="term-es-body">{state.facts.businessSummary}</pre>
+          {facts.businessSummary.trim() && (
+            <pre className="term-es-body">{facts.businessSummary}</pre>
           )}
           {state.streaming && (
             <p className="hint ambient-spinner" role="status">
@@ -169,7 +185,7 @@ export function EsReviewPanel() {
             disabled={
               state.streaming ||
               !state.esDraft.trim() ||
-              !companyFactsReady(state.facts)
+              !companyFactsReady(facts)
             }
           >
             {state.streaming ? "添削中…" : "ES を添削"}

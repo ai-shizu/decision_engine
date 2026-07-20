@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { probeAnswer, probeNext, probeStatus } from "../lib/engine";
 import { todayIso } from "../lib/dateUtils";
+import { useIsNarrowViewport } from "../lib/useIsNarrowViewport";
 import { uiErrorMessage } from "../lib/uiErrorMessages";
 import type {
   ProbeAxis,
@@ -37,10 +38,23 @@ const INSIGHT_LABELS: Record<string, string> = {
 type ProbeSurface = "pb_probe" | "pulse_rasch" | "legacy";
 
 /**
- * PROBE tab: Pocket Brain M15 wiring (primary) + legacy Python engine path.
+ * PROBE tab. M20-G: mobile = PocketProbe only (PULSE / legacy pills removed).
+ * Desktop keeps all three surfaces.
  */
 export function ProbeTab() {
+  const isNarrow = useIsNarrowViewport();
   const [surface, setSurface] = useState<ProbeSurface>("pb_probe");
+
+  if (isNarrow) {
+    return (
+      <section className="panel probe-panel probe-panel-mobile">
+        <h2>
+          <span className="mobile-only">PROBE</span>
+        </h2>
+        <PocketProbePanel />
+      </section>
+    );
+  }
 
   return (
     <section className="panel probe-panel">
