@@ -2232,6 +2232,8 @@ button.secondary {
    ========================================================================== */
 
 .mobile-chrome {
+  --mobile-dock-h: 70px;
+  --mobile-composer-h: 64px;
   display: flex;
   flex-direction: column;
   flex: 1;
@@ -2267,7 +2269,8 @@ button.secondary {
   min-height: 0;
   overflow-y: auto;
   -webkit-overflow-scrolling: touch;
-  padding: 12px 12px calc(72px + env(safe-area-inset-bottom, 0px));
+  /* Dock height + breathing room + home indicator */
+  padding: 12px 12px calc(var(--mobile-dock-h) + 16px + env(safe-area-inset-bottom, 0px));
   width: 100%;
 }
 
@@ -2275,8 +2278,10 @@ button.secondary {
   display: flex;
   flex-direction: column;
   padding: 0;
-  /* Dock + composer (~64) + safe-area — keep last messages clear of chrome */
-  padding-bottom: calc(56px + 72px + env(safe-area-inset-bottom, 0px));
+  /* Dock + fixed composer — last bubbles stay clear of both */
+  padding-bottom: calc(
+    var(--mobile-dock-h) + var(--mobile-composer-h) + env(safe-area-inset-bottom, 0px)
+  );
   overflow: hidden;
 }
 
@@ -2284,7 +2289,7 @@ button.secondary {
 .mobile-chrome .chat-log,
 .mobile-chrome .multistage-message-list,
 .mobile-chrome .es-review-message-list {
-  padding-bottom: calc(24px + env(safe-area-inset-bottom, 0px));
+  padding-bottom: calc(var(--mobile-dock-h) + 16px + env(safe-area-inset-bottom, 0px));
 }
 
 .mobile-panel {
@@ -2311,7 +2316,7 @@ button.secondary {
   align-items: stretch;
   justify-content: space-around;
   gap: 0;
-  min-height: 56px;
+  min-height: var(--mobile-dock-h);
   padding: 4px 0 calc(4px + env(safe-area-inset-bottom, 0px));
   background: var(--bg-raised);
   border-top: 1px solid var(--border);
@@ -2576,8 +2581,10 @@ button.secondary {
   list-style: none;
   margin: 0;
   padding: 12px;
-  /* Extra bottom inset so last bubble clears fixed composer */
-  padding-bottom: calc(24px + env(safe-area-inset-bottom, 0px));
+  /* Scroll past fixed composer which sits above the dock */
+  padding-bottom: calc(
+    var(--mobile-composer-h) + 12px + env(safe-area-inset-bottom, 0px)
+  );
   flex: 1;
   min-height: 0;
   overflow-y: auto;
@@ -2648,8 +2655,8 @@ button.secondary {
   position: fixed;
   left: 0;
   right: 0;
-  /* Dock = min-height 56 + safe-area padding — sit fully above it. */
-  bottom: calc(56px + env(safe-area-inset-bottom, 0px));
+  /* Sit fully above dock (70px) + home indicator */
+  bottom: calc(var(--mobile-dock-h) + env(safe-area-inset-bottom, 0px));
   z-index: 190;
   display: flex !important;
   visibility: visible !important;
@@ -2661,7 +2668,7 @@ button.secondary {
   /* Safe-area already in `bottom`; do not double-pad here. */
   padding: 10px 12px;
   box-sizing: border-box;
-  min-height: 52px;
+  min-height: var(--mobile-composer-h);
 }
 
 .mobile-chrome .rag-composer-action {
@@ -2924,7 +2931,7 @@ button.secondary {
 }
 
 .mobile-chrome .mobile-content {
-  padding: 8px 10px calc(64px + env(safe-area-inset-bottom, 0px));
+  padding: 8px 10px calc(var(--mobile-dock-h) + 12px + env(safe-area-inset-bottom, 0px));
 }
 
 .mobile-chrome .panel {

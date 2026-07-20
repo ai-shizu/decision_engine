@@ -6,11 +6,10 @@ import {
   sufficiencyLabel,
 } from "../lib/gapPayloadView";
 import {
-  buildDaysFromDraft,
-  draftReadyForRecalc,
   gapTensorDashboardReducer,
   initialGapTensorDashboardState,
 } from "../lib/gapTensorDashboardReducer";
+import { loadGapDaysFromRecords } from "../lib/loadGapDaysFromRecords";
 import {
   calculateGapAnalysis,
   ensureAuthoritativeTensorProfile,
@@ -44,8 +43,8 @@ function ScoreMeter({ score }: { score: number }) {
 }
 
 /**
- * M14 Gap + 6D Tensor dashboard (M18-C).
- * Uses existing SVG TensorRadarChart — no Recharts / external chart libs.
+ * M14 Gap + 6D Tensor dashboard (M18-C / M20-L).
+ * Recalc pulls RECORD automatically — no manual evidence composer.
  */
 export function GapTensorDashboard() {
   const [state, dispatch] = useReducer(
@@ -74,10 +73,18 @@ export function GapTensorDashboard() {
   }, []);
 
   async function onRecalculate() {
-    if (busy || !draftReadyForRecalc(state.draft)) return;
+    if (busy) return;
     dispatch({ type: "recalc_begin" });
     try {
-      const days = buildDaysFromDraft(state.draft);
+      const days = await loadGapDaysFromRecords();
+      if (days.length === 0) {
+        dispatch({
+          type: "recalc_failure",
+          message:
+            "再計算できる記録がありません。RECORD に日記・予定・支出を保存してから再実行してください。",
+        });
+        return;
+      }
       const result = await calculateGapAnalysis(days);
       const [tensor, gap] = await Promise.all([
         getLatestTensorProfile(),
@@ -93,6 +100,7 @@ export function GapTensorDashboard() {
           data_sufficiency: result.data_sufficiency,
           payload: result.payload,
         },
+        dayCount: days.length,
       });
     } catch {
       dispatch({ type: "recalc_failure", message: PB_UI_FAIL.gapRecalc });
@@ -131,11 +139,11 @@ export function GapTensorDashboard() {
             <span className="mobile-only">ギャップ分析</span>
           </p>
           <p className="hint mobile-only">
-            日記と行動記録のずれを可視化します。再計算は数値アルゴリズムのみです。
+            日記と行動記録のずれを可視化します。再計算は記録データから自動で行います。
           </p>
           <p className="hint dev-noise desktop-only">
             Vault の最新 Gap 分析と 6D テンソルを表示。権威テンソルは N/A 固定（LLM は権威を更新しない）。
-            再計算は決定論アルゴリズムのみ（LLM 非呼び出し）。
+            再計算は RECORD 蓄積データから決定論アルゴリズムのみ（LLM 非呼び出し）。
           </p>
         </div>
         <div className="action-row">
@@ -254,7 +262,8 @@ export function GapTensorDashboard() {
 
           {!state.gap && state.phase === "idle" && (
             <p className="hint">
-              保存済み Gap がありません。下の根拠を入力して再計算してください。
+              保存済み Gap がありません。「最新データで再計算」を押すと RECORD
+              の蓄積から自動計算します。
             </p>
           )}
 
@@ -302,112 +311,30 @@ export function GapTensorDashboard() {
 
       <div className="term-panel">
         <p className="term-header">
-          <span className="desktop-only">RECALCULATE_EVIDENCE</span>
-          <span className="mobile-only">根拠を入力して再計算</span>
+          <span className="desktop-only">RECALCULATE</span>
+          <span className="mobile-only">ギャップ再計算</span>
         </p>
-        <p className="hint mobile-only">
-          日記（主観）と行動記録（LINE・支出・予定）を入れて、ギャップを再計算します。
+        <p className="hint">
+          RECORD に保存された日記・予定・支出から自動で根拠を集め、ギャップを再計算します。
         </p>
-        <p className="hint dev-noise desktop-only">
-          `calculate_gap_analysis` は days[] 必須。Vault から日記を自動ロードするコマンドは無いため、
-          ここに主観（日記）と客観（LINE自己発話・支出・予定）を注入して再計算する。
-        </p>
-        <div className="term-row config-row">
-          <span className="term-source-name">日付 *</span>
-          <input
-            value={state.draft.date}
-            disabled={busy}
-            onChange={(e) =>
-              dispatch({ type: "patch_draft", patch: { date: e.target.value } })
-            }
-            placeholder="YYYY-MM-DD"
-          />
-        </div>
-        <div className="term-row config-row">
-          <span className="term-source-name">日記 (主観)</span>
-          <textarea
-            rows={3}
-            value={state.draft.diaryText}
-            disabled={busy}
-            onChange={(e) =>
-              dispatch({
-                type: "patch_draft",
-                patch: { diaryText: e.target.value },
-              })
-            }
-            placeholder="内省・宣言テキスト"
-          />
-        </div>
-        <div className="term-row config-row">
-          <span className="term-source-name">LINE 自己発話 (客観)</span>
-          <textarea
-            rows={2}
-            value={state.draft.lineSelfText}
-            disabled={busy}
-            onChange={(e) =>
-              dispatch({
-                type: "patch_draft",
-                patch: { lineSelfText: e.target.value },
-              })
-            }
-            placeholder="主観コーパスに混入させない（客観軸）"
-          />
-        </div>
-        <div className="term-row config-row">
-          <span className="term-source-name">支出カテゴリ / 金額</span>
-          <input
-            value={state.draft.expenseCategory}
-            disabled={busy}
-            onChange={(e) =>
-              dispatch({
-                type: "patch_draft",
-                patch: { expenseCategory: e.target.value },
-              })
-            }
-            placeholder="カテゴリ"
-          />
-          <input
-            value={state.draft.expenseAmount}
-            disabled={busy}
-            onChange={(e) =>
-              dispatch({
-                type: "patch_draft",
-                patch: { expenseAmount: e.target.value },
-              })
-            }
-            placeholder="円"
-            inputMode="numeric"
-          />
-        </div>
-        <div className="term-row config-row">
-          <span className="term-source-name">予定タイトル</span>
-          <input
-            value={state.draft.calendarTitle}
-            disabled={busy}
-            onChange={(e) =>
-              dispatch({
-                type: "patch_draft",
-                patch: { calendarTitle: e.target.value },
-              })
-            }
-            placeholder="任意"
-          />
-        </div>
         <div className="action-row">
           <button
             type="button"
             className="primary"
-            disabled={busy || !draftReadyForRecalc(state.draft)}
+            disabled={busy}
             onClick={() => void onRecalculate()}
           >
             {state.phase === "recalculating"
               ? "再計算中…"
-              : "最新データで Gap を再計算"}
+              : "最新データで再計算"}
           </button>
           {state.phase === "recalculating" && (
             <span className="hint ambient-spinner" role="status">
-              決定論 Gap 解析を実行中…
+              記録データを読み込み、解析しています…
             </span>
+          )}
+          {state.lastRecalcDayCount !== null && state.phase === "idle" && (
+            <span className="hint">{state.lastRecalcDayCount} 日分を反映</span>
           )}
         </div>
       </div>

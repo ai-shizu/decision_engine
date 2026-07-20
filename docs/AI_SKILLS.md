@@ -793,6 +793,32 @@ Pocket Brain 経路は M14 tensor + M15 pulse/Rasch + gap sufficiency から loa
 6. SETTINGS: `engineReady` を最大 3s probe 後に **fail-open** で `loadSettings`。永久ゲート禁止。「待機をスキップして再読込」を併設。
 7. 検証: `npx tsc --noEmit`（apps/desktop）。
 
+### 4.36 macOS `npm run` OS ディスパッチ (2026-07-20)
+
+**ハマりどころ:** `apps/desktop/package.json` の `dev` / `build` / `tauri:*` が PowerShell 固定だと、macOS で `npm run dev` が即死する。
+
+**as-built:** `scripts/run-os.mjs` が win32→`.ps1` / それ以外→`.sh` を起動。`run-tauri-dev.sh` / `run-tauri-build.sh` / `build-engine.sh`（→`build-sidecar.sh`）を追加。新規 npm 依存なし。Windows の `dev.cmd` / `*.ps1` は維持。
+
+### 4.37 M20-L — Chat padding / Gap auto-recalc / engine fail-open (2026-07-20)
+
+**射程:** 実機で残った「チャットがドック裏」「Gap 手入力フォーム」「エンジン起動中の永久ロック」。コミットは指揮官指示待ち。
+
+**as-built:**
+1. モバイル `.rag-message-list-messenger` / `.mobile-content*` / interview chat の `padding-bottom` を `calc(80px + safe-area)` 以上に引き上げ。
+2. Gap: 手動根拠フォーム撤去。`loadGapDaysFromRecords` が RECORD（+ calendar dates）から days[] を組み立て、「最新データで再計算」一ボタン。
+3. `App.waitForEngine` は最大 3s で `ready=true` へ fail-open。SETTINGS は `loadSettings` 3s タイムアウト後も fallback シェルで閲覧可能。
+4. 検証: `npx tsc --noEmit`。
+
+### 4.38 M20-M — Mobile seamless local mode / dock padding / Settings cleanup (2026-07-20)
+
+**射程:** iOS シミュレータで「エンジン未接続」威圧・チャット余白不足・Settings/PROFILE 重複・Advanced 英語。デスクトップ非破壊。コミットは指揮官指示待ち。
+
+**as-built:**
+1. モバイル: `App` は即 `ready`、sidecar 警告を出さない。SETTINGS は `settingsLocalCache`（localStorage）で即表示・保存。失敗時もシームレス。
+2. CSS: `--mobile-dock-h: 70px` / `--mobile-composer-h: 64px` で composer `bottom` と list `padding-bottom` を再計算。
+3. Settings: 「自動プロフィール」撤去 → 「プロフィールを開く」誘導。Advanced → 「高度な連携・詳細設定」等の日本語化。
+4. 検証: `npx tsc --noEmit`。
+
 ### 4.8 M3 Phase 0-A — SQLCipher / Security.framework iOS link gate (2026-07-18)
 
 **射程（Phase 0-A のみ）:** `secure-vault` feature、依存解決、in-memory SQLCipher identity（`PRAGMA key` + `cipher_version`）、Security.framework シンボル（`SecRandom` / `SecAccessControl`）、Tauri command 登録、iOS Simulator 最終リンク証明。スキーマ・repository・UI・本番 Keychain item 作成は対象外。

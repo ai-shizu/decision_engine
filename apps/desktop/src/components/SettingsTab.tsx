@@ -8,21 +8,59 @@ import {
   setKnowledgeResearchPolicy,
 } from "../lib/engine";
 import { defaultBirthday } from "../lib/birthdayUtils";
+import {
+  localSettingsShell,
+  readLocalFixedAttributes,
+  writeLocalFixedAttributes,
+} from "../lib/settingsLocalCache";
 import type { FixedField, SettingsData } from "../lib/types";
 import { uiErrorMessage } from "../lib/uiErrorMessages";
+import { useIsNarrowViewport } from "../lib/useIsNarrowViewport";
 import { BirthdayPicker } from "./BirthdayPicker";
 import { Toggle } from "./Toggle";
 
-/** M20-K: never block SETTINGS forever — budget then fail-open into loadSettings. */
+/** Desktop: short probe then fail-open. Mobile uses local-first (no scare). */
 const ENGINE_READY_BUDGET_MS = 3000;
+const SETTINGS_LOAD_TIMEOUT_MS = 3000;
 
 function sleep(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));
 }
 
-export function SettingsTab({ engineReady = true }: { engineReady?: boolean }) {
-  const [settings, setSettings] = useState<SettingsData | null>(null);
-  const [attrs, setAttrs] = useState<Record<string, string>>({});
+function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error("timeout")), ms);
+    promise.then(
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      (err: unknown) => {
+        clearTimeout(timer);
+        reject(err);
+      },
+    );
+  });
+}
+
+export function SettingsTab({
+  engineReady = true,
+  onOpenProfile,
+}: {
+  engineReady?: boolean;
+  /** Mobile: jump to PROFILE surface (single source of analysis). */
+  onOpenProfile?: () => void;
+}) {
+  const isNarrow = useIsNarrowViewport();
+  const [settings, setSettings] = useState<SettingsData | null>(() =>
+    isNarrow ? localSettingsShell(readLocalFixedAttributes()) : null,
+  );
+  const [attrs, setAttrs] = useState<Record<string, string>>(() => {
+    if (!isNarrow) return {};
+    const local = readLocalFixedAttributes();
+    const shell = localSettingsShell(local);
+    return { ...shell.fixed_attributes };
+  });
   const [status, setStatus] = useState("");
   const [statusKind, setStatusKind] = useState<"info" | "error">("info");
   const [saveNotice, setSaveNotice] = useState<{ text: string; kind: "success" | "error" } | null>(
@@ -39,64 +77,89 @@ export function SettingsTab({ engineReady = true }: { engineReady?: boolean }) {
     const deadline = Date.now() + budgetMs;
     while (Date.now() < deadline) {
       try {
-        if (await checkEngineReady()) return true;
+        if (await withTimeout(checkEngineReady(), 500)) return true;
       } catch {
         /* keep probing */
       }
       await sleep(250);
     }
     try {
-      return await checkEngineReady();
+      return await withTimeout(checkEngineReady(), 500);
     } catch {
       return false;
     }
+  }
+
+  function applySettings(s: SettingsData) {
+    const merged = { ...s.fixed_attributes };
+    if (!merged.birthday?.trim()) {
+      merged.birthday = defaultBirthday();
+    }
+    setSettings(s);
+    setAttrs(merged);
   }
 
   async function fetchSettings(opts?: { skipWait?: boolean }) {
     setLoadError("");
     setStatus("");
     setStatusKind("info");
+
+    if (isNarrow) {
+      // Instant local shell — never block or scare on mobile.
+      applySettings(localSettingsShell(readLocalFixedAttributes()));
+      try {
+        const s = await withTimeout(loadSettings(), SETTINGS_LOAD_TIMEOUT_MS);
+        applySettings(s);
+        writeLocalFixedAttributes({ ...s.fixed_attributes });
+        try {
+          const policy = await withTimeout(getKnowledgeResearchPolicy(), 1500);
+          setKnowledgeResearchEnabled(policy.enabled);
+        } catch {
+          /* optional */
+        }
+      } catch {
+        /* stay on local shell — seamless */
+      }
+      return;
+    }
+
     setWaitingEngine(true);
     const ready = opts?.skipWait
       ? engineReady || (await checkEngineReady().catch(() => false))
       : await probeReady(ENGINE_READY_BUDGET_MS);
     setWaitingEngine(false);
 
-    // Fail-open: always attempt load after budget (do not return early on !ready).
     try {
-      const s = await loadSettings();
-      const merged = { ...s.fixed_attributes };
-      if (!merged.birthday?.trim()) {
-        merged.birthday = defaultBirthday();
-      }
-      setSettings(s);
-      setAttrs(merged);
+      const s = await withTimeout(loadSettings(), SETTINGS_LOAD_TIMEOUT_MS);
+      applySettings(s);
       try {
-        const policy = await getKnowledgeResearchPolicy();
+        const policy = await withTimeout(getKnowledgeResearchPolicy(), 1500);
         setKnowledgeResearchEnabled(policy.enabled);
       } catch {
         /* best-effort */
       }
       if (!ready) {
         setStatusKind("info");
-        setStatus("エンジン接続は未確認です。保存など一部操作は失敗する場合があります。");
+        setStatus("一部の保存機能は後から有効になります。");
       }
     } catch {
-      setSettings(null);
-      setLoadError(
-        ready
-          ? uiErrorMessage("SETTINGS_LOAD")
-          : "設定を読み込めませんでした。「再試行」または「待機をスキップして再読込」を試してください。",
-      );
+      applySettings(localSettingsShell(readLocalFixedAttributes()));
+      setLoadError("");
+      setStatusKind("info");
+      setStatus("設定を端末に保持した状態で表示しています。「再読込」で同期できます。");
     }
   }
 
   useEffect(() => {
     void fetchSettings();
-  }, [engineReady]);
+  }, [engineReady, isNarrow]);
 
   function updateAttr(key: string, value: string) {
-    setAttrs((prev) => ({ ...prev, [key]: value }));
+    setAttrs((prev) => {
+      const next = { ...prev, [key]: value };
+      if (isNarrow) writeLocalFixedAttributes(next);
+      return next;
+    });
   }
 
   async function handleSaveFixed() {
@@ -104,11 +167,16 @@ export function SettingsTab({ engineReady = true }: { engineReady?: boolean }) {
     setStatus("");
     setStatusKind("info");
     setSaveNotice(null);
+    writeLocalFixedAttributes(attrs);
     try {
       await saveFixedAttributes(attrs);
       setSaveNotice({ text: "基本情報を保存しました", kind: "success" });
     } catch {
-      setSaveNotice({ text: uiErrorMessage("SETTINGS_SAVE"), kind: "error" });
+      if (isNarrow) {
+        setSaveNotice({ text: "基本情報を端末に保存しました", kind: "success" });
+      } else {
+        setSaveNotice({ text: uiErrorMessage("SETTINGS_SAVE"), kind: "error" });
+      }
     } finally {
       setBusy(false);
     }
@@ -130,7 +198,7 @@ export function SettingsTab({ engineReady = true }: { engineReady?: boolean }) {
   async function handleProfiler() {
     setBusy(true);
     setStatusKind("info");
-    setStatus("プロファイラ実行中… (数分かかる場合があります)");
+    setStatus("自己プロフィールを再構築しています…");
     try {
       const res = await runProfiler();
       setStatusKind("info");
@@ -138,6 +206,7 @@ export function SettingsTab({ engineReady = true }: { engineReady?: boolean }) {
       const s = await loadSettings();
       setSettings(s);
       setAttrs({ ...s.fixed_attributes });
+      writeLocalFixedAttributes({ ...s.fixed_attributes });
     } catch {
       setStatusKind("error");
       setStatus(uiErrorMessage("PROFILER_RUN"));
@@ -150,11 +219,7 @@ export function SettingsTab({ engineReady = true }: { engineReady?: boolean }) {
     return (
       <section className="panel">
         <p className="hint">
-          {waitingEngine
-            ? "エンジン接続を確認しています（最大数秒）…"
-            : loadError
-              ? ""
-              : "設定を読み込み中…"}
+          {waitingEngine ? "設定を読み込み中…" : loadError ? "" : "設定を読み込み中…"}
         </p>
         {loadError && (
           <>
@@ -165,18 +230,8 @@ export function SettingsTab({ engineReady = true }: { engineReady?: boolean }) {
               <button type="button" className="primary" onClick={() => void fetchSettings()}>
                 再試行
               </button>
-              <button
-                type="button"
-                className="ghost"
-                onClick={() => void fetchSettings({ skipWait: true })}
-              >
-                待機をスキップして再読込
-              </button>
             </div>
           </>
-        )}
-        {!loadError && !waitingEngine && (
-          <p className="hint">初回はエンジンの準備に数十秒かかることがあります。</p>
         )}
       </section>
     );
@@ -188,10 +243,15 @@ export function SettingsTab({ engineReady = true }: { engineReady?: boolean }) {
         <span className="desktop-only">設定 (SETTINGS)</span>
         <span className="mobile-only">設定</span>
       </h2>
+      <div className="action-row">
+        <button type="button" className="ghost" onClick={() => void fetchSettings({ skipWait: true })}>
+          再読込
+        </button>
+      </div>
 
       <div className="settings-block">
         <h3>基本情報</h3>
-        <p className="hint">手入力の基本情報（profiler では変更されません）</p>
+        <p className="hint">手入力の基本情報（自動分析では変更されません）</p>
         <div className="settings-list">
           {settings.fixed_fields.map((f: FixedField) => (
             <div
@@ -243,7 +303,7 @@ export function SettingsTab({ engineReady = true }: { engineReady?: boolean }) {
       </div>
 
       <div className="settings-block">
-        <h3>外部知識 (E0b)</h3>
+        <h3>外部知識</h3>
         <p className="hint">
           同意後、相談送信時に Wikipedia 検索で知識を補強します（オフライン検証パイプライン経由）。
         </p>
@@ -264,18 +324,29 @@ export function SettingsTab({ engineReady = true }: { engineReady?: boolean }) {
         </div>
       </div>
 
+      {/* Auto profile lives on PROFILE tab — avoid duplicate Surfaces (M20-M). */}
       <div className="settings-block">
-        <h3>自動プロフィール</h3>
-        <p className="hint">日記・LINE・相談・家計簿から profiler が抽象化して抽出します（読み取り専用）</p>
-        <pre className="profile-box">{settings.profile_summary || "(プロファイル未生成)"}</pre>
+        <h3>自己分析について</h3>
+        <p className="hint">
+          日記・行動データからの深い分析結果は、プロフィール画面にまとめています。
+        </p>
+        {onOpenProfile ? (
+          <div className="action-row">
+            <button type="button" className="secondary" onClick={onOpenProfile}>
+              プロフィールを開く
+            </button>
+          </div>
+        ) : (
+          <p className="hint desktop-only">PROFILE タブでギャップ分析・指標を確認できます。</p>
+        )}
       </div>
 
       <details className="settings-advanced">
-        <summary>Advanced</summary>
+        <summary>高度な連携・詳細設定</summary>
         <div className="settings-list">
           <div className="settings-row">
             <label htmlFor="settings-apple-calendar" className="settings-row-label">
-              Apple カレンダー連携
+              iPhoneカレンダー（予定）の読み込み連携
             </label>
             <div className="settings-row-value">
               <Toggle
@@ -288,7 +359,7 @@ export function SettingsTab({ engineReady = true }: { engineReady?: boolean }) {
         </div>
         <div className="settings-advanced-actions">
           <button type="button" className="secondary" disabled={busy} onClick={() => void handleProfiler()}>
-            再分析 (profiler)
+            AIによる自己プロフィールの再構築
           </button>
         </div>
       </details>

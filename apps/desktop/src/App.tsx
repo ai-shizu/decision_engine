@@ -120,11 +120,49 @@ export default function App() {
   useEffect(() => {
     let cancelled = false;
 
+    function sleep(ms: number): Promise<void> {
+      return new Promise((r) => setTimeout(r, ms));
+    }
+
+    /** Desktop: fail-open after budget. Mobile: unlock immediately (no sidecar scare). */
+    const ENGINE_READY_BUDGET_MS = 3000;
+
     async function waitForEngine() {
-      for (let i = 0; i < 120 && !cancelled; i++) {
+      // M20-M: iOS/mobile never depends on Python sidecar for shell unlock.
+      if (isNarrow) {
+        if (!cancelled) {
+          setReady(true);
+          setStatus("");
+        }
+        // Soft background upgrade when sidecar eventually answers.
+        for (let i = 0; i < 40 && !cancelled; i += 1) {
+          try {
+            if (await engineReady()) {
+              try {
+                await engineHealth();
+              } catch {
+                /* best-effort */
+              }
+              if (!cancelled) setStatus("準備完了");
+              return;
+            }
+          } catch {
+            /* keep soft */
+          }
+          await sleep(500);
+        }
+        return;
+      }
+
+      const deadline = Date.now() + ENGINE_READY_BUDGET_MS;
+      while (!cancelled && Date.now() < deadline) {
         try {
           if (await engineReady()) {
-            await engineHealth();
+            try {
+              await engineHealth();
+            } catch {
+              /* health is best-effort once ready flips */
+            }
             if (!cancelled) {
               setReady(true);
               setStatus("準備完了（完全オフライン）");
@@ -132,19 +170,22 @@ export default function App() {
             return;
           }
         } catch {
-          /* retry */
+          /* retry until budget */
         }
         if (!cancelled) setStatus("エンジン起動中…");
-        await new Promise((r) => setTimeout(r, 1000));
+        await sleep(250);
       }
-      if (!cancelled) setStatus("エンジンの起動に失敗しました。アプリを再起動してください。");
+      if (!cancelled) {
+        setReady(true);
+        setStatus("準備完了");
+      }
     }
 
     void waitForEngine();
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [isNarrow]);
 
   // SPEC_FOXTROT_UI.md §3.6 — desktop Alt+[1-7] only.
   useEffect(() => {
@@ -169,7 +210,7 @@ export default function App() {
     return (
       <div className="shell">
         <TitleBar />
-        <MobileChrome statusLine={status} engineReady={ready} />
+        <MobileChrome statusLine={status} engineReady={true} />
       </div>
     );
   }

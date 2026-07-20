@@ -1,4 +1,4 @@
-//! Pure reducer for Gap + Tensor dashboard (no Zustand — E0b).
+//! Pure helpers for Gap + Tensor dashboard (no Zustand — E0b).
 
 import type {
   AnalyticsDailyDay,
@@ -6,28 +6,19 @@ import type {
   LatestGapAnalysisResult,
   TensorProfile,
 } from "./pocketBrain/types";
-import { todayIso } from "./dateUtils";
-
-export interface GapEvidenceDraft {
-  date: string;
-  diaryText: string;
-  lineSelfText: string;
-  expenseCategory: string;
-  expenseAmount: string;
-  calendarTitle: string;
-}
+import type { RecordData } from "./types";
 
 export interface GapTensorDashboardState {
   phase: "idle" | "loading" | "recalculating" | "ensuring_tensor";
   tensor: TensorProfile | null;
   gap: LatestGapAnalysisResult | null;
   lastCalculate: CalculateGapAnalysisResult | null;
-  draft: GapEvidenceDraft;
+  /** How many Record days were fed into the last recalc (UI ambient only). */
+  lastRecalcDayCount: number | null;
   error: string | null;
 }
 
 export type GapTensorDashboardAction =
-  | { type: "patch_draft"; patch: Partial<GapEvidenceDraft> }
   | { type: "clear_error" }
   | { type: "load_begin" }
   | {
@@ -42,22 +33,12 @@ export type GapTensorDashboardAction =
       result: CalculateGapAnalysisResult;
       tensor: TensorProfile;
       gap: LatestGapAnalysisResult;
+      dayCount: number;
     }
   | { type: "recalc_failure"; message: string }
   | { type: "ensure_begin" }
   | { type: "ensure_success"; tensor: TensorProfile }
   | { type: "ensure_failure"; message: string };
-
-export function initialGapEvidenceDraft(): GapEvidenceDraft {
-  return {
-    date: todayIso(),
-    diaryText: "",
-    lineSelfText: "",
-    expenseCategory: "",
-    expenseAmount: "",
-    calendarTitle: "",
-  };
-}
 
 export function initialGapTensorDashboardState(): GapTensorDashboardState {
   return {
@@ -65,43 +46,39 @@ export function initialGapTensorDashboardState(): GapTensorDashboardState {
     tensor: null,
     gap: null,
     lastCalculate: null,
-    draft: initialGapEvidenceDraft(),
+    lastRecalcDayCount: null,
     error: null,
   };
 }
 
-/** Build CalculateGapRequest.days from the evidence composer (non-empty). */
-export function buildDaysFromDraft(draft: GapEvidenceDraft): AnalyticsDailyDay[] {
-  const date = draft.date.trim();
-  const amount = Number.parseInt(draft.expenseAmount.trim(), 10);
-  const transactions =
-    draft.expenseCategory.trim() && Number.isFinite(amount) && amount > 0
-      ? [
-          {
-            type: "expense",
-            category: draft.expenseCategory.trim(),
-            amount,
-          },
-        ]
-      : [];
-  const calendarEvents = draft.calendarTitle.trim()
-    ? [{ title: draft.calendarTitle.trim() }]
-    : [];
-
-  return [
-    {
-      date,
-      diaryText: draft.diaryText,
-      lineSelfText: draft.lineSelfText,
-      consultations: [],
-      transactions,
-      calendarEvents,
-    },
-  ];
+function recordHasEvidence(record: RecordData): boolean {
+  return (
+    record.diary.trim().length > 0 ||
+    record.events.length > 0 ||
+    record.transactions.length > 0
+  );
 }
 
-export function draftReadyForRecalc(draft: GapEvidenceDraft): boolean {
-  return draft.date.trim().length === 10;
+/** Map RECORD rows → AnalyticsDailyDay (LINE self-speech not in RECORD → empty). */
+export function buildDaysFromRecords(records: RecordData[]): AnalyticsDailyDay[] {
+  return records
+    .filter(recordHasEvidence)
+    .map((record) => ({
+      date: record.date.trim(),
+      diaryText: record.diary,
+      lineSelfText: "",
+      consultations: [],
+      transactions: record.transactions.map((tx) => ({
+        type: tx.type,
+        category: tx.category,
+        amount: tx.amount,
+      })),
+      calendarEvents: record.events
+        .map((e) => e.title.trim())
+        .filter(Boolean)
+        .map((title) => ({ title })),
+    }))
+    .filter((day) => day.date.length === 10);
 }
 
 export function gapTensorDashboardReducer(
@@ -109,8 +86,6 @@ export function gapTensorDashboardReducer(
   action: GapTensorDashboardAction,
 ): GapTensorDashboardState {
   switch (action.type) {
-    case "patch_draft":
-      return { ...state, draft: { ...state.draft, ...action.patch } };
     case "clear_error":
       return { ...state, error: null };
     case "load_begin":
@@ -133,6 +108,7 @@ export function gapTensorDashboardReducer(
         lastCalculate: action.result,
         gap: action.gap,
         tensor: action.tensor,
+        lastRecalcDayCount: action.dayCount,
       };
     case "recalc_failure":
       return { ...state, phase: "idle", error: action.message };

@@ -11,7 +11,11 @@ import { ProfileTab } from "./ProfileTab";
 import { RecordTab } from "./RecordTab";
 import { SettingsTab } from "./SettingsTab";
 
-function renderMobileSurface(id: MobileSurface, engineReady: boolean) {
+function renderMobileSurface(
+  id: MobileSurface,
+  engineReady: boolean,
+  onOpenProfile: () => void,
+) {
   switch (id) {
     case "record":
       return <RecordTab />;
@@ -26,7 +30,9 @@ function renderMobileSurface(id: MobileSurface, engineReady: boolean) {
     case "import":
       return <ImportTab />;
     case "settings":
-      return <SettingsTab engineReady={engineReady} />;
+      return (
+        <SettingsTab engineReady={engineReady} onOpenProfile={onOpenProfile} />
+      );
     default: {
       const _exhaustive: never = id;
       throw new Error(`unreachable mobile surface: ${_exhaustive as string}`);
@@ -116,7 +122,11 @@ export function MobileChrome({
             }
             hidden={surface !== id}
           >
-            {surface === id && renderMobileSurface(id, engineReady)}
+            {surface === id &&
+              renderMobileSurface(id, engineReady, () => {
+                setMenuOpen(false);
+                setSurface("profile");
+              })}
           </div>
         ))}
       </main>

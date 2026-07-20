@@ -3,14 +3,13 @@ import {
   sufficiencyLabel,
 } from "../src/lib/gapPayloadView";
 import {
-  buildDaysFromDraft,
-  draftReadyForRecalc,
+  buildDaysFromRecords,
   gapTensorDashboardReducer,
-  initialGapEvidenceDraft,
   initialGapTensorDashboardState,
 } from "../src/lib/gapTensorDashboardReducer";
 import { pocketTensorToRadarData } from "../src/lib/pocketBrainTensorView";
 import type { TensorProfile } from "../src/lib/pocketBrain/types";
+import type { RecordData } from "../src/lib/types";
 
 type TestFn = () => void;
 const tests: { name: string; fn: TestFn }[] = [];
@@ -93,18 +92,26 @@ test("M18C-02 parse gap payload", () => {
   assertOk(sufficiencyLabel(0.55) === "部分的", "label");
 });
 
-test("M18C-03 draft builds days", () => {
-  const draft = {
-    ...initialGapEvidenceDraft(),
-    date: "2026-07-20",
-    diaryText: "転職したい",
-    expenseCategory: "books",
-    expenseAmount: "3000",
-  };
-  assertOk(draftReadyForRecalc(draft), "ready");
-  const days = buildDaysFromDraft(draft);
-  assertOk(days.length === 1 && days[0].transactions?.length === 1, "tx");
-  assertOk(days[0].transactions?.[0].type === "expense", "expense type");
+test("M20L-03 records build days (no manual draft)", () => {
+  const records: RecordData[] = [
+    {
+      date: "2026-07-20",
+      diary: "転職したい",
+      events: [{ time: "10:00", title: "面接" }],
+      transactions: [{ type: "expense", category: "books", amount: 3000 }],
+    },
+    {
+      date: "2026-07-19",
+      diary: "",
+      events: [],
+      transactions: [],
+    },
+  ];
+  const days = buildDaysFromRecords(records);
+  assertOk(days.length === 1, "empty day dropped");
+  assertOk(days[0].diaryText === "転職したい", "diary");
+  assertOk(days[0].transactions?.length === 1, "tx");
+  assertOk(days[0].calendarEvents?.length === 1, "cal");
 });
 
 test("M18C-04 reducer load/recalc", () => {
@@ -135,8 +142,10 @@ test("M18C-04 reducer load/recalc", () => {
       data_sufficiency: 0.4,
       payload: { schema: "gap_analysis.v3", gaps: [] },
     },
+    dayCount: 3,
   });
   assertOk(s.gap?.id === "gap-1" && s.phase === "idle", "recalc done");
+  assertOk(s.lastRecalcDayCount === 3, "day count");
 });
 
 let failed = 0;
