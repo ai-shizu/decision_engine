@@ -135,8 +135,3 @@ export function startMemoryMonitor(
     thresholdBytes,
   });
 }
-
-/** Stop the Jetsam monitor sampler thread. */
-export function stopMemoryMonitor(): Promise<void> {
-  return invoke("memory_monitor_stop");
-}

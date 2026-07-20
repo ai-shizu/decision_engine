@@ -10,6 +10,7 @@
 //! M17 adds mentor consult context + multi-stage interview machine.
 
 pub mod commands_llm;
+pub mod commands_model_setup;
 pub mod embed;
 pub mod hashed_embed;
 pub mod model_path;

@@ -38,14 +38,11 @@ enforce_offline_environment()
 
 from .paths import (
     DEEP_PROFILE,
-    DIARY_META,
     KNOWLEDGE_BIN,
     KNOWLEDGE_DIR,
     KNOWLEDGE_META,
     LLAMA_CLI_EXE,
-    MODELS_DIR,
     PROCESSED,
-    PROJECT_ROOT as ROOT,
     SEARCH_EXE,
     USER_PROFILE,
 )

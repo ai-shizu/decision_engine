@@ -68,6 +68,103 @@ body::after {
   text-align: center;
 }
 
+/* Offline model setup gate (local import only — no download UI) */
+.model-setup-gate {
+  max-width: 560px;
+  text-align: left;
+}
+
+.model-setup-gate h1 {
+  text-align: center;
+}
+
+.model-setup-gate .status-line {
+  text-align: center;
+}
+
+.model-setup-lead {
+  margin: var(--s4) 0 var(--s5);
+}
+
+.model-setup-section {
+  margin-bottom: var(--s5);
+  padding-top: var(--s3);
+  border-top: 1px solid var(--border);
+}
+
+.model-setup-h2 {
+  margin: 0 0 var(--s2);
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.model-setup-url {
+  margin: var(--s2) 0 var(--s3);
+  padding: var(--s2) var(--s3);
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  word-break: break-all;
+  color: var(--text-muted);
+  background: var(--bg-deep);
+  border: 1px solid var(--border);
+}
+
+.model-setup-btn {
+  display: block;
+  width: 100%;
+  margin: var(--s2) 0;
+  padding: var(--s3) var(--s4);
+  font-family: var(--font-ui);
+  font-size: 0.9rem;
+  color: var(--text);
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  cursor: pointer;
+  transition: border-color var(--t-fast), background var(--t-fast);
+}
+
+.model-setup-btn:hover:not(:disabled) {
+  border-color: var(--accent);
+  background: var(--bg-hover);
+}
+
+.model-setup-btn:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.model-setup-btn-primary {
+  border-color: var(--text-muted);
+}
+
+.model-setup-progress {
+  position: relative;
+  margin-top: var(--s4);
+  height: 28px;
+  background: var(--bg-deep);
+  border: 1px solid var(--border);
+  overflow: hidden;
+}
+
+.model-setup-progress-bar {
+  height: 100%;
+  background: var(--sys-cyan);
+  transition: width var(--t-fast) linear;
+}
+
+.model-setup-progress-label {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-family: var(--font-mono);
+  font-size: 0.8rem;
+  color: var(--text);
+  pointer-events: none;
+}
+
 .shell {
   display: flex;
   flex-direction: column;

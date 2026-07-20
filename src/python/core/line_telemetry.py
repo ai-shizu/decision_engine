@@ -31,7 +31,7 @@ from datetime import datetime, timedelta
 from .data_merger import _parse_dt, normalize_date
 from .canonicalization import canonicalize_json, canonicalize_text
 from .durable_persistence import durable_atomic_write_text, read_json_file
-from .paths import DATA_PROCESSED, LINE_HISTORY
+from .paths import DATA_PROCESSED
 from .secure_identity import (
     contact_short_id as _contact_short_id,
     keyed_text_identity,

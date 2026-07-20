@@ -9,7 +9,6 @@ import os
 import re
 import secrets
 from functools import lru_cache
-from pathlib import Path
 from typing import Iterator
 
 from .canonicalization import canonicalize_text

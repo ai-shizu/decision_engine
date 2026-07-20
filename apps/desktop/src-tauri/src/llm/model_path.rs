@@ -1,22 +1,27 @@
-//! GGUF path resolution against the iOS App Container (docs/architecture_blueprint.md §3.5).
+//! GGUF path resolution for on-device Pocket Brain (docs/architecture_blueprint.md §3.5).
 //!
-//! The path is derived from Tauri's validated `app_data_dir` (the app sandbox's
-//! Library/Application Support on iOS) — never guessed from CWD or `HOME`.
+//! A+1 data root (`paths::user_data_root`):
+//!   macOS/Windows/Linux → `…/PKB/models/pocket-brain.gguf`
+//!   iOS → `…/Application Support/com.ai-shizu.pkb/models/pocket-brain.gguf`
+//!
+//! Never guess from CWD. Network download of this file is permanently forbidden
+//! (AI_SKILLS §5); only offline local import may create it.
 
 use std::path::PathBuf;
 
-use tauri::{AppHandle, Manager};
+use tauri::AppHandle;
 
-/// Fixed filename the operator places inside `<app_data_dir>/models/`.
+use crate::paths::user_data_root;
+
+/// Fixed filename the operator places (or imports) inside `<data_root>/models/`.
 pub const MODEL_FILENAME: &str = "pocket-brain.gguf";
 
-/// Returns `<app_data_dir>/models/pocket-brain.gguf`, creating the parent dir.
-pub fn resolve_model_path(app: &AppHandle) -> Result<PathBuf, String> {
-    let dir = app
-        .path()
-        .app_data_dir()
-        .map_err(|e| format!("app_data_dir resolve failed: {e}"))?
-        .join("models");
-    std::fs::create_dir_all(&dir).map_err(|e| format!("mkdir {}: {e}", dir.display()))?;
+/// Returns `<user_data_root>/models/pocket-brain.gguf`, creating the parent dir.
+///
+/// `AppHandle` is retained for call-site stability with Tauri commands; the path
+/// itself is derived from the A+1 `user_data_root` (not a second ad-hoc root).
+pub fn resolve_model_path(_app: &AppHandle) -> Result<PathBuf, String> {
+    let dir = user_data_root().join("models");
+    std::fs::create_dir_all(&dir).map_err(|_| "モデル保存先を作成できません。".to_string())?;
     Ok(dir.join(MODEL_FILENAME))
 }

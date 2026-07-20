@@ -29,7 +29,7 @@
 | Tauri iOS (M0〜) 初期化・シミュレータ | §1, §2.3, §4.4, §4.22〜§4.29, `docs/M0_IOS_INIT_INSTRUCTIONS.md`, `docs/M19_IOS_BUILD_AUDIT.md` |
 | Pocket Brain / on-device LLM (M4〜M5) / OOM defense (M7) / 浄化 (M8) / local RAG (M9〜M13) / Gap·Tensor (M14) / Psychometrics (M15) / Twin·Oracle (M16) / Consult·Interview parity (M17) / Frontend API (M18) | §1, §1.1, §4.5〜§4.21, §5, §6, §7.1, §12, `docs/m5_action_plan.md` |
 | SQLCipher vault / Keychain (M3) | §1, §4.8, `docs/m3_action_plan.md` |
-| LLM モデル選定・consult/KV キャッシュ | §1, §5, §7, §8 |
+| LLM モデル選定・consult/KV キャッシュ | §1, §5, §5.1, §7, §8 |
 | 検索エンジン・mmap・LSM 索引 | §1, §9, §10 |
 | LINE インポート・データ層・冪等性 | §1, §14 (IMP-1/IMP-2 as-built, T-20〜T-25) |
 | Gap 分析・プロファイリング全般 | §1, §6 |
@@ -933,10 +933,25 @@ Pocket Brain 経路は M14 tensor + M15 pulse/Rasch + gap sufficiency から loa
 4. **DeepSeek-R1 系は `<think>…</think>` を出力する。** `consult()` が最終応答から除去済み（`consultation_engine.py`）。ストリーミング中は思考過程が見えるが、最終置換でクリーンになる仕様。この除去を消すと保存ログと DailyContext が思考過程で汚染される。
 5. 生成パラメータ（temperature / max_tokens）は `generation_params()` 経由で取れ。`0.6` や `900` を直書きするな。
 6. モデルは `models/` に手動配置（gitignore 済み）。**ダウンロードを自動化するコードを書くな** — オフライン原則違反である。
+   - **許可されるのは「案内」と「ローカル import」だけ。** `check_model_exists` / `pick_local_gguf` / `import_local_model`（チャンクコピー + `model-import-progress`）/ `open_recommended_model_page`（OS ブラウザで Hugging Face を開く）は §5 準拠。アプリ内 HTTP で GGUF を取得する経路は永久禁止。
+   - 配置先の正本は A+1 `paths::user_data_root()/models/pocket-brain.gguf`（macOS: `~/Library/Application Support/PKB/models/…`）。`resolve_model_path` とセットアップゲートが同一パスを見る。
+   - `pocket-brain` feature 非ビルド時は `check_model_exists` が欠けるため、フロントは soft-skip（メイン UI をブロックしない）。
 7. **LLM transportの唯一所有者は`core/llm_backend.py`、prompt channelの唯一所有者は`core/llm_transport.py`。** prompt本文をargv・環境・通常ファイルへ置くな。Windows Named Pipeは`PIPE_REJECT_REMOTE_CLIENTS` + first-instance + owner/SYSTEM/AppContainer SID DACL、POSIXは`/dev/stdin`以外を認めない。子はengineのOS sandboxを継承する。TCP/HTTP、listener、port、cloud fallbackを再導入するな。
 8. **model / generation / stdio commandの正本は`llm_config.py`。** `llama_stdio_cmd()`は`completion` + `--offline` +固定local modelのみ。`--rpc` / remote model option / remote環境変数は禁止。クライアントへtemperature・max_tokens・ctxを複製するな。
 9. **レガシーCLI（`app.py` → `cli.py`）を「古い」という理由だけで削除するな。** 固有retrieval / prompt / `--show-prompt` / `--top-k` / interactive loopは維持し、shared `LlamaStdioBackend`だけを使う。相談modelは`find_gguf(role="consult")`。通常契約テストはnetworkless fake、transport検収時だけ公開promptのローカルGGUFを使う。
 10. **LLM出力を権威状態へ入力するな。** strict schema、temperature `0`、seed、model hash、再試行は、候補集合の一意性も観測事実性も証明しない。LLMのscore/evidence/metrics/要約を6D tensor、profile、growth差分、次回system prompt、その他の決定論的state更新へ渡すことを永久禁止する。権威更新に使えるのは、同じ観測証拠からコードだけで完全かつ一意に導出される値だけである。決定論的観測器が無い場合は`0`やLLM fallbackを捏造せずN/Aを返せ。LLM提案を残す場合は非測定の表示専用候補と明示し、将来セッションへ再注入するな。回帰境界は`tests/test_fsa_2026_07_13_05_llm_authority_boundary.py`であり、旧F4c/F-19の成長注入記述と競合する場合は本規則が勝つ。
+
+### 5.1 Offline model setup gate — as-built (2026-07-21)
+
+**射程:** `pocket-brain` の存在確認 + ローカル GGUF import + 起動時セットアップ画面。ネットワーク経由のモデル取得は含まない。
+
+**as-built:**
+1. Rust: `llm/commands_model_setup.rs` — `check_model_exists` / `pick_local_gguf` (rfd, non-iOS) / `import_local_model` (1MiB チャンク + `model-import-progress`) / `open_recommended_model_page` (OS `open`/`xdg-open`/`start`、HTTPS 固定 URL のみ)。
+2. パス: `model_path::resolve_model_path` → `user_data_root()/models/pocket-brain.gguf`（A+1。旧 `app_data_dir` 依存を撤去し load と import を一致）。
+3. FE: `ModelSetupGate` がメイン UI をブロック。案内 URL + ファイル選択 + プログレス。100%/`import_done` でシームレス遷移。状態は `modelSetupReducer`（Zustand 禁止）。
+4. 回帰: `tests-runtime/modelSetupReducer.test.ts`。
+
+**不変条件:** アプリ内 HTTP/ストリームで GGUF を取得するコードを追加するな。同意 UI でも解除されない。エラー文言にパス・例外原文を出すな。
 
 ---
 

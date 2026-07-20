@@ -32,7 +32,6 @@ import re
 import subprocess
 import sys
 import time
-from pathlib import Path
 
 from .artifact_auth import verify_artifact_path
 from .offline_runtime import enforce_offline_environment
@@ -40,7 +39,6 @@ from .offline_runtime import enforce_offline_environment
 enforce_offline_environment()
 
 from .paths import (
-    BUILD_DIR,
     DATA_KNOWLEDGE,
     DATA_PROCESSED,
     METADATA_JSON,

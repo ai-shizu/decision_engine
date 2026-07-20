@@ -16,7 +16,7 @@ from .durable_persistence import (
     durable_atomic_write_text,
     read_json_file,
 )
-from .paths import AI_CONSULTATIONS_JSON, PROJECT_ROOT as ROOT
+from .paths import AI_CONSULTATIONS_JSON
 
 
 def _ensure_raw_dir() -> None:

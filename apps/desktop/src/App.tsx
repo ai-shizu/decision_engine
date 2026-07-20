@@ -7,6 +7,7 @@ import { ConsultTab } from "./components/ConsultTab";
 import { ImportTab } from "./components/ImportTab";
 import { InterviewTab } from "./components/InterviewTab";
 import { MobileChrome } from "./components/MobileChrome";
+import { ModelSetupGate } from "./components/ModelSetupGate";
 import { ProbeTab } from "./components/ProbeTab";
 import { ProfileTab } from "./components/ProfileTab";
 import { RecordTab } from "./components/RecordTab";
@@ -112,12 +113,14 @@ function handleTabKeyDown(
 }
 
 export default function App() {
+  const [modelGateDone, setModelGateDone] = useState(false);
   const [ready, setReady] = useState(false);
   const [status, setStatus] = useState("Coraxis を起動しています…");
   const [tab, setTab] = useState<MainTab>("record");
   const isNarrow = useIsNarrowViewport();
 
   useEffect(() => {
+    if (!modelGateDone) return;
     let cancelled = false;
 
     function sleep(ms: number): Promise<void> {
@@ -189,7 +192,7 @@ export default function App() {
     return () => {
       cancelled = true;
     };
-  }, [isNarrow]);
+  }, [isNarrow, modelGateDone]);
 
   // SPEC_FOXTROT_UI.md §3.6 — desktop Alt+[1-7] only.
   useEffect(() => {
@@ -207,6 +210,12 @@ export default function App() {
     window.addEventListener("keydown", onKey, { capture: true });
     return () => window.removeEventListener("keydown", onKey, { capture: true });
   }, [ready, isNarrow]);
+
+  // Offline setup gate: block main UI until pocket-brain.gguf exists
+  // (or pocket-brain feature absent → soft skip inside the gate).
+  if (!modelGateDone) {
+    return <ModelSetupGate onReady={() => setModelGateDone(true)} />;
+  }
 
   // M20-E: mobile shell is primary — never trap under LoadingScreen with
   // engineReady frozen to false. Live `ready` updates Settings/RECORD IPC.

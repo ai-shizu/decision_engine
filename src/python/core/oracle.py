@@ -28,11 +28,8 @@ LLM によるリライトは禁止 (I-11 と同一原理)。
 
 from __future__ import annotations
 
-import json
 import re
 from datetime import date as _date
-
-import numpy as np
 
 from . import coupling, digital_twin, tensor_store
 

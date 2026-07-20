@@ -65,7 +65,7 @@ sqlite-vec = { version = "=0.1.9", optional = true }
 egress-live = ["dep:hickory-resolver", "dep:rustls", "dep:hyper-rustls", "dep:tokio-rustls", "reqwest/rustls-no-provider"]
 # M4 on-device LLM scaffold. Enables the optional llama-cpp-2 dep (requires cmake
 # + C++ toolchain). Never enable on default/release desktop builds.
-pocket-brain = ["llama-cpp-2", "libc"]
+pocket-brain = ["llama-cpp-2", "libc", "dep:rfd"]
 # M3 Phase 0+: SQLCipher + typed objc2 Keychain link gate. Keep off default
 # builds. All Apple bindings live in one objc2 type system; do not reintroduce
 # security-framework alongside them (docs/m3_action_plan.md §4.2.1).
@@ -95,6 +95,11 @@ windows-sys = { version = "0.61.2", features = [
 
 [target.'cfg(target_os = "linux")'.dependencies]
 libc = "0.2"
+
+# Offline model setup gate: native local GGUF picker (desktop only; never network).
+# Optional + enabled by `pocket-brain`. Absent on iOS (inject / Files path).
+[target.'cfg(not(target_os = "ios"))'.dependencies]
+rfd = { version = "=0.15.4", optional = true }
 
 # M4 pocket-brain jetsam probe (proc_pid_rusage). Optional; only pulled by the
 # `pocket-brain` feature so the default desktop build is unaffected.
