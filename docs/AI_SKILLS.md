@@ -27,7 +27,7 @@
 | 永続化境界・シリアライズ・runtime検証・IPC契約 | §1, §16 (SKILL-PKB-BOUNDARY-V3), `docs/architecture/INCIDENT_LEDGER.md` |
 | macOS ビルド・配布・コード署名 | §1, §2.3, §4 |
 | Tauri iOS (M0〜) 初期化・シミュレータ | §1, §2.3, §4.4, `docs/M0_IOS_INIT_INSTRUCTIONS.md` |
-| Pocket Brain / on-device LLM (M4〜M5) / OOM defense (M7) / 浄化 (M8) / local RAG (M9〜M13) / Gap·Tensor (M14) | §1, §1.1, §4.5〜§4.14, §5, §6, §7.1, `docs/m5_action_plan.md` |
+| Pocket Brain / on-device LLM (M4〜M5) / OOM defense (M7) / 浄化 (M8) / local RAG (M9〜M13) / Gap·Tensor (M14) / Psychometrics (M15) | §1, §1.1, §4.5〜§4.15, §5, §6, §7.1, `docs/m5_action_plan.md` |
 | SQLCipher vault / Keychain (M3) | §1, §4.8, `docs/m3_action_plan.md` |
 | LLM モデル選定・consult/KV キャッシュ | §1, §5, §7, §8 |
 | 検索エンジン・mmap・LSM 索引 | §1, §9, §10 |
@@ -551,6 +551,27 @@ rm -rf .boundary-tests-out
 **スキーマ v3:** `gap_analysis_runs(id, created_at, schema_version, data_sufficiency, payload_json)` / `tensor_profiles(id, created_at, schema_version, model_hash, payload_json)`。
 
 **コマンド:** `calculate_gap_analysis` / `get_latest_gap_analysis` / `get_latest_tensor_profile` / `ensure_authoritative_tensor_profile`。言語化は `build_gap_languageization_prompt` のみ（発見はコード）。
+
+### 4.15 M15 — Psychometrics / Romance Pulse / Rasch / PROBE (Rust) (2026-07-20)
+
+**射程:** Python 本土の `romance_analysis` / `dynamic_ordinal_rasch` / `probe_engine` 決定論コアを Rust へ移植。Vault schema v4 で永続化。React UI・LLM 解釈によるスコアリングは対象外。
+
+**対人パルス (`romance_analysis.v1`):**
+1. 正本入力は `[self]` / `[contact_alias]` 行のみ。生トランスクリプトは永続化禁止（`speakers_hash` のみ）。
+2. メトリクス: balance / switch_rate / reply_coverage。親和度 = `100*(0.40*balance+0.40*switch_rate+0.20*reply_coverage)`（半上げ）。不足条件: total≥6 ∧ self≥2 ∧ contact≥2 を満たさなければ `affinity_score=None`。
+3. tendency / next_best_action は固定日本語定数表から決定（LLM 禁止）。
+
+**Dynamic Ordinal Rasch (`dynamic_ordinal_rasch.v1`):**
+1. PCM・discrimination≡1.0。グリッド 17 点 (±4.0)、遷移 stay=0.75 / adjacent=0.125。閾値は artifact JSON と一致必須。
+2. `evaluate_rasch_scale` で事後更新、`rasch_select_next` は EIG を floor-half-up×1e6 で量子化しタイブレークは item_id 昇順。
+
+**PROBE ファネル:**
+1. 個人 5 軸 × FACT→CONTEXT→EMOTION→MEANING。優先度 `0.60*(1-conf)+0.25*coverage_gap+0.15*extremity`。
+2. セッションは Vault `probe_store` の JSON 単一レコード。対人ターゲット注入・gap 注入禁止。
+
+**スキーマ v4:** `interaction_pulse_runs` / `rasch_filter_runs` / `probe_store`。
+
+**コマンド:** `calculate_interaction_pulse` / `evaluate_rasch_scale` / `rasch_select_next_item` / `get_probe_questions` / `probe_next_question` / `probe_submit_answer` / `get_probe_status` / `get_latest_rasch_state`。
 
 ### 4.8 M3 Phase 0-A — SQLCipher / Security.framework iOS link gate (2026-07-18)
 

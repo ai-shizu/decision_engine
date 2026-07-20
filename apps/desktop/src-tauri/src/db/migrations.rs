@@ -8,7 +8,7 @@ use std::{error::Error, fmt};
 
 use rusqlite::{Connection, TransactionBehavior};
 
-pub(crate) const LATEST_SCHEMA_VERSION: i64 = 3;
+pub(crate) const LATEST_SCHEMA_VERSION: i64 = 4;
 
 /// Canonical embedding width for `knowledge_chunks.embedding` (M9 foundation).
 /// Matches the historical PKBVEC01 384-d space; a future 768-d migration would
@@ -71,6 +71,39 @@ CREATE INDEX IF NOT EXISTS idx_tensor_profiles_created
     ON tensor_profiles(created_at DESC, id DESC);
 "#;
 
+const MIGRATION_V4_SQL: &str = r#"
+CREATE TABLE IF NOT EXISTS interaction_pulse_runs (
+    id TEXT PRIMARY KEY NOT NULL,
+    created_at INTEGER NOT NULL,
+    affinity_score INTEGER,
+    interaction_tendency TEXT NOT NULL,
+    next_best_action TEXT NOT NULL,
+    metrics_json TEXT NOT NULL,
+    input_hash TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_pulse_runs_created
+    ON interaction_pulse_runs(created_at DESC, id DESC);
+
+CREATE TABLE IF NOT EXISTS rasch_filter_runs (
+    id TEXT PRIMARY KEY NOT NULL,
+    created_at INTEGER NOT NULL,
+    artifact_sha256 TEXT NOT NULL,
+    posterior_json TEXT NOT NULL,
+    excluded_json TEXT NOT NULL,
+    last_selection_json TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_rasch_runs_created
+    ON rasch_filter_runs(created_at DESC, id DESC);
+
+CREATE TABLE IF NOT EXISTS probe_store (
+    id TEXT PRIMARY KEY NOT NULL,
+    updated_at INTEGER NOT NULL,
+    payload_json TEXT NOT NULL
+);
+"#;
+
 const READ_CHATS_COLUMNS_SQL: &str =
     "SELECT name, type, \"notnull\", pk FROM pragma_table_info('chats') ORDER BY cid;";
 const READ_MESSAGES_COLUMNS_SQL: &str =
@@ -107,6 +140,11 @@ const MIGRATIONS: &[Migration] = &[
         version: 3,
         sql: MIGRATION_V3_SQL,
         verify: verify_v3_schema,
+    },
+    Migration {
+        version: 4,
+        sql: MIGRATION_V4_SQL,
+        verify: verify_v4_schema,
     },
 ];
 
@@ -393,6 +431,67 @@ fn verify_v2_schema(connection: &Connection) -> Result<(), MigrationError> {
 
     // Debug assert keeps the constant and DDL string in lockstep.
     debug_assert_eq!(KNOWLEDGE_EMBEDDING_DIMS, 384);
+
+    Ok(())
+}
+
+fn verify_v4_schema(connection: &Connection) -> Result<(), MigrationError> {
+    verify_v3_schema(connection).map_err(|_| MigrationError::SchemaMismatch { version: 4 })?;
+
+    let pulse_cols = read_columns(
+        connection,
+        "SELECT name, type, \"notnull\", pk FROM pragma_table_info('interaction_pulse_runs') ORDER BY cid;",
+    )
+    .map_err(|_| MigrationError::SchemaMismatch { version: 4 })?;
+    if !columns_match(
+        &pulse_cols,
+        &[
+            ("id", "TEXT", true, 1),
+            ("created_at", "INTEGER", true, 0),
+            ("affinity_score", "INTEGER", false, 0),
+            ("interaction_tendency", "TEXT", true, 0),
+            ("next_best_action", "TEXT", true, 0),
+            ("metrics_json", "TEXT", true, 0),
+            ("input_hash", "TEXT", true, 0),
+        ],
+    ) {
+        return Err(MigrationError::SchemaMismatch { version: 4 });
+    }
+
+    let rasch_cols = read_columns(
+        connection,
+        "SELECT name, type, \"notnull\", pk FROM pragma_table_info('rasch_filter_runs') ORDER BY cid;",
+    )
+    .map_err(|_| MigrationError::SchemaMismatch { version: 4 })?;
+    if !columns_match(
+        &rasch_cols,
+        &[
+            ("id", "TEXT", true, 1),
+            ("created_at", "INTEGER", true, 0),
+            ("artifact_sha256", "TEXT", true, 0),
+            ("posterior_json", "TEXT", true, 0),
+            ("excluded_json", "TEXT", true, 0),
+            ("last_selection_json", "TEXT", false, 0),
+        ],
+    ) {
+        return Err(MigrationError::SchemaMismatch { version: 4 });
+    }
+
+    let probe_cols = read_columns(
+        connection,
+        "SELECT name, type, \"notnull\", pk FROM pragma_table_info('probe_store') ORDER BY cid;",
+    )
+    .map_err(|_| MigrationError::SchemaMismatch { version: 4 })?;
+    if !columns_match(
+        &probe_cols,
+        &[
+            ("id", "TEXT", true, 1),
+            ("updated_at", "INTEGER", true, 0),
+            ("payload_json", "TEXT", true, 0),
+        ],
+    ) {
+        return Err(MigrationError::SchemaMismatch { version: 4 });
+    }
 
     Ok(())
 }

@@ -27,6 +27,7 @@ use super::{
     connection::{open_encrypted_database, verify_encrypted_connection, VaultConnectionError},
     knowledge_repo::{self, KnowledgeChunkRow, KnowledgeSearchHit},
     migrations::{run_migrations, MigrationError},
+    psychometrics_repo::{self, PulseRunRow, ProbeStoreRow, RaschRunRow},
     repository::{
         self, ChatCreate, ChatRecord, MessageAppend, MessageCursor, MessageRecord, RepositoryError,
     },
@@ -142,6 +143,11 @@ enum VaultReply {
     GapAnalysisLatest(Result<Option<GapAnalysisRow>, VaultErrorCode>),
     TensorProfileInsert(Result<(), VaultErrorCode>),
     TensorProfileLatest(Result<Option<TensorProfileRow>, VaultErrorCode>),
+    PulseRunInsert(Result<(), VaultErrorCode>),
+    RaschRunUpsert(Result<(), VaultErrorCode>),
+    RaschRunLatest(Result<Option<RaschRunRow>, VaultErrorCode>),
+    ProbeStoreGet(Result<Option<ProbeStoreRow>, VaultErrorCode>),
+    ProbeStorePut(Result<(), VaultErrorCode>),
 }
 
 enum VaultRequest {
@@ -204,6 +210,29 @@ enum VaultRequest {
         reply: SyncSender<VaultReply>,
     },
     TensorProfileLatest {
+        control: RequestControl,
+        reply: SyncSender<VaultReply>,
+    },
+    PulseRunInsert {
+        row: PulseRunRow,
+        control: RequestControl,
+        reply: SyncSender<VaultReply>,
+    },
+    RaschRunUpsert {
+        row: RaschRunRow,
+        control: RequestControl,
+        reply: SyncSender<VaultReply>,
+    },
+    RaschRunLatest {
+        control: RequestControl,
+        reply: SyncSender<VaultReply>,
+    },
+    ProbeStoreGet {
+        control: RequestControl,
+        reply: SyncSender<VaultReply>,
+    },
+    ProbeStorePut {
+        row: ProbeStoreRow,
         control: RequestControl,
         reply: SyncSender<VaultReply>,
     },
@@ -560,6 +589,89 @@ impl VaultHandle {
             _ => Err(VaultErrorCode::Unavailable),
         }
     }
+
+    pub(crate) fn pulse_run_insert(&self, row: PulseRunRow) -> Result<(), VaultErrorCode> {
+        let (reply_sender, receiver) = mpsc::sync_channel(1);
+        let cancelled = Arc::new(AtomicBool::new(false));
+        let request = VaultRequest::PulseRunInsert {
+            row,
+            control: RequestControl {
+                deadline: Instant::now() + SHORT_OPERATION_TIMEOUT,
+                cancelled: Arc::clone(&cancelled),
+            },
+            reply: reply_sender,
+        };
+        match self.submit(request, receiver, cancelled, SHORT_OPERATION_TIMEOUT)? {
+            VaultReply::PulseRunInsert(result) => result,
+            _ => Err(VaultErrorCode::Unavailable),
+        }
+    }
+
+    pub(crate) fn rasch_run_upsert(&self, row: RaschRunRow) -> Result<(), VaultErrorCode> {
+        let (reply_sender, receiver) = mpsc::sync_channel(1);
+        let cancelled = Arc::new(AtomicBool::new(false));
+        let request = VaultRequest::RaschRunUpsert {
+            row,
+            control: RequestControl {
+                deadline: Instant::now() + SHORT_OPERATION_TIMEOUT,
+                cancelled: Arc::clone(&cancelled),
+            },
+            reply: reply_sender,
+        };
+        match self.submit(request, receiver, cancelled, SHORT_OPERATION_TIMEOUT)? {
+            VaultReply::RaschRunUpsert(result) => result,
+            _ => Err(VaultErrorCode::Unavailable),
+        }
+    }
+
+    pub(crate) fn rasch_run_latest(&self) -> Result<Option<RaschRunRow>, VaultErrorCode> {
+        let (reply_sender, receiver) = mpsc::sync_channel(1);
+        let cancelled = Arc::new(AtomicBool::new(false));
+        let request = VaultRequest::RaschRunLatest {
+            control: RequestControl {
+                deadline: Instant::now() + SHORT_OPERATION_TIMEOUT,
+                cancelled: Arc::clone(&cancelled),
+            },
+            reply: reply_sender,
+        };
+        match self.submit(request, receiver, cancelled, SHORT_OPERATION_TIMEOUT)? {
+            VaultReply::RaschRunLatest(result) => result,
+            _ => Err(VaultErrorCode::Unavailable),
+        }
+    }
+
+    pub(crate) fn probe_store_get(&self) -> Result<Option<ProbeStoreRow>, VaultErrorCode> {
+        let (reply_sender, receiver) = mpsc::sync_channel(1);
+        let cancelled = Arc::new(AtomicBool::new(false));
+        let request = VaultRequest::ProbeStoreGet {
+            control: RequestControl {
+                deadline: Instant::now() + SHORT_OPERATION_TIMEOUT,
+                cancelled: Arc::clone(&cancelled),
+            },
+            reply: reply_sender,
+        };
+        match self.submit(request, receiver, cancelled, SHORT_OPERATION_TIMEOUT)? {
+            VaultReply::ProbeStoreGet(result) => result,
+            _ => Err(VaultErrorCode::Unavailable),
+        }
+    }
+
+    pub(crate) fn probe_store_put(&self, row: ProbeStoreRow) -> Result<(), VaultErrorCode> {
+        let (reply_sender, receiver) = mpsc::sync_channel(1);
+        let cancelled = Arc::new(AtomicBool::new(false));
+        let request = VaultRequest::ProbeStorePut {
+            row,
+            control: RequestControl {
+                deadline: Instant::now() + SHORT_OPERATION_TIMEOUT,
+                cancelled: Arc::clone(&cancelled),
+            },
+            reply: reply_sender,
+        };
+        match self.submit(request, receiver, cancelled, SHORT_OPERATION_TIMEOUT)? {
+            VaultReply::ProbeStorePut(result) => result,
+            _ => Err(VaultErrorCode::Unavailable),
+        }
+    }
 }
 
 struct VaultWorker {
@@ -721,6 +833,58 @@ impl VaultWorker {
                         self.latest_tensor_profile()
                     };
                     let _ = reply.send(VaultReply::TensorProfileLatest(result));
+                }
+                VaultRequest::PulseRunInsert {
+                    row,
+                    control,
+                    reply,
+                } => {
+                    let result = if request_expired(&control) {
+                        Err(VaultErrorCode::Timeout)
+                    } else {
+                        self.insert_pulse_run(row)
+                    };
+                    let _ = reply.send(VaultReply::PulseRunInsert(result));
+                }
+                VaultRequest::RaschRunUpsert {
+                    row,
+                    control,
+                    reply,
+                } => {
+                    let result = if request_expired(&control) {
+                        Err(VaultErrorCode::Timeout)
+                    } else {
+                        self.upsert_rasch_run(row)
+                    };
+                    let _ = reply.send(VaultReply::RaschRunUpsert(result));
+                }
+                VaultRequest::RaschRunLatest { control, reply } => {
+                    let result = if request_expired(&control) {
+                        Err(VaultErrorCode::Timeout)
+                    } else {
+                        self.latest_rasch_run()
+                    };
+                    let _ = reply.send(VaultReply::RaschRunLatest(result));
+                }
+                VaultRequest::ProbeStoreGet { control, reply } => {
+                    let result = if request_expired(&control) {
+                        Err(VaultErrorCode::Timeout)
+                    } else {
+                        self.get_probe_store()
+                    };
+                    let _ = reply.send(VaultReply::ProbeStoreGet(result));
+                }
+                VaultRequest::ProbeStorePut {
+                    row,
+                    control,
+                    reply,
+                } => {
+                    let result = if request_expired(&control) {
+                        Err(VaultErrorCode::Timeout)
+                    } else {
+                        self.put_probe_store(row)
+                    };
+                    let _ = reply.send(VaultReply::ProbeStorePut(result));
                 }
                 VaultRequest::RegisterEvents {
                     channel,
@@ -950,6 +1114,55 @@ impl VaultWorker {
         gate(snapshot_status(&self.status))?;
         let outcome =
             self.read_repository(|connection| analytics_repo::latest_tensor_profile(connection));
+        self.resolve_repository(outcome)
+    }
+
+    fn insert_pulse_run(&mut self, row: PulseRunRow) -> Result<(), VaultErrorCode> {
+        gate(snapshot_status(&self.status))?;
+        if row.metrics_json.len() > MAX_TEXT_BYTES * 2
+            || row.interaction_tendency.len() > MAX_TEXT_BYTES
+            || row.next_best_action.len() > MAX_TEXT_BYTES
+        {
+            return Err(VaultErrorCode::InvalidInput);
+        }
+        let outcome = self
+            .read_repository(|connection| psychometrics_repo::insert_pulse_run(connection, &row));
+        self.resolve_repository(outcome)
+    }
+
+    fn upsert_rasch_run(&mut self, row: RaschRunRow) -> Result<(), VaultErrorCode> {
+        gate(snapshot_status(&self.status))?;
+        if row.posterior_json.len() > MAX_TEXT_BYTES * 2
+            || row.excluded_json.len() > MAX_TEXT_BYTES
+        {
+            return Err(VaultErrorCode::InvalidInput);
+        }
+        let outcome = self
+            .read_repository(|connection| psychometrics_repo::upsert_rasch_run(connection, &row));
+        self.resolve_repository(outcome)
+    }
+
+    fn latest_rasch_run(&mut self) -> Result<Option<RaschRunRow>, VaultErrorCode> {
+        gate(snapshot_status(&self.status))?;
+        let outcome =
+            self.read_repository(|connection| psychometrics_repo::latest_rasch_run(connection));
+        self.resolve_repository(outcome)
+    }
+
+    fn get_probe_store(&mut self) -> Result<Option<ProbeStoreRow>, VaultErrorCode> {
+        gate(snapshot_status(&self.status))?;
+        let outcome =
+            self.read_repository(|connection| psychometrics_repo::get_probe_store(connection));
+        self.resolve_repository(outcome)
+    }
+
+    fn put_probe_store(&mut self, row: ProbeStoreRow) -> Result<(), VaultErrorCode> {
+        gate(snapshot_status(&self.status))?;
+        if row.payload_json.len() > MAX_TEXT_BYTES * 4 {
+            return Err(VaultErrorCode::InvalidInput);
+        }
+        let outcome = self
+            .read_repository(|connection| psychometrics_repo::put_probe_store(connection, &row));
         self.resolve_repository(outcome)
     }
 

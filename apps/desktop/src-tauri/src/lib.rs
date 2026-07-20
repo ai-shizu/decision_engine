@@ -153,6 +153,22 @@ pub fn run() {
             analytics::commands::get_latest_tensor_profile,
             #[cfg(all(feature = "secure-vault", target_vendor = "apple"))]
             analytics::commands::ensure_authoritative_tensor_profile,
+            #[cfg(all(feature = "secure-vault", target_vendor = "apple"))]
+            analytics::commands_psychometrics::calculate_interaction_pulse,
+            #[cfg(all(feature = "secure-vault", target_vendor = "apple"))]
+            analytics::commands_psychometrics::evaluate_rasch_scale,
+            #[cfg(all(feature = "secure-vault", target_vendor = "apple"))]
+            analytics::commands_psychometrics::rasch_select_next_item,
+            #[cfg(all(feature = "secure-vault", target_vendor = "apple"))]
+            analytics::commands_psychometrics::get_probe_questions,
+            #[cfg(all(feature = "secure-vault", target_vendor = "apple"))]
+            analytics::commands_psychometrics::probe_next_question,
+            #[cfg(all(feature = "secure-vault", target_vendor = "apple"))]
+            analytics::commands_psychometrics::probe_submit_answer,
+            #[cfg(all(feature = "secure-vault", target_vendor = "apple"))]
+            analytics::commands_psychometrics::get_probe_status,
+            #[cfg(all(feature = "secure-vault", target_vendor = "apple"))]
+            analytics::commands_psychometrics::get_latest_rasch_state,
             #[cfg(all(
                 feature = "pocket-brain",
                 feature = "secure-vault",
