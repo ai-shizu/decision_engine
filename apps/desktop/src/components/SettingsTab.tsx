@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import {
+  engineReady as checkEngineReady,
   getKnowledgeResearchPolicy,
   loadSettings,
   runProfiler,
@@ -29,11 +30,20 @@ export function SettingsTab({ engineReady = true }: { engineReady?: boolean }) {
     setLoadError("");
     setStatus("");
     setStatusKind("info");
-    // M20-D: LoadingScreen mounts MobileChrome before Python engine is ready.
-    // Do not call settings_get yet — that produced a false "SETTINGS_LOAD" failure.
-    if (!engineReady) {
+    // Prop may lag; also probe live readiness (M20 LoadingScreen race).
+    let ready = engineReady;
+    if (!ready) {
+      try {
+        ready = await checkEngineReady();
+      } catch {
+        ready = false;
+      }
+    }
+    if (!ready) {
       setSettings(null);
-      setLoadError("エンジンの準備完了後に設定を読み込みます。しばらく待つか、再読み込みしてください。");
+      setLoadError(
+        "エンジンの準備完了後に設定を読み込みます。しばらく待つか、再読み込みしてください。",
+      );
       return;
     }
     try {

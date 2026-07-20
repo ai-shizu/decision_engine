@@ -14,14 +14,14 @@ import { SettingsTab } from "./components/SettingsTab";
 import { TitleBar } from "./components/TitleBar";
 import { engineHealth, engineReady } from "./lib/engine";
 import type { MainTab } from "./lib/types";
+import { useIsNarrowViewport } from "./lib/useIsNarrowViewport";
 import "./App.css";
-// M4 pocket-brain (docs/architecture_blueprint.md §3.9). Mounted on the loading
-// screen because that is where the iOS shell sits (engine never becomes ready on
-// device). On desktop it shows briefly before the 7-tab UI takes over.
-// M20-A: MobileChrome also mounts PocketBrain on ≤768px (CSS-gated).
+// M4 pocket-brain: desktop LoadingScreen only. Mobile uses MobileChrome (CONSULT
+// messenger) and must not stay trapped behind LoadingScreen with engineReady=false.
 import { PocketBrainPanel } from "./components/PocketBrainPanel";
 import { VaultPanel } from "./components/VaultPanel";
 
+/** Desktop-only boot gate. Mobile never uses this tree (see App). */
 function LoadingScreen({ message }: { message: string }) {
   return (
     <div className="shell">
@@ -33,7 +33,6 @@ function LoadingScreen({ message }: { message: string }) {
         <PocketBrainPanel />
         <VaultPanel />
       </main>
-      <MobileChrome statusLine={message} engineReady={false} />
     </div>
   );
 }
@@ -116,6 +115,7 @@ export default function App() {
   const [ready, setReady] = useState(false);
   const [status, setStatus] = useState("PKB を起動しています…");
   const [tab, setTab] = useState<MainTab>("record");
+  const isNarrow = useIsNarrowViewport();
 
   useEffect(() => {
     let cancelled = false;
@@ -146,9 +146,9 @@ export default function App() {
     };
   }, []);
 
-  // SPEC_FOXTROT_UI.md §3.6 / SPEC_UI_ORPHAN: Alt+[1-6] (PROBE まで) + [1-7] (PROFILE 追加)。
+  // SPEC_FOXTROT_UI.md §3.6 — desktop Alt+[1-7] only.
   useEffect(() => {
-    if (!ready) return;
+    if (!ready || isNarrow) return;
     const onKey = (e: KeyboardEvent) => {
       if (e.altKey && !e.ctrlKey && /^[1-7]$/.test(e.key)) {
         const idx = Number(e.key) - 1;
@@ -161,7 +161,18 @@ export default function App() {
     };
     window.addEventListener("keydown", onKey, { capture: true });
     return () => window.removeEventListener("keydown", onKey, { capture: true });
-  }, [ready]);
+  }, [ready, isNarrow]);
+
+  // M20-E: mobile shell is primary — never trap under LoadingScreen with
+  // engineReady frozen to false. Live `ready` updates Settings/RECORD IPC.
+  if (isNarrow) {
+    return (
+      <div className="shell">
+        <TitleBar />
+        <MobileChrome statusLine={status} engineReady={ready} />
+      </div>
+    );
+  }
 
   if (!ready) {
     return <LoadingScreen message={status} />;
@@ -216,7 +227,6 @@ export default function App() {
           ))}
         </main>
       </div>
-      <MobileChrome statusLine={status} engineReady />
     </div>
   );
 }

@@ -42,8 +42,11 @@ export interface MobileChromeProps {
 }
 
 /**
- * M20-D: default RECORD; dock RECORD/CONSULT/INTERVIEW/PROBE/MENU;
+ * M20-D/E: default RECORD; dock RECORD/CONSULT/INTERVIEW/PROBE/MENU;
  * Menu = PROFILE/IMPORT/SETTINGS only. Desktop chrome untouched.
+ *
+ * `engineReady` must be the live App poll result — never hard-code false
+ * under LoadingScreen (that froze SETTINGS on iOS).
  */
 export function MobileChrome({
   statusLine,
