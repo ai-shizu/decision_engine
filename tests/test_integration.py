@@ -384,14 +384,14 @@ def _assert_no_gap_leak(*prompt_parts: str) -> None:
 
 
 def test_es_manager_dynamic_domain() -> None:
-    """F-16 (SPEC Rev.11 §10.2): 保持ESは active_es.md ただ1件。name 引数は
-    単一化により無意味 (W-53) — 何を渡しても同じ active_es.md が返る。"""
+    """M20-N: ACTIVE_ES フォールバックでもドメイン抽出が動く。"""
     _write_phase3_assets()
     docs = es_manager.load_es_documents()
     assert len(docs) == 1 and docs[0]["name"] == "active_es", \
         [d["name"] for d in docs]
 
-    es = es_manager.select_es("opengl")  # name は無視される (単一化)
+    es = es_manager.select_es(None)
+    assert es is not None
     assert es["target_domain"] == "リアルタイムグラフィックスエンジニア"
     assert es["explicit_domain"] is True
     assert "OpenGL" in es["keywords"], es["keywords"]
@@ -399,7 +399,7 @@ def test_es_manager_dynamic_domain() -> None:
     persona = es_manager.build_interviewer_persona(es)
     assert "リアルタイムグラフィックスエンジニア" in persona
     assert "攻撃" in persona and "Adversarial" in persona
-    print("  es_manager dynamic domain (single active_es.md) OK")
+    print("  es_manager dynamic domain OK")
 
 
 def test_es_manager_implicit_domain_from_text() -> None:

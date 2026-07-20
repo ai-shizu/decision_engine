@@ -20,6 +20,7 @@ EXPOSED_COMMANDS = {
     "calendar_event_dates",
     "import_stats",
     "es_view",
+    "es_list",
     "consult",
     "calendar_sync_ics",
     "calendar_sync_apple",
@@ -27,6 +28,7 @@ EXPOSED_COMMANDS = {
     "import_line_batch",
     "import_classify",
     "import_document",
+    "llm_warm",
     "settings_get",
     "settings_save_fixed",
     "settings_run_profiler",
@@ -148,7 +150,9 @@ def test_05_generic_rust_dispatch_is_removed_and_command_set_is_closed() -> None
         r"tauri::generate_handler!\[(?P<body>.*?)\]\)", lib, re.DOTALL
     )
     assert handler_match is not None
-    registered = set(re.findall(r"commands::([a-z0-9_]+)", handler_match["body"]))
+    registered = set(
+        re.findall(r"(?<!analytics::)commands::([a-z0-9_]+)", handler_match["body"])
+    )
     assert registered == EXPOSED_COMMANDS
 
 
@@ -200,6 +204,10 @@ def test_08_tauri_invoke_has_closed_frontend_owners() -> None:
         Path("apps/desktop/src/lib/llm.ts"),
         # M3 Phase 3-A secure-vault IPC owner.
         Path("apps/desktop/src/lib/vault.ts"),
+        # Pocket Brain / interview sim IPC owners (M18+).
+        Path("apps/desktop/src/lib/pocketBrain/api.ts"),
+        Path("apps/desktop/src/lib/pocketBrain/invoke.ts"),
+        Path("apps/desktop/src/lib/sim.ts"),
     ]
     assert sorted(owners) == sorted(expected)
 
