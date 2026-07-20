@@ -116,7 +116,7 @@ log_ok "Models dir: $MODELS_DIR"
 
 # ---- 3. Copy GGUF as pocket-brain.gguf --------------------------------------
 DEST="$MODELS_DIR/$DEST_FILENAME"
-log_info "Copying GGUF → $DEST_FILENAME…"
+log_info "Copying GGUF -> ${DEST_FILENAME} ..."
 # cp -f: overwrite prior injection without prompt
 cp -f "$SOURCE" "$DEST"
 

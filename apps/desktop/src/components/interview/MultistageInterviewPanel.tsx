@@ -192,7 +192,10 @@ export function MultistageInterviewPanel({
 
   return (
     <div className="multistage-interview-panel">
-      <p className="hint">
+      <p className="hint mobile-only">
+        基礎確認 → 深掘り → 振り返り → 終了の流れで進みます。振り返りで講評が付きます。
+      </p>
+      <p className="hint dev-noise desktop-only">
         Pocket Brain 多段面接 (M17): Foundation → Pressure → Debrief → Closed。
         議論フェーズに Gap/Oracle は注入されず、Debrief のみ講評に接続されます。
       </p>

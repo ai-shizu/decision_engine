@@ -609,7 +609,11 @@ button:disabled {
 }
 
 .term-source-name {
-  flex: 1;
+  flex: 0 0 auto;
+  /* Prevent 1-glyph-per-line “vertical” wrapping when the row is squeezed. */
+  white-space: nowrap;
+  writing-mode: horizontal-tb;
+  text-orientation: mixed;
 }
 
 .term-value {
@@ -1089,7 +1093,8 @@ button:disabled {
    term-row 全体には適用せず config-row のみに限定する (IMPORT 等
    他パネルの既存 term-row を意図せず変えない — 最小 diff)。 */
 .config-row select,
-.config-row input {
+.config-row input,
+.config-row textarea {
   padding: 4px 10px;
   border-radius: 0;
   border: 1px solid var(--border);
@@ -1097,6 +1102,8 @@ button:disabled {
   color: var(--text);
   font-family: inherit;
   font-size: 0.85rem;
+  flex: 1 1 auto;
+  min-width: 0;
 }
 
 .config-row input {
@@ -2268,8 +2275,8 @@ button.secondary {
   display: flex;
   flex-direction: column;
   padding: 0;
-  /* Room for fixed composer + bottom dock */
-  padding-bottom: calc(56px + 52px + env(safe-area-inset-bottom, 0px));
+  /* Dock + fixed composer + safe-area — keep messages clear of chrome */
+  padding-bottom: calc(56px + 56px + env(safe-area-inset-bottom, 0px));
   overflow: hidden;
 }
 
@@ -2627,27 +2634,48 @@ button.secondary {
   background: var(--bg-raised);
 }
 
-/* M20-G: never let overflow clip the messenger composer behind the dock */
+/* M20-G/H: never let overflow clip the messenger composer behind the dock */
 .mobile-chrome .rag-composer {
   position: fixed;
   left: 0;
   right: 0;
+  /* Dock = min-height 56 + safe-area padding — sit fully above it. */
   bottom: calc(56px + env(safe-area-inset-bottom, 0px));
   z-index: 190;
   display: flex !important;
   visibility: visible !important;
   opacity: 1 !important;
+  align-items: center;
+  gap: 10px;
   background: var(--bg-raised);
   border-top: 1px solid var(--border);
-  padding-bottom: calc(8px + env(safe-area-inset-bottom, 0px));
+  /* Safe-area already in `bottom`; do not double-pad here. */
+  padding: 10px 12px;
+  box-sizing: border-box;
+  min-height: 52px;
 }
 
-.mobile-chrome .rag-message-list-messenger {
-  padding-bottom: 8px;
+.mobile-chrome .rag-composer-action {
+  width: 44px;
+  height: 44px;
+  font-size: 1.5rem;
+  flex-shrink: 0;
 }
 
-.mobile-chrome .rag-chat-panel-messenger {
-  padding-bottom: 0;
+.mobile-chrome .rag-composer-input {
+  flex: 1;
+  min-width: 0;
+  min-height: 44px;
+  padding: 10px 12px;
+  font-size: 1rem;
+}
+
+.mobile-chrome .rag-composer-send {
+  flex-shrink: 0;
+  min-height: 44px;
+  min-width: 72px;
+  padding: 10px 14px;
+  font-size: 0.85rem;
 }
 
 .mobile-topbar-row {
@@ -2686,8 +2714,27 @@ button.secondary {
   cursor: pointer;
 }
 
-.mobile-chrome .interview-shared-context {
-  margin-bottom: 8px;
+/* M20-H: mobile company-facts — stack label above field (no squeezed vertical glyphs) */
+.mobile-chrome .config-row {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 4px;
+  padding: 6px 0;
+}
+
+.mobile-chrome .config-row .term-source-name {
+  flex: none;
+  width: 100%;
+  white-space: nowrap;
+  writing-mode: horizontal-tb;
+}
+
+.mobile-chrome .config-row input,
+.mobile-chrome .config-row textarea,
+.mobile-chrome .config-row select {
+  width: 100%;
+  flex: none;
+  min-width: 0;
 }
 
 .mobile-chrome .interview-shared-context .company-facts-form textarea {
@@ -2778,10 +2825,24 @@ button.secondary {
 .rag-action-sheet-head h2 {
   margin: 0;
   font-size: 1rem;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
+  letter-spacing: 0.04em;
   border-bottom: 1px solid var(--border);
   padding-bottom: var(--s1);
+  text-transform: none;
+}
+
+.rag-action-lead {
+  margin: 0 0 10px;
+  font-size: 0.8rem;
+  line-height: 1.4;
+  color: var(--text-muted);
+  flex-shrink: 0;
+}
+
+.rag-action-section {
+  border: 1px solid var(--border);
+  background: var(--bg);
+  padding: 4px 0;
 }
 
 .rag-action-close {
@@ -2822,6 +2883,11 @@ button.secondary {
 
 .mobile-chrome .mobile-only {
   display: inline;
+}
+
+.mobile-chrome p.mobile-only,
+.mobile-chrome .hint.mobile-only {
+  display: block;
 }
 
 .mobile-chrome .dev-noise {

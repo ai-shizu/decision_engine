@@ -26,7 +26,7 @@
 | Tauri/Rust sidecar・stdio IPC・artifact署名 | §1, §2.1, §2.3, §2.5, §9, §16 |
 | 永続化境界・シリアライズ・runtime検証・IPC契約 | §1, §16 (SKILL-PKB-BOUNDARY-V3), `docs/architecture/INCIDENT_LEDGER.md` |
 | macOS ビルド・配布・コード署名 | §1, §2.3, §4 |
-| Tauri iOS (M0〜) 初期化・シミュレータ | §1, §2.3, §4.4, §4.22, §4.23, `docs/M0_IOS_INIT_INSTRUCTIONS.md`, `docs/M19_IOS_BUILD_AUDIT.md` |
+| Tauri iOS (M0〜) 初期化・シミュレータ | §1, §2.3, §4.4, §4.22〜§4.29, `docs/M0_IOS_INIT_INSTRUCTIONS.md`, `docs/M19_IOS_BUILD_AUDIT.md` |
 | Pocket Brain / on-device LLM (M4〜M5) / OOM defense (M7) / 浄化 (M8) / local RAG (M9〜M13) / Gap·Tensor (M14) / Psychometrics (M15) / Twin·Oracle (M16) / Consult·Interview parity (M17) / Frontend API (M18) | §1, §1.1, §4.5〜§4.21, §5, §6, §7.1, §12, `docs/m5_action_plan.md` |
 | SQLCipher vault / Keychain (M3) | §1, §4.8, `docs/m3_action_plan.md` |
 | LLM モデル選定・consult/KV キャッシュ | §1, §5, §7, §8 |
@@ -660,6 +660,102 @@ Pocket Brain 経路は M14 tensor + M15 pulse/Rasch + gap sufficiency から loa
 2. Unix catch-all を `not(target_os = "ios")` で除外し、XDG / `~/.local/share` への誤フォールバックを封鎖。
 3. macOS 分岐（Containers / Application Support/PKB）はバイト列非破壊。
 4. 検証: `cargo +1.96.1 check --lib --features pocket-brain,secure-vault --target aarch64-apple-ios-sim` → Finished (exit 0)。
+
+### 4.24 M19-C — iOS Simulator GGUF injection helper (2026-07-20)
+
+**射程:** 開発補助スクリプトのみ。Rust / React 非破壊。モデル自動ダウンロード禁止（手動配置の GGUF を sim コンテナへコピーするだけ）。
+
+**as-built:**
+1. `apps/desktop/scripts/inject_ios_model.sh` — `xcrun simctl get_app_container booted com.ai-shizu.pkb data` → `Library/Application Support/com.ai-shizu.pkb/models` を `mkdir -p` → ローカル GGUF を `pocket-brain.gguf` としてコピー（`MODEL_FILENAME` と一致）。
+2. 引数未指定時のソース候補: `apps/desktop/models/pocket-brain.gguf` → `pocketbrain.gguf`。
+3. 前提: シミュレータ起動済み + アプリが一度インストール済み（コンテナ未作成だと simctl が失敗する）。
+4. 実行権限: スクリプトは `chmod +x`（コミット時に `100755` を記録すること）。
+
+### 4.25 M20-A — Mobile responsive shell (2026-07-20)
+
+**射程:** React / CSS のみ。Rust 非破壊。外部 UI ライブラリ禁止。デスクトップ 7 タブ (`MainTab`) は不変。
+
+**as-built:**
+1. `@media (max-width: 768px)` で `.titlebar` と `.desktop-chrome` を `display: none`（ウィンドウ操作ボタンをモバイルで隠蔽）。
+2. `MobileChrome` + `MobileBottomNav` — RAG / Dashboard(Gap·Tensor) / Probe の 3 面。状態は `MobileSurface` のローカル `useState`（Zustand 禁止）。
+3. `useIsNarrowViewport` でモバイルツリーのマウントを制限し、デスクトップで Pocket Brain を二重起動しない。
+4. iOS LoadingScreen（engine 未 ready）でもボトムナビで Gap/Probe に到達可能。
+5. 検証: `npx tsc --noEmit`（apps/desktop）→ exit 0。
+
+### 4.26 M20-B — Mobile 7-tab parity (REJECT of 3-tab cut) (2026-07-20)
+
+**射程:** モバイルナビ再設計のみ。`.desktop-chrome` 非破壊。外部 UI ライブラリ禁止。
+
+**as-built (M20-A 3面省略を撤回):**
+1. `MobileSurface = "rag" | MainTab` — RAG + RECORD/IMPORT/CONSULT/INTERVIEW/PROBE/PROFILE/SETTINGS の全面を `MobileChrome` でマウント。
+2. Approach B: ボトムドック = RAG / **Interview** / Probe / Profile / Menu。Interview は常時1タップ。
+3. Approach A: `.mobile-tab-rail` 横スクロールチップで全 destination にスワイプ到達。
+4. Menu シート: 全 destination のオーバーレイ一覧（Escape / backdrop / Close）。
+5. 検証: `npx tsc --noEmit` → exit 0。
+
+### 4.27 M20-C — Messenger RAG + nav declutter (2026-07-20)
+
+**射程:** モバイル RAG UX とナビ渋滞解消。デスクトップ `.pocket-brain` / `.desktop-chrome` 非破壊。
+
+**as-built:**
+1. 横スクロール chip rail を撤去。ナビは **ボトムドック + Menu ドロワー** のみ。
+2. `PocketBrainPanel variant="messenger"` — 吹き出しタイムライン + sticky composer（`+` / 入力 / 送信）。
+3. 記憶取り込み・家計簿抽出・Vault は `RagActionSheet`（`+` でスライドアップ）へ集約。デスクトップは従来どおりインライン表示。
+4. 検証: `npx tsc --noEmit` → exit 0。
+
+### 4.28 M20-D — RECORD default + Menu dedupe + SETTINGS wiring (2026-07-20)
+
+**射程:** モバイルナビ再編と SETTINGS 誤検知修正。デスクトップ 7 タブ非破壊。
+
+**as-built:**
+1. 初期タブ = `record`。ドック = RECORD / CONSULT(messenger) / INTERVIEW / PROBE / MENU。
+2. RAG surface 廃止。CONSULT に `PocketBrainPanel variant="messenger"` を統合（モバイルのみ）。
+3. Menu = PROFILE / IMPORT / SETTINGS のみ（ドック項目を除外）。
+4. SETTINGS: `engineReady` ゲート + `getKnowledgeResearchPolicy` を best-effort 分離。LoadingScreen 中の `settings_get` 失敗を SETTINGS_LOAD と誤表示しない。
+5. 検証: `npx tsc --noEmit` → exit 0。
+
+### 4.29 M20-E — Mobile shell not trapped under LoadingScreen (2026-07-20)
+
+**根本原因:** `App` が `!ready` の間だけ `LoadingScreen` 内の `MobileChrome engineReady={false}` を出し、iOS（engine が ready にならない／遅い）では SETTINGS が永久にゲートされた。ルーティング switch 欠落ではなかった。
+
+**as-built:**
+1. `useIsNarrowViewport()` が真なら App 直下で常時 `MobileChrome` をマウントし、`engineReady={ready}` をライブ伝播。
+2. デスクトップは従来どおり LoadingScreen → 7タブ。ready シェルから MobileChrome 二重マウントを除去。
+3. `SettingsTab` は prop に加え `engineReady()` を live probe。
+4. 検証: `npx tsc --noEmit` → exit 0。
+
+### 4.30 M20-F — Mobile declutter (noise / pill sub-tabs) (2026-07-20)
+
+**射程:** `.mobile-chrome` 内のみ。デスクトップ Foxtrot 表示は不変。
+
+**as-built:**
+1. `.dev-noise` + `.desktop-only` / `.mobile-only` で M18 解説・schema/model_hash・モード長 hint をモバイル非表示。
+2. INTERVIEW/PROBE の `.sub-tabs-pills` — 横スクロール pill（縦長カード崩壊を解消）。短ラベル（ケース/GD/多段…）。
+3. 余白・§装飾・term コーナーを圧縮。CONSULT messenger は RAG 表記をやめ、GGUF パスエラーを短縮。
+4. 検証: `npx tsc --noEmit` → exit 0。
+
+### 4.31 M20-G — CONSULT composer + Interview/Probe consolidation (2026-07-20)
+
+**CONSULT 入力消失の根本原因:** `.mobile-content-rag { overflow: hidden }` 配下の flex 列で、エラー帯やメッセージ領域が伸びると `.rag-composer` がビューポート下端（ドック裏）にクリップされていた。エンジン状態で unmount していたわけではない。
+
+**as-built:**
+1. `.mobile-chrome .rag-composer` を `position: fixed`（ドック直上）。入力は常時表示。
+2. アラーム status バナーは × で閉じる + 8s 自動消去。
+3. INTERVIEW: モバイルで `es_review`(ES旧) 除外し ES=`es_pocket` のみ。Pill 直下に共有 `CompanyFactsForm`（全モード共通 EDINET/企業コンテキスト）。
+4. PROBE: モバイルは `PocketProbePanel` 単一画面（PULSE / 旧 pill 削除）。デスクトップ 3 面は維持。
+5. 検証: `npx tsc --noEmit` → exit 0。
+
+### 4.32 M20-H — Mobile UX polish (vertical labels / composer / noise / stepper / ACTIONS) (2026-07-20)
+
+**射程:** `.mobile-chrome` 内の UX 欠陥修正。デスクトップ Foxtrot 機能は不変。コミットは指揮官指示待ち。
+
+**as-built:**
+1. 縦書き様ラベル: `.term-source-name` を `flex: 0 0 auto` + `white-space: nowrap` + `writing-mode: horizontal-tb`。モバイル `.config-row` はラベル上・フィールド下の縦スタック。
+2. CONSULT composer: `bottom: calc(56px + safe-area)`（ドック全高の直上）。safe-area の二重加算を廃止。タップ領域 44px。
+3. PROBE / 多段: ユーザー向け文言から API 名・M17/Gap/Oracle ノイズを除去。モバイル多段は自然語ヒントのみ。
+4. RollColumn: ▲=`+1` / ▼=`-1`（上=増加・下=減少）。
+5. ACTIONS: 見出し「AIへのデータ提供」+ lead 文。`friendly` で「メモの学習」「支出データの抽出」。`task: kakeibo_v1` はシート非表示。
+6. 検証: `npx tsc --noEmit` → exit 0。
 
 ### 4.8 M3 Phase 0-A — SQLCipher / Security.framework iOS link gate (2026-07-18)
 

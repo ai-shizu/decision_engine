@@ -16,11 +16,22 @@ export function RollColumn({ label, values, index, onIndexChange, wide }: RollCo
   return (
     <div className={wide ? "roll-column roll-column-wide" : "roll-column"}>
       <span className="roll-label">{label}</span>
-      <button type="button" className="roll-btn" aria-label={`${label} 前へ`} onClick={() => roll(-1)}>
+      {/* Up = next/higher index (intuitive increment for ascending value lists). */}
+      <button
+        type="button"
+        className="roll-btn"
+        aria-label={`${label} 増やす`}
+        onClick={() => roll(1)}
+      >
         ▲
       </button>
       <span className="roll-display">{values[safeIndex]}</span>
-      <button type="button" className="roll-btn" aria-label={`${label} 次へ`} onClick={() => roll(1)}>
+      <button
+        type="button"
+        className="roll-btn"
+        aria-label={`${label} 減らす`}
+        onClick={() => roll(-1)}
+      >
         ▼
       </button>
     </div>

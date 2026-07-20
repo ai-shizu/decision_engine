@@ -10,8 +10,7 @@ export interface RagActionSheetProps {
 }
 
 /**
- * M20-C: messenger-mode action sheet — ingest / finance extraction / vault.
- * Mounted only from PocketBrainPanel variant="messenger".
+ * Messenger "+" sheet: AI context provisioning (ingest / spend extract / vault).
  */
 export function RagActionSheet({ open, modelReady, onClose }: RagActionSheetProps) {
   const titleId = useId();
@@ -46,7 +45,7 @@ export function RagActionSheet({ open, modelReady, onClose }: RagActionSheetProp
         onClick={(e) => e.stopPropagation()}
       >
         <div className="rag-action-sheet-head">
-          <h2 id={titleId}>Actions</h2>
+          <h2 id={titleId}>AIへのデータ提供</h2>
           <button
             ref={closeRef}
             type="button"
@@ -54,13 +53,22 @@ export function RagActionSheet({ open, modelReady, onClose }: RagActionSheetProp
             aria-label="閉じる"
             onClick={onClose}
           >
-            Close
+            閉じる
           </button>
         </div>
+        <p className="rag-action-lead">
+          ここに追加した内容は、チャット回答の前提知識（コンテキスト）として使われます。
+        </p>
         <div className="rag-action-sheet-body">
-          <RagIngestPanel modelReady={modelReady} />
-          <ExtractionPanel modelReady={modelReady} />
-          <VaultPanel />
+          <section className="rag-action-section" aria-label="メモの学習">
+            <RagIngestPanel modelReady={modelReady} friendly />
+          </section>
+          <section className="rag-action-section" aria-label="支出データの抽出">
+            <ExtractionPanel modelReady={modelReady} friendly />
+          </section>
+          <section className="rag-action-section" aria-label="暗号化保管庫">
+            <VaultPanel />
+          </section>
         </div>
       </div>
     </div>

@@ -48,7 +48,7 @@ export function PocketProbePanel() {
     } catch (e) {
       const message = isPocketBrainInvokeError(e)
         ? e.message
-        : `probe load: ${String(e)}`;
+        : "状態の読み込みに失敗しました。しばらくしてからもう一度お試しください。";
       dispatch({ type: "load_failure", message });
     }
   }
@@ -69,7 +69,7 @@ export function PocketProbePanel() {
     } catch (e) {
       const message = isPocketBrainInvokeError(e)
         ? e.message
-        : `probe_next_question: ${String(e)}`;
+        : "次の質問を取得できませんでした。しばらくしてからもう一度お試しください。";
       dispatch({ type: "next_failure", message });
     }
   }
@@ -93,7 +93,7 @@ export function PocketProbePanel() {
     } catch (e) {
       const message = isPocketBrainInvokeError(e)
         ? e.message
-        : `probe_submit_answer: ${String(e)}`;
+        : "回答の送信に失敗しました。しばらくしてからもう一度お試しください。";
       dispatch({ type: "submit_failure", message });
     }
   }
@@ -169,7 +169,10 @@ export function PocketProbePanel() {
 
       {state.phase === "complete" && (
         <div className="term-panel probe-complete" role="status">
-          <p className="term-header">SESSION_COMPLETE</p>
+          <p className="term-header">
+            <span className="desktop-only">SESSION_COMPLETE</span>
+            <span className="mobile-only">セッション完了</span>
+          </p>
           <p className="hint">
             この軸の次質問はありません。ロビーから新しい質問を開始できます。
           </p>
@@ -191,7 +194,7 @@ export function PocketProbePanel() {
                 <p className="term-label">
                   {AXIS_LABELS[state.question.axis] ?? state.question.axis} /{" "}
                   {state.question.stage}
-                  <span className="probe-axis-metric">
+                  <span className="probe-axis-metric dev-noise">
                     {" "}
                     pri {state.question.priority.toFixed(3)}
                   </span>
@@ -200,7 +203,7 @@ export function PocketProbePanel() {
               </>
             ) : (
               <p className="hint">
-                「次の質問」で `probe_next_question` が選んだ静的バンク質問を表示します。
+                「次の質問」で次の自己探索の問いを表示します。
               </p>
             )}
           </div>
@@ -263,9 +266,7 @@ export function PocketProbePanel() {
       )}
 
       {state.bank.length > 0 && (
-        <p className="hint">
-          質問バンク {state.bank.length} 件（`get_probe_questions`）
-        </p>
+        <p className="hint">質問リスト {state.bank.length} 件</p>
       )}
 
       {state.error && (

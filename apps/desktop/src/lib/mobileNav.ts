@@ -11,7 +11,7 @@ export const MOBILE_DOCK_PRIMARY: {
   { id: "record", label: "RECORD", caption: "記録" },
   { id: "consult", label: "CONSULT", caption: "チャット" },
   { id: "interview", label: "INTERVIEW", caption: "面接" },
-  { id: "probe", label: "PROBE", caption: "Pulse" },
+  { id: "probe", label: "PROBE", caption: "自己探索" },
 ];
 
 /** Menu-only destinations — must not duplicate dock primaries. */

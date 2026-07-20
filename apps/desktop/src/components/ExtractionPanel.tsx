@@ -30,6 +30,8 @@ export interface ExtractionPanelProps {
   /** When false, extract is blocked (model not loaded). Input stays editable. */
   readonly modelReady?: boolean;
   readonly sink?: ExtractionSink;
+  /** Soften copy for messenger action sheet (desktop chrome unchanged when false). */
+  readonly friendly?: boolean;
 }
 
 function FieldRow(props: {
@@ -67,6 +69,7 @@ function FieldRow(props: {
 export function ExtractionPanel(props: ExtractionPanelProps): ReactElement {
   const modelReady = props.modelReady ?? true;
   const sink = props.sink ?? defaultSink;
+  const friendly = props.friendly ?? false;
   const [state, dispatch] = useReducer(extractionReducer, INITIAL_EXTRACTION_STATE);
   const nextRequestId = useRef(1);
   /** Guards against double completion handling for the same request. */
@@ -206,27 +209,35 @@ export function ExtractionPanel(props: ExtractionPanelProps): ReactElement {
   return (
     <section
       className="extraction-panel"
-      aria-label="家計簿抽出"
+      aria-label={friendly ? "支出データの抽出" : "家計簿抽出"}
       style={{
         textAlign: "left",
         width: "100%",
-        marginTop: 16,
-        borderTop: "1px solid #444",
-        paddingTop: 12,
+        marginTop: friendly ? 0 : 16,
+        borderTop: friendly ? "none" : "1px solid #444",
+        paddingTop: friendly ? 0 : 12,
       }}
     >
       <header style={{ padding: "0 12px 8px" }}>
-        <strong>家計簿抽出</strong>
-        <span style={{ marginLeft: 8, opacity: 0.7, fontSize: "0.9em" }}>
-          task: {TASK_KAKEIBO_V1}
-        </span>
+        <strong>{friendly ? "支出データの抽出" : "家計簿抽出"}</strong>
+        {!friendly ? (
+          <span style={{ marginLeft: 8, opacity: 0.7, fontSize: "0.9em" }}>
+            task: {TASK_KAKEIBO_V1}
+          </span>
+        ) : null}
       </header>
 
       <div style={{ padding: "0 12px", display: "flex", flexDirection: "column", gap: 8 }}>
-        <label htmlFor="extraction-input">抽出テキスト</label>
+        {friendly ? (
+          <p style={{ margin: 0, fontSize: 12, opacity: 0.75 }}>
+            買い物メモなどから日付・金額・用途を抜き出し、AI の前提知識に加えます。
+          </p>
+        ) : (
+          <label htmlFor="extraction-input">抽出テキスト</label>
+        )}
         <textarea
           id="extraction-input"
-          aria-label="家計簿抽出テキスト"
+          aria-label={friendly ? "支出メモ" : "家計簿抽出テキスト"}
           value={state.input}
           onChange={(e) => onInputChange(e.target.value)}
           rows={3}
@@ -237,7 +248,7 @@ export function ExtractionPanel(props: ExtractionPanelProps): ReactElement {
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
           <button
             type="button"
-            aria-label="家計簿を抽出"
+            aria-label={friendly ? "支出を抽出" : "家計簿を抽出"}
             onClick={() => void onExtract()}
             disabled={!canExtract}
           >
@@ -263,7 +274,9 @@ export function ExtractionPanel(props: ExtractionPanelProps): ReactElement {
 
         {!modelReady && (
           <p role="status" style={{ opacity: 0.7, margin: 0 }}>
-            モデルを読み込むと抽出できます
+            {friendly
+              ? "先にモデルを Load すると抽出できます"
+              : "モデルを読み込むと抽出できます"}
           </p>
         )}
 
@@ -296,27 +309,27 @@ export function ExtractionPanel(props: ExtractionPanelProps): ReactElement {
             }}
           >
             <FieldRow
-              label="date"
+              label={friendly ? "日付" : "date"}
               value={state.result.date}
               unknown={isUnknownField(state.result.date)}
             />
             <FieldRow
-              label="amount"
+              label={friendly ? "金額" : "amount"}
               value={formatAmountDisplay(state.result.amount)}
               unknown={state.result.amount === null}
             />
             <FieldRow
-              label="category"
+              label={friendly ? "カテゴリ" : "category"}
               value={state.result.category}
               unknown={isUnknownField(state.result.category)}
             />
             <FieldRow
-              label="payee"
+              label={friendly ? "支払先" : "payee"}
               value={state.result.payee}
               unknown={isUnknownField(state.result.payee)}
             />
             <FieldRow
-              label="memo"
+              label={friendly ? "メモ" : "memo"}
               value={state.result.memo}
               unknown={isUnknownField(state.result.memo)}
             />
