@@ -8,6 +8,7 @@ use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
 use serde_json::{json, Value};
+#[cfg(not(mobile))]
 use tauri::{AppHandle, Emitter};
 
 #[cfg(not(debug_assertions))]
@@ -360,7 +361,6 @@ pub struct EngineManager {
     ready: Mutex<bool>,
     restart_lock: Mutex<()>,
     event_sink: Mutex<Option<EventSink>>,
-    app: Mutex<Option<AppHandle>>,
 }
 
 impl EngineManager {
@@ -375,7 +375,6 @@ impl EngineManager {
             ready: Mutex::new(false),
             restart_lock: Mutex::new(()),
             event_sink: Mutex::new(None),
-            app: Mutex::new(None),
         })
     }
 
@@ -383,6 +382,10 @@ impl EngineManager {
         eprintln!("[PKB] {line}");
     }
 
+    // Desktop-only (and unit tests): iOS mobile setup never starts the Python
+    // sidecar, so this API is cfg-gated to keep `cargo check --target …-ios*`
+    // warning-free without deleting the desktop event path.
+    #[cfg(any(test, not(mobile)))]
     pub(crate) fn install_event_sink(self: &Arc<Self>, sink: EventSink) {
         *self.event_sink.lock().unwrap() = Some(sink);
     }
@@ -427,11 +430,14 @@ impl EngineManager {
         *self.ready.lock().unwrap() = false;
     }
 
+    /// Boot the Python sidecar and wire intermediate IPC events to the UI.
+    /// Desktop only — iOS has no sidecar (`lib.rs` `#[cfg(mobile)]` path).
+    #[cfg(not(mobile))]
     pub async fn start(self: &Arc<Self>, app: AppHandle) -> Result<(), String> {
-        *self.app.lock().unwrap() = Some(app.clone());
-        let app_for_sink = app;
+        // AppHandle is captured by the sink only; do not store a second copy
+        // on EngineManager (that field was never read and warned as dead_code).
         self.install_event_sink(Box::new(move |payload: &Value| {
-            if let Err(e) = app_for_sink.emit("pkb-engine-event", payload) {
+            if let Err(e) = app.emit("pkb-engine-event", payload) {
                 EngineManager::log(&format!("イベント転送失敗: {e}"));
             }
         }));

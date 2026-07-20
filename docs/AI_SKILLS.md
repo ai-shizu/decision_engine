@@ -27,7 +27,7 @@
 | 永続化境界・シリアライズ・runtime検証・IPC契約 | §1, §16 (SKILL-PKB-BOUNDARY-V3), `docs/architecture/INCIDENT_LEDGER.md` |
 | macOS ビルド・配布・コード署名 | §1, §2.3, §4 |
 | Tauri iOS (M0〜) 初期化・シミュレータ | §1, §2.3, §4.4, `docs/M0_IOS_INIT_INSTRUCTIONS.md` |
-| Pocket Brain / on-device LLM (M4〜M5) / OOM defense (M7) | §1, §4.5, §4.6, §4.7, §4.7b, §5, `docs/m5_action_plan.md` |
+| Pocket Brain / on-device LLM (M4〜M5) / OOM defense (M7) / 浄化 (M8) | §1, §1.1, §4.5, §4.6, §4.7, §4.7b, §4.7c, §5, `docs/m5_action_plan.md` |
 | SQLCipher vault / Keychain (M3) | §1, §4.8, `docs/m3_action_plan.md` |
 | LLM モデル選定・consult/KV キャッシュ | §1, §5, §7, §8 |
 | 検索エンジン・mmap・LSM 索引 | §1, §9, §10 |
@@ -85,6 +85,23 @@
    - RECORD 保存・カレンダー同期で profiler を走らせるな（`sync_diary_index()` のみ）。
    - profiler の自動実行は LINE 取込 (`import.line`) のみ。他で走らせたければユーザーに聞く前に HANDOFF を読み直せ。
    - 埋め込みモデル・llama.cpp子プロセスは初回 consult / profiler まで起動しない（遅延初期化）。起動を早めるな。
+
+### 1.1 Pocket Brain / iOS メモリ — 絶対の掟 (M7 確定 / M8 明文化)
+
+**以下3条は交渉不可能。破ると Jetsam / UI フリーズ / コマンド未登録が静かに起きる。**
+
+1. **iOS ネイティブコールバック（Objective-C フック）内では、絶対に Mutex 取得や同期処理を行うな。**
+   許容されるのは `AtomicBool`（または同等）のロックフリー操作のみ。
+   正本: `LlmMemoryGovernor::request_purge` = `cancel` + `purge_requested` の atomic store 2 回。
+   `lifecycle.rs` の `onMemoryWarning` / background セレクタから重い処理を呼ぶな。
+
+2. **GB 級 LLM モデルの Drop（解放）は、必ず Rust ワーカーの `recv_timeout` ループ先頭へ委譲せよ。**
+   ワーカーが `take_purge()` を検知したら `model.take()` で解放し、メインスレッドをブロックさせるな。
+   ObjC コールバックや Jetsam sampler スレッドで `LlamaModel` を Drop するな。
+
+3. **LLM 機能を含む開発・ビルド・実行時は、必ず `--features pocket-brain`（または Tauri の `-f pocket-brain`）を付与せよ。**
+   feature 無しでは `llm_*` / `memory_monitor_*` / `llm_events` が登録されず、フロントは `Command … not found` になる。
+   `lifecycle.rs` の `LlmMemoryGovernor` フィールドも `#[cfg(feature = "pocket-brain")]` のみ。
 
 ---
 
@@ -441,14 +458,24 @@ rm -rf .boundary-tests-out
 
 ### 4.7b M7 Phase 7-B — OOM killer defense / LLM lifecycle purge (2026-07-20)
 
-**射程:** `pocket-brain` の `LlmMemoryGovernor` + worker `recv_timeout` purge、`secure-vault` iOS `lifecycle.rs` の MemoryWarning／background → `request_purge`、Jetsam `over_threshold` 立上りエッジ、`llm_events` Channel、フロント `subscribeLlmEvents`／`MemoryPurged` UI。M8 整理は対象外。
+**射程:** `pocket-brain` の `LlmMemoryGovernor` + worker `recv_timeout` purge、`secure-vault` iOS `lifecycle.rs` の MemoryWarning／background → `request_purge`、Jetsam `over_threshold` 立上りエッジ、`llm_events` Channel、フロント `subscribeLlmEvents`／`MemoryPurged` UI。
 
-**as-built / 不変条件:**
+**as-built / 不変条件:** （絶対の掟の正本は **§1.1**。本節は実装対応表。）
 1. **ObjC コールバックはロックフリーのみ。** `request_purge` = `cancel` + `purge_requested` の atomic store 2 回。Mutex／モデル Drop／同期 IPC 禁止。重い Drop は LLM worker のみ。
 2. **worker は `recv_timeout(250ms)`。** ループ先頭で `take_purge()` → `model.take()` → `MemPhase::Baseline` → `LlmLifecycleEvent::MemoryPurged`。
 3. **トリガー3系統:** (a) `UIApplicationDidReceiveMemoryWarningNotification` (b) background／protected-data（既存 vault auto-lock と同セレクタ経路で LLM purge も発火）(c) Jetsam sampler の `over_threshold` 立上りエッジ → hook → `request_purge`。
 4. **`lifecycle.rs` の `llm: Arc<LlmMemoryGovernor>` は `#[cfg(feature = "pocket-brain")]` のみ。** `install_auto_lock` 引数も同様。
 5. **フロント:** `parseLlmLifecycleEvent` 厳格パーサ、`subscribeLlmEvents`、`PocketBrainPanel` が `memory_purged` で cancel + `modelReady=false` + 再ロード待機メッセージ。
+
+### 4.7c M8 — Codebase purification (2026-07-20)
+
+**射程:** dead_code / unused warning の殲滅、TS `src/` の console・未使用 import 監査、§1.1 への M7 絶対の掟の明文化。EDINET / RAG / sqlite-vec（M9+）は対象外。機能ロジック（M3 vault / M6 streaming / M7 OOM）の挙動変更禁止。
+
+**as-built:**
+1. `EngineManager.app`（未読フィールド）を削除。`start` は `#[cfg(not(mobile))]`、`install_event_sink` は `#[cfg(any(test, not(mobile)))]` — iOS では sidecar 非起動のため。
+2. `os_sandbox::take_standard_child` を `linux|macos` のみに cfg（iOS は unsupported stub）。
+3. `apps/desktop/src/` 監査: `console.log` 無し、`tsc --noUnusedLocals` クリーン（削除対象なし）。
+4. 検証ゲート: iOS sim `cargo +1.96.1 check …` は **warning 0**、`npx tsc --noEmit` GREEN。
 
 ### 4.8 M3 Phase 0-A — SQLCipher / Security.framework iOS link gate (2026-07-18)
 

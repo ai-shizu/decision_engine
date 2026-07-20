@@ -52,7 +52,9 @@ pub fn spawn_kernel_sandboxed(
     platform::spawn(command, data_root)
 }
 
-#[cfg(not(windows))]
+// Used only by the Linux seccomp + macOS App Sandbox spawn paths. iOS falls
+// through to the unsupported-OS stub and must not see a dead helper.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 fn take_standard_child(mut child: Child) -> Result<SandboxedProcess, SandboxUnavailable> {
     let stdin = child
         .stdin
