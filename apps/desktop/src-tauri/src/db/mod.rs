@@ -18,6 +18,8 @@ mod analytics_repo;
 #[cfg(target_vendor = "apple")]
 mod knowledge_repo;
 #[cfg(target_vendor = "apple")]
+mod oracle_repo;
+#[cfg(target_vendor = "apple")]
 mod psychometrics_repo;
 #[cfg(target_vendor = "apple")]
 mod migrations;
@@ -36,6 +38,8 @@ mod worker;
 pub(crate) use analytics_repo::{GapAnalysisRow, TensorProfileRow};
 #[cfg(target_vendor = "apple")]
 pub(crate) use knowledge_repo::{KnowledgeChunkRow, KnowledgeSearchHit};
+#[cfg(target_vendor = "apple")]
+pub(crate) use oracle_repo::{OracleRunRow, TwinRunRow};
 #[cfg(target_vendor = "apple")]
 pub(crate) use psychometrics_repo::{PulseRunRow, ProbeStoreRow, RaschRunRow};
 #[cfg(target_vendor = "apple")]

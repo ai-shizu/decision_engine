@@ -1,15 +1,17 @@
-//! M14–M15 analytics: Gap / Tensor / Psychometrics (deterministic, offline).
+//! M14–M16 analytics: Gap / Tensor / Psychometrics / Twin / Oracle.
 //!
-//! Ports the non-negotiable contracts from `core/gap_analysis.py`,
-//! `core/tensor_profile.py`, romance pulse, Dynamic Ordinal Rasch, and PROBE.
-//! LLM is never an authority for scores — discovery is code-only; [`prompt`]
-//! only builds languageization text.
+//! Deterministic only — LLM never updates scores or interventions.
+//! Echo sterile payload: [`oracle`]. State equation: [`digital_twin`].
 
 pub mod commands;
+pub mod commands_oracle;
 pub mod commands_psychometrics;
+pub mod coupling;
+pub mod digital_twin;
 pub mod gap;
 pub mod input;
 pub mod nonlinear;
+pub mod oracle;
 pub mod probe;
 pub mod prompt;
 pub mod rasch;

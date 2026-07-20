@@ -8,7 +8,7 @@ use std::{error::Error, fmt};
 
 use rusqlite::{Connection, TransactionBehavior};
 
-pub(crate) const LATEST_SCHEMA_VERSION: i64 = 4;
+pub(crate) const LATEST_SCHEMA_VERSION: i64 = 5;
 
 /// Canonical embedding width for `knowledge_chunks.embedding` (M9 foundation).
 /// Matches the historical PKBVEC01 384-d space; a future 768-d migration would
@@ -104,6 +104,32 @@ CREATE TABLE IF NOT EXISTS probe_store (
 );
 "#;
 
+const MIGRATION_V5_SQL: &str = r#"
+CREATE TABLE IF NOT EXISTS twin_scenario_runs (
+    id TEXT PRIMARY KEY NOT NULL,
+    created_at INTEGER NOT NULL,
+    schema_version TEXT NOT NULL,
+    gate_passed INTEGER NOT NULL,
+    bss REAL NOT NULL,
+    payload_json TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_twin_runs_created
+    ON twin_scenario_runs(created_at DESC, id DESC);
+
+CREATE TABLE IF NOT EXISTS oracle_payload_runs (
+    id TEXT PRIMARY KEY NOT NULL,
+    created_at INTEGER NOT NULL,
+    schema_version TEXT NOT NULL,
+    gate_passed INTEGER NOT NULL,
+    payload_json TEXT NOT NULL,
+    provenance_json TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_oracle_runs_created
+    ON oracle_payload_runs(created_at DESC, id DESC);
+"#;
+
 const READ_CHATS_COLUMNS_SQL: &str =
     "SELECT name, type, \"notnull\", pk FROM pragma_table_info('chats') ORDER BY cid;";
 const READ_MESSAGES_COLUMNS_SQL: &str =
@@ -145,6 +171,11 @@ const MIGRATIONS: &[Migration] = &[
         version: 4,
         sql: MIGRATION_V4_SQL,
         verify: verify_v4_schema,
+    },
+    Migration {
+        version: 5,
+        sql: MIGRATION_V5_SQL,
+        verify: verify_v5_schema,
     },
 ];
 
@@ -431,6 +462,50 @@ fn verify_v2_schema(connection: &Connection) -> Result<(), MigrationError> {
 
     // Debug assert keeps the constant and DDL string in lockstep.
     debug_assert_eq!(KNOWLEDGE_EMBEDDING_DIMS, 384);
+
+    Ok(())
+}
+
+fn verify_v5_schema(connection: &Connection) -> Result<(), MigrationError> {
+    verify_v4_schema(connection).map_err(|_| MigrationError::SchemaMismatch { version: 5 })?;
+
+    let twin_cols = read_columns(
+        connection,
+        "SELECT name, type, \"notnull\", pk FROM pragma_table_info('twin_scenario_runs') ORDER BY cid;",
+    )
+    .map_err(|_| MigrationError::SchemaMismatch { version: 5 })?;
+    if !columns_match(
+        &twin_cols,
+        &[
+            ("id", "TEXT", true, 1),
+            ("created_at", "INTEGER", true, 0),
+            ("schema_version", "TEXT", true, 0),
+            ("gate_passed", "INTEGER", true, 0),
+            ("bss", "REAL", true, 0),
+            ("payload_json", "TEXT", true, 0),
+        ],
+    ) {
+        return Err(MigrationError::SchemaMismatch { version: 5 });
+    }
+
+    let oracle_cols = read_columns(
+        connection,
+        "SELECT name, type, \"notnull\", pk FROM pragma_table_info('oracle_payload_runs') ORDER BY cid;",
+    )
+    .map_err(|_| MigrationError::SchemaMismatch { version: 5 })?;
+    if !columns_match(
+        &oracle_cols,
+        &[
+            ("id", "TEXT", true, 1),
+            ("created_at", "INTEGER", true, 0),
+            ("schema_version", "TEXT", true, 0),
+            ("gate_passed", "INTEGER", true, 0),
+            ("payload_json", "TEXT", true, 0),
+            ("provenance_json", "TEXT", true, 0),
+        ],
+    ) {
+        return Err(MigrationError::SchemaMismatch { version: 5 });
+    }
 
     Ok(())
 }

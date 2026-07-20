@@ -27,7 +27,7 @@
 | 永続化境界・シリアライズ・runtime検証・IPC契約 | §1, §16 (SKILL-PKB-BOUNDARY-V3), `docs/architecture/INCIDENT_LEDGER.md` |
 | macOS ビルド・配布・コード署名 | §1, §2.3, §4 |
 | Tauri iOS (M0〜) 初期化・シミュレータ | §1, §2.3, §4.4, `docs/M0_IOS_INIT_INSTRUCTIONS.md` |
-| Pocket Brain / on-device LLM (M4〜M5) / OOM defense (M7) / 浄化 (M8) / local RAG (M9〜M13) / Gap·Tensor (M14) / Psychometrics (M15) | §1, §1.1, §4.5〜§4.15, §5, §6, §7.1, `docs/m5_action_plan.md` |
+| Pocket Brain / on-device LLM (M4〜M5) / OOM defense (M7) / 浄化 (M8) / local RAG (M9〜M13) / Gap·Tensor (M14) / Psychometrics (M15) / Twin·Oracle (M16) | §1, §1.1, §4.5〜§4.16, §5, §6, §7.1, §12, `docs/m5_action_plan.md` |
 | SQLCipher vault / Keychain (M3) | §1, §4.8, `docs/m3_action_plan.md` |
 | LLM モデル選定・consult/KV キャッシュ | §1, §5, §7, §8 |
 | 検索エンジン・mmap・LSM 索引 | §1, §9, §10 |
@@ -572,6 +572,22 @@ rm -rf .boundary-tests-out
 **スキーマ v4:** `interaction_pulse_runs` / `rasch_filter_runs` / `probe_store`。
 
 **コマンド:** `calculate_interaction_pulse` / `evaluate_rasch_scale` / `rasch_select_next_item` / `get_probe_questions` / `probe_next_question` / `probe_submit_answer` / `get_probe_status` / `get_latest_rasch_state`。
+
+### 4.16 M16 — Digital Twin & Oracle orchestration (Rust) (2026-07-20)
+
+**射程:** Echo E2〜E4 の決定論コアを Pocket Brain Vault 上に統合。`coupling` / `digital_twin` / `oracle` を Rust 実装。UI・LLM 権威更新・E5 C++ カーネルは対象外。
+
+**状態方程式 (§3.4):**
+`R(t+1)=clip(R+ρ(1−R)rec−β₁ℓ_sw−β₂ℓ_vol−γ frict, R_floor=0.05, 1)`。
+Pocket Brain 経路は M14 tensor + M15 pulse/Rasch + gap sufficiency から loads を導出し、prior θ でシナリオ前進。系列 (N≥731) が IPC で渡されたときのみ FFT coupling を計算。
+
+**Oracle (`oracle_payload.v1`):** sterile JSON（自由文禁止）+ 外側 `provenance`（vault run id）。介入は INTERVENTION_BANK 選択のみ (I-19)。gate_passed=false なら forecast/interventions 空。
+
+**スキーマ v5:** `twin_scenario_runs` / `oracle_payload_runs`。
+
+**コマンド:** `evaluate_digital_twin_scenario` / `generate_oracle_payload`。
+
+**不変条件:** 面接/GD 議論へ Echo 不出 (I-22)。乱数禁止（決定論バンド）。既存 M7/Vault/RAG コマンド非破壊。
 
 ### 4.8 M3 Phase 0-A — SQLCipher / Security.framework iOS link gate (2026-07-18)
 

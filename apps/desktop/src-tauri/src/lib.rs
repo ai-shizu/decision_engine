@@ -169,6 +169,10 @@ pub fn run() {
             analytics::commands_psychometrics::get_probe_status,
             #[cfg(all(feature = "secure-vault", target_vendor = "apple"))]
             analytics::commands_psychometrics::get_latest_rasch_state,
+            #[cfg(all(feature = "secure-vault", target_vendor = "apple"))]
+            analytics::commands_oracle::evaluate_digital_twin_scenario,
+            #[cfg(all(feature = "secure-vault", target_vendor = "apple"))]
+            analytics::commands_oracle::generate_oracle_payload,
             #[cfg(all(
                 feature = "pocket-brain",
                 feature = "secure-vault",

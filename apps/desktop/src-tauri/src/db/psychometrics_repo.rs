@@ -56,6 +56,31 @@ pub(crate) fn insert_pulse_run(
     Ok(())
 }
 
+pub(crate) fn latest_pulse_run(
+    connection: &Connection,
+) -> Result<Option<PulseRunRow>, RepositoryError> {
+    let mut stmt = connection
+        .prepare(
+            "SELECT id, created_at, affinity_score, interaction_tendency, \
+                    next_best_action, metrics_json, input_hash \
+             FROM interaction_pulse_runs ORDER BY created_at DESC, id DESC LIMIT 1",
+        )
+        .map_err(map_storage_error)?;
+    let mut rows = stmt.query([]).map_err(map_storage_error)?;
+    match rows.next().map_err(map_storage_error)? {
+        Some(row) => Ok(Some(PulseRunRow {
+            id: row.get(0).map_err(map_storage_error)?,
+            created_at: row.get(1).map_err(map_storage_error)?,
+            affinity_score: row.get(2).map_err(map_storage_error)?,
+            interaction_tendency: row.get(3).map_err(map_storage_error)?,
+            next_best_action: row.get(4).map_err(map_storage_error)?,
+            metrics_json: row.get(5).map_err(map_storage_error)?,
+            input_hash: row.get(6).map_err(map_storage_error)?,
+        })),
+        None => Ok(None),
+    }
+}
+
 pub(crate) fn upsert_rasch_run(
     connection: &Connection,
     row: &RaschRunRow,
