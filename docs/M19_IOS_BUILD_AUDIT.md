@@ -46,4 +46,4 @@
 
 ## Known follow-up (logic — out of M19-A scope)
 
-`paths.rs::user_data_root()` has no `target_os = "ios"` branch. On iOS it currently falls into the Unix/non-macOS arm (`~/.local/share/PKB` / `XDG_DATA_HOME`), which is **incorrect** for the iOS container. Fix in a later M19 logic ticket — **not** in this config-only phase.
+~~`paths.rs::user_data_root()` has no `target_os = "ios"` branch.~~ **Fixed in M19-B** (`feature/m19-ios-sandbox-paths`): iOS → `$HOME/Library/Application Support/com.ai-shizu.pkb`.

@@ -26,7 +26,7 @@
 | Tauri/Rust sidecar・stdio IPC・artifact署名 | §1, §2.1, §2.3, §2.5, §9, §16 |
 | 永続化境界・シリアライズ・runtime検証・IPC契約 | §1, §16 (SKILL-PKB-BOUNDARY-V3), `docs/architecture/INCIDENT_LEDGER.md` |
 | macOS ビルド・配布・コード署名 | §1, §2.3, §4 |
-| Tauri iOS (M0〜) 初期化・シミュレータ | §1, §2.3, §4.4, §4.22, `docs/M0_IOS_INIT_INSTRUCTIONS.md`, `docs/M19_IOS_BUILD_AUDIT.md` |
+| Tauri iOS (M0〜) 初期化・シミュレータ | §1, §2.3, §4.4, §4.22, §4.23, `docs/M0_IOS_INIT_INSTRUCTIONS.md`, `docs/M19_IOS_BUILD_AUDIT.md` |
 | Pocket Brain / on-device LLM (M4〜M5) / OOM defense (M7) / 浄化 (M8) / local RAG (M9〜M13) / Gap·Tensor (M14) / Psychometrics (M15) / Twin·Oracle (M16) / Consult·Interview parity (M17) / Frontend API (M18) | §1, §1.1, §4.5〜§4.21, §5, §6, §7.1, §12, `docs/m5_action_plan.md` |
 | SQLCipher vault / Keychain (M3) | §1, §4.8, `docs/m3_action_plan.md` |
 | LLM モデル選定・consult/KV キャッシュ | §1, §5, §7, §8 |
@@ -284,7 +284,7 @@ cargo check
 - Sidecar は **`pkb-engine`（stdio JSON エンジン、エントリ `run_engine.py`）** である。FastAPI / HTTP サーバーは存在しないし、設計原則（完全オフライン）により**今後も導入禁止**。「pkb-api」という名前が指示に出てきたらそれは古い/誤った情報であり、`pkb-engine` に読み替えろ。
 - `externalBin: ["binaries/pkb-engine"]` は**二重化不要**。Tauri が target triple を自動付与して解決する: Windows は `pkb-engine-aarch64-pc-windows-msvc.exe`、macOS は `pkb-engine-aarch64-apple-darwin` / `pkb-engine-x86_64-apple-darwin`。**やることは正しいファイル名でバイナリを置くことだけ**（Windows: `scripts/build-engine.ps1`、macOS: `scripts/build-sidecar.sh`）。ファイルが無いと `tauri build` はその場で失敗する。
 - プラットフォーム差分は `tauri.conf.json` 本体ではなく **`tauri.macos.conf.json`**（自動マージされる platform-specific config）に書く。Windows の挙動を変えずに macOS を足すのが原則。
-- データルート: Windows `%LOCALAPPDATA%\PKB` / macOS production `~/Library/Containers/com.ai-shizu.pkb/Data/Library/Application Support/PKB` / macOS非sandbox dev `~/Library/Application Support/PKB`（`src-tauri/src/paths.rs::user_data_root()` の cfg 分岐）。releaseは`PKB_PROJECT_ROOT`とrepo探索を無視する。パスを変えるならここ**だけ**を変えろ。
+- データルート: Windows `%LOCALAPPDATA%\PKB` / macOS production `~/Library/Containers/com.ai-shizu.pkb/Data/Library/Application Support/PKB` / macOS非sandbox dev `~/Library/Application Support/PKB` / iOS `$HOME/Library/Application Support/com.ai-shizu.pkb`（`$HOME`=app container; Tauri `app_data_dir` と同型）（`src-tauri/src/paths.rs::user_data_root()` の cfg 分岐）。releaseは`PKB_PROJECT_ROOT`とrepo探索を無視する。パスを変えるならここ**だけ**を変えろ。
 - ネイティブ実行ファイル名は Python 側で `core/paths.py` の `SEARCH_EXE` / `LLAMA_CLI_EXE` に集約済み（Windows のみ `.exe`）。**`"xxx.exe"` という文字列リテラルを新たに書いた時点で不合格。**
 
 ### 4.1 GitHub Actions — Mac 用 (aarch64 / x86_64) ビルド構成
@@ -650,6 +650,16 @@ Pocket Brain 経路は M14 tensor + M15 pulse/Rasch + gap sufficiency から loa
 6. 検証実測: `cargo check --target aarch64-apple-ios-sim --features secure-vault --lib` → **Finished** (exit 0)。`tauri ios dev` は未実行（M19-A 禁止）。
 
 **既知フォロー (ロジック・本フェーズ外):** `paths.rs::user_data_root` に iOS 分岐が無く Unix 非 macOS 経路へ落ちる。Vault 永続パス修正は後続チケット。
+
+### 4.23 M19-B — iOS App Sandbox `user_data_root` (2026-07-20)
+
+**射程:** `paths.rs::user_data_root` の iOS 専用分岐のみ。Vault 暗号化・macOS/Linux/Windows 経路は不変。
+
+**as-built:**
+1. `#[cfg(target_os = "ios")]` → `$HOME/Library/Application Support/com.ai-shizu.pkb`（`$HOME` = アプリコンテナ）。Tauri `app.path().app_data_dir()` / Vault spawn と同型。
+2. Unix catch-all を `not(target_os = "ios")` で除外し、XDG / `~/.local/share` への誤フォールバックを封鎖。
+3. macOS 分岐（Containers / Application Support/PKB）はバイト列非破壊。
+4. 検証: `cargo +1.96.1 check --lib --features pocket-brain,secure-vault --target aarch64-apple-ios-sim` → Finished (exit 0)。
 
 ### 4.8 M3 Phase 0-A — SQLCipher / Security.framework iOS link gate (2026-07-18)
 
