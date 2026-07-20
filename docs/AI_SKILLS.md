@@ -26,7 +26,7 @@
 | Tauri/Rust sidecar・stdio IPC・artifact署名 | §1, §2.1, §2.3, §2.5, §9, §16 |
 | 永続化境界・シリアライズ・runtime検証・IPC契約 | §1, §16 (SKILL-PKB-BOUNDARY-V3), `docs/architecture/INCIDENT_LEDGER.md` |
 | macOS ビルド・配布・コード署名 | §1, §2.3, §4 |
-| Tauri iOS (M0〜) 初期化・シミュレータ | §1, §2.3, §4.4, `docs/M0_IOS_INIT_INSTRUCTIONS.md` |
+| Tauri iOS (M0〜) 初期化・シミュレータ | §1, §2.3, §4.4, §4.22, `docs/M0_IOS_INIT_INSTRUCTIONS.md`, `docs/M19_IOS_BUILD_AUDIT.md` |
 | Pocket Brain / on-device LLM (M4〜M5) / OOM defense (M7) / 浄化 (M8) / local RAG (M9〜M13) / Gap·Tensor (M14) / Psychometrics (M15) / Twin·Oracle (M16) / Consult·Interview parity (M17) / Frontend API (M18) | §1, §1.1, §4.5〜§4.21, §5, §6, §7.1, §12, `docs/m5_action_plan.md` |
 | SQLCipher vault / Keychain (M3) | §1, §4.8, `docs/m3_action_plan.md` |
 | LLM モデル選定・consult/KV キャッシュ | §1, §5, §7, §8 |
@@ -636,6 +636,20 @@ Pocket Brain 経路は M14 tensor + M15 pulse/Rasch + gap sufficiency から loa
 2. `lib/pulseViewReducer.ts` + `PulseRaschDashboard` — パルス親和度メーター + balance/switch/reply メーター。Rasch は 17 点事後分布の SVG スパークライン + Likert 0–4 + EAP θ̂。
 3. `ProbeTab` に surface `pb_probe` / `pulse_rasch` / `legacy`（Python sidecar 非破壊）。
 4. `RaschStateWire` 型を `types.ts` に追加し `getLatestRaschState` の戻り値を厳密化。
+
+### 4.22 M19-A — iOS build config audit (2026-07-20)
+
+**射程:** Tauri iOS ビルド構成の静的点検のみ。`tauri ios dev` 実行・Rust/React ロジック変更禁止。正本は `docs/M19_IOS_BUILD_AUDIT.md`。
+
+**検証結果 (base 不変):**
+1. `tauri.conf.json` — `identifier=com.ai-shizu.pkb` / `version=0.1.0` は Xcode 生成物と一致。base は Windows NSIS + sidecar 前提のまま（触らない）。
+2. `tauri.ios.conf.json` — bash ビルドコマンド、`create:true`、`externalBin:[]`、`minimumSystemVersion=17.0`、`Accelerate`+`LocalAuthentication`。M19-A で `infoPlist: Info.ios.plist` を追加。
+3. `Info.ios.plist` — M3 承認文言の `NSFaceIDUsageDescription` + `ITSAppUsesNonExemptEncryption=false`。`gen/apple` 手編集はしない。
+4. iOS entitlements 空 dict はコンテナ内 I/O のみなら正当。network entitlement 追加禁止。
+5. Cargo: `bundled-sqlcipher` / 静的 `sqlite-vec` / `pocket-brain` Metal は sim/device ターゲット向けに設計済み。`build.rs` は ios TARGET で sidecar placeholder を作らない。
+6. 検証実測: `cargo check --target aarch64-apple-ios-sim --features secure-vault --lib` → **Finished** (exit 0)。`tauri ios dev` は未実行（M19-A 禁止）。
+
+**既知フォロー (ロジック・本フェーズ外):** `paths.rs::user_data_root` に iOS 分岐が無く Unix 非 macOS 経路へ落ちる。Vault 永続パス修正は後続チケット。
 
 ### 4.8 M3 Phase 0-A — SQLCipher / Security.framework iOS link gate (2026-07-18)
 
