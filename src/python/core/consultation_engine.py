@@ -603,6 +603,7 @@ class ConsultationEngine:
     def __init__(self):
         self._embedder = None
         self._backend = None
+        self._llm_page_warmed = False
         # 検索デーモン (mmap ゼロコピー IPC)。初回検索まで起動しない遅延初期化
         self._search_daemon: SearchDaemonClient | None = None
         self._search_daemon_failed = False
@@ -1241,13 +1242,22 @@ class ConsultationEngine:
                     "テーマを提示し、最初に確認すべき前提を1つだけ問うこと。"
                 )
             else:
-                es = select_es(None)
-                use_registered_es = cfg.get("useRegisteredEs", cfg.get("use_registered_es", True))
-                if isinstance(use_registered_es, str):
-                    use_registered_es = use_registered_es.strip().lower() not in (
-                        "0", "false", "no", "off",
-                    )
-                if es is not None and use_registered_es:
+                # M20-N: esId で企業別 ES を明示選択。空/none = ゼロベース。
+                # 未指定時は後方互換で最新1件 (旧 useRegisteredEs 既定 True 相当)。
+                if "esId" in cfg or "es_id" in cfg:
+                    es_key = cfg.get("esId", cfg.get("es_id"))
+                    es = select_es("" if es_key is None else str(es_key))
+                else:
+                    use_registered = cfg.get(
+                        "useRegisteredEs", cfg.get("use_registered_es", True))
+                    if isinstance(use_registered, str):
+                        use_registered = use_registered.strip().lower() not in (
+                            "0", "false", "no", "off",
+                        )
+                    es = select_es(None) if use_registered else None
+                    if not use_registered:
+                        say("登録ESをスキップ: ゼロベース（config/ケース）面接")
+                if es is not None:
                     # ES 駆動: 面接官の専門性は ES のターゲットドメインに動的追従
                     # F-18: stance は config から読む (既定 adversarial)。
                     system = build_interviewer_persona(
@@ -1255,7 +1265,8 @@ class ConsultationEngine:
                     self._interview_state = {
                         "case": None, "es": es, "system": system,
                         "transcript": [], "latencies": [], "config": cfg}
-                    say(f"敵対的 ES 面接を開始: {es['target_domain']}")
+                    company = es.get("company_name") or es.get("name") or "ES"
+                    say(f"敵対的 ES 面接を開始: {company} / {es['target_domain']}")
                     prompt = (
                         f"# 候補者が提出した ES\n{es_body_for_prompt(es)}\n\n"
                         "この ES の記載内容【のみ】を根拠に面接を開始せよ。"
@@ -1263,8 +1274,6 @@ class ConsultationEngine:
                         "悪意を持った圧迫質問 (Adversarial Attack) を1つだけ投げること。"
                     )
                 else:
-                    if es is not None and not use_registered_es:
-                        say("登録ESをスキップ: ゼロベース（config/ケース）面接")
                     industry_id = str(cfg.get("industry") or "").strip()
                     genre_id = str(cfg.get("genre") or "").strip()
                     difficulty_id = str(cfg.get("difficulty") or "").strip()
@@ -1467,8 +1476,13 @@ class ConsultationEngine:
         from .es_manager import build_reviewer_persona, es_body_for_prompt, select_es
         say = status or (lambda msg: None)
         name_hint = query.strip()
-        es = select_es(name_hint if name_hint and name_hint not in
-                       INTERVIEW_START_COMMANDS else None)
+        if name_hint and name_hint not in INTERVIEW_START_COMMANDS:
+            es = select_es(name_hint)
+            # 未知ヒントは最新へフォールバック (旧単一ES時代の query 互換)
+            if es is None:
+                es = select_es(None)
+        else:
+            es = select_es(None)
         if es is None:
             return ("data/es/ に ES (.md / .txt) が見つかりません。"
                     "添削対象のファイルを配置してから再実行してください。")
@@ -1807,6 +1821,51 @@ class ConsultationEngine:
         daemon, self._search_daemon = self._search_daemon, None
         if daemon is not None:
             daemon.close()
+
+    def ensure_runtime_warm(self, *, probe_llm: bool = True) -> dict:
+        """CONSULT 用ランタイムを事前にメモリへ載せる (FSA-02: 単発 spawn は維持)。
+
+        - embedder / backend オブジェクトを遅延初期化済みにする
+        - 任意で 1 トークンの probe generate を一度だけ実行し、GGUF を
+          OS ページキャッシュへ載せる → 以降の推論のコールドスタートを消す
+        """
+        out = {
+            "embedder_ready": False,
+            "backend_ready": False,
+            "llm_probed": False,
+            "message": "",
+        }
+        try:
+            _ = self.embedder
+            out["embedder_ready"] = True
+        except Exception:  # noqa: BLE001
+            out["message"] = "embedder warm skipped"
+        backend = self.backend
+        out["backend_ready"] = backend is not None
+        if (
+            probe_llm
+            and not getattr(self, "_llm_page_warmed", False)
+            and hasattr(backend, "generate")
+            and type(backend).__name__ == "LlamaStdioBackend"
+        ):
+            try:
+                backend.generate(
+                    "You are a warmup probe. Reply with OK only.",
+                    "OK",
+                    max_tokens=1,
+                )
+                self._llm_page_warmed = True
+                out["llm_probed"] = True
+                out["message"] = "LLM runtime warmed (page cache)"
+            except Exception as exc:  # noqa: BLE001
+                out["message"] = f"LLM probe skipped: {type(exc).__name__}"
+        elif getattr(self, "_llm_page_warmed", False):
+            out["llm_probed"] = True
+            out["message"] = "LLM already warm"
+        else:
+            if not out["message"]:
+                out["message"] = "runtime objects ready"
+        return out
 
 
 # ============================================================ CLI (検証用)

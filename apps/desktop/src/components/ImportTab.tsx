@@ -2,20 +2,19 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import {
   classifyDocument,
-  esView,
+  esList,
   importDocument,
   importLineContent,
   importLineFiles,
   importStats,
-  knowledgeFetchPending,
   loadSettings,
   syncAppleCalendar,
   syncIcsContent,
   syncIcsFiles,
-  type KnowledgeFetchSummary,
+  type DocumentImportResult,
 } from "../lib/engine";
 import { parseEngineEvent } from "../lib/parseEngineResponse";
-import type { ClassifyResult, EngineEvent, EsView, SourceStat } from "../lib/types";
+import type { ClassifyResult, EngineEvent, EsListItem, SourceStat } from "../lib/types";
 import { uiErrorMessage } from "../lib/uiErrorMessages";
 import { useCorrelationId } from "../lib/useCorrelationId";
 
@@ -28,6 +27,15 @@ interface PendingItem {
   file: File;
   result: ClassifyResult;
   dest: "es" | "knowledge" | "skip";
+  companyName: string;
+}
+
+interface EsConflictPending {
+  fileName: string;
+  content: string;
+  companyName: string;
+  conflict: NonNullable<DocumentImportResult["conflict"]>;
+  message: string;
 }
 
 function classifyLabel(type: ClassifyResult["type"]): string {
@@ -74,10 +82,10 @@ export function ImportTab() {
   const [busy, setBusy] = useState(false);
   const [appleAvailable, setAppleAvailable] = useState(false);
   const [sources, setSources] = useState<Record<string, SourceStat>>({});
-  const [esActive, setEsActive] = useState<EsView | null>(null);
+  const [esItems, setEsItems] = useState<EsListItem[]>([]);
   const [log, setLog] = useState<string[]>(importLog);
   const [pending, setPending] = useState<PendingItem[]>([]);
-  const [fetchSummary, setFetchSummary] = useState<KnowledgeFetchSummary | null>(null);
+  const [esConflict, setEsConflict] = useState<EsConflictPending | null>(null);
   const lineRef = useRef<HTMLInputElement>(null);
   const icsRef = useRef<HTMLInputElement>(null);
   const otherRef = useRef<HTMLInputElement>(null);
@@ -106,12 +114,10 @@ export function ImportTab() {
     }
   }, []);
 
-  // F-16 (SPEC_FOXTROT_UI.md §10.2): 保持ES (active_es.md) の View 専用
-  // 取得。状態取得の純クエリなので cid は不要。
-  const refreshEsActive = useCallback(async () => {
+  const refreshEsList = useCallback(async () => {
     try {
-      const v = await esView();
-      if (mountedRef.current) setEsActive(v);
+      const items = await esList();
+      if (mountedRef.current) setEsItems(items);
     } catch {
       /* ignore */
     }
@@ -122,8 +128,8 @@ export function ImportTab() {
       if (mountedRef.current) setAppleAvailable(s.apple_calendar_available);
     });
     void refreshStats();
-    void refreshEsActive();
-  }, [refreshStats, refreshEsActive]);
+    void refreshEsList();
+  }, [refreshStats, refreshEsList]);
 
   // W-22: 解除関数を確実に return する。W-28/W-45〜W-49: 自分の in-flight
   // cid のイベントのみ処理する。
@@ -151,39 +157,35 @@ export function ImportTab() {
   }
 
   async function handleLine(files: FileList | null) {
-    const list = files ? Array.from(files) : [];
-    if (!list.length) return;
+    if (!files?.length) return;
     setBusy(true);
     const myCid = cid.begin();
     try {
-      const res = await importLineFiles(list, myCid);
-      const msg = res.message ?? `${list.length} 件の LINE 履歴を取り込みました`;
-      pushImportLog("ok" in res && res.ok === false ? `取り込み失敗: ${msg}` : msg);
+      const res = await importLineFiles(Array.from(files), myCid);
+      pushImportLog(
+        typeof res.message === "string" ? res.message : "LINE を取り込みました",
+      );
     } catch {
       pushImportLog(uiErrorMessage("LINE_IMPORT"));
     } finally {
       cid.end(myCid);
-      // W-29/W-46: 中断はしない (取込は継続済み) — フロント側の反映のみガードする。
       if (mountedRef.current) {
         setBusy(false);
         setLog([...importLog]);
-        resetInput(lineRef); // W-30: 同一ファイル再選択の onChange 無発火対策
       }
+      resetInput(lineRef);
       void refreshStats();
     }
   }
 
   async function handleIcs(files: FileList | null) {
-    const list = files ? Array.from(files) : [];
-    if (!list.length) return;
+    if (!files?.length) return;
     setBusy(true);
     const myCid = cid.begin();
     try {
-      const res = await syncIcsFiles(list, mode, myCid);
+      const res = await syncIcsFiles(Array.from(files), mode, myCid);
       pushImportLog(
-        typeof res.message === "string"
-          ? res.message
-          : `${list.length} 件の ICS を同期しました (${mode})`,
+        typeof res.message === "string" ? res.message : "ICS を同期しました",
       );
     } catch {
       pushImportLog(uiErrorMessage("ICS_SYNC"));
@@ -192,8 +194,8 @@ export function ImportTab() {
       if (mountedRef.current) {
         setBusy(false);
         setLog([...importLog]);
-        resetInput(icsRef);
       }
+      resetInput(icsRef);
       void refreshStats();
     }
   }
@@ -203,34 +205,51 @@ export function ImportTab() {
     const myCid = cid.begin();
     try {
       const res = await syncAppleCalendar(mode, myCid);
-      pushImportLog(typeof res.message === "string" ? res.message : "Appleカレンダーを同期しました");
+      pushImportLog(
+        typeof res.message === "string" ? res.message : "Apple カレンダーを同期しました",
+      );
     } catch {
       pushImportLog(uiErrorMessage("APPLE_CALENDAR_SYNC"));
     } finally {
       cid.end(myCid);
-      if (mountedRef.current) setBusy(false);
+      if (mountedRef.current) {
+        setBusy(false);
+        setLog([...importLog]);
+      }
       void refreshStats();
     }
   }
 
-  // F2-EXT 裁定1: classify は読み取り専用。ここでは一切書き込まない。
   async function handleOtherFiles(files: FileList | null) {
-    const list = files ? Array.from(files) : [];
-    if (!list.length) return;
-    const results = await Promise.all(
-      list.map(async (file) => {
-        const result = await classifyDocument(file);
-        const dest: PendingItem["dest"] =
-          result.type === "es" || result.type === "knowledge" ? result.type : "skip";
-        return { file, result, dest };
-      }),
-    );
-    setPending((prev) => [...prev, ...results]);
-    resetInput(otherRef);
+    if (!files?.length) return;
+    setBusy(true);
+    try {
+      const next: PendingItem[] = [];
+      for (const file of Array.from(files)) {
+        try {
+          const result = await classifyDocument(file);
+          const dest: PendingItem["dest"] =
+            result.type === "es" || result.type === "knowledge" ? result.type : "skip";
+          next.push({ file, result, dest, companyName: "" });
+        } catch {
+          pushImportLog(`${file.name}: ${uiErrorMessage("DOCUMENT_IMPORT")}`);
+        }
+      }
+      if (mountedRef.current) {
+        setPending(next);
+        setLog([...importLog]);
+      }
+    } finally {
+      if (mountedRef.current) setBusy(false);
+    }
   }
 
   function updatePendingDest(index: number, dest: PendingItem["dest"]) {
     setPending((prev) => prev.map((p, i) => (i === index ? { ...p, dest } : p)));
+  }
+
+  function updatePendingCompany(index: number, companyName: string) {
+    setPending((prev) => prev.map((p, i) => (i === index ? { ...p, companyName } : p)));
   }
 
   // F2-EXT 裁定1: 書き込みは UI が確認した dest を明示的に渡した時のみ実行する。
@@ -238,13 +257,23 @@ export function ImportTab() {
   async function handleConfirmOther() {
     const items = pending;
     if (!items.length) return;
+    const missingCompany = items.some(
+      (item) =>
+        item.dest === "es" &&
+        (item.result.type === "es" || item.result.type === "knowledge") &&
+        !item.companyName.trim(),
+    );
+    if (missingCompany) {
+      pushImportLog("ES 取込には企業名の入力が必要です");
+      if (mountedRef.current) setLog([...importLog]);
+      return;
+    }
     setBusy(true);
-    // バッチ全体を1論理リクエストとして扱う (§9.3: 1コンポーネント=1論理
-    // リクエスト)。ループ内の各明示commandは同一 myCid を運ぶ。
     const myCid = cid.begin();
+    let gated = false;
     try {
       for (const item of items) {
-        const { file, result, dest } = item;
+        const { file, result, dest, companyName } = item;
         const content = result.content ?? "";
         try {
           if (result.type === "reject") {
@@ -269,9 +298,29 @@ export function ImportTab() {
             pushImportLog(`${file.name}: スキップしました`);
             continue;
           }
-          const res = await importDocument(content, file.name, dest, myCid);
-          pushImportLog(res.message ?? `${file.name} を ${dest} へ取り込みました`);
-          if (dest === "es") void refreshEsActive();
+          const res = await importDocument(
+            content,
+            file.name,
+            dest,
+            myCid,
+            dest === "es" ? companyName.trim() : undefined,
+          );
+          if (res.needs_confirmation && res.conflict) {
+            gated = true;
+            if (mountedRef.current) {
+              setEsConflict({
+                fileName: file.name,
+                content,
+                companyName: companyName.trim(),
+                conflict: res.conflict,
+                message: res.message ?? "既存ESとの表記揺れが検出されました",
+              });
+            }
+            pushImportLog(res.message ?? `${file.name}: 置き換え確認が必要です`);
+            break;
+          }
+          pushImportLog(res.message ?? `${file.name} を取り込みました`);
+          if (dest === "es") void refreshEsList();
         } catch {
           pushImportLog(uiErrorMessage("DOCUMENT_IMPORT"));
         }
@@ -281,26 +330,51 @@ export function ImportTab() {
       if (mountedRef.current) {
         setBusy(false);
         setLog([...importLog]);
-        setPending([]);
+        if (!gated) setPending([]);
         resetInput(otherRef);
       }
       void refreshStats();
+      void refreshEsList();
     }
   }
 
-  async function handleKnowledgeFetch() {
+  async function resolveEsConflict(action: "replace" | "cancel") {
+    if (!esConflict) return;
+    if (action === "cancel") {
+      pushImportLog(`${esConflict.fileName}: 置き換えをキャンセルしました`);
+      if (mountedRef.current) {
+        setEsConflict(null);
+        setPending([]);
+        setLog([...importLog]);
+      }
+      return;
+    }
+    const primary =
+      esConflict.conflict.exact ?? esConflict.conflict.similar[0] ?? null;
     setBusy(true);
+    const myCid = cid.begin();
     try {
-      const summary = await knowledgeFetchPending();
-      if (mountedRef.current) setFetchSummary(summary);
-      pushImportLog(
-        typeof summary.message === "string"
-          ? summary.message
-          : `processed=${summary.processed} pending=${summary.pending}`,
+      const res = await importDocument(
+        esConflict.content,
+        esConflict.fileName,
+        "es",
+        myCid,
+        esConflict.companyName,
+        {
+          confirmOverwrite: true,
+          replaceEsId: primary?.id,
+        },
       );
+      pushImportLog(res.message ?? "ES を置き換えました");
+      if (mountedRef.current) {
+        setEsConflict(null);
+        setPending([]);
+      }
+      void refreshEsList();
     } catch {
-      pushImportLog(uiErrorMessage("KNOWLEDGE_FETCH"));
+      pushImportLog(uiErrorMessage("DOCUMENT_IMPORT"));
     } finally {
+      cid.end(myCid);
       if (mountedRef.current) {
         setBusy(false);
         setLog([...importLog]);
@@ -317,7 +391,7 @@ export function ImportTab() {
       </p>
 
       <div className="term-panel">
-        <p className="term-header">DATA_SOURCES</p>
+        <p className="term-header">取り込み済みのデータ</p>
         {SOURCE_ORDER.map((key) => {
           const s = sources[key];
           const glyph = s?.exists ? "●" : "○";
@@ -334,45 +408,19 @@ export function ImportTab() {
       </div>
 
       <div className="term-panel">
-        <p className="term-header">ES_ACTIVE</p>
-        {esActive?.exists ? (
-          <>
-            <div className="term-row">
-              <span className="term-source-name">{esActive.title || "(無題)"}</span>
-              <span className="term-value">{esActive.target_domain ?? "—"}</span>
-              <span className="term-value">{(esActive.char_count ?? 0).toLocaleString()}文字</span>
+        <p className="term-header">登録済みのES（企業別）</p>
+        {esItems.length > 0 ? (
+          esItems.map((item) => (
+            <div key={item.id} className="term-row">
+              <span className="term-glyph-ok">●</span>
+              <span className="term-source-name">{item.company_name}</span>
+              <span className="term-value">{item.target_domain || "—"}</span>
+              <span className="term-value">{item.char_count.toLocaleString()}文字</span>
+              <span className="term-value">{formatMtime(item.mtime)}</span>
             </div>
-            <pre className="term-es-body">{esActive.body}</pre>
-          </>
+          ))
         ) : (
-          <p className="hint">登録済み ES なし</p>
-        )}
-      </div>
-
-      <div className="term-panel knowledge-fetch-panel">
-        <p className="term-header">KNOWLEDGE_QUEUE</p>
-        <p className="hint">
-          ユーザー明示操作のみ。オフライン既定では pending 件数の報告のみ
-          (PKB_ALLOW_ONLINE_FETCH=1 時のみネットワーク取得)。
-        </p>
-        <button type="button" disabled={busy} onClick={() => void handleKnowledgeFetch()}>
-          {busy ? "処理中…" : "知識キューを処理 (ユーザー明示操作)"}
-        </button>
-        {fetchSummary && (
-          <>
-            <div className="term-row">
-              <span className="term-source-name">processed</span>
-              <span className="term-value">{fetchSummary.processed}</span>
-            </div>
-            <div className="term-row">
-              <span className="term-source-name">pending</span>
-              <span className="term-value">{fetchSummary.pending}</span>
-            </div>
-            <div className="term-row">
-              <span className="term-source-name">online_allowed</span>
-              <span className="term-value">{fetchSummary.online_allowed ? "true" : "false"}</span>
-            </div>
-          </>
+          <p className="hint">登録済みのESはありません。下の「その他」から企業名を付けて取り込めます。</p>
         )}
       </div>
 
@@ -426,7 +474,7 @@ export function ImportTab() {
         <h3>その他 (自動判別)</h3>
         <p className="hint">
           未対応形式のファイルを選択すると内容を読み取り専用で判定します。
-          書き込みは「取込を確定」を押すまで行われません。
+          ES の場合は企業名を入力してから「取込を確定」してください。
         </p>
         <input
           ref={otherRef}
@@ -438,25 +486,80 @@ export function ImportTab() {
         />
       </div>
 
-      {pending.length > 0 && (
+      {esConflict && (
+        <div className="term-panel import-es-conflict">
+          <p className="term-header">ESの置き換え確認</p>
+          <p className="hint">{esConflict.message}</p>
+          <div className="term-row">
+            <span className="term-source-name">新しい表記</span>
+            <span className="term-value">{esConflict.companyName}</span>
+          </div>
+          {esConflict.conflict.exact && (
+            <div className="term-row">
+              <span className="term-source-name">既存（同一）</span>
+              <span className="term-value">{esConflict.conflict.exact.company_name}</span>
+            </div>
+          )}
+          {esConflict.conflict.similar.map((s) => (
+            <div key={s.id} className="term-row">
+              <span className="term-source-name">表記揺れ候補</span>
+              <span className="term-value">
+                {s.company_name}（類似度 {(s.score * 100).toFixed(0)}%）
+              </span>
+            </div>
+          ))}
+          <div className="action-row">
+            <button
+              type="button"
+              className="primary"
+              disabled={busy}
+              onClick={() => void resolveEsConflict("replace")}
+            >
+              置き換える
+            </button>
+            <button
+              type="button"
+              className="ghost"
+              disabled={busy}
+              onClick={() => void resolveEsConflict("cancel")}
+            >
+              キャンセル
+            </button>
+          </div>
+        </div>
+      )}
+
+      {pending.length > 0 && !esConflict && (
         <div className="term-panel">
-          <p className="term-header">CLASSIFY_RESULT</p>
+          <p className="term-header">取込前の確認</p>
           {pending.map((item, i) => (
-            <div key={i} className="term-row">
+            <div key={i} className="term-row import-pending-row">
               <span className={item.result.type === "reject" ? "term-glyph-err" : "term-glyph-ok"}>
                 {item.result.type === "reject" ? "▲" : "●"}
               </span>
               <span className="term-source-name">{item.file.name}</span>
               <span className="term-value">{classifyLabel(item.result.type)}</span>
               {(item.result.type === "es" || item.result.type === "knowledge") && (
-                <select
-                  value={item.dest}
-                  onChange={(e) => updatePendingDest(i, e.target.value as PendingItem["dest"])}
-                >
-                  <option value="es">ES</option>
-                  <option value="knowledge">知識ベース</option>
-                  <option value="skip">スキップ</option>
-                </select>
+                <>
+                  <select
+                    value={item.dest}
+                    onChange={(e) => updatePendingDest(i, e.target.value as PendingItem["dest"])}
+                  >
+                    <option value="es">ES</option>
+                    <option value="knowledge">知識ベース</option>
+                    <option value="skip">スキップ</option>
+                  </select>
+                  {item.dest === "es" && (
+                    <input
+                      type="text"
+                      className="import-company-input"
+                      placeholder="企業名（必須）"
+                      value={item.companyName}
+                      onChange={(e) => updatePendingCompany(i, e.target.value)}
+                      maxLength={64}
+                    />
+                  )}
+                </>
               )}
             </div>
           ))}
@@ -479,7 +582,7 @@ export function ImportTab() {
       )}
 
       <div className="term-panel">
-        <p className="term-header">IMPORT_LOG</p>
+        <p className="term-header">取込ログ</p>
         {log.length === 0 ? (
           <p className="hint">(取込ログはまだありません)</p>
         ) : (

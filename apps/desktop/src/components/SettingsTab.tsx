@@ -3,7 +3,6 @@ import {
   engineReady as checkEngineReady,
   getKnowledgeResearchPolicy,
   loadSettings,
-  runProfiler,
   saveFixedAttributes,
   setKnowledgeResearchPolicy,
 } from "../lib/engine";
@@ -195,26 +194,6 @@ export function SettingsTab({
     }
   }
 
-  async function handleProfiler() {
-    setBusy(true);
-    setStatusKind("info");
-    setStatus("自己プロフィールを再構築しています…");
-    try {
-      const res = await runProfiler();
-      setStatusKind("info");
-      setStatus(res.message);
-      const s = await loadSettings();
-      setSettings(s);
-      setAttrs({ ...s.fixed_attributes });
-      writeLocalFixedAttributes({ ...s.fixed_attributes });
-    } catch {
-      setStatusKind("error");
-      setStatus(uiErrorMessage("PROFILER_RUN"));
-    } finally {
-      setBusy(false);
-    }
-  }
-
   if (!settings) {
     return (
       <section className="panel">
@@ -356,11 +335,6 @@ export function SettingsTab({
               />
             </div>
           </div>
-        </div>
-        <div className="settings-advanced-actions">
-          <button type="button" className="secondary" disabled={busy} onClick={() => void handleProfiler()}>
-            AIによる自己プロフィールの再構築
-          </button>
         </div>
       </details>
 

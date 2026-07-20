@@ -676,6 +676,13 @@ button:disabled {
   padding-top: 0;
 }
 
+.import-company-input {
+  min-width: 10rem;
+  max-width: 16rem;
+  padding: 0.25rem 0.5rem;
+  font: inherit;
+}
+
 .mode-row {
   display: flex;
   flex-wrap: wrap;

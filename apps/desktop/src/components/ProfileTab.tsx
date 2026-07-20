@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import {
   oraclePayload,
   oracleReport,
+  runProfiler,
   sourceCode,
   tensorRebuild,
   twinForecast,
@@ -35,6 +36,7 @@ export function ProfileTab() {
   const [horizonDays, setHorizonDays] = useState(14);
   const [twinMode, setTwinMode] = useState<"daily" | "interview">("daily");
   const [interviewTurns, setInterviewTurns] = useState(0);
+  const [profilerMsg, setProfilerMsg] = useState("");
 
   const loadSterile = useCallback(async () => {
     setBusy("refresh");
@@ -95,6 +97,21 @@ export function ProfileTab() {
       setTensorResult(res);
     } catch {
       setError(uiErrorMessage("TENSOR_REBUILD"));
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function handleProfilerRebuild() {
+    setBusy("profiler");
+    setError("");
+    setProfilerMsg("");
+    try {
+      const res = await runProfiler();
+      setProfilerMsg(res.message);
+      await loadSterile();
+    } catch {
+      setError(uiErrorMessage("PROFILER_RUN"));
     } finally {
       setBusy(null);
     }
@@ -380,6 +397,26 @@ export function ProfileTab() {
           直近の相談でどの情報を採用・見送ったかの内訳です。ボタンを押したときだけ取得します。
         </p>
         <ContextObservatoryContainer />
+      </div>
+
+      <div className="profile-section">
+        <p className="term-header">AIによる自己プロフィールの再構築</p>
+        <p className="hint">
+          日記・予定・家計など取り込み済みのデータから、自己理解プロフィールを再計算します。
+        </p>
+        <button
+          type="button"
+          className="secondary"
+          disabled={busy !== null}
+          onClick={() => void handleProfilerRebuild()}
+        >
+          {busy === "profiler" ? "再構築中…" : "プロフィールを再構築"}
+        </button>
+        {profilerMsg && (
+          <p className="status-line" role="status">
+            {profilerMsg}
+          </p>
+        )}
       </div>
 
       {error && (

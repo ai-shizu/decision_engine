@@ -4,6 +4,7 @@ import {
   consult,
   getKnowledgeResearchPolicy,
   knowledgeResearch,
+  warmConsultRuntime,
   type RomanceAnalysisResult,
 } from "../lib/engine";
 import { parseEngineEvent } from "../lib/parseEngineResponse";
@@ -25,6 +26,12 @@ type ConsultMode = "consult" | "romance_analysis";
 const ROMANCE_SUCCESS_MESSAGE = "会話履歴を解析しました";
 const ROMANCE_PARSING_STATUS = "交流パルスを解析中…";
 
+// F-11: タブはアンマウントされるが、会話セッションはモジュールに残し
+// 再入場時の「白紙＋再ロード感」を消す (ImportTab の importLog と同型)。
+let consultSessionMessages: ChatMessage[] = [];
+let consultSessionMode: ConsultMode = "consult";
+let consultWarmStarted = false;
+
 function stripRomanceSuccessMessages(messages: ChatMessage[]): ChatMessage[] {
   return messages.filter(
     (m) => !(m.role === "assistant" && m.text === ROMANCE_SUCCESS_MESSAGE),
@@ -32,26 +39,52 @@ function stripRomanceSuccessMessages(messages: ChatMessage[]): ChatMessage[] {
 }
 
 export function ConsultTab() {
-  const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [messages, setMessages] = useState<ChatMessage[]>(consultSessionMessages);
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
   const [status, setStatus] = useState("");
   const [statusKind, setStatusKind] = useState<"info" | "error">("info");
   const [confirmingClear, setConfirmingClear] = useState(false);
-  const [mode, setMode] = useState<ConsultMode>("consult");
+  const [mode, setMode] = useState<ConsultMode>(consultSessionMode);
   const [romanceResult, setRomanceResult] = useState<RomanceAnalysisResult | null>(null);
+  const [warmNote, setWarmNote] = useState("");
   const [researchUi, dispatchResearchUi] = useReducer(
     reduceResearchUi,
     INITIAL_RESEARCH_UI_STATE,
   );
   const researchSeqRef = useRef(0);
   const logRef = useRef<HTMLDivElement>(null);
-  // SPEC_FOXTROT_UI.md §9 (Rev.10): 旧来の真偽値フラグ (F3 裁定1) を撤廃し、
-  // 相関ID (cid) 照合へ移行した。自分の consult が in-flight の間だけ
-  // status/chunk を反映する (W-34 の是正) のは cid.accepts() が構造的に保証する。
   const cid = useCorrelationId();
-  // 裁定2: 最下端追従の可否は ref で持つ (state にすると再レンダリングの嵐)。
   const stickRef = useRef(true);
+
+  useEffect(() => {
+    consultSessionMessages = messages;
+  }, [messages]);
+
+  useEffect(() => {
+    consultSessionMode = mode;
+  }, [mode]);
+
+  // アプリ生存中に一度だけ embedder + LLM page-cache をウォーム。
+  // 入力は disabled にしない (アンビエント)。FSA-02 の単発 spawn は維持。
+  useEffect(() => {
+    if (consultWarmStarted) return;
+    consultWarmStarted = true;
+    let cancelled = false;
+    void warmConsultRuntime(true)
+      .then((res) => {
+        if (cancelled) return;
+        if (res.llm_probed || res.backend_ready) {
+          setWarmNote("相談エンジン準備済み — すぐ送れます");
+        }
+      })
+      .catch(() => {
+        /* best-effort */
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   function scrollToBottom(smooth = false) {
     requestAnimationFrame(() => {
@@ -259,6 +292,7 @@ export function ConsultTab() {
       return;
     }
     setMessages([]);
+    consultSessionMessages = [];
     setStatus("");
     setRomanceResult(null);
     setConfirmingClear(false);
@@ -281,6 +315,11 @@ export function ConsultTab() {
         </button>
       </div>
       <p className="hint">記録・プロファイルに基づくオフライン相談。会話はこのセッション内のみ保持されます。</p>
+      {warmNote && (
+        <p className="hint consult-warm-note" role="status">
+          {warmNote}
+        </p>
+      )}
 
       <div className="consult-mode-row">
         <label htmlFor="consult-mode-select">モード</label>

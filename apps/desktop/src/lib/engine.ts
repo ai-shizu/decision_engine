@@ -9,6 +9,7 @@ import {
   parseClassifyResult,
   parseDocumentImportResult,
   parseEngineHealth,
+  parseEsList,
   parseEsView,
   parseImportStats,
   parseKnowledgeFetchSummary,
@@ -43,6 +44,7 @@ import { parseContextManifestResponseV1 } from "./parseManifest";
 import { readTextLenient } from "./textDecode";
 import type {
   ClassifyResult,
+  EsListItem,
   EsView,
   InterviewConfig,
   ProbeAnswerResult,
@@ -63,6 +65,7 @@ type EngineIpcCommand =
   | "calendar_event_dates"
   | "import_stats"
   | "es_view"
+  | "es_list"
   | "consult"
   | "calendar_sync_ics"
   | "calendar_sync_apple"
@@ -70,6 +73,7 @@ type EngineIpcCommand =
   | "import_line_batch"
   | "import_classify"
   | "import_document"
+  | "llm_warm"
   | "settings_get"
   | "settings_save_fixed"
   | "settings_run_profiler"
@@ -150,6 +154,11 @@ export async function importStats(): Promise<Record<string, SourceStat>> {
 
 export async function esView(): Promise<EsView> {
   return invokeEngine("es_view", parseEsView);
+}
+
+
+export async function esList(): Promise<EsListItem[]> {
+  return invokeEngine("es_list", parseEsList);
 }
 
 
@@ -271,13 +280,51 @@ export async function importDocument(
   filename: string,
   dest: "es" | "knowledge",
   cid?: number,
+  companyName?: string,
+  opts?: { confirmOverwrite?: boolean; replaceEsId?: string },
 ): Promise<DocumentImportResult> {
   return invokeEngine(
     "import_document",
     parseDocumentImportResult,
-    { content, filename, dest },
+    {
+      content,
+      filename,
+      dest,
+      ...(companyName !== undefined && companyName !== ""
+        ? { company_name: companyName }
+        : {}),
+      ...(opts?.confirmOverwrite ? { confirm_overwrite: true } : {}),
+      ...(opts?.replaceEsId ? { replace_es_id: opts.replaceEsId } : {}),
+    },
     cid,
   );
+}
+
+
+export interface LlmWarmResult {
+  embedder_ready: boolean;
+  backend_ready: boolean;
+  llm_probed: boolean;
+  message: string;
+}
+
+
+function parseLlmWarmResult(value: unknown): LlmWarmResult {
+  if (typeof value !== "object" || value === null) {
+    throw new Error("llm.warm: expected object");
+  }
+  const o = value as Record<string, unknown>;
+  return {
+    embedder_ready: Boolean(o.embedder_ready),
+    backend_ready: Boolean(o.backend_ready),
+    llm_probed: Boolean(o.llm_probed),
+    message: typeof o.message === "string" ? o.message : "",
+  };
+}
+
+
+export async function warmConsultRuntime(probeLlm = true): Promise<LlmWarmResult> {
+  return invokeEngine("llm_warm", parseLlmWarmResult, { probe_llm: probeLlm });
 }
 
 

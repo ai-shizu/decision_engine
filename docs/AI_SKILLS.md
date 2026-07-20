@@ -819,6 +819,30 @@ Pocket Brain 経路は M14 tensor + M15 pulse/Rasch + gap sufficiency から loa
 3. Settings: 「自動プロフィール」撤去 → 「プロフィールを開く」誘導。Advanced → 「高度な連携・詳細設定」等の日本語化。
 4. 検証: `npx tsc --noEmit`。
 
+### 4.39 M20-N — Profile profiler placement / multi-company ES / Interview picker (2026-07-20)
+
+**射程:** 情報アーキテクチャと面接ユースケースの致命欠落。コミットは指揮官指示待ち。
+
+**不変条件 (W-53/F-16 単一 ES を置換):**
+1. ES は企業名付き `data/es/es_{slug}.md` で複数保持。`active_es.md` は最新ミラーのみ (一覧から除外)。
+2. `select_es(id)` は id/企業名で解決。空/`none` = ゼロベース。Interview は `config.esId` のみ注入。
+3. Import UI から `KNOWLEDGE_QUEUE` と開発者英語ラベルを排除。Profiler 再構築は ProfileTab のみ。
+4. ドメイン抽出の業界 if-elif 禁止は維持。
+
+**as-built:** Settings→Profile へ profiler 移動。Import 企業別リスト+企業名入力。Interview ES ドロップダウン。`es.list` IPC。`tsc --noEmit` HARD STOP。
+
+### 4.40 M20-O — ES alias confirm + CONSULT runtime warm (2026-07-20)
+
+**射程:** ES 企業名表記揺れの上書き確認、CONSULT のコールドスタート体感。コミットは指揮官指示待ち。
+
+**不変条件:**
+1. ES 上書き・表記揺れ置換は `confirm_overwrite` 無しでは書かない。UI は F-7 インライン確認 (alert/confirm 禁止)。
+2. 名寄せは `normalize_company_key` + SequenceMatcher (オフライン・業界 if-elif 禁止)。
+3. FSA-02: LLM は単発 owned spawn を維持。`llm.warm` は embedder 初期化 + 1 トークン probe で OS ページキャッシュを載せるだけ (HTTP/KV 復活禁止)。
+4. CONSULT 会話はモジュールシングルトンでタブ再入場に残す (F-11 アンマウントは維持)。
+
+**as-built:** `es_manager` 名寄せ / `import.document` 確認ゲート / ImportTab 置き換え UI / `llm.warm` + App・ConsultTab ウォーム / セッション保持。
+
 ### 4.8 M3 Phase 0-A — SQLCipher / Security.framework iOS link gate (2026-07-18)
 
 **射程（Phase 0-A のみ）:** `secure-vault` feature、依存解決、in-memory SQLCipher identity（`PRAGMA key` + `cipher_version`）、Security.framework シンボル（`SecRandom` / `SecAccessControl`）、Tauri command 登録、iOS Simulator 最終リンク証明。スキーマ・repository・UI・本番 Keychain item 作成は対象外。

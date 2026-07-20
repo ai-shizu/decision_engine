@@ -162,12 +162,24 @@ def dispatch(cmd: str, params: dict[str, Any], emit: EventEmitter | None = None)
         return facade.data_source_stats()
     if cmd == "es.view":
         return facade.active_es()
+    if cmd == "es.list":
+        return facade.list_es()
     if cmd == "import.classify":
         return facade.classify_document(params["content"], params.get("filename", ""))
     if cmd == "import.document":
         status = (lambda msg: emit({"event": "status", "message": msg})) if emit else None
         return facade.import_document(
-            params["content"], params.get("filename", ""), params["dest"], status=status,
+            params["content"],
+            params.get("filename", ""),
+            params["dest"],
+            company_name=params.get("company_name"),
+            confirm_overwrite=bool(params.get("confirm_overwrite", False)),
+            replace_es_id=params.get("replace_es_id"),
+            status=status,
+        )
+    if cmd == "llm.warm":
+        return facade.warm_consult_runtime(
+            probe_llm=bool(params.get("probe_llm", True)),
         )
     if cmd == "settings.run_profiler":
         return facade.run_profiler()

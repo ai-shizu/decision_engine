@@ -12,7 +12,7 @@ import { ProfileTab } from "./components/ProfileTab";
 import { RecordTab } from "./components/RecordTab";
 import { SettingsTab } from "./components/SettingsTab";
 import { TitleBar } from "./components/TitleBar";
-import { engineHealth, engineReady } from "./lib/engine";
+import { engineHealth, engineReady, warmConsultRuntime } from "./lib/engine";
 import type { MainTab } from "./lib/types";
 import { useIsNarrowViewport } from "./lib/useIsNarrowViewport";
 import "./App.css";
@@ -167,6 +167,10 @@ export default function App() {
               setReady(true);
               setStatus("準備完了（完全オフライン）");
             }
+            // CONSULT 用 LLM/埋め込みをバックグラウンドでウォーム (入力阻害なし)
+            void warmConsultRuntime(true).catch(() => {
+              /* best-effort */
+            });
             return;
           }
         } catch {

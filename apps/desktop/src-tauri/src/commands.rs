@@ -9,7 +9,7 @@ use crate::engine::{EngineManager, IPC_MAX_REQUEST_LINE_BYTES};
 use crate::ipc_contract::{
     CalendarAppleRequest, CalendarIcsRequest, ConsultRequest, ImportClassifyRequest,
     ImportDocumentRequest, ImportLineBatchRequest, ImportLineSingleRequest,
-    KnowledgePolicySetRequest, KnowledgeResearchRequest, NarrativeCompileRequest, ProbeAnswerRequest,
+    KnowledgePolicySetRequest, KnowledgeResearchRequest, LlmWarmRequest, NarrativeCompileRequest, ProbeAnswerRequest,
     ProbeDateRequest,
     RecordLoadRequest, RecordSaveRequest, ScopeRequest, SettingsSaveFixedRequest,
     TwinForecastRequest, ValidateRequest, IPC_REQUEST_ENVELOPE_HEADROOM_BYTES,
@@ -153,6 +153,11 @@ pub async fn es_view(manager: State<'_, Arc<EngineManager>>) -> Result<Value, St
 }
 
 #[tauri::command]
+pub async fn es_list(manager: State<'_, Arc<EngineManager>>) -> Result<Value, String> {
+    invoke_empty(manager, "es.list").await
+}
+
+#[tauri::command]
 pub async fn consult(
     manager: State<'_, Arc<EngineManager>>,
     request: ConsultRequest,
@@ -212,6 +217,14 @@ pub async fn import_document(
     cid: Option<u64>,
 ) -> Result<Value, String> {
     invoke_request(manager, "import.document", request, cid).await
+}
+
+#[tauri::command]
+pub async fn llm_warm(
+    manager: State<'_, Arc<EngineManager>>,
+    request: LlmWarmRequest,
+) -> Result<Value, String> {
+    invoke_request(manager, "llm.warm", request, None).await
 }
 
 #[tauri::command]

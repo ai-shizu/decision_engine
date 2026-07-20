@@ -13,9 +13,7 @@ PROJECT_ROOT = Path(os.environ.get("PKB_PROJECT_ROOT", _PROJECT_ROOT))
 
 DATA_RAW = PROJECT_ROOT / "data" / "raw"
 ES_DIR = PROJECT_ROOT / "data" / "es"
-# F-16 (SPEC_FOXTROT_UI.md §10.2 + 指揮官裁定): システムが保持する ES は
-# 常に active_es.md ただ1件。ES_DIR 内の他ファイル (レガシー) は削除せず、
-# 読み手側 (es_manager) で構造的に不可視化するのみ (W-53)。
+# M20-N: 企業別 ES は es_{slug}.md。ACTIVE_ES は最新のミラー (後方互換読取用)。
 ACTIVE_ES = ES_DIR / "active_es.md"
 DATA_PROCESSED = PROJECT_ROOT / "data" / "processed"
 DATA_KNOWLEDGE = PROJECT_ROOT / "data" / "knowledge"

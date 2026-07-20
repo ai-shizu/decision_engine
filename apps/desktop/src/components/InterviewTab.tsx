@@ -1,11 +1,12 @@
 import { useEffect, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
-import { consult, narrativeCompile, type NarrativeCompileResult } from "../lib/engine";
+import { consult, esList, narrativeCompile, type NarrativeCompileResult } from "../lib/engine";
 import { emptyCompanyFacts } from "../lib/interviewStage";
 import { parseEngineEvent } from "../lib/parseEngineResponse";
 import type { CompanyFacts } from "../lib/pocketBrain/types";
 import type {
   EngineEvent,
+  EsListItem,
   GdPersona,
   GdSpeakerTurn,
   InterviewConfig,
@@ -21,7 +22,6 @@ import { CompanyFactsForm } from "./interview/CompanyFactsForm";
 import { EsReviewPanel } from "./interview/EsReviewPanel";
 import { MultistageInterviewPanel } from "./interview/MultistageInterviewPanel";
 import { TensorProfilePanel } from "./TensorProfilePanel";
-import { Toggle } from "./Toggle";
 
 // F-17 (SPEC_FOXTROT_UI.md §10.3): es_review は思考速度を計測も評価もしない
 // (latency 構造的皆無)。hint はモード別に単一定義し、二重定義を作らない
@@ -110,7 +110,7 @@ const DEFAULT_CONFIG: InterviewConfig = {
   difficulty: "standard",
   stance: "adversarial",
   customTheme: "",
-  useRegisteredEs: true,
+  esId: "",
 };
 
 // F4b (SPEC_FOXTROT_UI.md §7 裁定3): スコア 0-100 を TensionMeter と同型の
@@ -214,6 +214,7 @@ export function InterviewTab() {
   const [messages, setMessages] = useState<InterviewMessage[]>([]);
   const [personas, setPersonas] = useState<GdPersona[]>(DEFAULT_PERSONAS);
   const [config, setConfig] = useState<InterviewConfig>(DEFAULT_CONFIG);
+  const [esLibrary, setEsLibrary] = useState<EsListItem[]>([]);
   const [report, setReport] = useState<InterviewReport | null>(null);
   const [narrativeTarget, setNarrativeTarget] = useState("");
   const [narrativeResult, setNarrativeResult] = useState<NarrativeCompileResult | null>(null);
@@ -245,6 +246,12 @@ export function InterviewTab() {
       setSurface("es_pocket");
     }
   }, [isNarrow, surface]);
+
+  useEffect(() => {
+    void esList()
+      .then((items) => setEsLibrary(items))
+      .catch(() => setEsLibrary([]));
+  }, []);
 
   function scrollToBottom() {
     requestAnimationFrame(() => {
@@ -657,19 +664,25 @@ export function InterviewTab() {
           </div>
           {mode === "interview_sim" && (
           <>
-          <div className="term-row config-row interview-es-toggle-row">
-            <span className="term-source-name">登録済みESを前提にする</span>
-            <Toggle
-              id="interview-use-registered-es"
-              checked={config.useRegisteredEs !== false}
+          <div className="term-row config-row">
+            <span className="term-source-name">対象企業のES</span>
+            <select
+              value={config.esId ?? ""}
               disabled={busy}
-              onChange={(v) => setConfig((c) => ({ ...c, useRegisteredEs: v }))}
-            />
+              onChange={(e) => setConfig((c) => ({ ...c, esId: e.target.value }))}
+            >
+              <option value="">ゼロベース（ESなし）</option>
+              {esLibrary.map((item) => (
+                <option key={item.id} value={item.id}>
+                  {item.company_name}のES
+                </option>
+              ))}
+            </select>
           </div>
           <p className="hint">
-            {config.useRegisteredEs !== false
-              ? "オン：登録済みESがある場合、その内容を踏まえた面接を優先します。"
-              : "オフ：ESを使わず、下の業界・ジャンル設定でゼロベースの面接にします。"}
+            {config.esId
+              ? "選択した企業のESのみを面接官AIの前提として使います。"
+              : "ESを使わず、下の業界・ジャンル設定でゼロベースの面接にします。"}
           </p>
           <div className="action-row">
             <button type="button" className="ghost" onClick={() => setConfig(DEFAULT_CONFIG)}>
