@@ -27,7 +27,7 @@
 | 永続化境界・シリアライズ・runtime検証・IPC契約 | §1, §16 (SKILL-PKB-BOUNDARY-V3), `docs/architecture/INCIDENT_LEDGER.md` |
 | macOS ビルド・配布・コード署名 | §1, §2.3, §4 |
 | Tauri iOS (M0〜) 初期化・シミュレータ | §1, §2.3, §4.4, `docs/M0_IOS_INIT_INSTRUCTIONS.md` |
-| Pocket Brain / on-device LLM (M4〜M5) / OOM defense (M7) / 浄化 (M8) / local RAG (M9〜M10) | §1, §1.1, §4.5, §4.6, §4.7, §4.7b, §4.7c, §4.9, §4.10, §5, `docs/m5_action_plan.md` |
+| Pocket Brain / on-device LLM (M4〜M5) / OOM defense (M7) / 浄化 (M8) / local RAG (M9〜M11) | §1, §1.1, §4.5, §4.6, §4.7, §4.7b, §4.7c, §4.9, §4.10, §4.11, §5, `docs/m5_action_plan.md` |
 | SQLCipher vault / Keychain (M3) | §1, §4.8, `docs/m3_action_plan.md` |
 | LLM モデル選定・consult/KV キャッシュ | §1, §5, §7, §8 |
 | 検索エンジン・mmap・LSM 索引 | §1, §9, §10 |
@@ -497,6 +497,19 @@ rm -rf .boundary-tests-out
 2. `ingest_knowledge` — `spawn_blocking` 内で chunk → `LlmHandle::embed` ループ → `VaultHandle::knowledge_replace`（DELETE `source_id::%` + INSERT を 1 トランザクション）。
 3. `search_knowledge` — query embed → `SELECT id, text_content, distance FROM knowledge_chunks WHERE embedding MATCH ?1 AND k = ?2`。
 4. コマンド登録は `pocket-brain` ∧ `secure-vault` ∧ Apple。埋め込み次元は `require_knowledge_embedding_dims`（384）で fail-closed。
+
+### 4.11 M11 — RAG chatbot UI (send_rag_chat + React) (2026-07-20)
+
+**射程:** 検索結果をプロンプト先頭へ注入する `send_rag_chat`、React の RAG チャット／取り込み UI。ストリームは既存 M6 Channel（`TokenEvent`）。M7 governor（cancel / purge）は破壊しない。
+
+**Prompt injection（as-built）:**
+1. `rag/prompt.rs::build_rag_prompt` — 固定 system preamble → `## 参考情報`（KNN hits、`RAG_CONTEXT_CHAR_BUDGET=6000`）→ `## ユーザーの質問`。
+2. `send_rag_chat` — `spawn_blocking` で `search_sync`（embed + vault KNN）→ `build_rag_prompt` → `LlmHandle::generate`（`on_token` Channel）。返却は `context_ids` / `context_count` のみ（本文ストリームは Channel）。
+3. UI: `lib/rag.ts` + `components/rag/{RagChatPanel,RagMessageList,RagChatInput,RagIngestPanel,SimpleMarkdown}`。`PocketBrainPanel` が load/cancel/memory を保持し RAG 面を合成。取り込み成功は ambient 通知（`alert` 禁止）。
+
+**ハマりどころ:**
+- チャット用 7B と埋め込み 384-d は別能力。ingest/search/RAG は次元不一致で fail-closed — 384-d 対応モデル未ロード時は UI が案内する。
+- `llm_generate` と同様、`send_rag_chat` の invoke はキュー投入で返り、トークンは Channel 継続。Cancel は既存 `llm_cancel`。
 
 ### 4.8 M3 Phase 0-A — SQLCipher / Security.framework iOS link gate (2026-07-18)
 

@@ -130,6 +130,12 @@ pub fn run() {
                 target_vendor = "apple"
             ))]
             rag::commands_rag::search_knowledge,
+            #[cfg(all(
+                feature = "pocket-brain",
+                feature = "secure-vault",
+                target_vendor = "apple"
+            ))]
+            rag::commands_rag::send_rag_chat,
             #[cfg(all(feature = "secure-vault", target_vendor = "apple"))]
             commands_db::vault_status,
             #[cfg(all(feature = "secure-vault", target_vendor = "apple"))]

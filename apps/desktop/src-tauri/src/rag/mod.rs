@@ -4,3 +4,4 @@
 
 pub mod chunk;
 pub mod commands_rag;
+pub mod prompt;

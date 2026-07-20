@@ -29,7 +29,7 @@ mod sqlite_vec_ext;
 mod worker;
 
 #[cfg(target_vendor = "apple")]
-pub(crate) use knowledge_repo::KnowledgeChunkRow;
+pub(crate) use knowledge_repo::{KnowledgeChunkRow, KnowledgeSearchHit};
 #[cfg(target_vendor = "apple")]
 pub(crate) use repository::{ChatCreate, ChatRecord, MessageAppend, MessageCursor, MessageRecord};
 #[cfg(target_vendor = "apple")]

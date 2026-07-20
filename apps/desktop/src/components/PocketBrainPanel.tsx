@@ -1,25 +1,19 @@
 // [D] Pocket Brain UI (docs/architecture_blueprint.md §3.9).
 //
-// Minimal chat panel for the M4 on-device LLM, with a real-time phys_footprint
-// indicator in the header. Deliberately unstyled beyond the essentials — the
-// polished mobile UI (fonts, ceremony) is M5, not this phase.
+// M4 memory header + model load/cancel, plus M11 RAG chat/ingest surface.
+// Cancellation and Jetsam purge stay here so M7 governor wiring is unchanged.
 
 import { useEffect, useState } from "react";
 
 import {
   cancelGeneration,
-  generate,
   loadModel,
   startMemoryMonitor,
   subscribeLlmEvents,
   type MemSample,
 } from "../lib/llm";
 import { ExtractionPanel } from "./ExtractionPanel";
-
-interface ChatMessage {
-  role: "user" | "assistant";
-  text: string;
-}
+import { RagChatPanel } from "./rag/RagChatPanel";
 
 // A17 Pro / 8GB jetsam design budget ≈ 4.8 GB (blueprint §G0-C.1, 60% band).
 const THRESHOLD_BYTES = Math.round(4.8 * 1024 * 1024 * 1024);
@@ -31,8 +25,6 @@ function fmtMiB(bytes: number): string {
 
 export function PocketBrainPanel() {
   const [mem, setMem] = useState<MemSample | null>(null);
-  const [messages, setMessages] = useState<ChatMessage[]>([]);
-  const [input, setInput] = useState("");
   const [modelReady, setModelReady] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -78,54 +70,6 @@ export function PocketBrainPanel() {
     }
   }
 
-  async function onSend() {
-    const prompt = input.trim();
-    if (!prompt || busy) return;
-    setInput("");
-    setError(null);
-    setBusy(true);
-    setMessages((m) => [
-      ...m,
-      { role: "user", text: prompt },
-      { role: "assistant", text: "" },
-    ]);
-    try {
-      await generate(
-        {
-          prompt,
-          n_ctx: 2048,
-          max_tokens: 256,
-          temp: 0.7,
-          top_k: 40,
-          top_p: 0.95,
-          seed: 0,
-        },
-        (event) => {
-          if (event.error) {
-            setError(event.error);
-            return;
-          }
-          if (event.done) return;
-          setMessages((msgs) => {
-            const copy = msgs.slice();
-            const last = copy[copy.length - 1];
-            if (last && last.role === "assistant") {
-              copy[copy.length - 1] = {
-                role: "assistant",
-                text: last.text + event.text,
-              };
-            }
-            return copy;
-          });
-        },
-      );
-    } catch (e) {
-      setError(`generate: ${String(e)}`);
-    } finally {
-      setBusy(false);
-    }
-  }
-
   const over = mem?.over_threshold ?? false;
 
   return (
@@ -140,7 +84,7 @@ export function PocketBrainPanel() {
           fontVariantNumeric: "tabular-nums",
         }}
       >
-        <strong>Pocket Brain</strong>
+        <strong>Pocket Brain · RAG</strong>
         <span>
           {mem
             ? `${fmtMiB(mem.phys_footprint_bytes)} / ${fmtMiB(mem.threshold_bytes)} · ${mem.phase}`
@@ -157,39 +101,13 @@ export function PocketBrainPanel() {
         </button>
       </div>
 
-      <ul
-        style={{
-          listStyle: "none",
-          margin: 0,
-          padding: 12,
-          display: "flex",
-          flexDirection: "column",
-          gap: 8,
-        }}
-      >
-        {messages.map((m, i) => (
-          <li key={i} style={{ whiteSpace: "pre-wrap", opacity: m.role === "user" ? 0.75 : 1 }}>
-            <b>{m.role === "user" ? "You" : "AI"}:</b> {m.text}
-          </li>
-        ))}
-      </ul>
-
       {error && <p style={{ color: "#ff5555", padding: "0 12px" }}>{error}</p>}
 
-      <div style={{ display: "flex", gap: 8, padding: 12 }}>
-        <input
-          value={input}
-          onChange={(e) => setInput(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === "Enter") void onSend();
-          }}
-          placeholder="メッセージを入力…"
-          style={{ flex: 1 }}
-        />
-        <button type="button" onClick={() => void onSend()} disabled={busy || !modelReady}>
-          Send
-        </button>
-      </div>
+      <RagChatPanel
+        modelReady={modelReady}
+        onError={setError}
+        onBusyChange={setBusy}
+      />
 
       <ExtractionPanel modelReady={modelReady} />
     </section>
