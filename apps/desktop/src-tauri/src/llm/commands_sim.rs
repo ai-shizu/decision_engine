@@ -18,11 +18,11 @@ use crate::knowledge::edinet_client::{
 use crate::knowledge::{
     refuse_if_egress_unavailable, refuse_if_policy_off, NetworkPolicyStore, OrchestratorError,
 };
-use crate::llm::embed::{require_knowledge_embedding_dims, EMBED_DEFAULT_N_CTX};
 use crate::llm::params::GenerationParams;
 use crate::llm::prompt_sim::{build_es_review_prompt, build_interview_prompt, ExperienceRef};
 use crate::llm::service::TokenEvent;
 use crate::llm::LlmHandle;
+use crate::rag::embed_knowledge::embed_for_knowledge;
 
 const MAX_TEXT_BYTES: usize = 64 * 1024;
 const DEFAULT_CONTEXT_LIMIT: u32 = 5;
@@ -106,8 +106,7 @@ fn search_sync(
     query: &str,
     limit: u32,
 ) -> Result<Vec<DbHit>, String> {
-    let embedding = llm.embed(query.to_string(), EMBED_DEFAULT_N_CTX)?;
-    require_knowledge_embedding_dims(&embedding)?;
+    let embedding = embed_for_knowledge(llm, query)?;
     vault
         .knowledge_search(embedding, limit)
         .map_err(map_vault_err)
@@ -217,23 +216,14 @@ pub async fn start_interview_session(
     .await?;
 
     let (context_limit, mut gen) = resolve_gen(params.gen.as_ref());
-    let vault = vault.inner().clone();
-    let llm_search = llm.inner().clone();
-    let message_for_search = message.clone();
+    let _ = (context_limit, vault.inner()); // no Vault auto-RAG in interview production (M20-J)
+    let message_for_prompt = message.clone();
     let facts_for_prompt = facts.clone();
 
     let (prompt, context_ids) = tauri::async_runtime::spawn_blocking(move || {
-        let hits = search_sync(&vault, &llm_search, &message_for_search, context_limit)?;
-        let refs: Vec<ExperienceRef<'_>> = hits
-            .iter()
-            .map(|hit| ExperienceRef {
-                id: hit.id.as_str(),
-                text: hit.text_content.as_str(),
-            })
-            .collect();
-        let prompt = build_interview_prompt(&message_for_search, &facts_for_prompt, &refs);
-        let ids: Vec<String> = hits.into_iter().map(|hit| hit.id).collect();
-        Ok::<_, String>((prompt, ids))
+        // Foundation-style single shot: company facts + utterance only (no vault KNN).
+        let prompt = build_interview_prompt(&message_for_prompt, &facts_for_prompt, &[]);
+        Ok::<_, String>((prompt, Vec::<String>::new()))
     })
     .await
     .map_err(|_| "interview retrieve task join failed".to_string())??;
@@ -287,7 +277,7 @@ pub async fn review_es_draft(
     let facts_for_prompt = facts.clone();
 
     let (prompt, context_ids) = tauri::async_runtime::spawn_blocking(move || {
-        let hits = search_sync(&vault, &llm_search, &query, context_limit)?;
+        let hits = search_sync(&vault, &llm_search, &query, context_limit).unwrap_or_default();
         let refs: Vec<ExperienceRef<'_>> = hits
             .iter()
             .map(|hit| ExperienceRef {
@@ -362,7 +352,15 @@ fn build_machine_prompt(
     user_message: &str,
     context_limit: u32,
 ) -> Result<(String, Vec<String>), String> {
-    let hits = search_sync(vault, llm, user_message, context_limit).unwrap_or_default();
+    let is_debrief = session.stage == InterviewStage::Debrief;
+
+    // M20-J scope: Vault auto-RAG + Gap/Tensor ONLY in Debrief.
+    // Foundation / Pressure: company facts + session transcript only (no vault KNN).
+    let hits = if is_debrief {
+        search_sync(vault, llm, user_message, context_limit).unwrap_or_default()
+    } else {
+        Vec::new()
+    };
     let refs: Vec<ExperienceRef<'_>> = hits
         .iter()
         .map(|hit| ExperienceRef {
@@ -371,36 +369,45 @@ fn build_machine_prompt(
         })
         .collect();
 
-    let mut prompt = build_stage_prompt_prefix(session, session.stage == InterviewStage::Debrief);
+    let mut prompt = build_stage_prompt_prefix(session, is_debrief);
     prompt.push_str("\n## 企業ファクト（EDINET）\n");
     prompt.push_str(&render_company_facts_block(facts));
-    prompt.push_str("\n## 候補者の過去経験（個人知識ベース）\n");
-    if refs.is_empty() {
-        prompt.push_str("（該当する知識チャンクは見つかりませんでした）\n");
-    } else {
-        for (i, hit) in refs.iter().enumerate() {
-            prompt.push_str(&format!(
-                "[{}] (id={})\n{}\n\n",
-                i + 1,
-                hit.id,
-                hit.text.trim()
-            ));
-        }
-    }
 
-    // I-22: Gap/Oracle only in debrief, never foundation/pressure.
-    if session.stage == InterviewStage::Debrief {
+    if is_debrief {
+        prompt.push_str("\n## 参考情報（Vault 自動探索・講評専用）\n");
+        if refs.is_empty() {
+            prompt.push_str("（該当する知識チャンクは見つかりませんでした）\n");
+        } else {
+            for (i, hit) in refs.iter().enumerate() {
+                prompt.push_str(&format!(
+                    "[{}] (id={})\n{}\n\n",
+                    i + 1,
+                    hit.id,
+                    hit.text.trim()
+                ));
+            }
+        }
+        // I-22 / M20-J: Gap / Tensor / Oracle only in debrief.
         match load_mentor_context(vault) {
             Ok(mentor) => {
                 prompt.push_str("\n## 主観×客観ギャップ（講評専用）\n");
                 prompt.push_str(&mentor.gap_block);
+                prompt.push_str("\n## Tensorプロファイル（講評専用）\n");
+                prompt.push_str(&mentor.tensor_block);
                 prompt.push_str("\n## Oracle予測（講評専用）\n");
                 prompt.push_str(&mentor.oracle_block);
             }
             Err(_) => {
-                prompt.push_str("\n（Gap/Oracle 取得不可 — 講評は企業ファクトと会話ログのみ）\n");
+                prompt.push_str(
+                    "\n（Gap/Tensor/Oracle 取得不可 — 講評は企業ファクトと会話ログのみ）\n",
+                );
             }
         }
+    } else {
+        prompt.push_str(
+            "\n## 参照範囲（面接本番）\n\
+（Vault / Gap / Tensor の自動探索は無効。企業ファクトと本セッションの対話のみを根拠にせよ。）\n",
+        );
     }
 
     prompt.push_str("\n## 候補者の発話\n");

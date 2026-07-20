@@ -1,4 +1,4 @@
-//! Mentor consult context: Gap (M14) + Oracle (M16) sections for prompt injection.
+//! Mentor consult context: Gap (M14) + Oracle (M16) + Tensor (M14) for prompt injection.
 //!
 //! Fail-safe: missing / ungated vault rows produce explicit "unavailable" notes
 //! rather than errors. Never invent scores. Discussion-phase interview must NOT
@@ -10,22 +10,27 @@ use crate::analytics::oracle::render_oracle_consult;
 use crate::db::{VaultErrorCode, VaultHandle};
 
 const MENTOR_PREAMBLE: &str = "\
-あなたは司令官の意思決定を支える冷徹なメンターである。\
-一般論でごまかすな。下記の「主観×客観ギャップ」と「Oracle予測」に定量根拠がある場合は\
-それを優先し、助言の自己検証を行い、行動可能な次手を1〜3個に絞れ。\
+あなたは司令官の意思決定を支える冷徹なメンターである。同意・共感だけで終わらせるな。\
+下記の「主観×客観ギャップ」「Tensorプロファイル」「Oracle予測」および参考情報に定量根拠がある場合はそれを優先し、\
+ユーザーの自己申告と矛盾する事実があれば「本当にそうか？」と突き、過去メモとの食い違いを明示せよ。\
+一般論でごまかすな。助言の自己検証を行い、行動可能な次手を1〜3個に絞れ。\
 データが不足と明示されている場合は推測で埋めず、観測継続を促せ。";
 
 const GAP_SECTION_BUDGET: usize = 2_500;
 const ORACLE_SECTION_BUDGET: usize = 1_500;
+const TENSOR_SECTION_BUDGET: usize = 1_200;
 
 #[derive(Debug, Clone, Default)]
 pub struct MentorContextSections {
     pub gap_block: String,
     pub oracle_block: String,
+    pub tensor_block: String,
     pub gap_available: bool,
     pub oracle_available: bool,
+    pub tensor_available: bool,
     pub gap_run_id: Option<String>,
     pub oracle_run_id: Option<String>,
+    pub tensor_run_id: Option<String>,
 }
 
 fn map_vault(err: VaultErrorCode) -> String {
@@ -69,7 +74,47 @@ fn format_gap_payload(payload: &Value, data_sufficiency: f64) -> String {
     truncate(&out, GAP_SECTION_BUDGET)
 }
 
-/// Load latest gap + oracle from vault. Errors only on vault transport failure;
+fn format_tensor_payload(payload: &Value, model_hash: &str) -> String {
+    let mut out = String::new();
+    out.push_str(&format!("model_hash: {model_hash}\n"));
+    let dims = payload
+        .get("dimensions")
+        .and_then(|v| v.as_array())
+        .cloned()
+        .unwrap_or_default();
+    if dims.is_empty() {
+        out.push_str("(Tensor次元なし — スコアを捏造するな)\n");
+    } else {
+        for d in dims.iter().take(8) {
+            let id = d
+                .get("dimension_id")
+                .and_then(|v| v.as_str())
+                .unwrap_or("?");
+            let axis = d
+                .get("calculus_axis")
+                .and_then(|v| v.as_str())
+                .unwrap_or("?");
+            let score = d.get("score");
+            let score_s = match score {
+                Some(Value::Null) | None => "N/A".to_string(),
+                Some(v) => v
+                    .as_f64()
+                    .map(|f| format!("{f:.3}"))
+                    .unwrap_or_else(|| "N/A".into()),
+            };
+            let conf = d.get("confidence").and_then(|v| v.as_f64()).unwrap_or(0.0);
+            out.push_str(&format!(
+                "- {id} ({axis}): score={score_s} conf={conf:.2}\n"
+            ));
+        }
+        out.push_str(
+            "N/A の軸は未観測として扱い、自己PRの美辞麗句で埋めさせない。矛盾があれば指摘せよ。\n",
+        );
+    }
+    truncate(&out, TENSOR_SECTION_BUDGET)
+}
+
+/// Load latest gap + oracle + tensor from vault. Errors only on vault transport failure;
 /// empty/ungated analytics become soft unavailable sections.
 pub fn load_mentor_context(vault: &VaultHandle) -> Result<MentorContextSections, String> {
     let mut sections = MentorContextSections::default();
@@ -120,10 +165,24 @@ pub fn load_mentor_context(vault: &VaultHandle) -> Result<MentorContextSections,
         }
     }
 
+    match vault.tensor_profile_latest().map_err(map_vault)? {
+        Some(row) => {
+            sections.tensor_run_id = Some(row.id.clone());
+            let payload: Value =
+                serde_json::from_str(&row.payload_json).unwrap_or(Value::Null);
+            sections.tensor_block = format_tensor_payload(&payload, &row.model_hash);
+            sections.tensor_available = true;
+        }
+        None => {
+            sections.tensor_block =
+                "（Tensor: Vault にプロファイルなし — 能力スコアを推測で埋めない）\n".into();
+        }
+    }
+
     Ok(sections)
 }
 
-/// Mentor consult prompt: preamble + gap + oracle + optional RAG + user message.
+/// Mentor consult prompt: preamble + gap + tensor + oracle + optional RAG + user message.
 pub fn build_consult_with_oracle_prompt(
     message: &str,
     mentor: &MentorContextSections,
@@ -133,6 +192,8 @@ pub fn build_consult_with_oracle_prompt(
     out.push_str(MENTOR_PREAMBLE);
     out.push_str("\n\n## 主観×客観ギャップ（決定論・Vault）\n");
     out.push_str(&mentor.gap_block);
+    out.push_str("\n## Tensorプロファイル（決定論・Vault）\n");
+    out.push_str(&mentor.tensor_block);
     out.push_str("\n## Oracle予測（決定論・Vault）\n");
     out.push_str(&mentor.oracle_block);
     if !rag_block.is_empty() {
@@ -153,6 +214,8 @@ pub fn append_mentor_sections(base_prompt: &str, mentor: &MentorContextSections)
         out.push_str(&base_prompt[..idx]);
         out.push_str("## 主観×客観ギャップ（決定論・Vault）\n");
         out.push_str(&mentor.gap_block);
+        out.push_str("\n## Tensorプロファイル（決定論・Vault）\n");
+        out.push_str(&mentor.tensor_block);
         out.push_str("\n## Oracle予測（決定論・Vault）\n");
         out.push_str(&mentor.oracle_block);
         out.push('\n');
@@ -161,6 +224,8 @@ pub fn append_mentor_sections(base_prompt: &str, mentor: &MentorContextSections)
         out.push_str(base_prompt);
         out.push_str("\n\n## 主観×客観ギャップ（決定論・Vault）\n");
         out.push_str(&mentor.gap_block);
+        out.push_str("\n## Tensorプロファイル（決定論・Vault）\n");
+        out.push_str(&mentor.tensor_block);
         out.push_str("\n## Oracle予測（決定論・Vault）\n");
         out.push_str(&mentor.oracle_block);
     }
@@ -177,12 +242,15 @@ mod tests {
         let mentor = MentorContextSections {
             gap_block: "gap-line\n".into(),
             oracle_block: "oracle-line\n".into(),
+            tensor_block: "tensor-line\n".into(),
             ..Default::default()
         };
         let p = append_mentor_sections(base, &mentor);
         let g = p.find("主観×客観ギャップ").unwrap();
+        let t = p.find("Tensorプロファイル").unwrap();
         let u = p.find("ユーザーの質問").unwrap();
-        assert!(g < u);
+        assert!(g < t && t < u);
         assert!(p.contains("gap-line"));
+        assert!(p.contains("tensor-line"));
     }
 }

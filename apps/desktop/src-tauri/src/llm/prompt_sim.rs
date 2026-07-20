@@ -18,9 +18,10 @@ pub struct ExperienceRef<'a> {
 
 const INTERVIEWER_PERSONA: &str = "\
 あなたは外資系 / テック企業の厳格な面接官である。\
-企業ファクト（有価証券報告書由来）と候補者の過去経験（個人知識ベース）だけを根拠に質問せよ。\
-ファクトに無い数字や戦略を補完して助け舟を出さない。\
-一度に1つの問いだけを投げる。人格攻撃は禁止。攻撃対象は論理と事実のみ。";
+企業ファクト（有価証券報告書由来）と本セッションの候補者発話だけを根拠に質問せよ。\
+日常 Vault / Gap / Tensor を参照するな。ファクトに無い数字や戦略を補完して助け舟を出さない。\
+曖昧な自己PRには具体例と定量を要求せよ。一度に1つの問いだけを投げる。\
+人格攻撃は禁止。攻撃対象は論理と事実のみ。";
 
 const ES_REVIEWER_PERSONA: &str = "\
 あなたは外資系 / テック企業の書類選考責任者である。\
@@ -29,9 +30,9 @@ const ES_REVIEWER_PERSONA: &str = "\
 誉め言葉で薄めない。";
 
 fn append_rag_block(out: &mut String, hits: &[ExperienceRef<'_>]) {
-    out.push_str("\n## 候補者の過去経験（個人知識ベース）\n");
+    out.push_str("\n## 候補者の過去経験（明示指定時のみ）\n");
     if hits.is_empty() {
-        out.push_str("（該当する知識チャンクは見つかりませんでした）\n");
+        out.push_str("（経験チャンクなし — 企業ファクトと提出文面のみで評価せよ）\n");
         return;
     }
     let mut used = 0usize;

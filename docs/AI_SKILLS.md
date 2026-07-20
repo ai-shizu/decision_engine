@@ -767,6 +767,19 @@ Pocket Brain 経路は M14 tensor + M15 pulse/Rasch + gap sufficiency から loa
 3. `uiErrorMessages.RAG_CHAT`（retry-safe）を追加。`RagChatPanel` は `event.error` / catch 値を UI に渡さず固定文言のみ（substring 分類禁止の Finding 13 を維持）。
 4. 検証: `npx tsc --noEmit` → exit 0。`tests-runtime/ui_error_boundary.test.ts` キー数 23。
 
+### 4.34 M20-J — Knowledge embed fallback + scoped auto mentor retrieval (2026-07-20)
+
+**原因:** Pocket Brain がチャット用 GGUF（例: Qwen `n_embd=1536`）をそのまま `LlmHandle::embed` に使い、vault `float[384]` と不一致 → `embedding dim mismatch` で KNN 全滅。
+
+**as-built:**
+1. `llm/hashed_embed.rs` — 決定論 hashed-ngram-384（L2）。`rag/embed_knowledge.rs::embed_for_knowledge` は模型が 384-d のときのみ GGUF embed、否则 hashed へフォールバック。非 384 を返さない。
+2. `ingest` / `search` / `sync_daily` / ES review retrieve は `embed_for_knowledge` 経由。
+3. **自動探索スコープ（厳格）:**
+   - **CONSULT** (`send_rag_chat` / `consult_with_oracle_context`): Vault KNN soft-fail + Gap/Tensor/Oracle 半強制注入。メタ認知 preamble。
+   - **INTERVIEW Debrief のみ:** Vault KNN + Gap/Tensor/Oracle 注入。感想戦で矛盾突き可。
+   - **INTERVIEW Foundation / Pressure（および legacy `start_interview_session`）:** Vault / Gap / Tensor 自動探索**禁止**。企業ファクト + セッション対話のみ。
+4. 検証: `cargo test -p pkb-desktop --features "pocket-brain,secure-vault" --lib`（hashed / consult_context / interview_machine）; `npx tsc --noEmit`。
+
 ### 4.8 M3 Phase 0-A — SQLCipher / Security.framework iOS link gate (2026-07-18)
 
 **射程（Phase 0-A のみ）:** `secure-vault` feature、依存解決、in-memory SQLCipher identity（`PRAGMA key` + `cipher_version`）、Security.framework シンボル（`SecRandom` / `SecAccessControl`）、Tauri command 登録、iOS Simulator 最終リンク証明。スキーマ・repository・UI・本番 Keychain item 作成は対象外。

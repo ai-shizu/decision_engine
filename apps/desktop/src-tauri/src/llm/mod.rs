@@ -11,6 +11,7 @@
 
 pub mod commands_llm;
 pub mod embed;
+pub mod hashed_embed;
 pub mod model_path;
 pub mod params;
 pub mod prompt;

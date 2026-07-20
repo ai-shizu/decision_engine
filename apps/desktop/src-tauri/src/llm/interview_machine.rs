@@ -71,18 +71,21 @@ impl InterviewSession {
     }
 }
 
-/// Stage-specific interviewer directive (discussion phases: no gap/oracle).
+/// Stage-specific interviewer directive (discussion: no vault/gap; debrief: mentor OK).
 pub fn stage_directive(stage: InterviewStage) -> &'static str {
     match stage {
         InterviewStage::Foundation => {
-            "【Stage 1: 基礎突撃】経歴・動機・基本事実の確認。一度に1問。曖昧な回答には具体例を要求せよ。"
+            "【Stage 1: 基礎突撃】経歴・動機・基本事実の確認。一度に1問。曖昧な回答には具体例を要求せよ。\
+Vault / Gap / Tensor は参照禁止。"
         }
         InterviewStage::Pressure => {
-            "【Stage 2: 圧迫・深掘り】矛盾・定量欠落・再現性を突け。助け舟を出さない。一度に1問。"
+            "【Stage 2: 圧迫・深掘り】矛盾・定量欠落・再現性を突け。助け舟を出さない。一度に1問。\
+Vault / Gap / Tensor は参照禁止。本セッションの発話と企業ファクトのみ。"
         }
         InterviewStage::Debrief => {
-            "【Stage 3: 最終講評】これ以上質問せず、候補者の論理強度・定量根拠・企業適合を講評せよ。\
-必要なら下記ギャップ/Oracleを参照してよい（議論フェーズではない）。"
+            "【Stage 3: 最終講評・感想戦】これ以上の新規面接質問はせず、論理強度・定量根拠・企業適合を講評せよ。\
+下記の Vault 参考情報・Gap・Tensor・Oracle がある場合は同意で終わらせず、\
+「本当にそうか？」と過去記録との矛盾を突け。データ不足なら推測で埋めるな。"
         }
         InterviewStage::Closed => "セッションは終了している。新たな質問を生成するな。",
     }
@@ -158,12 +161,11 @@ pub fn record_interviewer_utterance(session: &mut InterviewSession, text: &str) 
     });
 }
 
-/// Build discussion/debrief prompt layers (caller adds company + RAG + optional mentor).
+/// Build discussion/debrief prompt layers (caller adds company + optional vault mentor).
 pub fn build_stage_prompt_prefix(session: &InterviewSession, include_mentor_debrief: bool) -> String {
     let mut out = String::new();
     out.push_str(
-        "あなたは外資系 / テック企業の厳格な面接官である。\
-企業ファクトと候補者の過去経験だけを根拠にせよ。人格攻撃は禁止。\n",
+        "あなたは外資系 / テック企業の厳格な面接官である。人格攻撃は禁止。\n",
     );
     out.push_str(stage_directive(session.stage));
     out.push('\n');
@@ -182,7 +184,9 @@ pub fn build_stage_prompt_prefix(session: &InterviewSession, include_mentor_debr
         }
     }
     if include_mentor_debrief && session.stage == InterviewStage::Debrief {
-        out.push_str("\n（講評フェーズ: 呼び出し側が Gap/Oracle ブロックを続けて注入する）\n");
+        out.push_str(
+            "\n（講評フェーズ: 呼び出し側が Vault 参考情報と Gap/Tensor/Oracle を続けて注入する）\n",
+        );
     }
     out
 }

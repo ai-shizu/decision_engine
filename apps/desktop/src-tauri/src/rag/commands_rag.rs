@@ -12,9 +12,9 @@ use tauri::ipc::Channel;
 use tauri::State;
 
 use super::chunk::{chunk_markdown, MAX_CHUNKS};
+use super::embed_knowledge::embed_for_knowledge;
 use super::prompt::{build_rag_prompt, RagContextRef};
 use crate::db::{KnowledgeChunkRow, KnowledgeSearchHit as DbHit, VaultErrorCode, VaultHandle};
-use crate::llm::embed::{require_knowledge_embedding_dims, EMBED_DEFAULT_N_CTX};
 use crate::llm::params::GenerationParams;
 use crate::llm::service::TokenEvent;
 use crate::llm::LlmHandle;
@@ -96,8 +96,7 @@ pub(crate) fn search_sync(
     query: &str,
     limit: u32,
 ) -> Result<Vec<DbHit>, String> {
-    let embedding = llm.embed(query.to_string(), EMBED_DEFAULT_N_CTX)?;
-    require_knowledge_embedding_dims(&embedding)?;
+    let embedding = embed_for_knowledge(llm, query)?;
     vault
         .knowledge_search(embedding, limit)
         .map_err(map_vault_err)
@@ -147,8 +146,7 @@ pub async fn ingest_knowledge(
             } else {
                 format!("{}\n\n{}", chunk.title, chunk.text)
             };
-            let embedding = llm.embed(embed_input, EMBED_DEFAULT_N_CTX)?;
-            require_knowledge_embedding_dims(&embedding)?;
+            let embedding = embed_for_knowledge(&llm, &embed_input)?;
             rows.push(KnowledgeChunkRow {
                 id: chunk.id.clone(),
                 text_content: chunk.text.clone(),
@@ -235,7 +233,9 @@ pub async fn send_rag_chat(
     let message_for_search = message.clone();
 
     let (prompt, context_ids) = tauri::async_runtime::spawn_blocking(move || {
-        let hits = search_sync(&vault, &llm_for_search, &message_for_search, context_limit)?;
+        // Automatic retrieval: soft-fail KNN so Gap/Oracle/Tensor still inject.
+        let hits = search_sync(&vault, &llm_for_search, &message_for_search, context_limit)
+            .unwrap_or_default();
         let refs: Vec<RagContextRef<'_>> = hits
             .iter()
             .map(|hit| RagContextRef {
@@ -244,7 +244,7 @@ pub async fn send_rag_chat(
             })
             .collect();
         let rag_prompt = build_rag_prompt(&message_for_search, &refs);
-        // M17: fail-safe Gap/Oracle injection (missing vault analytics → soft notes).
+        // M17/M20-J: fail-safe Gap/Oracle/Tensor injection (missing → soft notes).
         let prompt = match crate::llm::consult_context::load_mentor_context(&vault) {
             Ok(mentor) => {
                 crate::llm::consult_context::append_mentor_sections(&rag_prompt, &mentor)

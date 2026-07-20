@@ -12,9 +12,9 @@ use crate::db::{KnowledgeChunkRow, VaultErrorCode, VaultHandle};
 use crate::knowledge::context_merger::{
     build_daily_context_markdown, daily_source_id, MergeError,
 };
-use crate::llm::embed::{require_knowledge_embedding_dims, EMBED_DEFAULT_N_CTX};
 use crate::llm::LlmHandle;
 use crate::rag::chunk::{chunk_markdown, MAX_CHUNKS};
+use crate::rag::embed_knowledge::embed_for_knowledge;
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -80,8 +80,7 @@ pub async fn sync_daily_context(
             } else {
                 format!("{}\n\n{}", chunk.title, chunk.text)
             };
-            let embedding = llm.embed(embed_input, EMBED_DEFAULT_N_CTX)?;
-            require_knowledge_embedding_dims(&embedding)?;
+            let embedding = embed_for_knowledge(&llm, &embed_input)?;
             rows.push(KnowledgeChunkRow {
                 id: chunk.id.clone(),
                 text_content: chunk.text.clone(),
