@@ -27,6 +27,7 @@ import type {
   ProbeQuestionV1,
   ProbeStatusV1,
   RagChatParams,
+  RaschStateWire,
   ScenarioModifiers,
   SearchKnowledgeResult,
   SendRagChatResult,
@@ -203,7 +204,7 @@ export function getProbeStatus(today: string): Promise<ProbeStatusV1> {
   });
 }
 
-export function getLatestRaschState(): Promise<Record<string, unknown> | null> {
+export function getLatestRaschState(): Promise<RaschStateWire | null> {
   return pocketInvoke("get_latest_rasch_state");
 }
 

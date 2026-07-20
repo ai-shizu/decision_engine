@@ -8,6 +8,8 @@ import type {
   ProbeStage,
   ProbeStatus,
 } from "../lib/types";
+import { PocketProbePanel } from "./PocketProbePanel";
+import { PulseRaschDashboard } from "./PulseRaschDashboard";
 
 const AXIS_LABELS: Record<ProbeAxis, string> = {
   decision_threshold: "意思決定閾値",
@@ -32,7 +34,58 @@ const INSIGHT_LABELS: Record<string, string> = {
   "probe.stage_complete": "完了",
 };
 
+type ProbeSurface = "pb_probe" | "pulse_rasch" | "legacy";
+
+/**
+ * PROBE tab: Pocket Brain M15 wiring (primary) + legacy Python engine path.
+ */
 export function ProbeTab() {
+  const [surface, setSurface] = useState<ProbeSurface>("pb_probe");
+
+  return (
+    <section className="panel probe-panel">
+      <div className="probe-topline">
+        <div>
+          <h2>PROBE (自己探索)</h2>
+          <p className="hint">
+            M18-D: Pocket Brain の PROBE ファネルと Romance/Rasch パルスを配線。
+            legacy は Python sidecar 経路（非破壊で残置）。
+          </p>
+        </div>
+      </div>
+
+      <div className="sub-tabs">
+        <button
+          type="button"
+          className={surface === "pb_probe" ? "active" : ""}
+          onClick={() => setSurface("pb_probe")}
+        >
+          PROBE (PB)
+        </button>
+        <button
+          type="button"
+          className={surface === "pulse_rasch" ? "active" : ""}
+          onClick={() => setSurface("pulse_rasch")}
+        >
+          PULSE / RASCH
+        </button>
+        <button
+          type="button"
+          className={surface === "legacy" ? "active" : ""}
+          onClick={() => setSurface("legacy")}
+        >
+          PROBE (legacy)
+        </button>
+      </div>
+
+      {surface === "pb_probe" && <PocketProbePanel />}
+      {surface === "pulse_rasch" && <PulseRaschDashboard />}
+      {surface === "legacy" && <LegacyProbePanel />}
+    </section>
+  );
+}
+
+function LegacyProbePanel() {
   const [status, setStatus] = useState<ProbeStatus | null>(null);
   const [question, setQuestion] = useState<ProbeQuestionView | null>(null);
   const [answer, setAnswer] = useState("");
@@ -133,10 +186,9 @@ export function ProbeTab() {
   const charCount = answer.length;
 
   return (
-    <section className="panel probe-panel">
+    <div className="legacy-probe-panel">
       <div className="probe-topline">
         <div>
-          <h2>PROBE (自己探索)</h2>
           <p className="hint">
             進捗{" "}
             <span className="term-metric">
@@ -153,7 +205,12 @@ export function ProbeTab() {
             )}
           </p>
         </div>
-        <button type="button" className="secondary" disabled={busy} onClick={() => void handleRefresh()}>
+        <button
+          type="button"
+          className="secondary"
+          disabled={busy}
+          onClick={() => void handleRefresh()}
+        >
           更新
         </button>
       </div>
@@ -192,7 +249,9 @@ export function ProbeTab() {
                 <p>{question.question}</p>
               </>
             ) : (
-              <p className="hint">「次の質問」でバックエンドが選んだ静的質問を表示します。</p>
+              <p className="hint">
+                「次の質問」でバックエンドが選んだ静的質問を表示します。
+              </p>
             )}
           </div>
 
@@ -212,7 +271,9 @@ export function ProbeTab() {
                 }}
                 onKeyDown={onAnswerKeyDown}
               />
-              <div className={`probe-char-counter${charCount >= 120 ? " error-text" : ""}`}>
+              <div
+                className={`probe-char-counter${charCount >= 120 ? " error-text" : ""}`}
+              >
                 {charCount}/120
               </div>
               <div className="action-row">
@@ -240,7 +301,9 @@ export function ProbeTab() {
                 {busy ? "保存中…" : "次の質問"}
               </button>
               {status?.active_session?.status === "closed" && (
-                <p className="hint">直近セッションは完了しました。新しい質問を開始できます。</p>
+                <p className="hint">
+                  直近セッションは完了しました。新しい質問を開始できます。
+                </p>
               )}
             </div>
           )}
@@ -268,11 +331,14 @@ export function ProbeTab() {
           <ul className="probe-insight-list">
             {(status?.insights ?? []).map((ins) => (
               <li key={`${ins.kind}-${ins.axis}-${ins.stage}`}>
-                <span className="term-metric">{INSIGHT_LABELS[ins.message_code] ?? ins.message_code}</span>
+                <span className="term-metric">
+                  {INSIGHT_LABELS[ins.message_code] ?? ins.message_code}
+                </span>
                 {" — "}
-                {AXIS_LABELS[ins.axis]} / {STAGE_LABELS[ins.stage]}
-                {" "}
-                <span className="probe-axis-metric">({ins.priority.toFixed(2)})</span>
+                {AXIS_LABELS[ins.axis]} / {STAGE_LABELS[ins.stage]}{" "}
+                <span className="probe-axis-metric">
+                  ({ins.priority.toFixed(2)})
+                </span>
               </li>
             ))}
             {status && status.insights.length === 0 && (
@@ -281,6 +347,6 @@ export function ProbeTab() {
           </ul>
         </div>
       </div>
-    </section>
+    </div>
   );
 }

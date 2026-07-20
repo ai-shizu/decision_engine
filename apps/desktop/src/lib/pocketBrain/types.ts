@@ -201,6 +201,16 @@ export interface ProbeStatusV1 {
   total_stages: number;
 }
 
+/** Wire shape of `get_latest_rasch_state` (serde Value object). */
+export interface RaschStateWire {
+  id: string;
+  created_at: number;
+  artifact_sha256: string;
+  posterior: number[];
+  excluded: string[];
+  last_selection: ItemSelection | null;
+}
+
 // ─── Twin / Oracle (M16) ────────────────────────────────────────────────────
 
 export interface ScenarioModifiers {

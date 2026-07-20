@@ -2131,3 +2131,90 @@ button.secondary {
 .gap-theme-scores {
   margin-top: 12px;
 }
+
+/* M18-D: Pocket Probe + Pulse/Rasch */
+.probe-progress-track {
+  height: 10px;
+  margin: 0 0 12px;
+  background: var(--border);
+  border: 1px solid var(--border);
+}
+
+.probe-progress-fill {
+  height: 100%;
+  background: var(--accent);
+}
+
+.probe-complete {
+  margin-bottom: 12px;
+}
+
+.pulse-rasch-dashboard {
+  margin-top: 4px;
+}
+
+.pulse-transcript {
+  width: 100%;
+  font-family: inherit;
+  resize: vertical;
+  margin-bottom: 8px;
+}
+
+.pulse-result-block {
+  margin-top: 12px;
+}
+
+.pulse-metrics {
+  margin-top: 10px;
+}
+
+.pulse-metric-row {
+  display: grid;
+  grid-template-columns: 7.5rem 1fr 4rem;
+  gap: 8px;
+  align-items: center;
+  margin-bottom: 6px;
+}
+
+.pulse-metric-meter {
+  height: 8px;
+  background: var(--border);
+  border: 1px solid var(--border);
+}
+
+.pulse-metric-fill {
+  height: 100%;
+  background: var(--ok);
+}
+
+.rasch-posterior-svg {
+  width: 100%;
+  max-width: 360px;
+  height: auto;
+  margin: 8px 0;
+  background: var(--bg-info);
+  border: 1px solid var(--border);
+}
+
+.rasch-posterior-bar {
+  fill: var(--accent);
+}
+
+.rasch-posterior-axis {
+  fill: var(--text-muted);
+  font-size: 9px;
+}
+
+.rasch-likert {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+  margin: 10px 0;
+}
+
+.rasch-likert-option {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 0.82rem;
+}
