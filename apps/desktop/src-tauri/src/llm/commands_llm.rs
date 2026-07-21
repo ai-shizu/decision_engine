@@ -75,3 +75,10 @@ pub async fn memory_monitor_start(
     );
     Ok(())
 }
+
+/// Stop the Jetsam monitor sampler thread.
+#[tauri::command]
+pub async fn memory_monitor_stop(monitor: State<'_, Arc<MemoryMonitor>>) -> Result<(), String> {
+    monitor.stop();
+    Ok(())
+}

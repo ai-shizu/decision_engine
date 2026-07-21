@@ -1,5 +1,6 @@
-import { useReducer, useRef } from "react";
+import { useEffect, useReducer, useRef } from "react";
 
+import { cancelGeneration } from "../../lib/llm";
 import { sendRagChat } from "../../lib/pocketBrain";
 import {
   initialRagChatState,
@@ -38,13 +39,30 @@ export function RagChatPanel({
 }: RagChatPanelProps) {
   const [state, dispatch] = useReducer(ragChatReducer, undefined, initialRagChatState);
   const assistantIdRef = useRef<string | null>(null);
+  const streamingRef = useRef(false);
   const messenger = variant === "messenger";
 
-  const throttle = useThrottledStream((chunk) => {
+  const { push: pushChunk, flushAndStop } = useThrottledStream((chunk) => {
     const id = assistantIdRef.current;
     if (!id) return;
     dispatch({ type: "token", assistantId: id, text: chunk });
   });
+
+  useEffect(() => {
+    streamingRef.current = state.streaming;
+  }, [state.streaming]);
+
+  // W4: unmount while generating must cancel the LLM worker.
+  useEffect(() => {
+    return () => {
+      flushAndStop();
+      if (streamingRef.current) {
+        void cancelGeneration().catch(() => {
+          /* best-effort */
+        });
+      }
+    };
+  }, [flushAndStop]);
 
   async function onSend() {
     const prompt = state.input.trim();
@@ -72,24 +90,24 @@ export function RagChatPanel({
             return;
           }
           if (event.done) {
-            throttle.flushAndStop();
+            flushAndStop();
             return;
           }
           if (event.text) {
-            throttle.push(event.text);
+            pushChunk(event.text);
           }
         },
         { contextLimit: 5 },
       );
 
-      throttle.flushAndStop();
+      flushAndStop();
       dispatch({
         type: "send_success",
         assistantId,
         contextCount: result.context_count,
       });
     } catch {
-      throttle.flushAndStop();
+      flushAndStop();
       dispatch({ type: "send_failure", message: sterile });
       onError(sterile);
     } finally {

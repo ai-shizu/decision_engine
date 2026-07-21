@@ -120,6 +120,8 @@ pub fn run() {
             #[cfg(feature = "pocket-brain")]
             llm::commands_llm::memory_monitor_start,
             #[cfg(feature = "pocket-brain")]
+            llm::commands_llm::memory_monitor_stop,
+            #[cfg(feature = "pocket-brain")]
             llm::commands_model_setup::check_model_exists,
             #[cfg(feature = "pocket-brain")]
             llm::commands_model_setup::pick_local_gguf,

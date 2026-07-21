@@ -146,6 +146,11 @@ impl MemoryMonitor {
     pub fn set_phase(&self, phase: MemPhase) {
         self.phase.store(phase.as_u8(), Ordering::SeqCst);
     }
+
+    /// Stop the sampler thread (it exits on its next tick).
+    pub fn stop(&self) {
+        self.running.store(false, Ordering::SeqCst);
+    }
 }
 
 impl Default for MemoryMonitor {

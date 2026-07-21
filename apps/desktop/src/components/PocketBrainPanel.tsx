@@ -9,6 +9,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import {
   cancelGeneration,
   loadModel,
+  memoryMonitorStop,
   startMemoryMonitor,
   subscribeLlmEvents,
   type MemSample,
@@ -43,6 +44,15 @@ export function PocketBrainPanel({ variant = "default" }: PocketBrainPanelProps)
   const messenger = variant === "messenger";
   const loadingRef = useRef(false);
   const retryCountRef = useRef(0);
+  const retryTimerRef = useRef<number | null>(null);
+  const mountedRef = useRef(true);
+
+  const clearRetryTimer = useCallback(() => {
+    if (retryTimerRef.current !== null) {
+      window.clearTimeout(retryTimerRef.current);
+      retryTimerRef.current = null;
+    }
+  }, []);
 
   const ensureModelLoaded = useCallback(async () => {
     if (loadingRef.current) return;
@@ -52,34 +62,60 @@ export function PocketBrainPanel({ variant = "default" }: PocketBrainPanelProps)
     setPhaseNote("モデル準備中…");
     try {
       await loadModel({ n_gpu_layers: 999, use_mmap: true });
+      if (!mountedRef.current) return;
       setModelReady(true);
       setPhaseNote("準備完了");
       setError(null);
       retryCountRef.current = 0;
       loadingRef.current = false;
     } catch (e) {
+      if (!mountedRef.current) {
+        loadingRef.current = false;
+        return;
+      }
       setModelReady(false);
       setError(`load: ${String(e)}`);
       setPhaseNote("再試行待機…");
       if (retryCountRef.current < 3) {
         retryCountRef.current += 1;
-        window.setTimeout(() => {
+        clearRetryTimer();
+        retryTimerRef.current = window.setTimeout(() => {
+          retryTimerRef.current = null;
           loadingRef.current = false;
-          void ensureModelLoaded();
+          if (mountedRef.current) {
+            void ensureModelLoaded();
+          }
         }, 4000);
       } else {
         loadingRef.current = false;
         setPhaseNote("準備に失敗");
       }
     } finally {
-      setBusy(false);
+      if (mountedRef.current) {
+        setBusy(false);
+      }
     }
-  }, []);
+  }, [clearRetryTimer]);
 
   useEffect(() => {
-    startMemoryMonitor(setMem, SAMPLE_INTERVAL_MS, THRESHOLD_BYTES).catch((e) =>
-      setError(`monitor: ${String(e)}`),
-    );
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      clearRetryTimer();
+    };
+  }, [clearRetryTimer]);
+
+  useEffect(() => {
+    let cancelled = false;
+    startMemoryMonitor(setMem, SAMPLE_INTERVAL_MS, THRESHOLD_BYTES).catch((e) => {
+      if (!cancelled) setError(`monitor: ${String(e)}`);
+    });
+    return () => {
+      cancelled = true;
+      void memoryMonitorStop().catch(() => {
+        /* best-effort stop */
+      });
+    };
   }, []);
 
   // Auto-load on mount (no manual Load button).

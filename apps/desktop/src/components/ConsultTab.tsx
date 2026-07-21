@@ -3,6 +3,7 @@ import {
   getKnowledgeResearchPolicy,
   knowledgeResearch,
 } from "../lib/engine";
+import { cancelGeneration } from "../lib/llm";
 import {
   calculateInteractionPulse,
   consultWithOracleContext,
@@ -36,6 +37,26 @@ function stripRomanceSuccessMessages(messages: ChatMessage[]): ChatMessage[] {
   );
 }
 
+/** W6: never persist a forever-streaming ghost in the module singleton. */
+function freezeStreamingMessages(messages: ChatMessage[]): ChatMessage[] {
+  const out: ChatMessage[] = [];
+  for (const m of messages) {
+    if (!m.streaming) {
+      out.push(m);
+      continue;
+    }
+    if (m.role === "assistant" && !m.text.trim()) {
+      continue;
+    }
+    out.push({ ...m, streaming: false });
+  }
+  return out;
+}
+
+function persistConsultSession(messages: ChatMessage[]): void {
+  consultSessionMessages = freezeStreamingMessages(messages);
+}
+
 export function ConsultTab() {
   const [messages, setMessages] = useState<ChatMessage[]>(consultSessionMessages);
   const [input, setInput] = useState("");
@@ -52,9 +73,11 @@ export function ConsultTab() {
   const researchSeqRef = useRef(0);
   const logRef = useRef<HTMLDivElement>(null);
   const stickRef = useRef(true);
+  const streamingRef = useRef(false);
 
   useEffect(() => {
-    consultSessionMessages = messages;
+    // Live UI may show streaming; singleton must never keep streaming:true across remount.
+    persistConsultSession(messages);
   }, [messages]);
 
   useEffect(() => {
@@ -86,6 +109,20 @@ export function ConsultTab() {
       if (stickRef.current) scrollToBottom(false);
     },
   );
+
+  // W4/W6: cancel in-flight LLM on unmount; freeze singleton streaming ghosts.
+  useEffect(() => {
+    return () => {
+      flushChunkQueue();
+      if (streamingRef.current) {
+        void cancelGeneration().catch(() => {
+          /* best-effort */
+        });
+      }
+      persistConsultSession(consultSessionMessages);
+      streamingRef.current = false;
+    };
+  }, [flushChunkQueue]);
 
   function handleModeChange(next: ConsultMode) {
     setMode(next);
@@ -157,6 +194,7 @@ export function ConsultTab() {
     }
 
     setBusy(true);
+    streamingRef.current = true;
     setStatusKind("info");
     setStatus("考え中…");
     const sterile = uiErrorMessage("CONSULT_RESPONSE");
@@ -212,7 +250,10 @@ export function ConsultTab() {
       setStatusKind("error");
       setStatus(sterile);
     } finally {
+      streamingRef.current = false;
       setBusy(false);
+      // W6: belt-and-suspenders — freeze singleton even if setState is dropped on unmount.
+      persistConsultSession(consultSessionMessages);
       if (stickRef.current) scrollToBottom(true);
     }
   }

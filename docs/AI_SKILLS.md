@@ -637,6 +637,20 @@ Pocket Brain 経路は M14 tensor + M15 pulse/Rasch + gap sufficiency から loa
 3. `ProbeTab` に surface `pb_probe` / `pulse_rasch` / `legacy`（Python sidecar 非破壊）。
 4. `RaschStateWire` 型を `types.ts` に追加し `getLatestRaschState` の戻り値を厳密化。
 
+### 4.21.1 M18-E — Dual-stack FE removal (Coraxis-only consult / interview / probe) (2026-07-21)
+
+**射程:** デスクトップ FE から Python dual-stack（mentor consult / romance / oracle / twin / interview_sim / es_review legacy / gd_sim / probe legacy）を撤去し、Coraxis on-device API に一本化。`engine.ts` からも対応 FE ラッパー（`consult` / `oracle_*` / `twin_forecast` / `probe_*` / `narrative_compile` 等）を削除。Rust は未使用 Tauri コマンド `llm_embed` の登録解除（内部 `LlmHandle::embed` は維持）。当初 `memory_monitor_stop` も解除したが Phase 2（§4.45）で復元。A+1 ID・Zustand 禁止・Finding 13 soft UI は不変。
+
+**as-built:**
+1. `ConsultTab` — `consultWithOracleContext` + Channel/`useThrottledStream`。Romance は `calculateInteractionPulse` → `RomanceAnalysisV1`。`pkb-engine-event` / `useCorrelationId` / warm は撤去。knowledge research ambient は維持（別経路）。
+2. `ProfileTab` — `generateOraclePayload({ today })` / `evaluateDigitalTwinScenario({ today, horizonDays })`。`todayIso()` 必須。sourceCode / tensorRebuild / profiler / ContextObservatory は Python のまま。
+3. `InterviewTab` — legacy `interview_sim` / `es_review` / `gd_sim` / narrativeCompile / TensorProfilePanel 撤去。surfaces = `interview_pocket` (`startInterviewSession`) + `multistage` + `es_pocket`。
+4. `ProbeTab` — `pb_probe` + `pulse_rasch` のみ（legacy Python probe 撤去）。
+5. 未使用 FE wrappers 削除: `esView` / `knowledgeFetchPending` / `checkDbHealth` / `vaultChatDelete` / `syncDailyContext` / `raschSelectNextItem` / `lib/sim.ts` / `DEFAULT_KNOWLEDGE_POLICY`。
+6. 検証: `npx tsc --noEmit` / `npm run test:boundary` / `cargo check --features pocket-brain,secure-vault`。
+
+**訂正 (Phase 2 / 2026-07-21):** `memory_monitor_stop` はデッドコードではなく FE アンマウント配線に必要。`MemoryMonitor::stop` + Tauri コマンド + `llm.ts` `memoryMonitorStop` を復元（§4.45）。`llm_embed` 公開コマンドの削除は維持。
+
 ### 4.22 M19-A — iOS build config audit (2026-07-20)
 
 **射程:** Tauri iOS ビルド構成の静的点検のみ。`tauri ios dev` 実行・Rust/React ロジック変更禁止。正本は `docs/M19_IOS_BUILD_AUDIT.md`。
@@ -887,6 +901,18 @@ Pocket Brain 経路は M14 tensor + M15 pulse/Rasch + gap sufficiency から loa
 3. デッドコード削除は未使用 import / 参照ゼロ証明済みのみ。コンポーネント積極削除禁止。
 
 **as-built:** `productName` / window title / UI 見出し・CONSULT 表示名・Interview モードラベルを Coraxis。`docs` 歴史全文の PKB 置換はしない。
+
+### 4.45 M20 Phase 2 — Resource leak / unmount guards (W3–W6) (2026-07-21)
+
+**射程:** React ライフサイクルのリソースリーク修正のみ。A+1 ID・オフライン原則・Zustand 禁止は不変。
+
+**as-built:**
+1. **W3:** `MemoryMonitor::stop` + `memory_monitor_stop` Tauri コマンドを `generate_handler!` に再登録。FE `memoryMonitorStop`。`PocketBrainPanel` の monitor `useEffect` クリーンアップで停止。
+2. **W4:** `RagChatPanel` / `ConsultTab` のアンマウント時に `cancelGeneration()`（ストリーム中のみ）。
+3. **W5:** `PocketBrainPanel` の load 再試行 `setTimeout(4000)` を `retryTimerRef` に保持し、アンマウントで `clearTimeout`。
+4. **W6:** `consultSessionMessages` へは `freezeStreamingMessages` 経由のみ書く。空の streaming assistant は破棄、部分応答は `streaming: false`。catch/finally/unmount でも再凍結。
+
+**ハマりどころ:** シングルトンへ `streaming: true` のまま書くとタブ再入場でカーソル永久点滅 + 裏推論継続の複合バグになる。monitor stop を「start 先頭の running=false で足りる」と削除するとアンマウント後もサンプラーが生き続ける。
 
 ### 4.8 M3 Phase 0-A — SQLCipher / Security.framework iOS link gate (2026-07-18)
 
