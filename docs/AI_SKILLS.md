@@ -1098,6 +1098,60 @@ Pocket Brain 経路は M14 tensor + M15 pulse/Rasch + gap sufficiency から loa
 
 **検証:** `cargo check|test --features pocket-brain,secure-vault`。
 
+### 4.57 Phase 14.1 — Inner Coliseum 非可逆戦術コンパイル (2026-07-21)
+
+**射程:** 鬼モード面接ストリームへの Vault 生データ注入を型＋コンパイラ境界で封じる（I-22）。F-14 決定論。RNG・外部 API 禁止。
+
+**as-built:**
+1. `coliseum/tactics.rs` — 有限 `InterviewerTactic`（ProbeOvergeneralization / StressTestQuantitative / ForceNuancedTradeoff / TechnicalEdgeCaseProbe）+ `to_instruction`。
+2. `coliseum/interviewer_context.rs` — `compile_interviewer_tactics` が化石を消費し `AbstractTacticSet` のみ出力。`sort_by_key` + discriminant 集約。`OniModePrompt` は VaultHandle を受け取らない。
+3. `coliseum/render_guard.rs` — `verify_no_leakage` ハードゲート（ブラックリスト部分文字列・小文字化スキャン）。
+
+**ハマりどころ:** 戦術 instruction に金額・固有名詞を埋め込つな。鬼モード経路に `VaultHandle` を渡す API を増やすな。
+
+**検証:** `cargo check|test --features pocket-brain,secure-vault`。
+
+### 4.58 Phase 14.2 — ZPD 構造ゲートとサーキットブレーカ (2026-07-21)
+
+**射程:** 鬼モード入室のハードゲート（枯渇 R）+ Pressure 中の早期サーキットブレーカ + 温度/強度の分離。RNG・外部 API 禁止。精神的安全性は LLM 裁量ではなく Rust 構造で担保。
+
+**as-built:**
+1. `coliseum/mentor_zpd.rs` — `evaluate_oni_mode_eligibility(r_t)` / `resolve_oni_activation`。閾値 `ONI_R_T_THRESHOLD=40`（`R_DEPLETED=0.40` と整合）。
+2. `interview_machine` — 撤退語彙・短答ストリークで Pressure→Debrief 強制。`oni_active=false` 時は Foundation 後に Pressure をスキップ（ダウングレード）。
+3. `resolve_coliseum_gen` — `temp=COLISEUM_GENERATION_TEMP(0.1)` 固定、`seed=14` 固定。難易度は戦術タグのみ。
+
+**ハマりどころ:** FE の temp で鬼の苛烈さを上げるな。枯渇時に oni を通すな。サーキットをプロンプト「優しくして」に置換するな。
+
+**検証:** `cargo check|test --features pocket-brain,secure-vault`。
+
+### 4.59 Phase 14.3 — 二層評価スキーマ（構成概念の純粋性）(2026-07-21)
+
+**射程:** 面接合否（職務適性）と、Vault 連動の自己洞察を型レベルで分離する。RNG・外部 API 禁止。Zero Warnings。
+
+**as-built:**
+1. `coliseum/evaluation.rs` — `InterviewEvaluationV1`（軸: mece_structure / hypothesis_thinking / quantitative_validity / stress_resilience）。証拠は `turn_id` + `quote_snippet` のみ。`validate_interview_evaluation(eval, transcript)` は VaultHandle / fossil / purchase を型として受け取れない。
+2. `MetacognitiveDebriefV1` — オプトイン自己洞察。`VaultMirrorAbstract`（カテゴリキー・spend band・深夜傾向の抽象のみ）と turn_id を照合。合否判定への合流禁止。
+3. GBNF: `coliseum/assets/interview_evaluation_v1.gbnf` / `metacognitive_debrief_v1.gbnf`。`LlmTaskId::{InterviewEvaluationV1, MetacognitiveDebriefV1}` → `GenerationMode` → grammar + finalize。`TokenEvent` に `validated_interview_evaluation` / `validated_metacognitive_debrief`。
+4. 別エンドポイント: `assign_interview_turn_ids` / `seal_interview_evaluation`（transcript のみ）/ `seal_metacognitive_debrief`（`VaultMirrorAbstract` のみ。合否非連動）。
+
+**ハマりどころ:** Layer-1 の provenance に `purchase_id` / `distortion_id` を許すな。Layer-2 を overall_pass に混ぜるな。面接ストリームに Vault 生化石を戻すな（I-22）。
+
+**検証:** `cargo check|test --features pocket-brain,secure-vault`。
+
+### 4.60 Phase 14.4 — 面接セッション不変アーティファクト (2026-07-21)
+
+**射程:** 開始時点の戦術・ZPD・証拠実体をフリーズし、Vault Vacuum 後も評価が宙吊りにならない再生可能アーティファクト。RNG 禁止。Zero Warnings。
+
+**as-built:**
+1. `coliseum/session_artifact.rs` — `InterviewSessionArtifact`（`frozen_directives`=`AbstractTacticSet`、`model_hash`、`per_turn_seeds`、`r_t_snapshot`、証拠実体 `DistortionEvidenceSnap`/`PurchaseEvidenceSnap` の text_summary コピー）。`generate_fingerprint()` = SHA-256（`rasch::artifact_fingerprint` と同型）。
+2. DB v10 — `interview_sessions.artifact_json` / `artifact_fingerprint`。`InterviewSessionRow` + put/get 更新。
+3. `interview_machine` — `attach_artifact` / `require_session_artifact` / `seal_evaluation_against_artifact`（live vault 禁止）。Pressure は凍結ディレクティブ再生。Debrief に凍結エビデンスブロック。
+4. 開始時 `start_multistage_interview` で Vault から証拠本文をコピー凍結。評価 IPC: `seal_interview_evaluation_from_session` / `seal_metacognitive_debrief_from_session`。
+
+**ハマりどころ:** 評価を最新 Vault 再読込に戻すな。fingerprint 再計算と不一致なら fail-closed。証拠は ID 参照のみで持つな（要約本文必須）。
+
+**検証:** `cargo check|test --features pocket-brain,secure-vault`。
+
 ### 4.8 M3 Phase 0-A — SQLCipher / Security.framework iOS link gate (2026-07-18)
 
 **射程（Phase 0-A のみ）:** `secure-vault` feature、依存解決、in-memory SQLCipher identity（`PRAGMA key` + `cipher_version`）、Security.framework シンボル（`SecRandom` / `SecAccessControl`）、Tauri command 登録、iOS Simulator 最終リンク証明。スキーマ・repository・UI・本番 Keychain item 作成は対象外。

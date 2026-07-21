@@ -1846,7 +1846,10 @@ impl VaultWorker {
 
     fn put_interview_session(&mut self, row: InterviewSessionRow) -> Result<(), VaultErrorCode> {
         gate(snapshot_status(&self.status))?;
-        if row.payload_json.len() > MAX_TEXT_BYTES * 4 {
+        if row.payload_json.len() > MAX_TEXT_BYTES * 4
+            || row.artifact_json.len() > MAX_TEXT_BYTES * 4
+            || row.artifact_fingerprint.len() > 128
+        {
             return Err(VaultErrorCode::InvalidInput);
         }
         let outcome = self

@@ -8,7 +8,7 @@ use std::{error::Error, fmt};
 
 use rusqlite::{Connection, TransactionBehavior};
 
-pub(crate) const LATEST_SCHEMA_VERSION: i64 = 9;
+pub(crate) const LATEST_SCHEMA_VERSION: i64 = 10;
 
 /// Canonical embedding width for `knowledge_chunks.embedding` (M9 foundation).
 /// Matches the historical PKBVEC01 384-d space; a future 768-d migration would
@@ -211,6 +211,11 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_commitments_source_relation
     ON commitments(source_relation_id);
 "#;
 
+const MIGRATION_V10_SQL: &str = r#"
+ALTER TABLE interview_sessions ADD COLUMN artifact_json TEXT NOT NULL DEFAULT '';
+ALTER TABLE interview_sessions ADD COLUMN artifact_fingerprint TEXT NOT NULL DEFAULT '';
+"#;
+
 
 const READ_CHATS_COLUMNS_SQL: &str =
     "SELECT name, type, \"notnull\", pk FROM pragma_table_info('chats') ORDER BY cid;";
@@ -278,6 +283,11 @@ const MIGRATIONS: &[Migration] = &[
         version: 9,
         sql: MIGRATION_V9_SQL,
         verify: verify_v9_schema,
+    },
+    Migration {
+        version: 10,
+        sql: MIGRATION_V10_SQL,
+        verify: verify_v10_schema,
     },
 ];
 
@@ -576,7 +586,8 @@ fn verify_v6_schema(connection: &Connection) -> Result<(), MigrationError> {
         "SELECT name, type, \"notnull\", pk FROM pragma_table_info('interview_sessions') ORDER BY cid;",
     )
     .map_err(|_| MigrationError::SchemaMismatch { version: 6 })?;
-    if !columns_match(
+    // Base v6 columns must be present; v10 may append artifact columns.
+    if !columns_include(
         &cols,
         &[
             ("id", "TEXT", true, 1),
@@ -686,6 +697,31 @@ fn verify_v9_schema(connection: &Connection) -> Result<(), MigrationError> {
         ],
     ) {
         return Err(MigrationError::SchemaMismatch { version: 9 });
+    }
+    Ok(())
+}
+
+fn verify_v10_schema(connection: &Connection) -> Result<(), MigrationError> {
+    verify_v9_schema(connection).map_err(|_| MigrationError::SchemaMismatch { version: 10 })?;
+
+    let cols = read_columns(
+        connection,
+        "SELECT name, type, \"notnull\", pk FROM pragma_table_info('interview_sessions') ORDER BY cid;",
+    )
+    .map_err(|_| MigrationError::SchemaMismatch { version: 10 })?;
+    if !columns_match(
+        &cols,
+        &[
+            ("id", "TEXT", true, 1),
+            ("updated_at", "INTEGER", true, 0),
+            ("stage", "TEXT", true, 0),
+            ("status", "TEXT", true, 0),
+            ("payload_json", "TEXT", true, 0),
+            ("artifact_json", "TEXT", true, 0),
+            ("artifact_fingerprint", "TEXT", true, 0),
+        ],
+    ) {
+        return Err(MigrationError::SchemaMismatch { version: 10 });
     }
     Ok(())
 }
@@ -867,6 +903,18 @@ fn columns_match(actual: &[ColumnShape], expected: &[(&str, &str, bool, i64)]) -
                 && actual.not_null == expected.2
                 && actual.primary_key_position == expected.3
         })
+}
+
+/// True when every required column is present (extra columns allowed — additive migrations).
+fn columns_include(actual: &[ColumnShape], required: &[(&str, &str, bool, i64)]) -> bool {
+    required.iter().all(|exp| {
+        actual.iter().any(|col| {
+            col.name == exp.0
+                && col.data_type.eq_ignore_ascii_case(exp.1)
+                && col.not_null == exp.2
+                && col.primary_key_position == exp.3
+        })
+    })
 }
 
 #[cfg(test)]

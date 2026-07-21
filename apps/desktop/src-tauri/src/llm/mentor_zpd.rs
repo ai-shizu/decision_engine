@@ -56,6 +56,8 @@ impl MentorZpdLevel {
         }
     }
 
+    /// Consult-mentor generative prior only. **Do not** use for 鬼モード difficulty —
+    /// oni intensity is `InterviewerTactic`; coliseum temp is `COLISEUM_GENERATION_TEMP`.
     pub fn temperature(self) -> f32 {
         match self {
             Self::Depleted => TEMP_DEPLETED,
@@ -219,6 +221,17 @@ mod tests {
         assert_eq!(MentorZpdLevel::Depleted.action_count(), 1);
         assert_eq!(MentorZpdLevel::Neutral.action_count(), 2);
         assert_eq!(MentorZpdLevel::HighResource.action_count(), 3);
+    }
+
+    #[test]
+    fn oni_threshold_aligns_with_r_depleted() {
+        use crate::coliseum::mentor_zpd::{
+            evaluate_oni_mode_eligibility, r_t_from_unit_interval, ONI_R_T_THRESHOLD,
+        };
+        assert_eq!(ONI_R_T_THRESHOLD, ((R_DEPLETED * 100.0).round() as u8));
+        assert!(evaluate_oni_mode_eligibility(ONI_R_T_THRESHOLD).is_err());
+        assert!(evaluate_oni_mode_eligibility(ONI_R_T_THRESHOLD + 1).is_ok());
+        assert_eq!(r_t_from_unit_interval(R_DEPLETED), ONI_R_T_THRESHOLD);
     }
 
     #[test]

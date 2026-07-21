@@ -12,6 +12,12 @@ pub const TASK_COGNITIVE_DISTORTION_V1: &str = "cognitive_distortion_v1";
 /// Task id for hierarchical receipt OCR extraction (Phase 11).
 pub const TASK_RECEIPT_OCR_V1: &str = "receipt_ocr_v1";
 
+/// Task id for Layer-1 interview scorecard (Phase 14.3 — transcript only).
+pub const TASK_INTERVIEW_EVALUATION_V1: &str = "interview_evaluation_v1";
+
+/// Task id for Layer-2 opt-in metacognitive debrief (Phase 14.3 — separate endpoint).
+pub const TASK_METACOGNITIVE_DEBRIEF_V1: &str = "metacognitive_debrief_v1";
+
 /// Named grammar-constrained extraction tasks.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LlmTaskId {
@@ -20,6 +26,10 @@ pub enum LlmTaskId {
     CognitiveDistortionV1,
     /// Hierarchical receipt (merchant / tax / total / lines).
     ReceiptOcrV1,
+    /// Pure interview scorecard — turn_id provenance only (no vault).
+    InterviewEvaluationV1,
+    /// Opt-in self-insight debrief — never feeds pass/fail.
+    MetacognitiveDebriefV1,
 }
 
 impl LlmTaskId {
@@ -28,6 +38,8 @@ impl LlmTaskId {
             Self::KakeiboV1 => TASK_KAKEIBO_V1,
             Self::CognitiveDistortionV1 => TASK_COGNITIVE_DISTORTION_V1,
             Self::ReceiptOcrV1 => TASK_RECEIPT_OCR_V1,
+            Self::InterviewEvaluationV1 => TASK_INTERVIEW_EVALUATION_V1,
+            Self::MetacognitiveDebriefV1 => TASK_METACOGNITIVE_DEBRIEF_V1,
         }
     }
 
@@ -36,6 +48,8 @@ impl LlmTaskId {
             TASK_KAKEIBO_V1 => Ok(Self::KakeiboV1),
             TASK_COGNITIVE_DISTORTION_V1 => Ok(Self::CognitiveDistortionV1),
             TASK_RECEIPT_OCR_V1 => Ok(Self::ReceiptOcrV1),
+            TASK_INTERVIEW_EVALUATION_V1 => Ok(Self::InterviewEvaluationV1),
+            TASK_METACOGNITIVE_DEBRIEF_V1 => Ok(Self::MetacognitiveDebriefV1),
             other => Err(format!("unknown extraction task_id: {other}")),
         }
     }
@@ -80,6 +94,33 @@ Rules:
 - Do not invent items. Do not add extra keys. Do not wrap JSON in markdown.
 - Arithmetic consistency is verified later; do not retry or invent balancing tax.";
 
+const INTERVIEW_EVALUATION_V1_SYSTEM: &str = "\
+You are a top-tier consulting-firm interview evaluator.
+Score ONLY from the provided interview transcript (turn_id + utterance text).
+Do NOT use private vault data, purchase history, CBT labels, or any id other than turn_id.
+Output ONLY one JSON object with schema \"interview_evaluation.v1\" and keys:
+  schema, mece_structure, hypothesis_thinking, quantitative_validity,
+  stress_resilience, overall_pass, summary
+Each axis is {\"score\":0..1,\"provenance\":[{\"turn_id\":...,\"quote_snippet\":...},...]}.
+Rules:
+- Every axis must cite at least one turn_id that appears in the transcript.
+- quote_snippet must be a short verbatim fragment from that turn.
+- Do not invent turn ids. Do not add vault field names. Do not wrap in markdown.";
+
+const METACOGNITIVE_DEBRIEF_V1_SYSTEM: &str = "\
+You produce an OPT-IN metacognitive debrief (self-insight), NOT a pass/fail score.
+The user has consented to mirror abstract vault tendencies against interview turns.
+Output ONLY one JSON object with schema \"metacognitive_debrief.v1\":
+  {\"schema\":\"metacognitive_debrief.v1\",\"opted_in\":true,\"insights\":[...]}
+Each insight:
+  parallel_label, interview_turn_id, mirror_kind, distortion_category, note
+mirror_kind MUST be one of:
+  distortion_isomorphism, spend_pattern, late_night_tendency, resource_parallel
+Rules:
+- This output must NEVER be used for hiring/pass decisions.
+- Use only abstract category keys / bands from the mirror block in the input.
+- Do not invent purchase_id or distortion_id. Do not wrap in markdown.";
+
 /// Build `(system_prompt, user_content)` for a named extraction task.
 ///
 /// Returns `Err` for unknown `task_id` so callers fail closed instead of
@@ -92,6 +133,14 @@ pub fn build_prompt(task_id: &str, input: &str) -> Result<(String, String), Stri
             input.to_string(),
         )),
         LlmTaskId::ReceiptOcrV1 => Ok((RECEIPT_OCR_V1_SYSTEM.to_string(), input.to_string())),
+        LlmTaskId::InterviewEvaluationV1 => Ok((
+            INTERVIEW_EVALUATION_V1_SYSTEM.to_string(),
+            input.to_string(),
+        )),
+        LlmTaskId::MetacognitiveDebriefV1 => Ok((
+            METACOGNITIVE_DEBRIEF_V1_SYSTEM.to_string(),
+            input.to_string(),
+        )),
     }
 }
 
@@ -131,6 +180,22 @@ mod tests {
     }
 
     #[test]
+    fn interview_evaluation_v1_forbids_vault_in_prompt() {
+        let (sys, user) = build_prompt(TASK_INTERVIEW_EVALUATION_V1, "t-0: ...").unwrap();
+        assert!(sys.contains("turn_id"));
+        assert!(sys.contains("mece_structure") || sys.contains("transcript"));
+        assert!(sys.to_ascii_lowercase().contains("do not use private vault"));
+        assert_eq!(user, "t-0: ...");
+    }
+
+    #[test]
+    fn metacognitive_debrief_v1_is_opt_in() {
+        let (sys, _) = build_prompt(TASK_METACOGNITIVE_DEBRIEF_V1, "mirror").unwrap();
+        assert!(sys.contains("OPT-IN") || sys.contains("opt-in") || sys.contains("opted_in"));
+        assert!(sys.contains("NEVER") || sys.contains("never"));
+    }
+
+    #[test]
     fn llm_task_id_round_trip() {
         assert_eq!(
             LlmTaskId::parse(LlmTaskId::CognitiveDistortionV1.as_str()).unwrap(),
@@ -139,6 +204,14 @@ mod tests {
         assert_eq!(
             LlmTaskId::parse(LlmTaskId::ReceiptOcrV1.as_str()).unwrap(),
             LlmTaskId::ReceiptOcrV1
+        );
+        assert_eq!(
+            LlmTaskId::parse(LlmTaskId::InterviewEvaluationV1.as_str()).unwrap(),
+            LlmTaskId::InterviewEvaluationV1
+        );
+        assert_eq!(
+            LlmTaskId::parse(LlmTaskId::MetacognitiveDebriefV1.as_str()).unwrap(),
+            LlmTaskId::MetacognitiveDebriefV1
         );
     }
 }

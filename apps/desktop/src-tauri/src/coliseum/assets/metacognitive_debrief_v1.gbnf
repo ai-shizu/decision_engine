@@ -1,0 +1,43 @@
+# MetacognitiveDebriefV1 — opt-in self-insight (Phase 14.3)
+# Separate from pass/fail. Mirror fields are abstract category keys only.
+
+root ::= object
+
+object ::= "{" ws
+  "\"schema\"" ws ":" ws "\"metacognitive_debrief.v1\"" ws "," ws
+  "\"opted_in\"" ws ":" ws "true" ws "," ws
+  "\"insights\"" ws ":" ws insight-array
+ws "}"
+
+insight-array ::= "[" ws "]" | "[" ws insight ("," ws insight)* ws "]"
+
+insight ::= "{" ws
+  "\"parallel_label\"" ws ":" ws json-string ws "," ws
+  "\"interview_turn_id\"" ws ":" ws json-string ws "," ws
+  "\"mirror_kind\"" ws ":" ws mirror-kind ws "," ws
+  "\"distortion_category\"" ws ":" ws (category | "null") ws "," ws
+  "\"note\"" ws ":" ws json-string
+ws "}"
+
+mirror-kind ::=
+  "\"distortion_isomorphism\"" |
+  "\"spend_pattern\"" |
+  "\"late_night_tendency\"" |
+  "\"resource_parallel\""
+
+category ::=
+  "\"all_or_nothing\"" |
+  "\"overgeneralization\"" |
+  "\"mental_filter\"" |
+  "\"disqualifying_the_positive\"" |
+  "\"jumping_to_conclusions\"" |
+  "\"magnification_minimization\"" |
+  "\"emotional_reasoning\"" |
+  "\"should_statements\"" |
+  "\"labeling\"" |
+  "\"personalization\""
+
+json-string ::= "\"" json-char* "\""
+json-char ::= [^"\\] | "\\" (["\\/bfnrt] | "u" hex hex hex hex)
+hex ::= [0-9a-fA-F]
+ws ::= [ \t\n\r]*

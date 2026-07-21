@@ -60,6 +60,12 @@ test("MS-05 no download phase in reducer vocabulary", () => {
   assertOk(phases.every((p) => !p.includes("download")), "no download");
 });
 
+test("MS-06 initial recommendedPageUrl is empty (backend is source of truth)", () => {
+  assertOk(INITIAL_MODEL_SETUP.recommendedPageUrl === "", "no hardcoded HF URL");
+  const afterStart = modelSetupReducer(INITIAL_MODEL_SETUP, { type: "check_start" });
+  assertOk(afterStart.recommendedPageUrl === "", "check_start keeps empty");
+});
+
 let failed = 0;
 for (const { name, fn } of tests) {
   try {

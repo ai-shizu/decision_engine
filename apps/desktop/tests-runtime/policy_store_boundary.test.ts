@@ -1,9 +1,13 @@
 import { parseKnowledgePolicy } from "../src/lib/parseKnowledgePolicy";
 import {
   applyPolicyEnabled,
-  DEFAULT_KNOWLEDGE_POLICY,
   policySetRequest,
 } from "../src/lib/policyStore";
+
+const DEFAULT_KNOWLEDGE_POLICY = {
+  schema: "knowledge_policy.v1" as const,
+  enabled: false,
+};
 
 type TestFn = () => void;
 const tests: { name: string; fn: TestFn }[] = [];

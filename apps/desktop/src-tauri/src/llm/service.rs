@@ -34,14 +34,18 @@ use llama_cpp_2::sampling::LlamaSampler;
 
 use super::params::{GenerationParams, LoadParams};
 use super::prompt::{
-    build_prompt, LlmTaskId, TASK_COGNITIVE_DISTORTION_V1, TASK_KAKEIBO_V1,
-    TASK_RECEIPT_OCR_V1,
+    build_prompt, LlmTaskId, TASK_COGNITIVE_DISTORTION_V1, TASK_INTERVIEW_EVALUATION_V1,
+    TASK_KAKEIBO_V1, TASK_METACOGNITIVE_DEBRIEF_V1, TASK_RECEIPT_OCR_V1,
 };
 use super::schema::{
     CognitiveDistortionReportV1, KakeiboEntryV1, ReceiptOcrV1, COGNITIVE_DISTORTION_V1_GBNF,
     KAKEIBO_V1_GBNF, RECEIPT_OCR_V1_GBNF,
 };
 use super::token_batch::TokenStreamBatcher;
+use crate::coliseum::{
+    InterviewEvaluationV1, MetacognitiveDebriefV1, INTERVIEW_EVALUATION_V1_GBNF,
+    METACOGNITIVE_DEBRIEF_V1_GBNF,
+};
 use crate::monitor::{DegradationLevel, MemPhase, MemoryMonitor};
 
 /// Idle wake cadence for the worker's command loop. Bounds how long the worker
@@ -141,6 +145,10 @@ pub struct TokenEvent {
     pub validated_receipt: Option<ReceiptOcrV1>,
     /// Checksum gate result for receipt extract (`Σ amount + tax == total`).
     pub receipt_verified: Option<bool>,
+    /// Layer-1 interview scorecard (transcript-only; Phase 14.3).
+    pub validated_interview_evaluation: Option<InterviewEvaluationV1>,
+    /// Layer-2 opt-in metacognitive debrief (Phase 14.3; never feeds pass/fail).
+    pub validated_metacognitive_debrief: Option<MetacognitiveDebriefV1>,
 }
 
 /// Resolved generation branch. Pure helper — unit-tested without a model.
@@ -150,6 +158,8 @@ pub enum GenerationMode {
     KakeiboV1,
     CognitiveDistortionV1,
     ReceiptOcrV1,
+    InterviewEvaluationV1,
+    MetacognitiveDebriefV1,
 }
 
 /// Map `task_id` to a generation mode. Unknown ids fail closed (no chat fallback).
@@ -165,6 +175,8 @@ pub fn resolve_generation_mode(task_id: Option<&str>) -> Result<GenerationMode, 
                 LlmTaskId::KakeiboV1 => GenerationMode::KakeiboV1,
                 LlmTaskId::CognitiveDistortionV1 => GenerationMode::CognitiveDistortionV1,
                 LlmTaskId::ReceiptOcrV1 => GenerationMode::ReceiptOcrV1,
+                LlmTaskId::InterviewEvaluationV1 => GenerationMode::InterviewEvaluationV1,
+                LlmTaskId::MetacognitiveDebriefV1 => GenerationMode::MetacognitiveDebriefV1,
             })
         }
     }
@@ -200,6 +212,31 @@ pub fn finalize_receipt_extraction(
     ReceiptOcrV1::from_json_str(buf).map_err(|e| format!("receipt extraction parse: {e}"))
 }
 
+/// Parse Layer-1 scorecard JSON. Transcript provenance checks happen outside
+/// the worker (callers pass `[TranscriptTurnRef]` into `validate_interview_evaluation`).
+pub fn finalize_interview_evaluation(
+    buf: &str,
+    cancelled: bool,
+) -> Result<InterviewEvaluationV1, String> {
+    if cancelled {
+        return Err("extraction cancelled".to_string());
+    }
+    InterviewEvaluationV1::from_json_str(buf)
+        .map_err(|e| format!("interview evaluation parse: {e}"))
+}
+
+/// Parse Layer-2 debrief JSON. Mirror / turn validation is caller-side.
+pub fn finalize_metacognitive_debrief(
+    buf: &str,
+    cancelled: bool,
+) -> Result<MetacognitiveDebriefV1, String> {
+    if cancelled {
+        return Err("extraction cancelled".to_string());
+    }
+    MetacognitiveDebriefV1::from_json_str(buf)
+        .map_err(|e| format!("metacognitive debrief parse: {e}"))
+}
+
 fn streaming_token(seq: u32, text: String) -> TokenEvent {
     TokenEvent {
         seq,
@@ -210,6 +247,8 @@ fn streaming_token(seq: u32, text: String) -> TokenEvent {
         validated_distortions: None,
         validated_receipt: None,
         receipt_verified: None,
+        validated_interview_evaluation: None,
+        validated_metacognitive_debrief: None,
     }
 }
 
@@ -223,6 +262,8 @@ fn chat_done_event(seq: u32) -> TokenEvent {
         validated_distortions: None,
         validated_receipt: None,
         receipt_verified: None,
+        validated_interview_evaluation: None,
+        validated_metacognitive_debrief: None,
     }
 }
 
@@ -236,6 +277,8 @@ fn extract_done_event(seq: u32, entry: KakeiboEntryV1) -> TokenEvent {
         validated_distortions: None,
         validated_receipt: None,
         receipt_verified: None,
+        validated_interview_evaluation: None,
+        validated_metacognitive_debrief: None,
     }
 }
 
@@ -249,6 +292,8 @@ fn distortion_done_event(seq: u32, report: CognitiveDistortionReportV1) -> Token
         validated_distortions: Some(report),
         validated_receipt: None,
         receipt_verified: None,
+        validated_interview_evaluation: None,
+        validated_metacognitive_debrief: None,
     }
 }
 
@@ -263,6 +308,38 @@ fn receipt_done_event(seq: u32, report: ReceiptOcrV1) -> TokenEvent {
         validated_distortions: None,
         validated_receipt: Some(report),
         receipt_verified: Some(verified),
+        validated_interview_evaluation: None,
+        validated_metacognitive_debrief: None,
+    }
+}
+
+fn interview_eval_done_event(seq: u32, report: InterviewEvaluationV1) -> TokenEvent {
+    TokenEvent {
+        seq,
+        text: String::new(),
+        done: true,
+        error: None,
+        validated: None,
+        validated_distortions: None,
+        validated_receipt: None,
+        receipt_verified: None,
+        validated_interview_evaluation: Some(report),
+        validated_metacognitive_debrief: None,
+    }
+}
+
+fn metacognitive_debrief_done_event(seq: u32, report: MetacognitiveDebriefV1) -> TokenEvent {
+    TokenEvent {
+        seq,
+        text: String::new(),
+        done: true,
+        error: None,
+        validated: None,
+        validated_distortions: None,
+        validated_receipt: None,
+        receipt_verified: None,
+        validated_interview_evaluation: None,
+        validated_metacognitive_debrief: Some(report),
     }
 }
 
@@ -276,6 +353,8 @@ fn error_done_event(seq: u32, error: String) -> TokenEvent {
         validated_distortions: None,
         validated_receipt: None,
         receipt_verified: None,
+        validated_interview_evaluation: None,
+        validated_metacognitive_debrief: None,
     }
 }
 
@@ -623,6 +702,14 @@ fn generate(
             let (system, user) = build_prompt(TASK_RECEIPT_OCR_V1, &g.prompt)?;
             render_chat_prompt(model, &system, &user)?
         }
+        GenerationMode::InterviewEvaluationV1 => {
+            let (system, user) = build_prompt(TASK_INTERVIEW_EVALUATION_V1, &g.prompt)?;
+            render_chat_prompt(model, &system, &user)?
+        }
+        GenerationMode::MetacognitiveDebriefV1 => {
+            let (system, user) = build_prompt(TASK_METACOGNITIVE_DEBRIEF_V1, &g.prompt)?;
+            render_chat_prompt(model, &system, &user)?
+        }
     };
 
     let level = governor.degradation();
@@ -676,6 +763,16 @@ fn generate(
                 .map_err(|e| format!("grammar init: {e}"))?;
             LlamaSampler::chain_simple([grammar, LlamaSampler::greedy()])
         }
+        GenerationMode::InterviewEvaluationV1 => {
+            let grammar = LlamaSampler::grammar(model, INTERVIEW_EVALUATION_V1_GBNF, "root")
+                .map_err(|e| format!("grammar init: {e}"))?;
+            LlamaSampler::chain_simple([grammar, LlamaSampler::greedy()])
+        }
+        GenerationMode::MetacognitiveDebriefV1 => {
+            let grammar = LlamaSampler::grammar(model, METACOGNITIVE_DEBRIEF_V1_GBNF, "root")
+                .map_err(|e| format!("grammar init: {e}"))?;
+            LlamaSampler::chain_simple([grammar, LlamaSampler::greedy()])
+        }
     };
 
     let mut extract_buf = String::new();
@@ -710,6 +807,8 @@ fn generate(
             GenerationMode::KakeiboV1
                 | GenerationMode::CognitiveDistortionV1
                 | GenerationMode::ReceiptOcrV1
+                | GenerationMode::InterviewEvaluationV1
+                | GenerationMode::MetacognitiveDebriefV1
         ) {
             extract_buf.push_str(&piece);
         }
@@ -751,6 +850,20 @@ fn generate(
             let report = finalize_receipt_extraction(&extract_buf, cancelled)?;
             tokens
                 .send(receipt_done_event(g.max_tokens, report))
+                .map_err(|e| format!("channel send: {e}"))?;
+            Ok(())
+        }
+        GenerationMode::InterviewEvaluationV1 => {
+            let report = finalize_interview_evaluation(&extract_buf, cancelled)?;
+            tokens
+                .send(interview_eval_done_event(g.max_tokens, report))
+                .map_err(|e| format!("channel send: {e}"))?;
+            Ok(())
+        }
+        GenerationMode::MetacognitiveDebriefV1 => {
+            let report = finalize_metacognitive_debrief(&extract_buf, cancelled)?;
+            tokens
+                .send(metacognitive_debrief_done_event(g.max_tokens, report))
                 .map_err(|e| format!("channel send: {e}"))?;
             Ok(())
         }
@@ -810,6 +923,22 @@ mod tests {
         assert_eq!(
             resolve_generation_mode(Some(TASK_RECEIPT_OCR_V1)),
             Ok(GenerationMode::ReceiptOcrV1)
+        );
+    }
+
+    #[test]
+    fn mode_interview_evaluation_v1_is_extract() {
+        assert_eq!(
+            resolve_generation_mode(Some(TASK_INTERVIEW_EVALUATION_V1)),
+            Ok(GenerationMode::InterviewEvaluationV1)
+        );
+    }
+
+    #[test]
+    fn mode_metacognitive_debrief_v1_is_extract() {
+        assert_eq!(
+            resolve_generation_mode(Some(TASK_METACOGNITIVE_DEBRIEF_V1)),
+            Ok(GenerationMode::MetacognitiveDebriefV1)
         );
     }
 

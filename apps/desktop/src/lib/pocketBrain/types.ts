@@ -11,6 +11,10 @@ export interface TokenEvent {
   error: string | null;
   validated: unknown | null;
   validated_distortions: CognitiveDistortionReportV1 | null;
+  validated_receipt?: unknown | null;
+  receipt_verified?: boolean | null;
+  validated_interview_evaluation?: unknown | null;
+  validated_metacognitive_debrief?: unknown | null;
 }
 
 /** Burns (1980) / Beck (1976) cognitive distortion category ids. */

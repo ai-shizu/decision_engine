@@ -31,6 +31,10 @@ mod commands_db;
 /// Phase 10: Taptic Engine IPC (soft no-op off iOS).
 mod haptics;
 
+/// Phase 14: Inner Coliseum — irreversible tactic compile + oni leak gate (I-22).
+#[cfg(feature = "pocket-brain")]
+mod coliseum;
+
 #[cfg(all(feature = "secure-vault", target_vendor = "apple"))]
 mod analytics;
 
@@ -140,6 +144,16 @@ pub fn run() {
             llm::commands_model_setup::import_local_model,
             #[cfg(feature = "pocket-brain")]
             llm::commands_model_setup::open_recommended_model_page,
+            #[cfg(feature = "pocket-brain")]
+            coliseum::commands::assign_interview_turn_ids,
+            #[cfg(feature = "pocket-brain")]
+            coliseum::commands::seal_interview_evaluation,
+            #[cfg(feature = "pocket-brain")]
+            coliseum::commands::seal_metacognitive_debrief,
+            #[cfg(feature = "pocket-brain")]
+            coliseum::commands::seal_interview_evaluation_from_session,
+            #[cfg(feature = "pocket-brain")]
+            coliseum::commands::seal_metacognitive_debrief_from_session,
             #[cfg(all(
                 feature = "pocket-brain",
                 feature = "secure-vault",

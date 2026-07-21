@@ -120,6 +120,38 @@ fn resolve_gen(gen: Option<&SimGenParams>) -> (u32, GenerationParams) {
     (context_limit, params)
 }
 
+/// Multistage / oni interview: temperature is hallucination floor only; seed fixed (F-14).
+/// FE `temp` cannot raise difficulty — intensity is tactic-driven when `oni_active`.
+/// `turn_seed` comes from the frozen artifact's `per_turn_seeds` when present.
+fn resolve_coliseum_gen(
+    gen: Option<&SimGenParams>,
+    turn_seed: Option<u32>,
+) -> (u32, GenerationParams) {
+    use crate::coliseum::{COLISEUM_GENERATION_SEED, COLISEUM_GENERATION_TEMP};
+    let g = gen;
+    let context_limit = g
+        .and_then(|p| p.context_limit)
+        .unwrap_or(DEFAULT_CONTEXT_LIMIT)
+        .clamp(1, MAX_CONTEXT_LIMIT);
+    let params = GenerationParams {
+        prompt: String::new(),
+        n_ctx: g.and_then(|p| p.n_ctx).unwrap_or(DEFAULT_N_CTX),
+        max_tokens: g.and_then(|p| p.max_tokens).unwrap_or(DEFAULT_MAX_TOKENS),
+        temp: COLISEUM_GENERATION_TEMP,
+        top_k: g.and_then(|p| p.top_k).unwrap_or(40),
+        top_p: g.and_then(|p| p.top_p).unwrap_or(0.95),
+        seed: turn_seed.unwrap_or(COLISEUM_GENERATION_SEED),
+    };
+    (context_limit, params)
+}
+
+fn artifact_turn_seed(session: &InterviewSession) -> Option<u32> {
+    session
+        .session_artifact
+        .as_ref()
+        .map(|a| a.seed_for_turn(session.total_turns as usize))
+}
+
 async fn resolve_company_facts(
     store: &NetworkPolicyStore,
     injected: Option<CompanyFacts>,
@@ -434,10 +466,18 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use crate::db::InterviewSessionRow;
 use crate::knowledge::edinet_client::render_company_facts_block;
 use crate::llm::consult_context::load_mentor_context;
+use crate::coliseum::session_artifact::{
+    amount_band, is_late_night_jst, purchase_text_summary, DistortionEvidenceSnap,
+    EvidenceSnapshot, InterviewSessionArtifact, PurchaseEvidenceSnap,
+};
+use crate::coliseum::CognitiveFossilSnapshot;
 use crate::llm::interview_machine::{
-    apply_candidate_answer, build_stage_prompt_prefix, record_interviewer_utterance,
+    apply_candidate_answer, artifact_evidence_prompt_block, build_stage_prompt_prefix,
+    oni_pressure_prompt_from_artifact, oni_pressure_prompt_from_fossils, record_interviewer_utterance,
     AdvanceOutcome, InterviewSession, InterviewStage,
 };
+use crate::llm::model_path::MODEL_FILENAME;
+use sha2::{Digest, Sha256};
 
 fn now_unix() -> i64 {
     SystemTime::now()
@@ -446,9 +486,81 @@ fn now_unix() -> i64 {
         .unwrap_or(0)
 }
 
+fn model_hash_label() -> String {
+    hex::encode(Sha256::digest(MODEL_FILENAME.as_bytes()))
+}
+
+fn freeze_evidence_from_vault(vault: &VaultHandle, frozen_at_unix: i64) -> EvidenceSnapshot {
+    let distortions = vault
+        .distortion_tags_list(32)
+        .unwrap_or_default()
+        .into_iter()
+        .map(|row| DistortionEvidenceSnap {
+            source_id: row.id,
+            category: row.category,
+            text_summary: row.snippet,
+            confidence_score: row.confidence_score,
+        })
+        .collect();
+    let purchases = vault
+        .purchase_list_recent(32)
+        .unwrap_or_default()
+        .into_iter()
+        .map(|row| {
+            let late = is_late_night_jst(row.occurred_at);
+            let band = amount_band(row.total_amount).to_string();
+            PurchaseEvidenceSnap {
+                source_id: row.id,
+                text_summary: purchase_text_summary(&row.merchant_norm, row.total_amount, late),
+                amount_band: band,
+                late_night: late,
+            }
+        })
+        .collect();
+    EvidenceSnapshot {
+        distortions,
+        purchases,
+        frozen_at_unix,
+    }
+}
+
+fn fossil_from_evidence(evidence: &EvidenceSnapshot, r_unit: f64) -> CognitiveFossilSnapshot {
+    CognitiveFossilSnapshot {
+        r_at_decision: Some(r_unit.clamp(0.0, 1.0)),
+        distortion_categories: evidence
+            .distortions
+            .iter()
+            .map(|d| d.category.clone())
+            .collect(),
+        purchase_amounts: evidence
+            .purchases
+            .iter()
+            .filter_map(|p| match p.amount_band.as_str() {
+                "micro" => Some(500),
+                "low" => Some(2_000),
+                "mid" => Some(10_000),
+                "high" => Some(40_000),
+                "extreme" => Some(200_000),
+                _ => None,
+            })
+            .collect(),
+        late_night_purchase_count: evidence.purchases.iter().filter(|p| p.late_night).count() as u32,
+        impulse_purchase_count: 0,
+        blacklist_seed_terms: Vec::new(),
+    }
+}
+
 fn persist_session(vault: &VaultHandle, session: &InterviewSession) -> Result<(), String> {
     let payload_json =
         serde_json::to_string(session).map_err(|_| "interview session serialize failed".to_string())?;
+    let (artifact_json, artifact_fingerprint) = match &session.session_artifact {
+        Some(art) => {
+            let json = serde_json::to_string(art)
+                .map_err(|_| "interview artifact serialize failed".to_string())?;
+            (json, art.fingerprint.clone())
+        }
+        None => (String::new(), String::new()),
+    };
     vault
         .interview_session_put(InterviewSessionRow {
             id: session.id.clone(),
@@ -456,6 +568,8 @@ fn persist_session(vault: &VaultHandle, session: &InterviewSession) -> Result<()
             stage: session.stage.as_str().into(),
             status: session.status.clone(),
             payload_json,
+            artifact_json,
+            artifact_fingerprint,
         })
         .map_err(map_vault_err)
 }
@@ -465,7 +579,23 @@ fn load_session(vault: &VaultHandle, id: &str) -> Result<InterviewSession, Strin
         .interview_session_get(id.to_string())
         .map_err(map_vault_err)?
         .ok_or_else(|| "interview_session_not_found".to_string())?;
-    serde_json::from_str(&row.payload_json).map_err(|_| "interview session parse failed".into())
+    let mut session: InterviewSession = serde_json::from_str(&row.payload_json)
+        .map_err(|_| "interview session parse failed".to_string())?;
+    // Prefer dedicated columns when payload predates artifact embedding.
+    if session.session_artifact.is_none() && !row.artifact_json.is_empty() {
+        let mut art: InterviewSessionArtifact = serde_json::from_str(&row.artifact_json)
+            .map_err(|_| "interview artifact parse failed".to_string())?;
+        if !row.artifact_fingerprint.is_empty() && art.fingerprint != row.artifact_fingerprint {
+            return Err("session_artifact_fingerprint_mismatch".into());
+        }
+        art.rehydrate_directives();
+        // Fingerprint is over canonical body; rehydrate must be idempotent.
+        if !art.verify_fingerprint() {
+            return Err("session_artifact_fingerprint_mismatch".into());
+        }
+        session.attach_artifact(art);
+    }
+    Ok(session)
 }
 
 fn build_machine_prompt(
@@ -532,6 +662,37 @@ fn build_machine_prompt(
             "\n## 参照範囲（面接本番）\n\
 （Vault / Gap / Tensor の自動探索は無効。企業ファクトと本セッションの対話のみを根拠にせよ。）\n",
         );
+        // Phase 14.4: Pressure uses frozen artifact directives (replayable; no live vault).
+        if session.stage == InterviewStage::Pressure && session.oni_active {
+            let sealed = if let Some(art) = session.session_artifact.as_ref() {
+                oni_pressure_prompt_from_artifact(art, "")
+            } else {
+                let empty = CognitiveFossilSnapshot {
+                    r_at_decision: None,
+                    distortion_categories: Vec::new(),
+                    purchase_amounts: Vec::new(),
+                    late_night_purchase_count: 0,
+                    impulse_purchase_count: 0,
+                    blacklist_seed_terms: Vec::new(),
+                };
+                oni_pressure_prompt_from_fossils(empty, "")
+            };
+            match sealed {
+                Ok(text) if !text.is_empty() => {
+                    prompt.push_str("\n## 鬼モード抽象戦術（I-22 凍結ディレクティブ）\n");
+                    prompt.push_str(&text);
+                    prompt.push('\n');
+                }
+                _ => {}
+            }
+        }
+    }
+
+    if is_debrief {
+        if let Some(art) = session.session_artifact.as_ref() {
+            prompt.push('\n');
+            prompt.push_str(&artifact_evidence_prompt_block(art));
+        }
     }
 
     prompt.push_str("\n## 候補者の発話\n");
@@ -551,6 +712,10 @@ pub struct StartMultistageInterviewParams {
     pub edinet_date: Option<String>,
     pub filing_text: Option<String>,
     pub gen: Option<SimGenParams>,
+    /// Request 鬼モード (Pressure + abstract tactics). Subject to ZPD hard gate.
+    pub oni_mode: Option<bool>,
+    /// Quantized Twin R(t) on 0..=100. Required when oni_mode; else ignored.
+    pub r_t: Option<u8>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -564,6 +729,7 @@ pub struct MultistageInterviewResult {
     pub context_ids: Vec<String>,
     pub company_name: String,
     pub outcome: String,
+    pub oni_active: bool,
 }
 
 /// Start Foundation stage; streams first interviewer question.
@@ -588,11 +754,39 @@ pub async fn start_multistage_interview(
     let session_id = format!("iv-{}", now_unix());
     let mut session =
         InterviewSession::new(session_id.clone(), facts.company_name.clone(), facts_json);
+    let oni_requested = params.oni_mode.unwrap_or(false);
+    let r_t = params
+        .r_t
+        .unwrap_or_else(|| crate::coliseum::mentor_zpd::r_t_from_unit_interval(1.0));
+    session.oni_active = if !oni_requested {
+        false
+    } else if crate::coliseum::mentor_zpd::evaluate_oni_mode_eligibility(r_t).is_err() {
+        // Structural hard-downgrade: depleted R never enters oni Pressure.
+        false
+    } else {
+        crate::coliseum::resolve_oni_activation(true, r_t).unwrap_or(false)
+    };
+
+    // Phase 14.4: freeze start-of-session artifact (evidence bodies + directives).
+    let frozen_at = now_unix();
+    let evidence = freeze_evidence_from_vault(vault.inner(), frozen_at);
+    let r_unit = f64::from(r_t) / 100.0;
+    let fossil = fossil_from_evidence(&evidence, r_unit);
+    let artifact = InterviewSessionArtifact::freeze(
+        session_id.clone(),
+        model_hash_label(),
+        r_unit,
+        fossil,
+        evidence,
+    );
+    session.attach_artifact(artifact);
+
     let opening = params
         .opening_message
         .unwrap_or_else(|| "自己紹介と、志望動機を簡潔に述べてください。".into());
 
-    let (context_limit, mut gen) = resolve_gen(params.gen.as_ref());
+    let (context_limit, mut gen) =
+        resolve_coliseum_gen(params.gen.as_ref(), artifact_turn_seed(&session));
     let vault_c = vault.inner().clone();
     let llm_s = llm.inner().clone();
     let facts_c = facts.clone();
@@ -627,6 +821,7 @@ pub async fn start_multistage_interview(
         context_ids,
         company_name: facts.company_name,
         outcome: "started".into(),
+        oni_active: session.oni_active,
     })
 }
 
@@ -665,6 +860,7 @@ pub async fn advance_interview_stage(
             InterviewStage::Debrief => "entered_debrief",
             _ => "entered_stage",
         },
+        AdvanceOutcome::CircuitBreakToDebrief => "circuit_break_debrief",
         AdvanceOutcome::Closed => "closed",
     };
 
@@ -679,12 +875,14 @@ pub async fn advance_interview_stage(
             context_ids: vec![],
             company_name: session.company_name,
             outcome: outcome_label.into(),
+            oni_active: session.oni_active,
         });
     }
 
     let facts: CompanyFacts = serde_json::from_str(&session.facts_json)
         .map_err(|_| "stored facts parse failed".to_string())?;
-    let (context_limit, mut gen) = resolve_gen(params.gen.as_ref());
+    let (context_limit, mut gen) =
+        resolve_coliseum_gen(params.gen.as_ref(), artifact_turn_seed(&session));
     let llm_s = llm.inner().clone();
     let session_snap = session.clone();
     let answer_c = answer.clone();
@@ -717,6 +915,7 @@ pub async fn advance_interview_stage(
         context_ids,
         company_name: session.company_name,
         outcome: outcome_label.into(),
+        oni_active: session.oni_active,
     })
 }
 

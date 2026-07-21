@@ -136,6 +136,10 @@ pub(crate) struct InterviewSessionRow {
     pub stage: String,
     pub status: String,
     pub payload_json: String,
+    /// Phase 14.4 immutable artifact JSON (may be empty for pre-v10 rows).
+    pub artifact_json: String,
+    /// Phase 14.4 SHA-256 fingerprint (may be empty for pre-v10 rows).
+    pub artifact_fingerprint: String,
 }
 
 pub(crate) fn put_interview_session(
@@ -144,19 +148,25 @@ pub(crate) fn put_interview_session(
 ) -> Result<(), RepositoryError> {
     connection
         .execute(
-            "INSERT INTO interview_sessions(id, updated_at, stage, status, payload_json) \
-             VALUES (?1, ?2, ?3, ?4, ?5)
+            "INSERT INTO interview_sessions(\
+                id, updated_at, stage, status, payload_json, \
+                artifact_json, artifact_fingerprint\
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
              ON CONFLICT(id) DO UPDATE SET
                 updated_at=excluded.updated_at,
                 stage=excluded.stage,
                 status=excluded.status,
-                payload_json=excluded.payload_json",
+                payload_json=excluded.payload_json,
+                artifact_json=excluded.artifact_json,
+                artifact_fingerprint=excluded.artifact_fingerprint",
             params![
                 row.id,
                 row.updated_at,
                 row.stage,
                 row.status,
                 row.payload_json,
+                row.artifact_json,
+                row.artifact_fingerprint,
             ],
         )
         .map_err(map_storage_error)?;
@@ -170,7 +180,9 @@ pub(crate) fn get_interview_session(
     use rusqlite::OptionalExtension;
     connection
         .query_row(
-            "SELECT id, updated_at, stage, status, payload_json FROM interview_sessions WHERE id = ?1",
+            "SELECT id, updated_at, stage, status, payload_json, \
+                    artifact_json, artifact_fingerprint \
+             FROM interview_sessions WHERE id = ?1",
             params![id],
             |row| {
                 Ok(InterviewSessionRow {
@@ -179,6 +191,8 @@ pub(crate) fn get_interview_session(
                     stage: row.get(2)?,
                     status: row.get(3)?,
                     payload_json: row.get(4)?,
+                    artifact_json: row.get(5)?,
+                    artifact_fingerprint: row.get(6)?,
                 })
             },
         )

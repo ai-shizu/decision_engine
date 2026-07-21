@@ -37,11 +37,18 @@ export interface MemSample {
 }
 
 /** Known extraction task ids accepted by the Rust worker. */
-export type LlmTaskId = "kakeibo_v1" | "cognitive_distortion_v1" | "receipt_ocr_v1";
+export type LlmTaskId =
+  | "kakeibo_v1"
+  | "cognitive_distortion_v1"
+  | "receipt_ocr_v1"
+  | "interview_evaluation_v1"
+  | "metacognitive_debrief_v1";
 
 export const TASK_KAKEIBO_V1: LlmTaskId = "kakeibo_v1";
 export const TASK_COGNITIVE_DISTORTION_V1: LlmTaskId = "cognitive_distortion_v1";
 export const TASK_RECEIPT_OCR_V1: LlmTaskId = "receipt_ocr_v1";
+export const TASK_INTERVIEW_EVALUATION_V1: LlmTaskId = "interview_evaluation_v1";
+export const TASK_METACOGNITIVE_DEBRIEF_V1: LlmTaskId = "metacognitive_debrief_v1";
 
 /** Burns (1980) / Beck (1976) cognitive distortion category ids. */
 export type DistortionCategory =
@@ -81,6 +88,42 @@ export interface ReceiptOcrV1 {
   lines: ReceiptLineV1[];
 }
 
+/** Layer-1 interview scorecard — turn_id provenance only (Phase 14.3). */
+export interface TurnProvenance {
+  turn_id: string;
+  quote_snippet: string;
+}
+
+export interface AxisScoreV1 {
+  score: number;
+  provenance: TurnProvenance[];
+}
+
+export interface InterviewEvaluationV1 {
+  schema: string;
+  mece_structure: AxisScoreV1;
+  hypothesis_thinking: AxisScoreV1;
+  quantitative_validity: AxisScoreV1;
+  stress_resilience: AxisScoreV1;
+  overall_pass: boolean;
+  summary: string;
+}
+
+/** Layer-2 opt-in metacognitive debrief — never feeds pass/fail. */
+export interface MetacognitiveInsightV1 {
+  parallel_label: string;
+  interview_turn_id: string;
+  mirror_kind: string;
+  distortion_category: string | null;
+  note: string;
+}
+
+export interface MetacognitiveDebriefV1 {
+  schema: string;
+  opted_in: boolean;
+  insights: MetacognitiveInsightV1[];
+}
+
 export interface TokenEvent {
   seq: number;
   text: string;
@@ -94,6 +137,10 @@ export interface TokenEvent {
   validated_receipt: ReceiptOcrV1 | null;
   /** Deterministic checksum: sum(line.amount)+tax === total. */
   receipt_verified: boolean | null;
+  /** Layer-1 interview scorecard (transcript-only). */
+  validated_interview_evaluation: InterviewEvaluationV1 | null;
+  /** Layer-2 opt-in debrief (never pass/fail). */
+  validated_metacognitive_debrief: MetacognitiveDebriefV1 | null;
 }
 
 export interface LoadParams {
