@@ -23,14 +23,14 @@ export function CompanyFactsForm({
 }: CompanyFactsFormProps) {
   return (
     <div
-      className={`term-panel company-facts-form${researching ? " researching-ambient" : ""}`}
+      className={`term-panel company-facts-form interview-section${researching ? " researching-ambient" : ""}`}
       aria-busy={researching}
     >
       <p className="term-header">
         <span className="desktop-only">COMPANY_FACTS (offline inject)</span>
         <span className="mobile-only">共通企業コンテキスト</span>
       </p>
-      <p className="hint dev-noise">
+      <p className="hint guide">
         企業名入力で EDINET コードを自動特定し、ローカル RAG /（設定オン時）E0b ネット補強が走る。
         コードの手動入力は不要。
       </p>

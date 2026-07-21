@@ -284,6 +284,8 @@ export function startInterviewSession(
     edinetCode?: string;
     edinetDate?: string;
     filingText?: string;
+    /** Optional ES body as interview base (empty = zero-base). */
+    esText?: string;
     gen?: SimGenParams;
   },
   onToken: (event: TokenEvent) => void,
@@ -295,6 +297,7 @@ export function startInterviewSession(
       edinetCode: args.edinetCode ?? null,
       edinetDate: args.edinetDate ?? null,
       filingText: args.filingText ?? null,
+      esText: args.esText?.trim() ? args.esText : null,
       gen: genPayload(args.gen),
     },
     onToken: tokenChannel(onToken),

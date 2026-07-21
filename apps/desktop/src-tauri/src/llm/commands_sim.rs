@@ -57,6 +57,8 @@ pub struct StartInterviewParams {
     pub edinet_date: Option<String>,
     /// Optional UTF-8 yuho excerpt to merge risk/performance sections.
     pub filing_text: Option<String>,
+    /// Optional ES body used as interview base (empty = zero-base).
+    pub es_text: Option<String>,
     pub gen: Option<SimGenParams>,
 }
 
@@ -371,14 +373,27 @@ pub async fn start_interview_session(
     )
     .await?;
 
+    let es_text = params
+        .es_text
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_string());
+
     let (context_limit, mut gen) = resolve_gen(params.gen.as_ref());
     let _ = (context_limit, vault.inner()); // no Vault auto-RAG in interview production (M20-J)
     let message_for_prompt = message.clone();
     let facts_for_prompt = facts.clone();
+    let es_for_prompt = es_text;
 
     let (prompt, context_ids) = tauri::async_runtime::spawn_blocking(move || {
-        // Foundation-style single shot: company facts + utterance only (no vault KNN).
-        let prompt = build_interview_prompt(&message_for_prompt, &facts_for_prompt, &[]);
+        // Foundation-style: company facts + optional ES base + utterance (no vault KNN).
+        let prompt = build_interview_prompt(
+            &message_for_prompt,
+            &facts_for_prompt,
+            &[],
+            es_for_prompt.as_deref(),
+        );
         Ok::<_, String>((prompt, Vec::<String>::new()))
     })
     .await

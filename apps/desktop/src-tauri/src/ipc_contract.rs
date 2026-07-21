@@ -582,3 +582,20 @@ impl ValidateRequest for KnowledgePolicySetRequest {
         Ok(())
     }
 }
+
+/// Optional ES id for `es.view` (empty / absent = latest active ES).
+#[derive(Debug, Default, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct EsViewRequest {
+    #[serde(default)]
+    pub id: Option<String>,
+}
+
+impl ValidateRequest for EsViewRequest {
+    fn validate(&self) -> Result<(), String> {
+        if let Some(ref id) = self.id {
+            require_max_bytes(id, "id", 512)?;
+        }
+        Ok(())
+    }
+}

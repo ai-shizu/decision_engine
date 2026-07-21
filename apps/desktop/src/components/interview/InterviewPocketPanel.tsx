@@ -1,4 +1,4 @@
-import { useReducer, useRef } from "react";
+import { useReducer, useRef, type ReactNode } from "react";
 
 import { CompanyFactsForm } from "./CompanyFactsForm";
 import { todayIso } from "../../lib/dateUtils";
@@ -147,10 +147,16 @@ export function InterviewPocketPanel({
   sharedFacts,
   onSharedFactsPatch,
   hideEmbeddedFactsForm = false,
+  esText = "",
+  esBaseSlot = null,
 }: {
   sharedFacts?: CompanyFacts;
   onSharedFactsPatch?: (patch: Partial<CompanyFacts>) => void;
   hideEmbeddedFactsForm?: boolean;
+  /** Optional ES body injected into interviewer prompt. */
+  esText?: string;
+  /** Desktop: ES picker rendered above company facts. Mobile: null (parent owns). */
+  esBaseSlot?: ReactNode;
 } = {}) {
   const [state, dispatch] = useReducer(reducer, undefined, initialState);
   const assistantIdRef = useRef<string | null>(null);
@@ -220,6 +226,7 @@ export function InterviewPocketPanel({
           message: prompt,
           companyFacts: factsPayload,
           edinetDate: todayIso(),
+          esText: esText.trim() || undefined,
         },
         (event) => {
           if (event.error) {
@@ -255,13 +262,15 @@ export function InterviewPocketPanel({
   }
 
   return (
-    <div className="interview-pocket-panel">
-      <p className="hint mobile-only">
+    <div className="interview-pocket-panel interview-section-stack">
+      <p className="hint guide mobile-only">
         企業情報を入れたあと、1対1の模擬面接をストリーミングで進めます。
       </p>
-      <p className="hint dev-noise desktop-only">
-        Coraxis 1:1 面接 (`start_interview_session`): 企業ファクト + RAG 経験を根拠に面接官が応答します。
+      <p className="hint guide dev-noise desktop-only">
+        Coraxis 1:1 面接 (`start_interview_session`): 企業ファクト + 任意 ES ベースで面接官が応答します。
       </p>
+
+      {esBaseSlot}
 
       {!hideEmbeddedFactsForm && (
         <CompanyFactsForm
@@ -275,7 +284,7 @@ export function InterviewPocketPanel({
 
       <div className="chat-log line-chat" ref={logRef}>
         {state.messages.length === 0 ? (
-          <p className="hint chat-empty">
+          <p className="hint guide chat-empty">
             企業ファクトを入力し、最初の発言を送信してください。
           </p>
         ) : (

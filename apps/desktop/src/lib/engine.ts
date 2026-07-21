@@ -9,6 +9,7 @@ import {
   parseDocumentImportResult,
   parseEngineHealth,
   parseEsList,
+  parseEsView,
   parseImportStats,
   parseKnowledgeResearchReceipt,
   parseLineImportResult,
@@ -30,6 +31,7 @@ import { readTextLenient } from "./textDecode";
 import type {
   ClassifyResult,
   EsListItem,
+  EsView,
   RecordData,
   SettingsData,
   SourceCodeView,
@@ -46,6 +48,7 @@ type EngineIpcCommand =
   | "calendar_event_dates"
   | "import_stats"
   | "es_list"
+  | "es_view"
   | "calendar_sync_ics"
   | "calendar_sync_apple"
   | "import_line_single"
@@ -125,6 +128,15 @@ export async function importStats(): Promise<Record<string, SourceStat>> {
 
 export async function esList(): Promise<EsListItem[]> {
   return invokeEngine("es_list", parseEsList);
+}
+
+
+export async function esView(id?: string): Promise<EsView> {
+  return invokeEngine(
+    "es_view",
+    parseEsView,
+    id && id.trim() ? { id: id.trim() } : {},
+  );
 }
 
 

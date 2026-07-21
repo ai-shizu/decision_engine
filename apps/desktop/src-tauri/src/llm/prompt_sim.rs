@@ -56,15 +56,26 @@ fn append_company_block(out: &mut String, facts: &CompanyFacts) {
     out.push_str(&render_company_facts_block(facts));
 }
 
+fn append_es_base_block(out: &mut String, es_text: Option<&str>) {
+    let Some(body) = es_text.map(str::trim).filter(|s| !s.is_empty()) else {
+        return;
+    };
+    out.push_str("\n## 候補者の提出 ES（面接のベース）\n");
+    out.push_str(body);
+    out.push('\n');
+}
+
 /// Build the full interview-generation prompt.
 pub fn build_interview_prompt(
     user_message: &str,
     facts: &CompanyFacts,
     experience_hits: &[ExperienceRef<'_>],
+    es_text: Option<&str>,
 ) -> String {
     let mut out = String::with_capacity(user_message.len() + 1024);
     out.push_str(INTERVIEWER_PERSONA);
     append_company_block(&mut out, facts);
+    append_es_base_block(&mut out, es_text);
     append_rag_block(&mut out, experience_hits);
     out.push_str("\n## 候補者の発話\n");
     out.push_str(user_message.trim());
@@ -110,12 +121,26 @@ mod tests {
             id: "memo::0000",
             text: "留学でチームを率いた",
         }];
-        let prompt = build_interview_prompt("自己紹介してください", &sample_facts(), &hits);
+        let prompt = build_interview_prompt("自己紹介してください", &sample_facts(), &hits, None);
         assert!(prompt.contains("面接官"));
         assert!(prompt.contains("企業ファクト"));
         assert!(prompt.contains("テスト株式会社"));
         assert!(prompt.contains("留学でチーム"));
         assert!(prompt.contains("自己紹介"));
+        assert!(!prompt.contains("提出 ES"));
+    }
+
+    #[test]
+    fn interview_includes_es_base_when_present() {
+        let prompt = build_interview_prompt(
+            "志望動機を述べてください",
+            &sample_facts(),
+            &[],
+            Some("ガクチカ: 研究で定量検証した。"),
+        );
+        assert!(prompt.contains("提出 ES"));
+        assert!(prompt.contains("ガクチカ"));
+        assert!(prompt.contains("志望動機"));
     }
 
     #[test]

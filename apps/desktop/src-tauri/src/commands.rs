@@ -7,10 +7,10 @@ use tauri::State;
 
 use crate::engine::{EngineManager, IPC_MAX_REQUEST_LINE_BYTES};
 use crate::ipc_contract::{
-    CalendarAppleRequest, CalendarIcsRequest, ConsultRequest, ImportClassifyRequest,
-    ImportDocumentRequest, ImportLineBatchRequest, ImportLineSingleRequest,
-    KnowledgePolicySetRequest, KnowledgeResearchRequest, LlmWarmRequest, NarrativeCompileRequest, ProbeAnswerRequest,
-    ProbeDateRequest,
+    CalendarAppleRequest, CalendarIcsRequest, ConsultRequest, EsViewRequest,
+    ImportClassifyRequest, ImportDocumentRequest, ImportLineBatchRequest,
+    ImportLineSingleRequest, KnowledgePolicySetRequest, KnowledgeResearchRequest,
+    LlmWarmRequest, NarrativeCompileRequest, ProbeAnswerRequest, ProbeDateRequest,
     RecordLoadRequest, RecordSaveRequest, ScopeRequest, SettingsSaveFixedRequest,
     TwinForecastRequest, ValidateRequest, IPC_REQUEST_ENVELOPE_HEADROOM_BYTES,
     MAX_REQUEST_PARAMS_JSON_BYTES, MAX_TEXT_BYTES, REQUEST_PARAMS_JSON_HEADROOM_BYTES,
@@ -148,8 +148,20 @@ pub async fn import_stats(manager: State<'_, Arc<EngineManager>>) -> Result<Valu
 }
 
 #[tauri::command]
-pub async fn es_view(manager: State<'_, Arc<EngineManager>>) -> Result<Value, String> {
-    invoke_empty(manager, "es.view").await
+pub async fn es_view(
+    manager: State<'_, Arc<EngineManager>>,
+    request: Option<EsViewRequest>,
+) -> Result<Value, String> {
+    let req = request.unwrap_or(EsViewRequest { id: None });
+    let id = req
+        .id
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty());
+    match id {
+        Some(_) => invoke_request(manager, "es.view", req, None).await,
+        None => invoke_empty(manager, "es.view").await,
+    }
 }
 
 #[tauri::command]

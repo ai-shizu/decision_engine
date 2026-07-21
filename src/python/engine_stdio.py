@@ -161,6 +161,13 @@ def dispatch(cmd: str, params: dict[str, Any], emit: EventEmitter | None = None)
     if cmd == "import.stats":
         return facade.data_source_stats()
     if cmd == "es.view":
+        es_id = None
+        if isinstance(params, dict):
+            raw = params.get("id")
+            if isinstance(raw, str) and raw.strip():
+                es_id = raw.strip()
+        if es_id:
+            return facade.get_es(es_id)
         return facade.active_es()
     if cmd == "es.list":
         return facade.list_es()

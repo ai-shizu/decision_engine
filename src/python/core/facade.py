@@ -743,6 +743,26 @@ def active_es() -> dict:
     }
 
 
+def get_es(es_id: str) -> dict:
+    """企業別 ES を id / 企業名で解決。未ヒットは {"exists": False}。"""
+    from . import es_manager
+
+    doc = es_manager.select_es(es_id)
+    if doc is None:
+        return {"exists": False}
+    return {
+        "exists": True,
+        "id": doc["id"],
+        "title": doc["title"],
+        "company_name": doc["company_name"],
+        "target_domain": doc["target_domain"],
+        "keywords": doc["keywords"],
+        "body": doc["body"],
+        "char_count": doc["char_count"],
+        "mtime": _mtime_iso(Path(doc["path"])),
+    }
+
+
 def list_es() -> dict:
     """企業別 ES 一覧 (本文なし)。"""
     from . import es_manager

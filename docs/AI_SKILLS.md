@@ -744,7 +744,7 @@ Pocket Brain 経路は M14 tensor + M15 pulse/Rasch + gap sufficiency から loa
 
 **as-built:**
 1. `.dev-noise` + `.desktop-only` / `.mobile-only` で M18 解説・schema/model_hash・モード長 hint をモバイル非表示。
-2. INTERVIEW/PROBE の `.sub-tabs-pills` — 横スクロール pill（縦長カード崩壊を解消）。短ラベル（ケース/GD/多段…）。
+2. INTERVIEW/PROBE/RECORD の `.sub-tabs` / `.sub-tabs-pills` — **均等グリッド**（`width:100%` + 各 button `flex:1 1 0`、中央揃え、`gap:0` + `margin-left:-1px` 罫線接合）。横スクロール pill / 右デッドスペース禁止。
 3. 余白・§装飾・term コーナーを圧縮。CONSULT messenger は RAG 表記をやめ、GGUF パスエラーを短縮。
 4. 検証: `npx tsc --noEmit` → exit 0。
 
@@ -919,7 +919,7 @@ Pocket Brain 経路は M14 tensor + M15 pulse/Rasch + gap sufficiency から loa
 **射程:** アーキテクチャ洗練（常駐マウント・状態永続・リスナチャーン・型ガード）。IPC 契約・A+1・オフライン原則は不変。
 
 **as-built:**
-1. **N1:** デスクトップで `PocketBrainPanel` + `VaultPanel` を `ready` ゲートの外側に常駐（`hidden={ready}` で視覚のみ隠蔽）。モバイル CONSULT の `PocketBrainPanel` も surface 切替で破棄せず `hidden` 常駐。
+1. **N1:** デスクトップで `PocketBrainPanel` + `VaultPanel` を `ready` ゲートの外側に常駐（`hidden={ready}` で視覚のみ隠蔽）。モバイル CONSULT の `PocketBrainPanel` も surface 切替で破棄せず `hidden`+`inert` 常駐。**禁止:** `.rag-composer { display:flex !important }` を `.mobile-chrome` 全域に付けること（`[hidden]` を貫通し RECORD/PROBE 上に CONSULT が残る）。固定 composer は `.mobile-content-rag .rag-composer` のみ。`.mobile-panel[hidden]{display:none!important}` 必須。
 2. **N2:** `RagChatPanel` にモジュールシングルトン `ragSessionState` + `freezeRagSession`（ConsultTab / W6 と同型）。
 3. **N3:** `RecordTab` の Ctrl+S リスナは `handleSaveRef` + `useEffect([])` で1回登録。
 4. **N4:** `MobileChrome` へ `engineReady={ready}` をライブ伝播（`true` ハードコード禁止）。
@@ -1301,6 +1301,24 @@ Pocket Brain 経路は M14 tensor + M15 pulse/Rasch + gap sufficiency から loa
 
 **検証:** `cargo test --lib webview_policy` / `npx tsc --noEmit` / Simulator スクリーンショット。
 
+### 4.71 iOS Safari 案内起動 + Phase 15 The Brain IPC (2026-07-22)
+
+**射程:** ModelSetupGate の公式ページ手渡し、および on-device 推論 IPC の Phase 15 表面。
+
+**ブラウザ起動（原因と修正）:**
+1. 失敗原因は `tauri-plugin-shell` 不足ではない。`open_https_url` の iOS 分岐が **意図的に Err** を返していた（`/usr/bin/open` 不在）。
+2. 修正: `secure-vault` ∧ iOS で `UIApplication::sharedApplication` + `NSURL` + `openURL` を **メインスレッド**（`AppHandle::run_on_main_thread`）から呼ぶ。HTTPS のみ。アプリはモデルバイトを fetch しない（§5）。
+3. `objc2-foundation` に `NSURL` feature を追加。ATS 例外・Local Network 権限は足すな。
+
+**Phase 15 The Brain:**
+1. **選定 = `llama-cpp-2`（既存 `pocket-brain`）**。Candle は不採用（GGUF/Metal/iOS 既存経路と二重化するため）。
+2. IPC 表面: `brain_load_gguf` / `brain_generate_stream` / `brain_is_ready`（`llm/brain.rs`）。実体は `LlmHandle` へ委譲 — 第二ランタイム禁止。
+3. 既存 `llm_load_model` / `llm_generate` は維持（後方互換）。
+
+**as-built:** `commands_model_setup.rs`、`Cargo.toml`（NSURL）、`llm/brain.rs`、`lib.rs` 登録。
+
+**検証:** `cargo test -p pkb-desktop --features "pocket-brain,secure-vault" --lib commands_model_setup` / `cargo check --features pocket-brain,secure-vault --target aarch64-apple-ios-sim`。
+
 ### 4.8 M3 Phase 0-A — SQLCipher / Security.framework iOS link gate (2026-07-18)
 
 **射程（Phase 0-A のみ）:** `secure-vault` feature、依存解決、in-memory SQLCipher identity（`PRAGMA key` + `cipher_version`）、Security.framework シンボル（`SecRandom` / `SecAccessControl`）、Tauri command 登録、iOS Simulator 最終リンク証明。スキーマ・repository・UI・本番 Keychain item 作成は対象外。
@@ -1346,25 +1364,45 @@ Pocket Brain 経路は M14 tensor + M15 pulse/Rasch + gap sufficiency から loa
 4. **DeepSeek-R1 系は `<think>…</think>` を出力する。** `consult()` が最終応答から除去済み（`consultation_engine.py`）。ストリーミング中は思考過程が見えるが、最終置換でクリーンになる仕様。この除去を消すと保存ログと DailyContext が思考過程で汚染される。
 5. 生成パラメータ（temperature / max_tokens）は `generation_params()` 経由で取れ。`0.6` や `900` を直書きするな。
 6. モデルは `models/` に手動配置（gitignore 済み）。**ダウンロードを自動化するコードを書くな** — オフライン原則違反である。
-   - **許可されるのは「案内」と「ローカル import」だけ。** `check_model_exists` / `pick_local_gguf` / `import_local_model`（チャンクコピー + `model-import-progress`）/ `open_recommended_model_page`（OS ブラウザで Hugging Face を開く）は §5 準拠。アプリ内 HTTP で GGUF を取得する経路は永久禁止。
-   - 配置先の正本は A+1 `paths::user_data_root()/models/pocket-brain.gguf`（macOS: `~/Library/Application Support/PKB/models/…`）。`resolve_model_path` とセットアップゲートが同一パスを見る。
+   - **許可されるのは「案内」と「ローカル import」だけ。** FE `plugin-dialog` + `plugin-fs` copy → AppData、`confirm_model_imported` / `open_recommended_model_page` は §5 準拠。アプリ内 HTTP で GGUF を取得する経路は永久禁止。
+   - 配置先の正本は `app.path().app_data_dir()/models/pocket-brain.gguf`（iOS Application Support / デスクトップ AppData）。`resolve_model_path` とセットアップゲートが同一パスを見る。
    - `pocket-brain` feature 非ビルド時は `check_model_exists` が欠けるため、フロントは soft-skip（メイン UI をブロックしない）。
 7. **LLM transportの唯一所有者は`core/llm_backend.py`、prompt channelの唯一所有者は`core/llm_transport.py`。** prompt本文をargv・環境・通常ファイルへ置くな。Windows Named Pipeは`PIPE_REJECT_REMOTE_CLIENTS` + first-instance + owner/SYSTEM/AppContainer SID DACL、POSIXは`/dev/stdin`以外を認めない。子はengineのOS sandboxを継承する。TCP/HTTP、listener、port、cloud fallbackを再導入するな。
 8. **model / generation / stdio commandの正本は`llm_config.py`。** `llama_stdio_cmd()`は`completion` + `--offline` +固定local modelのみ。`--rpc` / remote model option / remote環境変数は禁止。クライアントへtemperature・max_tokens・ctxを複製するな。
 9. **レガシーCLI（`app.py` → `cli.py`）を「古い」という理由だけで削除するな。** 固有retrieval / prompt / `--show-prompt` / `--top-k` / interactive loopは維持し、shared `LlamaStdioBackend`だけを使う。相談modelは`find_gguf(role="consult")`。通常契約テストはnetworkless fake、transport検収時だけ公開promptのローカルGGUFを使う。
 10. **LLM出力を権威状態へ入力するな。** strict schema、temperature `0`、seed、model hash、再試行は、候補集合の一意性も観測事実性も証明しない。LLMのscore/evidence/metrics/要約を6D tensor、profile、growth差分、次回system prompt、その他の決定論的state更新へ渡すことを永久禁止する。権威更新に使えるのは、同じ観測証拠からコードだけで完全かつ一意に導出される値だけである。決定論的観測器が無い場合は`0`やLLM fallbackを捏造せずN/Aを返せ。LLM提案を残す場合は非測定の表示専用候補と明示し、将来セッションへ再注入するな。回帰境界は`tests/test_fsa_2026_07_13_05_llm_authority_boundary.py`であり、旧F4c/F-19の成長注入記述と競合する場合は本規則が勝つ。
 
-### 5.1 Offline model setup gate — as-built (2026-07-21)
+### 5.1 Offline model setup gate — as-built (2026-07-21 / rev 2026-07-22)
 
 **射程:** `pocket-brain` の存在確認 + ローカル GGUF import + 起動時セットアップ画面。ネットワーク経由のモデル取得は含まない。
 
-**as-built:**
-1. Rust: `llm/commands_model_setup.rs` — `check_model_exists` / `pick_local_gguf` (rfd, non-iOS) / `import_local_model` (1MiB チャンク + `model-import-progress`) / `open_recommended_model_page` (OS `open`/`xdg-open`/`start`、HTTPS 固定 URL のみ)。
-2. パス: `model_path::resolve_model_path` → `user_data_root()/models/pocket-brain.gguf`（A+1。旧 `app_data_dir` 依存を撤去し load と import を一致）。
-3. FE: `ModelSetupGate` がメイン UI をブロック。案内 URL + ファイル選択 + プログレス。100%/`import_done` でシームレス遷移。状態は `modelSetupReducer`（Zustand 禁止）。
-4. 回帰: `tests-runtime/modelSetupReducer.test.ts`。
+**as-built (rev):**
+1. **FE がコピーの唯一の経路。** `@tauri-apps/plugin-dialog` で選択 → `startAccessingSecurityScopedResource` → `plugin-fs` `copyFile` で `BaseDirectory.AppData` / `models/pocket-brain.gguf` へ。巨大 GGUF を JS heap に `readFile` するな。
+2. Rust: `prepare_model_import_dest` / `confirm_model_imported` / `check_model_exists` / `open_recommended_model_page`。**外部ピッカーパスを `std::fs` で読むな**（iOS Security-Scoped で失敗する）。旧 `pick_local_gguf` / `import_local_model`（rfd）は削除。
+3. パス正本: `model_path::resolve_model_path` → `app.path().app_data_dir()/models/pocket-brain.gguf`（`brain_load_gguf` / `llm_load_model` も同じ。内部ファイル存在確認後のみロード）。
+4. Capabilities: `dialog:default` + `fs:default` + `fs:allow-appdata-write-recursive` + security-scoped start/stop。
+5. 回帰: `tests-runtime/modelSetupReducer.test.ts`。
 
-**不変条件:** アプリ内 HTTP/ストリームで GGUF を取得するコードを追加するな。同意 UI でも解除されない。エラー文言にパス・例外原文を出すな。
+**不変条件:** アプリ内 HTTP/ストリームで GGUF を取得するコードを追加するな。エラー文言にパス・例外原文を出すな。
+
+### 4.72 iOS GGUF AppData 取り込み (2026-07-22)
+
+**原因:** Rust がピッカー返却パスを直接 `std::fs` で読もうとしてサンドボックス拒否 → 「モデルの取り込みに失敗しました」。
+
+**修正:** FE `copyFile` → AppData。Rust は `app_data_dir` のみ信頼。
+
+### 4.73 Interview UX — ES ベース復旧 + GD ドメイン言語 (2026-07-22)
+
+**症状:** Phase 14 端末美学適用後、(1) サブタブ「闘技」が選考語彙と不一致、(2) 面接サブタブから ES 指定 UI が消失、(3) 罫線フラット化で入力欄と静的テキストの区別が困難。
+
+**as-built:**
+1. `InterviewTab` coliseum: `shortLabel`/`label` = GD / グループディスカッション（「闘技」「コロシアム」廃止）。
+2. `InterviewEsBaseForm` + `useInterviewEsBase`: 企業別 ES ドロップダウン + 本文 textarea。`es.list` / `es.view(id)` で本文取得（エンジン未起動時は貼り付けのみ）。
+3. `start_interview_session` に `esText`。`build_interview_prompt(..., es_text)` が「提出 ES」ブロックを企業ファクト直後へ注入。空 = ゼロベース。
+4. `es.view` は任意 `id` 付きで `facade.get_es`（無指定は従来 `active_es`）。
+5. CSS: `.interview-panel` 入力は `rgba(255,255,255,0.05)` + focus `var(--sys-cyan)`。セクションは `gap`/`padding` で階層化（角丸禁止）。`.hint.guide` = `var(--text-dim)`。
+
+**不変条件:** ES 本文は FE が明示注入するのみ（Vault 自動 RAG に戻すな）。ギャップ隔離は維持。角丸を復活させるな。
 
 ---
 

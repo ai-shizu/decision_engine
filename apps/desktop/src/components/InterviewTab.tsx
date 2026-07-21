@@ -2,10 +2,12 @@ import { useState } from "react";
 import { emptyCompanyFacts } from "../lib/interviewStage";
 import type { CompanyFacts } from "../lib/pocketBrain/types";
 import { useCompanyFactsEnrichment } from "../lib/useCompanyFactsEnrichment";
+import { useInterviewEsBase } from "../lib/useInterviewEsBase";
 import { useIsNarrowViewport } from "../lib/useIsNarrowViewport";
 import { ColiseumRoot } from "./consult/coliseum";
 import { CompanyFactsForm } from "./interview/CompanyFactsForm";
 import { EsReviewPanel } from "./interview/EsReviewPanel";
+import { InterviewEsBaseForm } from "./interview/InterviewEsBaseForm";
 import { InterviewPocketPanel } from "./interview/InterviewPocketPanel";
 import { MultistageInterviewPanel } from "./interview/MultistageInterviewPanel";
 
@@ -17,7 +19,7 @@ const MODES: { id: InterviewSurface; label: string; shortLabel: string; hint: st
     id: "interview_pocket",
     label: "面接",
     shortLabel: "面接",
-    hint: "start_interview_session: オフライン企業ファクト + RAG 経験の 1:1 面接ストリーム。",
+    hint: "start_interview_session: オフライン企業ファクト + 任意 ES ベース + 1:1 面接ストリーム。",
   },
   {
     id: "multistage",
@@ -34,9 +36,9 @@ const MODES: { id: InterviewSurface; label: string; shortLabel: string; hint: st
   },
   {
     id: "coliseum",
-    label: "コロシアム",
-    shortLabel: "闘技",
-    hint: "Phase 14 Inner Coliseum: Lobby → Arena → Debrief + SovereignBar (SURRENDER 二度押し)。",
+    label: "グループディスカッション",
+    shortLabel: "GD",
+    hint: "Phase 14 Inner Coliseum / GD: Lobby → Arena → Debrief + SovereignBar (SURRENDER 二度押し)。",
   },
 ];
 
@@ -44,6 +46,7 @@ export function InterviewTab() {
   const isNarrow = useIsNarrowViewport();
   const [surface, setSurface] = useState<InterviewSurface>("interview_pocket");
   const [sharedFacts, setSharedFacts] = useState<CompanyFacts>(() => emptyCompanyFacts());
+  const esBase = useInterviewEsBase();
 
   const patchSharedFacts = (patch: Partial<CompanyFacts>) => {
     setSharedFacts((prev) => ({ ...prev, ...patch }));
@@ -84,10 +87,30 @@ export function InterviewTab() {
           </button>
         ))}
       </div>
-      <p className="hint dev-noise">{currentMode.hint}</p>
+      <p className="hint guide dev-noise">{currentMode.hint}</p>
 
-      {isNarrow && (
-        <div className="interview-shared-context">
+      {isNarrow && surface === "interview_pocket" && (
+        <div className="interview-shared-context interview-section-stack">
+          <InterviewEsBaseForm
+            esId={esBase.esId}
+            esText={esBase.esText}
+            items={esBase.items}
+            onEsIdChange={(id) => {
+              void esBase.onEsIdChange(id);
+            }}
+            onEsTextChange={esBase.onEsTextChange}
+          />
+          <CompanyFactsForm
+            facts={sharedFacts}
+            onPatch={patchSharedFacts}
+            researching={sharedResearching}
+            provenanceLabel={sharedProvenance}
+          />
+        </div>
+      )}
+
+      {isNarrow && surface !== "interview_pocket" && surface !== "coliseum" && (
+        <div className="interview-shared-context interview-section-stack">
           <CompanyFactsForm
             facts={sharedFacts}
             onPatch={patchSharedFacts}
@@ -102,6 +125,20 @@ export function InterviewTab() {
           sharedFacts={isNarrow ? sharedFacts : undefined}
           onSharedFactsPatch={isNarrow ? patchSharedFacts : undefined}
           hideEmbeddedFactsForm={isNarrow}
+          esText={esBase.esText}
+          esBaseSlot={
+            isNarrow ? null : (
+              <InterviewEsBaseForm
+                esId={esBase.esId}
+                esText={esBase.esText}
+                items={esBase.items}
+                onEsIdChange={(id) => {
+                  void esBase.onEsIdChange(id);
+                }}
+                onEsTextChange={esBase.onEsTextChange}
+              />
+            )
+          }
         />
       )}
       {surface === "multistage" && (
