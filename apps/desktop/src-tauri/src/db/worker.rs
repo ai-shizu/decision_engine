@@ -30,6 +30,7 @@ use super::{
     },
     knowledge_repo::{self, KnowledgeChunkRow, KnowledgeSearchHit},
     migrations::{run_migrations, MigrationError},
+    distortion_repo::{self, DistortionTagRow},
     oracle_repo::{self, InterviewSessionRow, OracleRunRow, TwinRunRow},
     psychometrics_repo::{self, PulseRunRow, ProbeStoreRow, RaschRunRow},
     repository::{
@@ -160,6 +161,8 @@ enum VaultReply {
     OracleRunLatest(Result<Option<OracleRunRow>, VaultErrorCode>),
     InterviewSessionPut(Result<(), VaultErrorCode>),
     InterviewSessionGet(Result<Option<InterviewSessionRow>, VaultErrorCode>),
+    DistortionTagsInsert(Result<usize, VaultErrorCode>),
+    DistortionTagsList(Result<Vec<DistortionTagRow>, VaultErrorCode>),
 }
 
 enum VaultRequest {
@@ -282,6 +285,16 @@ enum VaultRequest {
     },
     InterviewSessionGet {
         id: String,
+        control: RequestControl,
+        reply: SyncSender<VaultReply>,
+    },
+    DistortionTagsInsert {
+        rows: Vec<DistortionTagRow>,
+        control: RequestControl,
+        reply: SyncSender<VaultReply>,
+    },
+    DistortionTagsList {
+        limit: u32,
         control: RequestControl,
         reply: SyncSender<VaultReply>,
     },
@@ -860,6 +873,46 @@ impl VaultHandle {
             _ => Err(VaultErrorCode::Unavailable),
         }
     }
+
+    pub(crate) fn distortion_tags_insert(
+        &self,
+        rows: Vec<DistortionTagRow>,
+    ) -> Result<usize, VaultErrorCode> {
+        let (reply_sender, receiver) = mpsc::sync_channel(1);
+        let cancelled = Arc::new(AtomicBool::new(false));
+        let request = VaultRequest::DistortionTagsInsert {
+            rows,
+            control: RequestControl {
+                deadline: Instant::now() + SHORT_OPERATION_TIMEOUT,
+                cancelled: Arc::clone(&cancelled),
+            },
+            reply: reply_sender,
+        };
+        match self.submit(request, receiver, cancelled, SHORT_OPERATION_TIMEOUT)? {
+            VaultReply::DistortionTagsInsert(result) => result,
+            _ => Err(VaultErrorCode::Unavailable),
+        }
+    }
+
+    pub(crate) fn distortion_tags_list(
+        &self,
+        limit: u32,
+    ) -> Result<Vec<DistortionTagRow>, VaultErrorCode> {
+        let (reply_sender, receiver) = mpsc::sync_channel(1);
+        let cancelled = Arc::new(AtomicBool::new(false));
+        let request = VaultRequest::DistortionTagsList {
+            limit,
+            control: RequestControl {
+                deadline: Instant::now() + SHORT_OPERATION_TIMEOUT,
+                cancelled: Arc::clone(&cancelled),
+            },
+            reply: reply_sender,
+        };
+        match self.submit(request, receiver, cancelled, SHORT_OPERATION_TIMEOUT)? {
+            VaultReply::DistortionTagsList(result) => result,
+            _ => Err(VaultErrorCode::Unavailable),
+        }
+    }
 }
 
 struct VaultWorker {
@@ -1157,6 +1210,30 @@ impl VaultWorker {
                         self.get_interview_session(id)
                     };
                     let _ = reply.send(VaultReply::InterviewSessionGet(result));
+                }
+                VaultRequest::DistortionTagsInsert {
+                    rows,
+                    control,
+                    reply,
+                } => {
+                    let result = if request_expired(&control) {
+                        Err(VaultErrorCode::Timeout)
+                    } else {
+                        self.insert_distortion_tags(rows)
+                    };
+                    let _ = reply.send(VaultReply::DistortionTagsInsert(result));
+                }
+                VaultRequest::DistortionTagsList {
+                    limit,
+                    control,
+                    reply,
+                } => {
+                    let result = if request_expired(&control) {
+                        Err(VaultErrorCode::Timeout)
+                    } else {
+                        self.list_distortion_tags(limit)
+                    };
+                    let _ = reply.send(VaultReply::DistortionTagsList(result));
                 }
                 VaultRequest::RegisterEvents {
                     channel,
@@ -1511,6 +1588,35 @@ impl VaultWorker {
         gate(snapshot_status(&self.status))?;
         let outcome = self
             .read_repository(|connection| oracle_repo::get_interview_session(connection, &id));
+        self.resolve_repository(outcome)
+    }
+
+    fn insert_distortion_tags(
+        &mut self,
+        rows: Vec<DistortionTagRow>,
+    ) -> Result<usize, VaultErrorCode> {
+        gate(snapshot_status(&self.status))?;
+        for row in &rows {
+            if row.snippet.len() > MAX_TEXT_BYTES
+                || row.category.len() > 128
+                || row.source_kind.len() > 64
+                || row.source_id.len() > 512
+                || row.run_id.len() > 128
+                || row.id.len() > 128
+            {
+                return Err(VaultErrorCode::InvalidInput);
+            }
+        }
+        let outcome = self
+            .read_repository(|connection| distortion_repo::insert_distortion_tags(connection, &rows));
+        self.resolve_repository(outcome)
+    }
+
+    fn list_distortion_tags(&mut self, limit: u32) -> Result<Vec<DistortionTagRow>, VaultErrorCode> {
+        gate(snapshot_status(&self.status))?;
+        let lim = limit.clamp(1, 10_000);
+        let outcome = self
+            .read_repository(|connection| distortion_repo::list_distortion_tags(connection, lim));
         self.resolve_repository(outcome)
     }
 

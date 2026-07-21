@@ -10,6 +10,52 @@ export interface TokenEvent {
   done: boolean;
   error: string | null;
   validated: unknown | null;
+  validated_distortions: CognitiveDistortionReportV1 | null;
+}
+
+/** Burns (1980) / Beck (1976) cognitive distortion category ids. */
+export type DistortionCategory =
+  | "all_or_nothing"
+  | "overgeneralization"
+  | "mental_filter"
+  | "disqualifying_the_positive"
+  | "jumping_to_conclusions"
+  | "magnification_minimization"
+  | "emotional_reasoning"
+  | "should_statements"
+  | "labeling"
+  | "personalization";
+
+export interface DistortionDetectionV1 {
+  category: DistortionCategory;
+  snippet: string;
+  confidence_score: number;
+}
+
+export interface CognitiveDistortionReportV1 {
+  detected_distortions: DistortionDetectionV1[];
+}
+
+export interface RecordCognitiveDistortionsResult {
+  run_id: string;
+  inserted: number;
+}
+
+export interface CategoryBiasScore {
+  category: string;
+  count: number;
+  mean_confidence: number;
+  recent_count_30d: number;
+  share: number;
+  score: number;
+}
+
+export interface CognitiveBiasProfile {
+  schema: string;
+  total_tags: number;
+  run_count: number;
+  categories: CategoryBiasScore[];
+  as_of_unix: number;
 }
 
 // ─── RAG (M10–M11 / M13) ───────────────────────────────────────────────────
@@ -24,6 +70,10 @@ export interface SearchKnowledgeHit {
   id: string;
   text_content: string;
   distance: number;
+  /** Phase 7: RRF × Ebbinghaus recall score (higher = stronger recall). */
+  recall_score: number;
+  /** Chunk creation time (Unix UTC seconds). */
+  created_at: number;
 }
 
 export interface SearchKnowledgeResult {
@@ -354,6 +404,10 @@ export interface ConsultWithOracleResult {
   oracle_available: boolean;
   gap_run_id: string | null;
   oracle_run_id: string | null;
+  /** Phase 6 ZPD: depleted | neutral | high_resource */
+  mentor_zpd_level: string;
+  mentor_zpd_temperature: number;
+  mentor_zpd_twin_available: boolean;
 }
 
 export type InterviewStage =
@@ -420,6 +474,8 @@ export const POCKET_BRAIN_COMMANDS = [
   "start_multistage_interview",
   "advance_interview_stage",
   "get_interview_session",
+  "record_cognitive_distortions",
+  "get_cognitive_bias_profile",
 ] as const;
 
 export type PocketBrainCommand = (typeof POCKET_BRAIN_COMMANDS)[number];

@@ -1,0 +1,39 @@
+# CognitiveDistortionReportV1 — exact JSON grammar (Phase 8 / CBT)
+#
+# Forces a single object:
+#   { "detected_distortions": [ { category, snippet, confidence_score }, ... ] }
+# Categories are the Burns (1980) / Beck (1976) ten cognitive distortions
+# (snake_case ids). confidence_score ∈ {0, 0.NN, 1, 1.0}.
+
+root ::= object
+
+object ::= "{" ws "\"detected_distortions\"" ws ":" ws array ws "}"
+
+array ::= "[" ws "]" | "[" ws item ("," ws item)* ws "]"
+
+item ::= "{" ws cat-kv "," ws snip-kv "," ws conf-kv ws "}"
+
+cat-kv  ::= "\"category\"" ws ":" ws category
+snip-kv ::= "\"snippet\"" ws ":" ws json-string
+conf-kv ::= "\"confidence_score\"" ws ":" ws conf
+
+category ::=
+  "\"all_or_nothing\"" |
+  "\"overgeneralization\"" |
+  "\"mental_filter\"" |
+  "\"disqualifying_the_positive\"" |
+  "\"jumping_to_conclusions\"" |
+  "\"magnification_minimization\"" |
+  "\"emotional_reasoning\"" |
+  "\"should_statements\"" |
+  "\"labeling\"" |
+  "\"personalization\""
+
+conf ::= "0" | "1" | "1.0" | "0." digit digit | "0." digit | "1." "0"
+
+json-string ::= "\"" json-char* "\""
+json-char ::= [^"\\] | "\\" (["\\/bfnrt] | "u" hex hex hex hex)
+
+digit ::= [0-9]
+hex ::= [0-9a-fA-F]
+ws ::= [ \t\n\r]*

@@ -183,6 +183,10 @@ pub fn run() {
             analytics::commands_oracle::get_twin_identify_status,
             #[cfg(all(feature = "secure-vault", target_vendor = "apple"))]
             analytics::commands_oracle::generate_oracle_payload,
+            #[cfg(all(feature = "secure-vault", target_vendor = "apple"))]
+            analytics::commands_bias::record_cognitive_distortions,
+            #[cfg(all(feature = "secure-vault", target_vendor = "apple"))]
+            analytics::commands_bias::get_cognitive_bias_profile,
             #[cfg(all(
                 feature = "pocket-brain",
                 feature = "secure-vault",

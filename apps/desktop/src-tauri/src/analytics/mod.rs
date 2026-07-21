@@ -3,7 +3,9 @@
 //! Deterministic only — LLM never updates scores or interventions.
 //! Echo sterile payload: [`oracle`]. State equation: [`digital_twin`].
 
+pub mod bias_profile;
 pub mod commands;
+pub mod commands_bias;
 pub mod commands_oracle;
 pub mod commands_psychometrics;
 pub mod coupling;

@@ -36,9 +36,33 @@ export interface MemSample {
 }
 
 /** Known extraction task ids accepted by the Rust worker. */
-export type LlmTaskId = "kakeibo_v1";
+export type LlmTaskId = "kakeibo_v1" | "cognitive_distortion_v1";
 
 export const TASK_KAKEIBO_V1: LlmTaskId = "kakeibo_v1";
+export const TASK_COGNITIVE_DISTORTION_V1: LlmTaskId = "cognitive_distortion_v1";
+
+/** Burns (1980) / Beck (1976) cognitive distortion category ids. */
+export type DistortionCategory =
+  | "all_or_nothing"
+  | "overgeneralization"
+  | "mental_filter"
+  | "disqualifying_the_positive"
+  | "jumping_to_conclusions"
+  | "magnification_minimization"
+  | "emotional_reasoning"
+  | "should_statements"
+  | "labeling"
+  | "personalization";
+
+export interface DistortionDetectionV1 {
+  category: DistortionCategory;
+  snippet: string;
+  confidence_score: number;
+}
+
+export interface CognitiveDistortionReportV1 {
+  detected_distortions: DistortionDetectionV1[];
+}
 
 export interface TokenEvent {
   seq: number;
@@ -47,6 +71,8 @@ export interface TokenEvent {
   error: string | null;
   /** Set only on successful kakeibo extraction completion. */
   validated: KakeiboEntryV1 | null;
+  /** Set only on successful CBT distortion extraction completion. */
+  validated_distortions: CognitiveDistortionReportV1 | null;
 }
 
 export interface LoadParams {

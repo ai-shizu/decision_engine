@@ -22,6 +22,8 @@ mod oracle_repo;
 #[cfg(target_vendor = "apple")]
 mod psychometrics_repo;
 #[cfg(target_vendor = "apple")]
+mod distortion_repo;
+#[cfg(target_vendor = "apple")]
 mod migrations;
 #[cfg(target_vendor = "apple")]
 mod repository;
@@ -38,6 +40,8 @@ mod worker;
 pub(crate) use analytics_repo::{GapAnalysisRow, TensorProfileRow};
 #[cfg(target_vendor = "apple")]
 pub(crate) use knowledge_repo::{KnowledgeChunkRow, KnowledgeSearchHit};
+#[cfg(target_vendor = "apple")]
+pub(crate) use distortion_repo::DistortionTagRow;
 #[cfg(target_vendor = "apple")]
 pub(crate) use oracle_repo::{InterviewSessionRow, OracleRunRow, TwinRunRow};
 #[cfg(target_vendor = "apple")]

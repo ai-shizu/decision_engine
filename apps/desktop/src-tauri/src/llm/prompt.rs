@@ -1,10 +1,38 @@
-//! PromptSpec builder for on-device structured extraction (M5 Phase 1).
+//! PromptSpec builder for on-device structured extraction (M5 Phase 1 / Phase 8).
 //!
 //! Pure function: task_id + user text → (system_prompt, user_content).
 //! No I/O, no model handle — chat-template application lives in `service`.
 
 /// Task id for [`KakeiboEntryV1`](super::schema::KakeiboEntryV1) extraction.
 pub const TASK_KAKEIBO_V1: &str = "kakeibo_v1";
+
+/// Task id for CBT cognitive-distortion extraction (Beck 1976 / Burns 1980).
+pub const TASK_COGNITIVE_DISTORTION_V1: &str = "cognitive_distortion_v1";
+
+/// Named grammar-constrained extraction tasks.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LlmTaskId {
+    KakeiboV1,
+    /// Cognitive distortion fingerprint — ten Burns categories under GBNF.
+    CognitiveDistortionV1,
+}
+
+impl LlmTaskId {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::KakeiboV1 => TASK_KAKEIBO_V1,
+            Self::CognitiveDistortionV1 => TASK_COGNITIVE_DISTORTION_V1,
+        }
+    }
+
+    pub fn parse(s: &str) -> Result<Self, String> {
+        match s {
+            TASK_KAKEIBO_V1 => Ok(Self::KakeiboV1),
+            TASK_COGNITIVE_DISTORTION_V1 => Ok(Self::CognitiveDistortionV1),
+            other => Err(format!("unknown extraction task_id: {other}")),
+        }
+    }
+}
 
 const KAKEIBO_V1_SYSTEM: &str = "\
 You extract a single Japanese household-ledger (家計簿) record from the user's text.
@@ -16,14 +44,32 @@ Rules:
 - category, payee, memo: short Japanese or ASCII strings; use the literal \"unknown\" when unsure.
 - Do not invent facts. Do not add extra keys. Do not wrap the JSON in markdown.";
 
+const COGNITIVE_DISTORTION_V1_SYSTEM: &str = "\
+You are a clinical-style cognitive-behavioral observer (Beck 1976; Burns 1980).
+From the user's diary or chat text, detect cognitive distortions (irrational thought patterns).
+Output ONLY one JSON object:
+  {\"detected_distortions\":[{\"category\":...,\"snippet\":...,\"confidence_score\":...},...]}
+category MUST be one of:
+  all_or_nothing, overgeneralization, mental_filter, disqualifying_the_positive,
+  jumping_to_conclusions, magnification_minimization, emotional_reasoning,
+  should_statements, labeling, personalization
+Rules:
+- snippet: a short verbatim quote from the input that evidences the distortion (do not invent).
+- confidence_score: number from 0 to 1.
+- If none are clearly present, return {\"detected_distortions\":[]}.
+- Do not add extra keys. Do not wrap the JSON in markdown. Do not diagnose disorders.";
+
 /// Build `(system_prompt, user_content)` for a named extraction task.
 ///
 /// Returns `Err` for unknown `task_id` so callers fail closed instead of
 /// silently falling back to an empty system prompt.
 pub fn build_prompt(task_id: &str, input: &str) -> Result<(String, String), String> {
-    match task_id {
-        TASK_KAKEIBO_V1 => Ok((KAKEIBO_V1_SYSTEM.to_string(), input.to_string())),
-        other => Err(format!("unknown extraction task_id: {other}")),
+    match LlmTaskId::parse(task_id)? {
+        LlmTaskId::KakeiboV1 => Ok((KAKEIBO_V1_SYSTEM.to_string(), input.to_string())),
+        LlmTaskId::CognitiveDistortionV1 => Ok((
+            COGNITIVE_DISTORTION_V1_SYSTEM.to_string(),
+            input.to_string(),
+        )),
     }
 }
 
@@ -41,7 +87,23 @@ mod tests {
     }
 
     #[test]
+    fn cognitive_distortion_v1_mentions_burns_categories() {
+        let (sys, user) = build_prompt(TASK_COGNITIVE_DISTORTION_V1, "全部ダメだ").unwrap();
+        assert!(sys.contains("all_or_nothing"));
+        assert!(sys.contains("Beck") || sys.contains("Burns"));
+        assert_eq!(user, "全部ダメだ");
+    }
+
+    #[test]
     fn unknown_task_id_errors() {
         assert!(build_prompt("nope", "x").is_err());
+    }
+
+    #[test]
+    fn llm_task_id_round_trip() {
+        assert_eq!(
+            LlmTaskId::parse(LlmTaskId::CognitiveDistortionV1.as_str()).unwrap(),
+            LlmTaskId::CognitiveDistortionV1
+        );
     }
 }

@@ -33,8 +33,12 @@ use llama_cpp_2::model::{AddBos, LlamaChatMessage, LlamaModel, Special};
 use llama_cpp_2::sampling::LlamaSampler;
 
 use super::params::{GenerationParams, LoadParams};
-use super::prompt::{build_prompt, TASK_KAKEIBO_V1};
-use super::schema::{KakeiboEntryV1, KAKEIBO_V1_GBNF};
+use super::prompt::{
+    build_prompt, LlmTaskId, TASK_COGNITIVE_DISTORTION_V1, TASK_KAKEIBO_V1,
+};
+use super::schema::{
+    CognitiveDistortionReportV1, KakeiboEntryV1, COGNITIVE_DISTORTION_V1_GBNF, KAKEIBO_V1_GBNF,
+};
 use crate::monitor::{DegradationLevel, MemPhase, MemoryMonitor};
 
 /// Idle wake cadence for the worker's command loop. Bounds how long the worker
@@ -128,6 +132,8 @@ pub struct TokenEvent {
     pub error: Option<String>,
     /// Set only on the final success event of a kakeibo extraction.
     pub validated: Option<KakeiboEntryV1>,
+    /// Set only on the final success event of CBT distortion extraction.
+    pub validated_distortions: Option<CognitiveDistortionReportV1>,
 }
 
 /// Resolved generation branch. Pure helper — unit-tested without a model.
@@ -135,14 +141,23 @@ pub struct TokenEvent {
 pub enum GenerationMode {
     Chat,
     KakeiboV1,
+    CognitiveDistortionV1,
 }
 
 /// Map `task_id` to a generation mode. Unknown ids fail closed (no chat fallback).
 pub fn resolve_generation_mode(task_id: Option<&str>) -> Result<GenerationMode, String> {
     match task_id {
         None => Ok(GenerationMode::Chat),
-        Some(TASK_KAKEIBO_V1) => Ok(GenerationMode::KakeiboV1),
-        Some(other) => Err(format!("unknown extraction task_id: {other}")),
+        Some(s) => {
+            let id = LlmTaskId::parse(s)?;
+            if id.as_str() != s {
+                return Err(format!("unknown extraction task_id: {s}"));
+            }
+            Ok(match id {
+                LlmTaskId::KakeiboV1 => GenerationMode::KakeiboV1,
+                LlmTaskId::CognitiveDistortionV1 => GenerationMode::CognitiveDistortionV1,
+            })
+        }
     }
 }
 
@@ -155,6 +170,17 @@ pub fn finalize_extraction(buf: &str, cancelled: bool) -> Result<KakeiboEntryV1,
     KakeiboEntryV1::from_json_str(buf).map_err(|e| format!("extraction parse: {e}"))
 }
 
+pub fn finalize_distortion_extraction(
+    buf: &str,
+    cancelled: bool,
+) -> Result<CognitiveDistortionReportV1, String> {
+    if cancelled {
+        return Err("extraction cancelled".to_string());
+    }
+    CognitiveDistortionReportV1::from_json_str(buf)
+        .map_err(|e| format!("distortion extraction parse: {e}"))
+}
+
 fn streaming_token(seq: u32, text: String) -> TokenEvent {
     TokenEvent {
         seq,
@@ -162,6 +188,7 @@ fn streaming_token(seq: u32, text: String) -> TokenEvent {
         done: false,
         error: None,
         validated: None,
+        validated_distortions: None,
     }
 }
 
@@ -172,6 +199,7 @@ fn chat_done_event(seq: u32) -> TokenEvent {
         done: true,
         error: None,
         validated: None,
+        validated_distortions: None,
     }
 }
 
@@ -182,6 +210,18 @@ fn extract_done_event(seq: u32, entry: KakeiboEntryV1) -> TokenEvent {
         done: true,
         error: None,
         validated: Some(entry),
+        validated_distortions: None,
+    }
+}
+
+fn distortion_done_event(seq: u32, report: CognitiveDistortionReportV1) -> TokenEvent {
+    TokenEvent {
+        seq,
+        text: String::new(),
+        done: true,
+        error: None,
+        validated: None,
+        validated_distortions: Some(report),
     }
 }
 
@@ -192,6 +232,7 @@ fn error_done_event(seq: u32, error: String) -> TokenEvent {
         done: true,
         error: Some(error),
         validated: None,
+        validated_distortions: None,
     }
 }
 
@@ -500,6 +541,10 @@ fn generate(
             let (system, user) = build_prompt(TASK_KAKEIBO_V1, &g.prompt)?;
             render_chat_prompt(model, &system, &user)?
         }
+        GenerationMode::CognitiveDistortionV1 => {
+            let (system, user) = build_prompt(TASK_COGNITIVE_DISTORTION_V1, &g.prompt)?;
+            render_chat_prompt(model, &system, &user)?
+        }
     };
 
     let level = governor.degradation();
@@ -543,6 +588,11 @@ fn generate(
                 .map_err(|e| format!("grammar init: {e}"))?;
             LlamaSampler::chain_simple([grammar, LlamaSampler::greedy()])
         }
+        GenerationMode::CognitiveDistortionV1 => {
+            let grammar = LlamaSampler::grammar(model, COGNITIVE_DISTORTION_V1_GBNF, "root")
+                .map_err(|e| format!("grammar init: {e}"))?;
+            LlamaSampler::chain_simple([grammar, LlamaSampler::greedy()])
+        }
     };
 
     let mut extract_buf = String::new();
@@ -567,7 +617,10 @@ fn generate(
         tokens
             .send(streaming_token(seq, piece.clone()))
             .map_err(|e| format!("channel send: {e}"))?;
-        if matches!(mode, GenerationMode::KakeiboV1) {
+        if matches!(
+            mode,
+            GenerationMode::KakeiboV1 | GenerationMode::CognitiveDistortionV1
+        ) {
             extract_buf.push_str(&piece);
         }
         sampler.accept(token);
@@ -592,6 +645,13 @@ fn generate(
             let entry = finalize_extraction(&extract_buf, cancelled)?;
             tokens
                 .send(extract_done_event(g.max_tokens, entry))
+                .map_err(|e| format!("channel send: {e}"))?;
+            Ok(())
+        }
+        GenerationMode::CognitiveDistortionV1 => {
+            let report = finalize_distortion_extraction(&extract_buf, cancelled)?;
+            tokens
+                .send(distortion_done_event(g.max_tokens, report))
                 .map_err(|e| format!("channel send: {e}"))?;
             Ok(())
         }
@@ -635,6 +695,14 @@ mod tests {
         assert!(matches!(
             resolve_generation_mode(Some(TASK_KAKEIBO_V1)),
             Ok(GenerationMode::KakeiboV1)
+        ));
+    }
+
+    #[test]
+    fn mode_cognitive_distortion_v1_is_extract() {
+        assert!(matches!(
+            resolve_generation_mode(Some(TASK_COGNITIVE_DISTORTION_V1)),
+            Ok(GenerationMode::CognitiveDistortionV1)
         ));
     }
 

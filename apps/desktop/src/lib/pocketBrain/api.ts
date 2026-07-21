@@ -11,6 +11,8 @@ import type {
   AxisScoreHint,
   CalculateGapAnalysisResult,
   CalculatePulseResult,
+  CognitiveBiasProfile,
+  CognitiveDistortionReportV1,
   CompanyFacts,
   ConsultWithOracleResult,
   EvaluateRaschRequest,
@@ -27,6 +29,7 @@ import type {
   ProbeStatusV1,
   RagChatParams,
   RaschStateWire,
+  RecordCognitiveDistortionsResult,
   ScenarioModifiers,
   SearchKnowledgeResult,
   SendRagChatResult,
@@ -375,4 +378,26 @@ export function getInterviewSession(
   sessionId: string,
 ): Promise<InterviewSession> {
   return pocketInvoke("get_interview_session", { sessionId });
+}
+
+/** Persist a GBNF-validated CBT extraction report into vault `distortion_tags`. */
+export function recordCognitiveDistortions(args: {
+  report: CognitiveDistortionReportV1;
+  sourceKind: string;
+  sourceId: string;
+}): Promise<RecordCognitiveDistortionsResult> {
+  return pocketInvoke("record_cognitive_distortions", {
+    report: args.report,
+    sourceKind: args.sourceKind,
+    sourceId: args.sourceId,
+  });
+}
+
+/** Deterministic Burns-category fingerprint over accumulated distortion tags. */
+export function getCognitiveBiasProfile(
+  limit?: number,
+): Promise<CognitiveBiasProfile> {
+  return pocketInvoke("get_cognitive_bias_profile", {
+    limit: limit ?? null,
+  });
 }

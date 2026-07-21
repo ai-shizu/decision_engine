@@ -8,7 +8,7 @@ use std::{error::Error, fmt};
 
 use rusqlite::{Connection, TransactionBehavior};
 
-pub(crate) const LATEST_SCHEMA_VERSION: i64 = 6;
+pub(crate) const LATEST_SCHEMA_VERSION: i64 = 7;
 
 /// Canonical embedding width for `knowledge_chunks.embedding` (M9 foundation).
 /// Matches the historical PKBVEC01 384-d space; a future 768-d migration would
@@ -143,6 +143,25 @@ CREATE INDEX IF NOT EXISTS idx_interview_sessions_updated
     ON interview_sessions(updated_at DESC, id DESC);
 "#;
 
+const MIGRATION_V7_SQL: &str = r#"
+CREATE TABLE IF NOT EXISTS distortion_tags (
+    id TEXT PRIMARY KEY NOT NULL,
+    created_at INTEGER NOT NULL,
+    category TEXT NOT NULL,
+    snippet TEXT NOT NULL,
+    confidence_score REAL NOT NULL,
+    source_kind TEXT NOT NULL,
+    source_id TEXT NOT NULL,
+    run_id TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_distortion_tags_created
+    ON distortion_tags(created_at DESC, id DESC);
+
+CREATE INDEX IF NOT EXISTS idx_distortion_tags_category
+    ON distortion_tags(category, created_at DESC);
+"#;
+
 const READ_CHATS_COLUMNS_SQL: &str =
     "SELECT name, type, \"notnull\", pk FROM pragma_table_info('chats') ORDER BY cid;";
 const READ_MESSAGES_COLUMNS_SQL: &str =
@@ -194,6 +213,11 @@ const MIGRATIONS: &[Migration] = &[
         version: 6,
         sql: MIGRATION_V6_SQL,
         verify: verify_v6_schema,
+    },
+    Migration {
+        version: 7,
+        sql: MIGRATION_V7_SQL,
+        verify: verify_v7_schema,
     },
 ];
 
@@ -503,6 +527,32 @@ fn verify_v6_schema(connection: &Connection) -> Result<(), MigrationError> {
         ],
     ) {
         return Err(MigrationError::SchemaMismatch { version: 6 });
+    }
+    Ok(())
+}
+
+fn verify_v7_schema(connection: &Connection) -> Result<(), MigrationError> {
+    verify_v6_schema(connection).map_err(|_| MigrationError::SchemaMismatch { version: 7 })?;
+
+    let cols = read_columns(
+        connection,
+        "SELECT name, type, \"notnull\", pk FROM pragma_table_info('distortion_tags') ORDER BY cid;",
+    )
+    .map_err(|_| MigrationError::SchemaMismatch { version: 7 })?;
+    if !columns_match(
+        &cols,
+        &[
+            ("id", "TEXT", true, 1),
+            ("created_at", "INTEGER", true, 0),
+            ("category", "TEXT", true, 0),
+            ("snippet", "TEXT", true, 0),
+            ("confidence_score", "REAL", true, 0),
+            ("source_kind", "TEXT", true, 0),
+            ("source_id", "TEXT", true, 0),
+            ("run_id", "TEXT", true, 0),
+        ],
+    ) {
+        return Err(MigrationError::SchemaMismatch { version: 7 });
     }
     Ok(())
 }

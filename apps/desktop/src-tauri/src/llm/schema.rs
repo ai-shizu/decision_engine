@@ -166,6 +166,145 @@ where
 /// Static GBNF grammar for [`KakeiboEntryV1`] (embedded asset).
 pub const KAKEIBO_V1_GBNF: &str = include_str!("assets/kakeibo_v1.gbnf");
 
+/// Static GBNF grammar for [`CognitiveDistortionReportV1`].
+pub const COGNITIVE_DISTORTION_V1_GBNF: &str =
+    include_str!("assets/cognitive_distortion_v1.gbnf");
+
+// ─── Phase 8: Cognitive distortion extraction (Beck 1976 / Burns 1980) ───────
+
+/// Burns (1980) / Beck (1976) ten cognitive distortions.
+///
+/// CBT holds that depression and anxiety are maintained by habitual irrational
+/// thought patterns ("cognitive distortions"). These ten labels are the
+/// canonical inventory used for fingerprinting — detection is LLM-assisted
+/// under GBNF; aggregation in `bias_profile` remains deterministic.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DistortionCategory {
+    /// All-or-Nothing — 全か無か思考
+    AllOrNothing,
+    /// Overgeneralization — 過度の一般化
+    Overgeneralization,
+    /// Mental Filter — 心のフィルター
+    MentalFilter,
+    /// Disqualifying the Positive — マイナス化思考
+    DisqualifyingThePositive,
+    /// Jumping to Conclusions — 結論の飛躍（心の読みすぎ / 先読み）
+    JumpingToConclusions,
+    /// Magnification / Minimization — 拡大解釈・過小評価（破局視含む）
+    MagnificationMinimization,
+    /// Emotional Reasoning — 感情的決めつけ
+    EmotionalReasoning,
+    /// Should Statements — すべき思考
+    ShouldStatements,
+    /// Labeling — レッテル貼り
+    Labeling,
+    /// Personalization — 自己関連づけ
+    Personalization,
+}
+
+impl DistortionCategory {
+    /// Fixed Burns order (radar / table axes). Deterministic — no HashMap iteration order.
+    pub const ALL: [Self; 10] = [
+        Self::AllOrNothing,
+        Self::Overgeneralization,
+        Self::MentalFilter,
+        Self::DisqualifyingThePositive,
+        Self::JumpingToConclusions,
+        Self::MagnificationMinimization,
+        Self::EmotionalReasoning,
+        Self::ShouldStatements,
+        Self::Labeling,
+        Self::Personalization,
+    ];
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::AllOrNothing => "all_or_nothing",
+            Self::Overgeneralization => "overgeneralization",
+            Self::MentalFilter => "mental_filter",
+            Self::DisqualifyingThePositive => "disqualifying_the_positive",
+            Self::JumpingToConclusions => "jumping_to_conclusions",
+            Self::MagnificationMinimization => "magnification_minimization",
+            Self::EmotionalReasoning => "emotional_reasoning",
+            Self::ShouldStatements => "should_statements",
+            Self::Labeling => "labeling",
+            Self::Personalization => "personalization",
+        }
+    }
+
+    pub fn parse(s: &str) -> Option<Self> {
+        match s {
+            "all_or_nothing" => Some(Self::AllOrNothing),
+            "overgeneralization" => Some(Self::Overgeneralization),
+            "mental_filter" => Some(Self::MentalFilter),
+            "disqualifying_the_positive" => Some(Self::DisqualifyingThePositive),
+            "jumping_to_conclusions" => Some(Self::JumpingToConclusions),
+            "magnification_minimization" => Some(Self::MagnificationMinimization),
+            "emotional_reasoning" => Some(Self::EmotionalReasoning),
+            "should_statements" => Some(Self::ShouldStatements),
+            "labeling" => Some(Self::Labeling),
+            "personalization" => Some(Self::Personalization),
+            _ => None,
+        }
+    }
+}
+
+/// One detected distortion span from constrained extraction.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DistortionDetectionV1 {
+    pub category: DistortionCategory,
+    pub snippet: String,
+    pub confidence_score: f64,
+}
+
+/// Grammar-constrained CBT extraction report.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CognitiveDistortionReportV1 {
+    pub detected_distortions: Vec<DistortionDetectionV1>,
+}
+
+impl CognitiveDistortionReportV1 {
+    pub fn normalize(&mut self) {
+        // Keep Burns inventory live in non-test builds (Zero Warnings / no allow).
+        let _burns_n = DistortionCategory::ALL.len();
+        debug_assert_eq!(_burns_n, 10);
+        for d in &mut self.detected_distortions {
+            let label = d.category.as_str();
+            let _roundtrip = DistortionCategory::parse(label);
+            debug_assert_eq!(_roundtrip, Some(d.category));
+            d.snippet = truncate_snippet(d.snippet.trim());
+            if !d.confidence_score.is_finite() {
+                d.confidence_score = 0.0;
+            }
+            d.confidence_score = d.confidence_score.clamp(0.0, 1.0);
+        }
+        // Drop empty snippets (gap safety — do not invent quotes).
+        self.detected_distortions
+            .retain(|d| !d.snippet.is_empty() && d.snippet != UNKNOWN);
+    }
+
+    pub fn from_json_str(raw: &str) -> Result<Self, serde_json::Error> {
+        let mut report: Self = serde_json::from_str(raw)?;
+        report.normalize();
+        Ok(report)
+    }
+}
+
+fn truncate_snippet(s: &str) -> String {
+    const MAX: usize = 280;
+    if s.len() <= MAX {
+        return s.to_string();
+    }
+    let mut end = MAX;
+    while end > 0 && !s.is_char_boundary(end) {
+        end -= 1;
+    }
+    format!("{}…", &s[..end])
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -275,5 +414,41 @@ mod tests {
         assert!(KAKEIBO_V1_GBNF.contains("memo"));
         assert!(KAKEIBO_V1_GBNF.contains("unknown"));
         assert!(!KAKEIBO_V1_GBNF.trim().is_empty());
+    }
+
+    #[test]
+    fn cognitive_distortion_report_parses_and_clamps() {
+        let raw = r#"{
+          "detected_distortions": [
+            {"category":"all_or_nothing","snippet":"いつも失敗する","confidence_score":1.5},
+            {"category":"should_statements","snippet":"","confidence_score":0.8}
+          ]
+        }"#;
+        let r = CognitiveDistortionReportV1::from_json_str(raw).expect("parse");
+        assert_eq!(r.detected_distortions.len(), 1);
+        assert_eq!(
+            r.detected_distortions[0].category,
+            DistortionCategory::AllOrNothing
+        );
+        assert!((r.detected_distortions[0].confidence_score - 1.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn cognitive_gbnf_lists_all_ten_categories() {
+        for cat in DistortionCategory::ALL {
+            assert!(
+                COGNITIVE_DISTORTION_V1_GBNF.contains(cat.as_str()),
+                "missing {}",
+                cat.as_str()
+            );
+        }
+        assert!(COGNITIVE_DISTORTION_V1_GBNF.contains("detected_distortions"));
+    }
+
+    #[test]
+    fn distortion_category_round_trip() {
+        for cat in DistortionCategory::ALL {
+            assert_eq!(DistortionCategory::parse(cat.as_str()), Some(cat));
+        }
     }
 }

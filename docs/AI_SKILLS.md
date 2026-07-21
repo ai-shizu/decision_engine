@@ -999,6 +999,23 @@ Pocket Brain 経路は M14 tensor + M15 pulse/Rasch + gap sufficiency から loa
 
 **検証:** `cargo check|test --features pocket-brain,secure-vault`。
 
+### 4.51 Phase 8 — CBT cognitive bias fingerprint (2026-07-21)
+
+**射程:** 日記/チャットから Burns の「10の認知の歪み」を GBNF 制約付き LLM 抽出し、Vault 時系列蓄積 + 決定論集計。RNG・外部 API 禁止（F-14）。
+
+**学術根拠:** **CBT** — Beck (1976) & Burns (1980)。カテゴリはスキーマ / GBNF / `BURNS_CATEGORIES` で同一の10軸。
+
+**as-built:**
+1. `LlmTaskId::CognitiveDistortionV1` / `TASK_COGNITIVE_DISTORTION_V1` + `cognitive_distortion_v1.gbnf` + `CognitiveDistortionReportV1`。
+2. `GenerationMode::CognitiveDistortionV1` — grammar+greedy。`TokenEvent.validated_distortions`。
+3. Vault マイグレーション v7 `distortion_tags`。`record_cognitive_distortions` / `get_cognitive_bias_profile`。
+4. `bias_profile::aggregate_bias_profile` — カテゴリ別 count / mean_confidence / 30d / share / score（Burns 固定順）。
+5. FE: pocketBrain types + API + `biasProfileView`（レーダー準備、ダッシュボード破壊なし）。
+
+**ハマりどころ:** 抽出ラベルは LLM、スコア更新は決定論のみ（権威境界）。未知 category は record で拒否。
+
+**検証:** `cargo check|test --features pocket-brain,secure-vault` / `npx tsc --noEmit`。
+
 ### 4.8 M3 Phase 0-A — SQLCipher / Security.framework iOS link gate (2026-07-18)
 
 **射程（Phase 0-A のみ）:** `secure-vault` feature、依存解決、in-memory SQLCipher identity（`PRAGMA key` + `cipher_version`）、Security.framework シンボル（`SecRandom` / `SecAccessControl`）、Tauri command 登録、iOS Simulator 最終リンク証明。スキーマ・repository・UI・本番 Keychain item 作成は対象外。
