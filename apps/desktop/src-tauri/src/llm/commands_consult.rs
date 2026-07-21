@@ -84,9 +84,20 @@ pub async fn consult_with_oracle_context(
                 .unwrap_or_default();
             let refs: Vec<RagContextRef<'_>> = hits
                 .iter()
-                .map(|hit| RagContextRef {
-                    id: hit.id.as_str(),
-                    text: hit.text_content.as_str(),
+                .map(|hit| {
+                    let relevance = if hit.recall_score.is_finite() && hit.recall_score > 0.0 {
+                        hit.recall_score.clamp(0.0, 1.0)
+                    } else if hit.distance.is_finite() {
+                        (1.0 / (1.0 + hit.distance)).clamp(0.0, 1.0)
+                    } else {
+                        0.5
+                    };
+                    RagContextRef {
+                        id: hit.id.as_str(),
+                        text: hit.text_content.as_str(),
+                        relevance,
+                        created_at: hit.created_at,
+                    }
                 })
                 .collect();
             let rag = build_rag_prompt(&message_for_search, &refs);

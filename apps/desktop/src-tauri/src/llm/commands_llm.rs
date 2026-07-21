@@ -7,6 +7,7 @@ use std::sync::Arc;
 use tauri::ipc::Channel;
 use tauri::{AppHandle, State};
 
+use super::embed::EMBED_DEFAULT_N_CTX;
 use super::model_path::resolve_model_path;
 use super::params::{GenerationParams, LoadParams};
 use super::service::{LlmHandle, LlmLifecycleEvent, TokenEvent};
@@ -25,6 +26,7 @@ pub async fn llm_load_model(
 
 /// Start a generation, streaming `TokenEvent`s over `on_token`.
 /// `task_id` selects extraction mode (`kakeibo_v1`) or plain chat (`None`).
+/// Tokens are micro-batched (~30ms / 8 pieces) before IPC send (Phase 9).
 #[tauri::command]
 pub async fn llm_generate(
     handle: State<'_, LlmHandle>,
@@ -33,6 +35,24 @@ pub async fn llm_generate(
     on_token: Channel<TokenEvent>,
 ) -> Result<(), String> {
     handle.generate(params, task_id, on_token)
+}
+
+/// Embed `text` and return little-endian `f32` bytes (Phase 9 binary IPC).
+/// Frontend decodes with `Float32Array` / `DataView` — no JSON number array.
+#[tauri::command]
+pub async fn llm_embed_binary(
+    handle: State<'_, LlmHandle>,
+    text: String,
+    n_ctx: Option<u32>,
+) -> Result<Vec<u8>, String> {
+    if text.trim().is_empty() {
+        return Err("empty embed input".into());
+    }
+    let n_ctx = n_ctx.unwrap_or(EMBED_DEFAULT_N_CTX);
+    let handle = handle.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || handle.embed_binary(text, n_ctx))
+        .await
+        .map_err(|_| "embed binary join failed".to_string())?
 }
 
 /// Cancel an in-flight generation.

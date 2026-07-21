@@ -20,9 +20,12 @@ use crate::analytics::oracle::render_oracle_consult;
 use crate::db::{VaultErrorCode, VaultHandle};
 use crate::llm::mentor_zpd::MentorZpdSignal;
 
-const GAP_SECTION_BUDGET: usize = 2_500;
-const ORACLE_SECTION_BUDGET: usize = 1_500;
-const TENSOR_SECTION_BUDGET: usize = 1_200;
+use crate::llm::context_budget::truncate_to_token_budget;
+
+/// Token budgets for mentor sections (Phase 9; replaces char-tail truncate).
+const GAP_SECTION_TOKEN_BUDGET: usize = 625;
+const ORACLE_SECTION_TOKEN_BUDGET: usize = 375;
+const TENSOR_SECTION_TOKEN_BUDGET: usize = 300;
 
 #[derive(Debug, Clone, Default)]
 pub struct MentorContextSections {
@@ -41,15 +44,8 @@ fn map_vault(err: VaultErrorCode) -> String {
     format!("{err:?}").to_ascii_lowercase()
 }
 
-fn truncate(s: &str, budget: usize) -> String {
-    if s.len() <= budget {
-        return s.to_string();
-    }
-    let mut end = budget;
-    while end > 0 && !s.is_char_boundary(end) {
-        end -= 1;
-    }
-    format!("{}…", &s[..end])
+fn truncate(s: &str, token_budget: usize) -> String {
+    truncate_to_token_budget(s, token_budget)
 }
 
 fn format_gap_payload(payload: &Value, data_sufficiency: f64) -> String {
@@ -75,7 +71,7 @@ fn format_gap_payload(payload: &Value, data_sufficiency: f64) -> String {
             }
         }
     }
-    truncate(&out, GAP_SECTION_BUDGET)
+    truncate(&out, GAP_SECTION_TOKEN_BUDGET)
 }
 
 fn format_tensor_payload(payload: &Value, model_hash: &str) -> String {
@@ -115,7 +111,7 @@ fn format_tensor_payload(payload: &Value, model_hash: &str) -> String {
             "N/A の軸は未観測として扱い、自己PRの美辞麗句で埋めさせない。矛盾があれば指摘せよ。\n",
         );
     }
-    truncate(&out, TENSOR_SECTION_BUDGET)
+    truncate(&out, TENSOR_SECTION_TOKEN_BUDGET)
 }
 
 /// Load latest gap + oracle + tensor from vault. Errors only on vault transport failure;
@@ -159,7 +155,7 @@ pub fn load_mentor_context(vault: &VaultHandle) -> Result<MentorContextSections,
                 sections.oracle_available = false;
             } else {
                 let rendered = render_oracle_consult(&payload);
-                sections.oracle_block = truncate(&rendered, ORACLE_SECTION_BUDGET);
+                sections.oracle_block = truncate(&rendered, ORACLE_SECTION_TOKEN_BUDGET);
                 sections.oracle_available = true;
             }
         }

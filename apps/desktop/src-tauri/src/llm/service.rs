@@ -39,6 +39,7 @@ use super::prompt::{
 use super::schema::{
     CognitiveDistortionReportV1, KakeiboEntryV1, COGNITIVE_DISTORTION_V1_GBNF, KAKEIBO_V1_GBNF,
 };
+use super::token_batch::TokenStreamBatcher;
 use crate::monitor::{DegradationLevel, MemPhase, MemoryMonitor};
 
 /// Idle wake cadence for the worker's command loop. Bounds how long the worker
@@ -337,6 +338,18 @@ impl LlmHandle {
             .map_err(|_| "llm worker gone".to_string())
     }
 
+    /// Blocking: embed `text` and return little-endian f32 bytes (Phase 9 binary IPC).
+    pub fn embed_binary(&self, text: String, n_ctx: u32) -> Result<Vec<u8>, String> {
+        let v = self.embed(text, n_ctx)?;
+        let bytes = super::embed::f32_slice_to_le_bytes(&v);
+        // Round-trip guard keeps decode helper live (Zero Warnings) and catches packing bugs.
+        let back = super::embed::le_bytes_to_f32_vec(&bytes)?;
+        if back.len() != v.len() {
+            return Err("embed binary round-trip length mismatch".into());
+        }
+        Ok(bytes)
+    }
+
     /// Request cancellation of the in-flight generation (checked each token).
     pub fn cancel(&self) {
         self.governor.request_cancel();
@@ -598,6 +611,11 @@ fn generate(
     let mut extract_buf = String::new();
     let mut cancelled = false;
     let mut n_cur = batch.n_tokens();
+    let mut batcher = TokenStreamBatcher::new(|seq, text| {
+        tokens
+            .send(streaming_token(seq, text))
+            .map_err(|e| format!("channel send: {e}"))
+    });
     for seq in 0..g.max_tokens {
         if governor.is_cancelled() {
             cancelled = true;
@@ -614,8 +632,8 @@ fn generate(
         let piece = model
             .token_to_str(token, Special::Plaintext)
             .map_err(|e| format!("token decode: {e}"))?;
-        tokens
-            .send(streaming_token(seq, piece.clone()))
+        batcher
+            .push(seq, &piece)
             .map_err(|e| format!("channel send: {e}"))?;
         if matches!(
             mode,
@@ -632,6 +650,8 @@ fn generate(
         n_cur += 1;
         ctx.decode(&mut batch).map_err(|e| format!("decode: {e}"))?;
     }
+
+    batcher.flush()?;
 
     match mode {
         GenerationMode::Chat => {

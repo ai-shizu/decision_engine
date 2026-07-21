@@ -11,6 +11,7 @@
 
 pub mod commands_llm;
 pub mod commands_model_setup;
+pub mod context_budget;
 pub mod embed;
 pub mod hashed_embed;
 pub mod model_path;
@@ -19,6 +20,7 @@ pub mod prompt;
 pub mod prompt_sim;
 pub mod schema;
 pub mod service;
+pub mod token_batch;
 
 #[cfg(all(feature = "secure-vault", target_vendor = "apple"))]
 pub mod commands_consult;

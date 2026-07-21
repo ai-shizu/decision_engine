@@ -341,14 +341,25 @@ pub async fn send_rag_chat(
         // Automatic retrieval: soft-fail KNN so Gap/Oracle/Tensor still inject.
         let hits = search_sync(&vault, &llm_for_search, &message_for_search, context_limit)
             .unwrap_or_default();
-        let refs: Vec<RagContextRef<'_>> = hits
-            .iter()
-            .map(|hit| RagContextRef {
-                id: hit.id.as_str(),
-                text: hit.text_content.as_str(),
-            })
-            .collect();
-        let rag_prompt = build_rag_prompt(&message_for_search, &refs);
+            let refs: Vec<RagContextRef<'_>> = hits
+                .iter()
+                .map(|hit| {
+                    let relevance = if hit.recall_score.is_finite() && hit.recall_score > 0.0 {
+                        hit.recall_score.clamp(0.0, 1.0)
+                    } else if hit.distance.is_finite() {
+                        (1.0 / (1.0 + hit.distance)).clamp(0.0, 1.0)
+                    } else {
+                        0.5
+                    };
+                    RagContextRef {
+                        id: hit.id.as_str(),
+                        text: hit.text_content.as_str(),
+                        relevance,
+                        created_at: hit.created_at,
+                    }
+                })
+                .collect();
+            let rag_prompt = build_rag_prompt(&message_for_search, &refs);
         // M17/M20-J: fail-safe Gap/Oracle/Tensor injection (missing → soft notes).
         let prompt = match crate::llm::consult_context::load_mentor_context(&vault) {
             Ok(mentor) => {

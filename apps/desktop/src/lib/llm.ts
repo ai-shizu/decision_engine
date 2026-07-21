@@ -96,9 +96,9 @@ export function loadModel(params: LoadParams): Promise<void> {
 }
 
 /**
- * Start a generation; `onToken` receives each streamed `TokenEvent`.
+ * Start a generation; `onToken` receives streamed `TokenEvent`s.
+ * Phase 9: Rust micro-batches pieces (~30ms / 8 tokens); FE still appends `text`.
  * Optional `taskId` selects extraction (`"kakeibo_v1"`) vs plain chat (`null`).
- * Existing two-argument callers remain valid.
  */
 export function generate(
   params: GenerationParams,
@@ -111,6 +111,40 @@ export function generate(
     taskId: taskId ?? null,
     onToken: channel,
   });
+}
+
+/**
+ * Embed text and return a `Float32Array` decoded from little-endian IPC bytes
+ * (Phase 9). Avoids JSON-serializing 384 floats.
+ */
+export async function embedBinary(
+  text: string,
+  nCtx?: number,
+): Promise<Float32Array> {
+  const bytes = await invoke<number[] | Uint8Array>("llm_embed_binary", {
+    text,
+    nCtx: nCtx ?? null,
+  });
+  return decodeF32Le(bytes);
+}
+
+/** Decode little-endian f32 payload from Tauri binary IPC. */
+export function decodeF32Le(bytes: ArrayBuffer | Uint8Array | number[]): Float32Array {
+  let u8: Uint8Array;
+  if (bytes instanceof ArrayBuffer) {
+    u8 = new Uint8Array(bytes);
+  } else if (Array.isArray(bytes)) {
+    u8 = Uint8Array.from(bytes);
+  } else {
+    u8 = bytes;
+  }
+  if (u8.byteLength % 4 !== 0) {
+    throw new Error("embed binary length not divisible by 4");
+  }
+  // Copy to guarantee 4-byte alignment for Float32Array view.
+  const copy = new Uint8Array(u8.byteLength);
+  copy.set(u8);
+  return new Float32Array(copy.buffer);
 }
 
 /** Request cancellation of the in-flight generation. */

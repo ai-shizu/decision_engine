@@ -90,6 +90,28 @@ pub fn embed_text(
     Ok(embedding.to_vec())
 }
 
+/// Pack `f32` embedding as little-endian bytes for Tauri raw binary IPC (Phase 9).
+pub fn f32_slice_to_le_bytes(v: &[f32]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(v.len() * 4);
+    for x in v {
+        out.extend_from_slice(&x.to_le_bytes());
+    }
+    out
+}
+
+/// Decode little-endian f32 bytes back to a vector (tests / FE contract mirror).
+pub fn le_bytes_to_f32_vec(bytes: &[u8]) -> Result<Vec<f32>, String> {
+    if bytes.len() % 4 != 0 {
+        return Err("embed binary length not divisible by 4".into());
+    }
+    let mut out = Vec::with_capacity(bytes.len() / 4);
+    for chunk in bytes.chunks_exact(4) {
+        let arr: [u8; 4] = chunk.try_into().map_err(|_| "embed binary chunk".to_string())?;
+        out.push(f32::from_le_bytes(arr));
+    }
+    Ok(out)
+}
+
 /// Fail closed when a vector cannot be stored in the M9 `float[384]` column.
 pub fn require_knowledge_embedding_dims(embedding: &[f32]) -> Result<(), String> {
     if embedding.len() == EMBEDDING_DIMENSIONS {
@@ -116,5 +138,14 @@ mod tests {
     fn require_dims_rejects_wrong_width() {
         let v = vec![0.0_f32; 8];
         assert!(require_knowledge_embedding_dims(&v).is_err());
+    }
+
+    #[test]
+    fn le_bytes_round_trip() {
+        let v = vec![1.0f32, -2.5, 0.0, 384.0];
+        let b = f32_slice_to_le_bytes(&v);
+        assert_eq!(b.len(), 16);
+        let back = le_bytes_to_f32_vec(&b).expect("decode");
+        assert_eq!(back, v);
     }
 }

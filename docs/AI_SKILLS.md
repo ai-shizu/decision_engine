@@ -1016,6 +1016,22 @@ Pocket Brain 経路は M14 tensor + M15 pulse/Rasch + gap sufficiency から loa
 
 **検証:** `cargo check|test --features pocket-brain,secure-vault` / `npx tsc --noEmit`。
 
+### 4.52 Phase 9 — Context hierarchy budget + binary IPC (2026-07-21)
+
+**射程:** (1) トークン予算ベースの階層コンテキスト圧縮 (2) 埋め込みバイナリ IPC (3) TokenEvent マイクロバッチ。RNG・外部 API 禁止。
+
+**学術根拠:** Baddeley (2000) 作動記憶チャンク / Packer et al. (2023) MemGPT 階層要約 / Ebbinghaus (1885) サリエンス減衰。
+
+**as-built:**
+1. `llm/context_budget.rs` — `estimate_tokens` + `salience = relevance × exp(−Δt/τ)` + 貪欲選択 + 溢分を `[compressed id=…]` スタブへ（破棄しない）。
+2. `rag/prompt.rs` — 文字末尾切り捨て廃止。`fit_context_budget`（既定 1500 tok）。`consult_context` もトークン予算切り詰め。
+3. `llm/token_batch.rs` — 8 pieces または 30ms で IPC 送出を合流。抽出バッファは piece ごとに維持。
+4. `llm_embed_binary` → LE `f32` bytes。FE `embedBinary` / `decodeF32Le` → `Float32Array`。
+
+**ハマりどころ:** トークン推定はオフラインヒューリスティック（CJK≈1、Latin≈1/4）。厳密 BPE 一致は要求しない — 予算の安全側に寄せる。
+
+**検証:** `cargo check|test --features pocket-brain,secure-vault` / `npx tsc --noEmit`。
+
 ### 4.8 M3 Phase 0-A — SQLCipher / Security.framework iOS link gate (2026-07-18)
 
 **射程（Phase 0-A のみ）:** `secure-vault` feature、依存解決、in-memory SQLCipher identity（`PRAGMA key` + `cipher_version`）、Security.framework シンボル（`SecRandom` / `SecAccessControl`）、Tauri command 登録、iOS Simulator 最終リンク証明。スキーマ・repository・UI・本番 Keychain item 作成は対象外。

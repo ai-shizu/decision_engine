@@ -114,6 +114,8 @@ pub fn run() {
             #[cfg(feature = "pocket-brain")]
             llm::commands_llm::llm_generate,
             #[cfg(feature = "pocket-brain")]
+            llm::commands_llm::llm_embed_binary,
+            #[cfg(feature = "pocket-brain")]
             llm::commands_llm::llm_cancel,
             #[cfg(feature = "pocket-brain")]
             llm::commands_llm::llm_events,
