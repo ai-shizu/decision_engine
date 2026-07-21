@@ -16,7 +16,7 @@ use crate::knowledge::edinet_client::{
     sanitize_company_facts, subscription_key_from_env, CompanyFacts, EdinetError,
 };
 use crate::knowledge::{
-    refuse_if_egress_unavailable, refuse_if_policy_off, NetworkPolicyStore, OrchestratorError,
+    refuse_if_egress_unavailable, refuse_if_policy_off, NetworkPolicyStore,
 };
 use crate::llm::params::GenerationParams;
 use crate::llm::prompt_sim::{build_es_review_prompt, build_interview_prompt, ExperienceRef};
@@ -96,10 +96,6 @@ pub struct SimSessionResult {
 
 fn map_vault_err(code: VaultErrorCode) -> String {
     format!("{code:?}").to_ascii_lowercase()
-}
-
-fn map_orch_err(err: OrchestratorError) -> String {
-    err.to_string()
 }
 
 fn map_edinet_err(err: EdinetError) -> String {
@@ -276,6 +272,8 @@ async fn resolve_company_facts(
 }
 
 /// Fill empty fields on `base` from `incoming` (interview start merge).
+/// Only compiled with `egress-live` — the sole call site is the live EDINET fetch path.
+#[cfg(feature = "egress-live")]
 fn merge_company_facts_prefer_filled(base: &CompanyFacts, incoming: &CompanyFacts) -> CompanyFacts {
     let pick = |cur: &str, next: &str| -> String {
         if !cur.trim().is_empty() {

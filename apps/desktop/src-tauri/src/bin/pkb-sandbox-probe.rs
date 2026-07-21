@@ -163,6 +163,7 @@ fn windows_token_is_zero_capability_appcontainer() -> bool {
     container_ok && is_container == 1 && capabilities_ok && capabilities.GroupCount == 0
 }
 
+#[cfg(windows)]
 fn probe_port(name: &str) -> u16 {
     std::env::var(name)
         .ok()

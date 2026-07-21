@@ -84,12 +84,13 @@ impl MemoryMonitor {
     }
 
     /// Spawn the sampler thread. Records the baseline footprint from the first
-    /// reading, then emits a `MemSample` every `interval_ms` until `stop()`.
+    /// reading, then emits a `MemSample` every `interval_ms` until the channel
+    /// closes or a subsequent `start` flips `running` off.
     /// `threshold_bytes` is the jetsam budget (e.g. A17 Pro/8GB ≈ 4.8 GB = 60%).
     ///
     /// On the rising edge of `over_threshold`, `over_threshold_hook` is invoked
-    /// (lock-free expected). Caller should `stop()` a previous run before
-    /// starting a new one.
+    /// (lock-free expected). Re-entrant `start` signals any prior sampler to exit
+    /// via `running` before spawning a replacement.
     pub fn start(
         &self,
         channel: Channel<MemSample>,
@@ -97,6 +98,8 @@ impl MemoryMonitor {
         threshold_bytes: u64,
         over_threshold_hook: Option<OverThresholdHook>,
     ) {
+        // Drop any previous sampler (channel hang-up also ends a sampler).
+        self.running.store(false, Ordering::SeqCst);
         let base = phys_footprint_bytes().unwrap_or(0);
         self.baseline.store(base, Ordering::SeqCst);
         self.phase.store(MemPhase::Baseline.as_u8(), Ordering::SeqCst);
@@ -142,11 +145,6 @@ impl MemoryMonitor {
     /// The LLM worker calls this on each phase transition.
     pub fn set_phase(&self, phase: MemPhase) {
         self.phase.store(phase.as_u8(), Ordering::SeqCst);
-    }
-
-    /// Stop the sampler thread (it exits on its next tick).
-    pub fn stop(&self) {
-        self.running.store(false, Ordering::SeqCst);
     }
 }
 

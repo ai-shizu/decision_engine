@@ -123,6 +123,6 @@ mod tests {
         let prompt = build_es_review_prompt("私は挑戦を大切にします。", &sample_facts(), &[]);
         assert!(prompt.contains("書類選考"));
         assert!(prompt.contains("挑戦を大切"));
-        assert!(prompt.contains("見つかりませんでした"));
+        assert!(prompt.contains("経験チャンクなし"));
     }
 }

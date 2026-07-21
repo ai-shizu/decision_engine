@@ -19,7 +19,13 @@ static TEMP_SEQ: AtomicU64 = AtomicU64::new(1);
 
 fn temp_root() -> PathBuf {
     let sequence = TEMP_SEQ.fetch_add(1, Ordering::Relaxed);
-    let root = std::env::temp_dir().join(format!("pkb-fsa04-{}-{sequence}", std::process::id()));
+    // macOS: `temp_dir()` is under `/var` → `/private/var` symlink. Artifact auth
+    // rejects symlink components, so canonicalize before joining so tests exercise
+    // real files without false-positive link rejection.
+    let base = std::env::temp_dir()
+        .canonicalize()
+        .expect("canonicalize temp_dir");
+    let root = base.join(format!("pkb-fsa04-{}-{sequence}", std::process::id()));
     if root.exists() {
         fs::remove_dir_all(&root).expect("remove stale temp root");
     }
