@@ -220,16 +220,13 @@ export function PocketBrainPanel({ variant = "default" }: PocketBrainPanelProps)
   }
 
   return (
-    <section className="pocket-brain" style={{ textAlign: "left", width: "100%" }}>
+    <section className="pocket-brain">
       <header
-        style={{
-          display: "flex",
-          justifyContent: "space-between",
-          padding: "8px 12px",
-          borderBottom: "1px solid #333",
-          color: over || thermalWarn ? "var(--err)" : "inherit",
-          fontVariantNumeric: "tabular-nums",
-        }}
+        className={
+          over || thermalWarn
+            ? "pocket-brain-header pocket-brain-header--alarm"
+            : "pocket-brain-header"
+        }
       >
         <strong>Coraxis · RAG</strong>
         <span>
@@ -243,9 +240,7 @@ export function PocketBrainPanel({ variant = "default" }: PocketBrainPanelProps)
       </header>
 
       {error && (
-        <p className="pocket-brain-error" style={{ padding: "8px 12px" }}>
-          {softLoadError(error)}
-        </p>
+        <p className="pocket-brain-error">{softLoadError(error)}</p>
       )}
 
       <RagChatPanel

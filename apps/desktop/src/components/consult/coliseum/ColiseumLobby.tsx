@@ -126,7 +126,7 @@ function ModeSelect({
           DEVIL {devilReady ? "· READY" : "· LOCKED"}
         </button>
       </div>
-      <div className="coliseum-text-muted" style={{ fontSize: "0.65rem" }}>
+      <div className="coliseum-text-muted coliseum-lobby-debug-note">
         {devilReady
           ? "GATE PASS · ONI ELIGIBLE"
           : "GATE FAIL · PROTECTION ONLINE · STANDARD ONLY"}

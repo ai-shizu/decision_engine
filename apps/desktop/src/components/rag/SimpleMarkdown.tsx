@@ -39,7 +39,7 @@ export function SimpleMarkdown({ text }: { text: string }) {
   return (
     <div className="rag-md">
       {lines.map((line, i) => (
-        <p key={i} style={{ margin: "0 0 0.35em" }}>
+        <p key={i} className="rag-md-line">
           {renderInline(line, `L${i}`)}
         </p>
       ))}

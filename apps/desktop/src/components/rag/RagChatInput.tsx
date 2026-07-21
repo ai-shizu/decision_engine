@@ -49,11 +49,9 @@ export function RagChatInput({
   }
 
   return (
-    <div
-      className="rag-chat-input"
-      style={{ display: "flex", gap: 8, padding: 12, alignItems: "flex-end" }}
-    >
+    <div className="rag-chat-input">
       <textarea
+        className="rag-chat-input-field"
         value={value}
         onChange={(e) => onChange(e.target.value)}
         onKeyDown={(e) => {
@@ -68,14 +66,15 @@ export function RagChatInput({
             : "モデル準備中…完了後すぐ送れます"
         }
         rows={2}
-        style={{ flex: 1, resize: "vertical", minHeight: 48 }}
+        aria-label="RAG chat input"
       />
       <button
         type="button"
+        className="rag-chat-input-send"
         onClick={onSend}
         disabled={streaming || !modelReady || !value.trim()}
       >
-        {streaming ? "…" : "Send"}
+        {streaming ? "…" : "SEND"}
       </button>
     </div>
   );

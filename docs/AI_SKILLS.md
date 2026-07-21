@@ -1269,6 +1269,20 @@ Pocket Brain 経路は M14 tensor + M15 pulse/Rasch + gap sufficiency から loa
 
 **検証:** `npx tsc --noEmit` / `npm run test:boundary`。
 
+### 4.69 UI 全域残滓掃討 (2026-07-22)
+
+**射程:** `apps/desktop/src` 全域の Kill List（角丸非0 / box-shadow / ハードコード色 / カード余白 / sans 上書き）。コア画面（Coliseum・Ledger・Calendar・chrome）以外の RAG・アラート・アンビエントを含む。
+
+**不変条件:**
+1. `App.css` に `box-shadow` を復活させるな。フォーカス・武装・research は `border` / `outline` のみ。
+2. コンポーネント inline の `#hex` / `borderRadius>0` 禁止。色は `:root` トークンのみ（スキャンラインの極低 opacity を除く）。
+3. RAG desktop は messenger と同型の `.rag-bubble` グリッド。`borderRadius: 12` チャットバブルを戻すな。
+4. 成功通知は `--ok`、危険は `--err`。`#7dcea0` 等のアドホック緑を書くな。
+
+**as-built:** `RagMessageList` / `RagIngestPanel` / `RagChatInput` / `PocketBrainPanel` / `SimpleMarkdown` クラス化。`App.css` から box-shadow 全廃・ハードコード色トークン化。
+
+**検証:** `npx tsc --noEmit` / `npm run test:boundary`。
+
 ### 4.8 M3 Phase 0-A — SQLCipher / Security.framework iOS link gate (2026-07-18)
 
 **射程（Phase 0-A のみ）:** `secure-vault` feature、依存解決、in-memory SQLCipher identity（`PRAGMA key` + `cipher_version`）、Security.framework シンボル（`SecRandom` / `SecAccessControl`）、Tauri command 登録、iOS Simulator 最終リンク証明。スキーマ・repository・UI・本番 Keychain item 作成は対象外。
