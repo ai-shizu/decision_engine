@@ -228,12 +228,16 @@ export function RecordTab() {
     }
   }, [date, diary, events, refreshMarks, transactions]);
 
+  const handleSaveRef = useRef(handleSave);
+  handleSaveRef.current = handleSave;
+
+  // N3: register once — diary/events churn must not rebind the global listener.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.ctrlKey && !e.altKey && e.key === "s") {
         e.preventDefault();
         e.stopPropagation();
-        void handleSave();
+        void handleSaveRef.current();
         return;
       }
       if (e.ctrlKey && !e.altKey && (e.key === "1" || e.key === "2" || e.key === "3")) {
@@ -244,7 +248,7 @@ export function RecordTab() {
     };
     window.addEventListener("keydown", onKey, { capture: true });
     return () => window.removeEventListener("keydown", onKey, { capture: true });
-  }, [handleSave]);
+  }, []);
 
   const summary = summarizeDay(transactions);
 

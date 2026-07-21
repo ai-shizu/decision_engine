@@ -5,6 +5,7 @@ import { sendRagChat } from "../../lib/pocketBrain";
 import {
   initialRagChatState,
   ragChatReducer,
+  type RagChatState,
 } from "../../lib/ragChatReducer";
 import { uiErrorMessage } from "../../lib/uiErrorMessages";
 import { useThrottledStream } from "../../lib/useThrottledStream";
@@ -26,6 +27,27 @@ function allocId(prefix: string): string {
   return `${prefix}-${nextMsgId}`;
 }
 
+// N2: tab remount must restore history (ConsultTab / F-11 pattern).
+let ragSessionState: RagChatState = initialRagChatState();
+
+/** Never persist a forever-streaming ghost across remount (W6 / N2). */
+function freezeRagSession(state: RagChatState): RagChatState {
+  const messages = state.messages.flatMap((m) => {
+    if (!m.streaming) return [m];
+    if (!m.text.trim()) return [];
+    return [{ ...m, streaming: false }];
+  });
+  return {
+    ...state,
+    streaming: false,
+    messages,
+  };
+}
+
+function persistRagSession(state: RagChatState): void {
+  ragSessionState = freezeRagSession(state);
+}
+
 /**
  * RAG chat surface: pure-reducer timeline + Channel streaming via pocketBrain API.
  * Cancellation / memory purge remain owned by the parent PocketBrainPanel.
@@ -37,7 +59,12 @@ export function RagChatPanel({
   onBusyChange,
   variant = "default",
 }: RagChatPanelProps) {
-  const [state, dispatch] = useReducer(ragChatReducer, undefined, initialRagChatState);
+  const [state, dispatch] = useReducer(
+    ragChatReducer,
+    undefined,
+    () => ragSessionState,
+  );
+  const stateRef = useRef(state);
   const assistantIdRef = useRef<string | null>(null);
   const streamingRef = useRef(false);
   const messenger = variant === "messenger";
@@ -49,10 +76,15 @@ export function RagChatPanel({
   });
 
   useEffect(() => {
+    stateRef.current = state;
+    persistRagSession(state);
+  }, [state]);
+
+  useEffect(() => {
     streamingRef.current = state.streaming;
   }, [state.streaming]);
 
-  // W4: unmount while generating must cancel the LLM worker.
+  // W4/N2: unmount cancels LLM; singleton keeps frozen history.
   useEffect(() => {
     return () => {
       flushAndStop();
@@ -61,6 +93,7 @@ export function RagChatPanel({
           /* best-effort */
         });
       }
+      persistRagSession(stateRef.current);
     };
   }, [flushAndStop]);
 
@@ -114,6 +147,7 @@ export function RagChatPanel({
       assistantIdRef.current = null;
       dispatch({ type: "send_end" });
       onBusyChange(false);
+      persistRagSession(stateRef.current);
     }
   }
 

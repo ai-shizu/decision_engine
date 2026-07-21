@@ -8,35 +8,17 @@ import { ImportTab } from "./components/ImportTab";
 import { InterviewTab } from "./components/InterviewTab";
 import { MobileChrome } from "./components/MobileChrome";
 import { ModelSetupGate } from "./components/ModelSetupGate";
+import { PocketBrainPanel } from "./components/PocketBrainPanel";
 import { ProbeTab } from "./components/ProbeTab";
 import { ProfileTab } from "./components/ProfileTab";
 import { RecordTab } from "./components/RecordTab";
 import { SettingsTab } from "./components/SettingsTab";
 import { TitleBar } from "./components/TitleBar";
+import { VaultPanel } from "./components/VaultPanel";
 import { engineHealth, engineReady, warmConsultRuntime } from "./lib/engine";
 import type { MainTab } from "./lib/types";
 import { useIsNarrowViewport } from "./lib/useIsNarrowViewport";
 import "./App.css";
-// M4 pocket-brain: desktop LoadingScreen only. Mobile uses MobileChrome (CONSULT
-// messenger) and must not stay trapped behind LoadingScreen with engineReady=false.
-import { PocketBrainPanel } from "./components/PocketBrainPanel";
-import { VaultPanel } from "./components/VaultPanel";
-
-/** Desktop-only boot gate. Mobile never uses this tree (see App). */
-function LoadingScreen({ message }: { message: string }) {
-  return (
-    <div className="shell">
-      <TitleBar />
-      <main className="app loading desktop-chrome">
-        <h1>Coraxis</h1>
-        <p className="status-line">{message}</p>
-        <p className="hint">初回起動はエンジン展開に 30 秒ほどかかることがあります。</p>
-        <PocketBrainPanel />
-        <VaultPanel />
-      </main>
-    </div>
-  );
-}
 
 const TABS: { id: MainTab; label: string }[] = [
   { id: "record", label: "RECORD" },
@@ -217,70 +199,92 @@ export default function App() {
     return <ModelSetupGate onReady={() => setModelGateDone(true)} />;
   }
 
-  // M20-E: mobile shell is primary — never trap under LoadingScreen with
-  // engineReady frozen to false. Live `ready` updates Settings/RECORD IPC.
+  // M20-E: mobile shell is primary — never trap under LoadingScreen.
+  // N4: propagate live `ready` (do not hardcode true).
   if (isNarrow) {
     return (
       <div className="shell">
         <TitleBar />
-        <MobileChrome statusLine={status} engineReady={true} />
+        <MobileChrome statusLine={status} engineReady={ready} />
       </div>
     );
   }
 
-  if (!ready) {
-    return <LoadingScreen message={status} />;
-  }
-
+  // N1: PocketBrain + Vault stay mounted for the desktop app lifetime.
+  // Loading copy is gated by `ready`; panels are only visually hidden after unlock
+  // so GGUF warm / vault watchers are not torn down by the 3s fail-open.
   return (
     <div className="shell">
       <TitleBar />
-      <div className="desktop-chrome">
-        <header className="topbar">
-          <div>
+      <div
+        className={
+          ready
+            ? "desktop-pb-keepalive"
+            : "app loading desktop-chrome desktop-pb-keepalive"
+        }
+        hidden={ready}
+        aria-hidden={ready}
+      >
+        {!ready ? (
+          <>
             <h1>Coraxis</h1>
-            <p className="subtitle">{status}</p>
-          </div>
-          <nav
-            className="tabs"
-            role="tablist"
-            aria-label="メインタブ"
-            aria-orientation="horizontal"
-          >
-            {TABS.map(({ id, label }, index) => (
-              <button
-                key={id}
-                id={tabButtonId(id)}
-                type="button"
-                role="tab"
-                aria-selected={tab === id}
-                aria-controls={tabPanelId(id)}
-                tabIndex={tab === id ? 0 : -1}
-                className={tab === id ? "active" : ""}
-                onClick={() => setTab(id)}
-                onKeyDown={(event) => handleTabKeyDown(event, index)}
-              >
-                {label}
-              </button>
-            ))}
-          </nav>
-        </header>
-        <main className="content">
-          {TABS.map(({ id }) => (
-            <div
-              key={id}
-              id={tabPanelId(id)}
-              className="main-tab-panel"
-              role="tabpanel"
-              aria-labelledby={tabButtonId(id)}
-              hidden={tab !== id}
-              tabIndex={tab === id ? 0 : -1}
-            >
-              {tab === id && renderMainTab(id)}
-            </div>
-          ))}
-        </main>
+            <p className="status-line">{status}</p>
+            <p className="hint">
+              初回起動はエンジン展開に 30 秒ほどかかることがあります。
+            </p>
+          </>
+        ) : null}
+        <PocketBrainPanel />
+        <VaultPanel />
       </div>
+      {ready ? (
+        <div className="desktop-chrome">
+          <header className="topbar">
+            <div>
+              <h1>Coraxis</h1>
+              <p className="subtitle">{status}</p>
+            </div>
+            <nav
+              className="tabs"
+              role="tablist"
+              aria-label="メインタブ"
+              aria-orientation="horizontal"
+            >
+              {TABS.map(({ id, label }, index) => (
+                <button
+                  key={id}
+                  id={tabButtonId(id)}
+                  type="button"
+                  role="tab"
+                  aria-selected={tab === id}
+                  aria-controls={tabPanelId(id)}
+                  tabIndex={tab === id ? 0 : -1}
+                  className={tab === id ? "active" : ""}
+                  onClick={() => setTab(id)}
+                  onKeyDown={(event) => handleTabKeyDown(event, index)}
+                >
+                  {label}
+                </button>
+              ))}
+            </nav>
+          </header>
+          <main className="content">
+            {TABS.map(({ id }) => (
+              <div
+                key={id}
+                id={tabPanelId(id)}
+                className="main-tab-panel"
+                role="tabpanel"
+                aria-labelledby={tabButtonId(id)}
+                hidden={tab !== id}
+                tabIndex={tab === id ? 0 : -1}
+              >
+                {tab === id && renderMainTab(id)}
+              </div>
+            ))}
+          </main>
+        </div>
+      ) : null}
     </div>
   );
 }

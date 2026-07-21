@@ -30,6 +30,17 @@ interface PendingItem {
   companyName: string;
 }
 
+const PENDING_DESTS = ["es", "knowledge", "skip"] as const;
+const SYNC_MODES = ["append", "overwrite"] as const;
+
+function isPendingDest(value: string): value is PendingItem["dest"] {
+  return (PENDING_DESTS as readonly string[]).includes(value);
+}
+
+function isSyncMode(value: string): value is (typeof SYNC_MODES)[number] {
+  return (SYNC_MODES as readonly string[]).includes(value);
+}
+
 interface EsConflictPending {
   fileName: string;
   content: string;
@@ -441,7 +452,13 @@ export function ImportTab() {
 
       <div className="mode-row">
         <span>ICS / Apple 同期モード:</span>
-        <select value={mode} onChange={(e) => setMode(e.target.value as "append" | "overwrite")}>
+        <select
+          value={mode}
+          onChange={(e) => {
+            const next = e.target.value;
+            if (isSyncMode(next)) setMode(next);
+          }}
+        >
           <option value="append">追記 (既存予定に追加)</option>
           <option value="overwrite">上書き (同一日付を置換)</option>
         </select>
@@ -603,7 +620,10 @@ export function ImportTab() {
               {item.result.type === "knowledge" && (
                 <select
                   value={item.dest}
-                  onChange={(e) => updatePendingDest(i, e.target.value as PendingItem["dest"])}
+                  onChange={(e) => {
+                    const next = e.target.value;
+                    if (isPendingDest(next)) updatePendingDest(i, next);
+                  }}
                 >
                   <option value="knowledge">知識ベース</option>
                   <option value="skip">スキップ</option>

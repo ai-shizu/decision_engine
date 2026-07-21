@@ -139,9 +139,11 @@ export function ModelSetupGate({ onReady }: ModelSetupGateProps) {
             ダウンロード後、ファイル名は取り込み時に{" "}
             <code>pocket-brain.gguf</code> として保存されます。
           </p>
-          <p className="model-setup-url" title={state.recommendedPageUrl}>
-            {state.recommendedPageUrl}
-          </p>
+          {state.recommendedPageUrl ? (
+            <p className="model-setup-url" title={state.recommendedPageUrl}>
+              {state.recommendedPageUrl}
+            </p>
+          ) : null}
           <button
             type="button"
             className="model-setup-btn"

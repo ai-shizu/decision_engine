@@ -1,7 +1,6 @@
 import { useEffect, useState } from "react";
 import type { MobileSurface } from "../lib/types";
 import { MOBILE_ALL_SURFACES } from "../lib/mobileNav";
-import { useIsNarrowViewport } from "../lib/useIsNarrowViewport";
 import { ImportTab } from "./ImportTab";
 import { InterviewTab } from "./InterviewTab";
 import { MobileBottomNav } from "./MobileBottomNav";
@@ -20,7 +19,8 @@ function renderMobileSurface(
     case "record":
       return <RecordTab />;
     case "consult":
-      return <PocketBrainPanel variant="messenger" />;
+      // Mounted separately for N1 keep-alive — never via this switch.
+      return null;
     case "interview":
       return <InterviewTab />;
     case "probe":
@@ -51,12 +51,12 @@ export interface MobileChromeProps {
 
 /**
  * M20-G: dismissible status banner; CONSULT composer stays fixed above dock.
+ * N6: parent App already gates on narrow viewport — no local matchMedia.
  */
 export function MobileChrome({
   statusLine,
   engineReady = false,
 }: MobileChromeProps) {
-  const isNarrow = useIsNarrowViewport();
   const [surface, setSurface] = useState<MobileSurface>("record");
   const [menuOpen, setMenuOpen] = useState(false);
   const [bannerDismissed, setBannerDismissed] = useState(false);
@@ -70,8 +70,6 @@ export function MobileChrome({
     const t = window.setTimeout(() => setBannerDismissed(true), 8000);
     return () => window.clearTimeout(t);
   }, [statusLine, bannerDismissed]);
-
-  if (!isNarrow) return null;
 
   const chatActive = surface === "consult";
   const showBanner =
@@ -105,15 +103,21 @@ export function MobileChrome({
           chatActive ? "mobile-content mobile-content-rag" : "mobile-content"
         }
       >
-        {MOBILE_ALL_SURFACES.map((id) => (
+        {/* N1: CONSULT PocketBrain stays mounted for mobile shell lifetime. */}
+        <div
+          id="mobile-panel-consult"
+          className="mobile-panel mobile-panel-rag"
+          role="tabpanel"
+          aria-labelledby="mobile-tab-consult"
+          hidden={surface !== "consult"}
+        >
+          <PocketBrainPanel variant="messenger" />
+        </div>
+        {MOBILE_ALL_SURFACES.filter((id) => id !== "consult").map((id) => (
           <div
             key={id}
             id={`mobile-panel-${id}`}
-            className={
-              id === "consult"
-                ? "mobile-panel mobile-panel-rag"
-                : "mobile-panel"
-            }
+            className="mobile-panel"
             role="tabpanel"
             aria-labelledby={
               id === "settings" || id === "import" || id === "profile"

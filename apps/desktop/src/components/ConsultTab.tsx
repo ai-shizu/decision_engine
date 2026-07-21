@@ -23,6 +23,12 @@ import { RomanceAnalysisPanel } from "./RomanceAnalysisPanel";
 
 type ConsultMode = "consult" | "romance_analysis";
 
+const CONSULT_MODES = ["consult", "romance_analysis"] as const;
+
+function isConsultMode(value: string): value is ConsultMode {
+  return (CONSULT_MODES as readonly string[]).includes(value);
+}
+
 const ROMANCE_SUCCESS_MESSAGE = "会話履歴を解析しました";
 const ROMANCE_PARSING_STATUS = "交流パルスを解析中…";
 
@@ -293,7 +299,10 @@ export function ConsultTab() {
         <select
           id="consult-mode-select"
           value={mode}
-          onChange={(e) => handleModeChange(e.target.value as ConsultMode)}
+          onChange={(e) => {
+            const next = e.target.value;
+            if (isConsultMode(next)) handleModeChange(next);
+          }}
           disabled={busy}
         >
           <option value="consult">通常相談</option>

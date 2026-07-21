@@ -37,7 +37,8 @@ export const INITIAL_MODEL_SETUP: ModelSetupState = {
   phase: "checking",
   progressPercent: 0,
   relativePath: "models/pocket-brain.gguf",
-  recommendedPageUrl: "https://huggingface.co/Qwen/Qwen2.5-7B-Instruct-GGUF",
+  // N5: URL comes only from backend check_result — never hardcode HF here.
+  recommendedPageUrl: "",
   error: null,
 };
 

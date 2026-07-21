@@ -914,6 +914,21 @@ Pocket Brain 経路は M14 tensor + M15 pulse/Rasch + gap sufficiency から loa
 
 **ハマりどころ:** シングルトンへ `streaming: true` のまま書くとタブ再入場でカーソル永久点滅 + 裏推論継続の複合バグになる。monitor stop を「start 先頭の running=false で足りる」と削除するとアンマウント後もサンプラーが生き続ける。
 
+### 4.46 M20 Phase 3 — Notice cleanup (N1–N6, N8) (2026-07-21)
+
+**射程:** アーキテクチャ洗練（常駐マウント・状態永続・リスナチャーン・型ガード）。IPC 契約・A+1・オフライン原則は不変。
+
+**as-built:**
+1. **N1:** デスクトップで `PocketBrainPanel` + `VaultPanel` を `ready` ゲートの外側に常駐（`hidden={ready}` で視覚のみ隠蔽）。モバイル CONSULT の `PocketBrainPanel` も surface 切替で破棄せず `hidden` 常駐。
+2. **N2:** `RagChatPanel` にモジュールシングルトン `ragSessionState` + `freezeRagSession`（ConsultTab / W6 と同型）。
+3. **N3:** `RecordTab` の Ctrl+S リスナは `handleSaveRef` + `useEffect([])` で1回登録。
+4. **N4:** `MobileChrome` へ `engineReady={ready}` をライブ伝播（`true` ハードコード禁止）。
+5. **N6:** `MobileChrome` 内の `useIsNarrowViewport` / `matchMedia` 再購読を削除（親 App がゲート）。
+6. **N5:** `INITIAL_MODEL_SETUP.recommendedPageUrl = ""`（HF URL は `check_result` のみ）。
+7. **N8:** `ImportTab` / `ConsultTab` の `as` キャストを type guard（`.includes`）に置換。
+
+**検証:** `npx tsc --noEmit` / `npm run test:boundary`。
+
 ### 4.8 M3 Phase 0-A — SQLCipher / Security.framework iOS link gate (2026-07-18)
 
 **射程（Phase 0-A のみ）:** `secure-vault` feature、依存解決、in-memory SQLCipher identity（`PRAGMA key` + `cipher_version`）、Security.framework シンボル（`SecRandom` / `SecAccessControl`）、Tauri command 登録、iOS Simulator 最終リンク証明。スキーマ・repository・UI・本番 Keychain item 作成は対象外。
