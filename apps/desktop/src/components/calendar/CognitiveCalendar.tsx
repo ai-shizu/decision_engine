@@ -1,5 +1,5 @@
 /**
- * Phase 12 — metacognitive calendar: Twin R(t) heatmap + expense + CBT markers.
+ * Phase 12 — metacognitive calendar: Twin R(t) telemetry matrix + expense + CBT.
  * Lightweight CSS Grid (no third-party calendar). VoiceOver via role=grid.
  */
 
@@ -7,10 +7,11 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 
 import {
   buildCognitiveMonthGrid,
+  cellTelemetryClassName,
   cognitiveDayAriaLabel,
-  dayHasRecord,
   expenseBarPct,
-  rHeatCss,
+  formatCompactYen,
+  formatRTelemetry,
 } from "../../lib/cognitiveCalendarView";
 import { monthLabel, todayIso } from "../../lib/dateUtils";
 import { FOREGROUND_RESTORE_EVENT } from "../../lib/foregroundRestore";
@@ -84,9 +85,12 @@ export function CognitiveCalendar() {
   }
 
   return (
-    <section className="panel cognitive-calendar-panel" aria-labelledby="cognitive-cal-title">
+    <section
+      className="panel cognitive-calendar-panel"
+      aria-labelledby="cognitive-cal-title"
+    >
       <div className="cognitive-cal-toolbar">
-        <h2 id="cognitive-cal-title">メタ認知カレンダー</h2>
+        <h2 id="cognitive-cal-title">METACOG · MATRIX</h2>
         <div className="cognitive-cal-nav">
           <button type="button" className="ghost" onClick={() => go(-1)} aria-label="前月">
             ‹
@@ -101,9 +105,24 @@ export function CognitiveCalendar() {
         </div>
       </div>
       <p className="hint cognitive-cal-hint">
-        背景は認知資源 R(t)（低=暖色 / 高=寒色）。上部ドットは CBT バイアス、下部バーは支出。
+        R(t) · DISTORTION · EXPENSE — border = state · cyan = telemetry
       </p>
       {error ? <p className="error-text">{error}</p> : null}
+
+      <div className="cognitive-cal-legend" aria-hidden="true">
+        <span className="cognitive-cal-legend-item cognitive-cal-legend--stable">
+          STABLE
+        </span>
+        <span className="cognitive-cal-legend-item cognitive-cal-legend--nominal">
+          NOMINAL
+        </span>
+        <span className="cognitive-cal-legend-item cognitive-cal-legend--warn">
+          WARN
+        </span>
+        <span className="cognitive-cal-legend-item cognitive-cal-legend--danger">
+          DANGER
+        </span>
+      </div>
 
       <div
         className="cognitive-cal-grid"
@@ -130,34 +149,42 @@ export function CognitiveCalendar() {
                   />
                 );
               }
-              const heat = rHeatCss(cell.day.r_value);
-              const hasBias = cell.day.distortions.length > 0;
+              const biasN = cell.day.distortions.length;
               const bar = expenseBarPct(cell.day.total_expense, monthMax);
               const isToday = cell.date === today;
-              const recorded = dayHasRecord(cell.day);
+              const rTel = formatRTelemetry(cell.day.r_value);
               return (
                 <div
                   key={cell.key}
-                  className={
-                    "cognitive-cal-cell" +
-                    (isToday ? " is-today" : "") +
-                    (recorded ? " has-record" : "")
-                  }
+                  className={cellTelemetryClassName(cell.day, { isToday })}
                   role="gridcell"
                   aria-label={cognitiveDayAriaLabel(cell.day, month)}
                   tabIndex={0}
-                  style={heat ? { backgroundColor: heat } : undefined}
                 >
                   <div className="cognitive-cal-cell-visual" aria-hidden="true">
-                    <span className="cognitive-cal-daynum">{cell.dayOfMonth}</span>
-                    {hasBias ? (
-                      <span className="cognitive-cal-bias-dots">
-                        {cell.day.distortions.slice(0, 3).map((c) => (
-                          <span key={c} className="cognitive-cal-bias-dot" title={c} />
-                        ))}
+                    <div className="cognitive-cal-cell-top">
+                      <span className="cognitive-cal-daynum">{cell.dayOfMonth}</span>
+                      {rTel ? (
+                        <span className="cognitive-cal-r">R {rTel}</span>
+                      ) : null}
+                    </div>
+                    {biasN > 0 ? (
+                      <span className="cognitive-cal-bias">
+                        D×{biasN}
+                        <span className="cognitive-cal-bias-ticks">
+                          {cell.day.distortions.slice(0, 3).map((c) => (
+                            <span
+                              key={c}
+                              className="cognitive-cal-bias-tick"
+                              title={c}
+                            />
+                          ))}
+                        </span>
                       </span>
                     ) : (
-                      <span className="cognitive-cal-bias-dots" />
+                      <span className="cognitive-cal-bias cognitive-cal-bias--none">
+                        —
+                      </span>
                     )}
                     <span className="cognitive-cal-expense">
                       {cell.day.total_expense > 0 ? (
@@ -170,7 +197,11 @@ export function CognitiveCalendar() {
                             {formatCompactYen(cell.day.total_expense)}
                           </span>
                         </>
-                      ) : null}
+                      ) : (
+                        <span className="cognitive-cal-expense-amt cognitive-cal-expense-amt--empty">
+                          —
+                        </span>
+                      )}
                     </span>
                   </div>
                 </div>
@@ -189,12 +220,4 @@ function chunkRows<T>(cells: T[]): T[][] {
     rows.push(cells.slice(i, i + 7));
   }
   return rows;
-}
-
-function formatCompactYen(n: number): string {
-  if (n >= 10_000) {
-    const man = n / 10_000;
-    return `${man >= 10 ? Math.round(man) : man.toFixed(1)}万`;
-  }
-  return n.toLocaleString("ja-JP");
 }

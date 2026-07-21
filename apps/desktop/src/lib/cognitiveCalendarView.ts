@@ -1,5 +1,5 @@
 /**
- * Pure helpers for Phase 12 metacognitive calendar (heatmap + VoiceOver labels).
+ * Pure helpers for Phase 12 metacognitive calendar (telemetry matrix + VoiceOver).
  * No React — harness-testable in tests-runtime.
  */
 
@@ -7,6 +7,14 @@ import { categoryAxisName } from "./biasProfileView";
 import type { CognitiveDayView } from "./pocketBrain/types";
 
 export type RLevel = "低" | "中" | "高";
+
+/** Deterministic cell chrome band — maps to `--ok` / `--sys-cyan` / `--err-soft` / `--err`. */
+export type CellTelemetryBand =
+  | "empty"
+  | "stable"
+  | "nominal"
+  | "warn"
+  | "danger";
 
 export type CalendarCell =
   | { kind: "pad"; key: string }
@@ -27,15 +35,11 @@ export function rLevelJa(r: number | null | undefined): RLevel | null {
 }
 
 /**
- * Heatmap fill: low R → warm (警戒), high R → cool (安全).
- * Returns CSS color string; null R → transparent (no heat).
+ * @deprecated Consumer HSL heat fills are banned. Always returns null.
+ * Prefer `cellTelemetryBand` / CSS token classes.
  */
-export function rHeatCss(r: number | null | undefined): string | null {
-  if (r === null || r === undefined || !Number.isFinite(r)) return null;
-  const t = Math.min(1, Math.max(0, r));
-  const hue = 12 + t * 188; // ~12° orange-red → ~200° blue-green
-  const lightness = 86 - t * 6;
-  return `hsl(${hue.toFixed(1)} 58% ${lightness.toFixed(1)}%)`;
+export function rHeatCss(_r: number | null | undefined): string | null {
+  return null;
 }
 
 /** True when the day carries any persisted cognitive/finance signal. */
@@ -45,6 +49,55 @@ export function dayHasRecord(day: CognitiveDayView): boolean {
     day.r_value !== null ||
     (day.distortions?.length ?? 0) > 0
   );
+}
+
+/**
+ * Hard state band from R(t) depletion + distortion density.
+ * danger ≥ warn ≥ stable ≥ nominal ≥ empty.
+ */
+export function cellTelemetryBand(day: CognitiveDayView): CellTelemetryBand {
+  if (!dayHasRecord(day)) return "empty";
+  const n = day.distortions?.length ?? 0;
+  const r = day.r_value;
+  const depleted =
+    r !== null && r !== undefined && Number.isFinite(r) && r < 0.34;
+  const strained =
+    r !== null && r !== undefined && Number.isFinite(r) && r < 0.55;
+  if (n >= 2 || depleted) return "danger";
+  if (n >= 1 || strained) return "warn";
+  if (
+    n === 0 &&
+    (r === null || r === undefined || !Number.isFinite(r) || r >= 0.67)
+  ) {
+    return "stable";
+  }
+  return "nominal";
+}
+
+export function cellTelemetryClassName(
+  day: CognitiveDayView,
+  opts: { isToday?: boolean } = {},
+): string {
+  const band = cellTelemetryBand(day);
+  const parts = ["cognitive-cal-cell", `cognitive-cal-cell--${band}`];
+  if (opts.isToday) parts.push("is-today");
+  if (dayHasRecord(day)) parts.push("has-record");
+  return parts.join(" ");
+}
+
+/** Twin R(t) as cold telemetry (two decimals). */
+export function formatRTelemetry(r: number | null | undefined): string | null {
+  if (r === null || r === undefined || !Number.isFinite(r)) return null;
+  return r.toFixed(2);
+}
+
+export function formatCompactYen(n: number): string {
+  if (!Number.isFinite(n) || n <= 0) return "";
+  if (n >= 10_000) {
+    const man = n / 10_000;
+    return `${man >= 10 ? Math.round(man) : man.toFixed(1)}万`;
+  }
+  return n.toLocaleString("ja-JP");
 }
 
 /**

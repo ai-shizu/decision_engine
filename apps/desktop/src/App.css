@@ -3682,9 +3682,9 @@ button.secondary {
 }
 
 
-/* Phase 12 — metacognitive calendar */
+/* Phase 12 — metacognitive calendar (terminal telemetry matrix) */
 .cognitive-calendar-panel {
-  margin-bottom: 16px;
+  margin-bottom: var(--s3);
 }
 
 .cognitive-cal-toolbar {
@@ -3692,75 +3692,200 @@ button.secondary {
   flex-wrap: wrap;
   justify-content: space-between;
   align-items: baseline;
-  gap: 8px;
-  margin-bottom: 4px;
+  gap: var(--s2);
+  margin-bottom: 2px;
 }
 
 .cognitive-cal-toolbar h2 {
   margin: 0;
-  font-size: 1.05rem;
+  font-size: 0.78rem;
+  letter-spacing: 0.1em;
+  font-weight: 700;
+  border-bottom: none;
+  padding-bottom: 0;
+}
+
+.cognitive-cal-toolbar h2::before {
+  content: none;
 }
 
 .cognitive-cal-nav {
   display: flex;
   align-items: center;
-  gap: 4px;
+  gap: 0;
+}
+
+.cognitive-cal-nav .ghost {
+  border: 1px solid var(--border);
+  margin-left: -1px;
+  min-width: 28px;
+  padding: 4px 8px;
+  font-family: var(--font-mono);
+  color: var(--text-muted);
+  background: var(--bg);
+}
+
+.cognitive-cal-nav .ghost:hover {
+  color: var(--accent);
+  border-color: var(--accent);
+  z-index: 1;
 }
 
 .cognitive-cal-month {
   min-width: 7.5rem;
   text-align: center;
   font-variant-numeric: tabular-nums;
+  font-size: 0.72rem;
+  color: var(--sys-cyan);
+  border-top: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+  padding: 4px 8px;
+  letter-spacing: 0.04em;
 }
 
 .cognitive-cal-hint {
-  margin: 0 0 10px;
-  font-size: 0.8rem;
+  margin: 0 0 6px;
+  font-size: 0.62rem;
+  letter-spacing: 0.04em;
+  color: var(--text-dim);
+}
+
+.cognitive-cal-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0;
+  margin: 0 0 6px;
+  border: 1px solid var(--border);
+}
+
+.cognitive-cal-legend-item {
+  flex: 1 1 auto;
+  padding: 3px 8px;
+  font-size: 0.58rem;
+  letter-spacing: 0.08em;
+  border-right: 1px solid var(--border);
+  font-family: var(--font-mono);
+  color: var(--text-dim);
+}
+
+.cognitive-cal-legend-item:last-child {
+  border-right: none;
+}
+
+.cognitive-cal-legend--stable {
+  color: var(--ok);
+  border-left: 2px solid var(--ok);
+}
+
+.cognitive-cal-legend--nominal {
+  color: var(--sys-cyan);
+  border-left: 2px solid var(--sys-cyan);
+}
+
+.cognitive-cal-legend--warn {
+  color: var(--err-soft);
+  border-left: 2px solid var(--err-soft);
+}
+
+.cognitive-cal-legend--danger {
+  color: var(--err);
+  border-left: 2px solid var(--err);
 }
 
 .cognitive-cal-grid {
   display: flex;
   flex-direction: column;
-  gap: 3px;
+  gap: 0;
+  border: 1px solid var(--border);
+  background: var(--bg-deep);
 }
 
 .cognitive-cal-row {
   display: grid;
   grid-template-columns: repeat(7, minmax(0, 1fr));
-  gap: 3px;
+  gap: 0;
 }
 
 .cognitive-cal-head {
   text-align: center;
-  font-size: 0.7rem;
-  color: var(--text-muted);
-  padding: 2px 0;
+  font-size: 0.62rem;
+  letter-spacing: 0.06em;
+  color: var(--text-dim);
+  padding: 4px 0;
+  border-right: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-raised);
+  font-family: var(--font-mono);
+}
+
+.cognitive-cal-head:last-child {
+  border-right: none;
 }
 
 .cognitive-cal-pad {
-  min-height: 4.2rem;
+  min-height: 4.4rem;
+  border-right: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+  background: var(--bg);
   content-visibility: auto;
-  contain-intrinsic-size: auto 4.2rem;
+  contain-intrinsic-size: auto 4.4rem;
+}
+
+.cognitive-cal-pad:nth-child(7n) {
+  border-right: none;
 }
 
 .cognitive-cal-cell {
   position: relative;
-  min-height: 4.2rem;
-  border: 1px solid var(--border);
+  min-height: 4.4rem;
+  border-right: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+  border-left: 2px solid transparent;
   background: var(--bg-deep);
   color: var(--text);
   content-visibility: auto;
-  contain-intrinsic-size: auto 4.2rem;
-  outline-offset: 2px;
+  contain-intrinsic-size: auto 4.4rem;
+  outline-offset: -2px;
+  transition: none;
+}
+
+.cognitive-cal-cell:nth-child(7n) {
+  border-right: none;
+}
+
+.cognitive-cal-cell--empty {
+  border-left-color: transparent;
+  color: var(--text-dim);
+}
+
+.cognitive-cal-cell--stable {
+  border-left-color: var(--ok);
+  background: color-mix(in srgb, var(--ok) 5%, var(--bg-deep));
+}
+
+.cognitive-cal-cell--nominal {
+  border-left-color: var(--sys-cyan);
+  background: color-mix(in srgb, var(--sys-cyan) 4%, var(--bg-deep));
+}
+
+.cognitive-cal-cell--warn {
+  border-left-color: var(--err-soft);
+  background: color-mix(in srgb, var(--err-soft) 8%, var(--bg-deep));
+}
+
+.cognitive-cal-cell--danger {
+  border-left-color: var(--err);
+  background: color-mix(in srgb, var(--err) 9%, var(--bg-deep));
 }
 
 .cognitive-cal-cell.is-today {
-  border-color: var(--accent);
-  box-shadow: inset 0 0 0 1px var(--accent);
+  outline: 1px solid var(--accent);
+  outline-offset: -1px;
 }
 
 .cognitive-cal-cell:focus-visible {
-  outline: 2px solid var(--accent);
+  outline: 1px solid var(--accent);
+  outline-offset: -1px;
 }
 
 .cognitive-cal-cell-visual {
@@ -3768,28 +3893,72 @@ button.secondary {
   flex-direction: column;
   justify-content: space-between;
   height: 100%;
-  padding: 4px 5px 3px;
+  padding: 3px 4px 2px;
   pointer-events: none;
+  gap: 2px;
+}
+
+.cognitive-cal-cell-top {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 2px;
 }
 
 .cognitive-cal-daynum {
-  font-size: 0.78rem;
+  font-size: 0.72rem;
   font-variant-numeric: tabular-nums;
   line-height: 1.1;
+  color: var(--sys-cyan);
+  font-family: var(--font-mono);
+  font-weight: 700;
 }
 
-.cognitive-cal-bias-dots {
+.cognitive-cal-cell--empty .cognitive-cal-daynum {
+  color: var(--text-dim);
+  font-weight: 400;
+}
+
+.cognitive-cal-r {
+  font-size: 0.58rem;
+  font-variant-numeric: tabular-nums;
+  color: var(--sys-cyan);
+  letter-spacing: 0.02em;
+  font-family: var(--font-mono);
+}
+
+.cognitive-cal-bias {
   display: flex;
-  gap: 3px;
-  min-height: 6px;
-  margin-top: 2px;
+  align-items: center;
+  gap: 4px;
+  min-height: 12px;
+  font-size: 0.58rem;
+  letter-spacing: 0.04em;
+  font-family: var(--font-mono);
+  color: var(--err-soft);
 }
 
-.cognitive-cal-bias-dot {
-  width: 5px;
-  height: 5px;
-  border-radius: 0;
+.cognitive-cal-cell--danger .cognitive-cal-bias {
+  color: var(--err);
+}
+
+.cognitive-cal-bias--none {
+  color: var(--text-dim);
+}
+
+.cognitive-cal-bias-ticks {
+  display: flex;
+  gap: 2px;
+}
+
+.cognitive-cal-bias-tick {
+  width: 4px;
+  height: 8px;
   background: var(--err-soft);
+}
+
+.cognitive-cal-cell--danger .cognitive-cal-bias-tick {
+  background: var(--err);
 }
 
 .cognitive-cal-expense {
@@ -3801,16 +3970,22 @@ button.secondary {
 
 .cognitive-cal-expense-bar {
   display: block;
-  height: 3px;
+  height: 2px;
   max-width: 100%;
-  background: color-mix(in srgb, var(--text) 55%, transparent);
+  background: var(--sys-cyan);
 }
 
 .cognitive-cal-expense-amt {
-  font-size: 0.62rem;
-  color: var(--text-muted);
+  font-size: 0.58rem;
+  color: var(--sys-cyan);
   font-variant-numeric: tabular-nums;
   line-height: 1;
+  text-align: right;
+  font-family: var(--font-mono);
+}
+
+.cognitive-cal-expense-amt--empty {
+  color: var(--text-dim);
 }
 
 /* ─── Phase 14 Inner Coliseum (terminal shell) ───────────────────────────── */

@@ -1074,11 +1074,11 @@ Pocket Brain 経路は M14 tensor + M15 pulse/Rasch + gap sufficiency から loa
 **as-built:**
 1. `get_cognitive_month_view(year, month)` — Vault `purchases` を JST 月境界で一括取得し、日次 `r_value`（平均）/ `total_expense` / 一意 `distortions` を dense 配列で返す。
 2. `purchase_repo::list_purchases_in_range` + `VaultHandle::purchase_list_range`（集計は Rust、FE は描画のみ）。
-3. `CognitiveCalendar.tsx` — CSS Grid + `content-visibility: auto`。背景ヒートマップ（低 R=暖色 / 高 R=寒色）、上部バイアスドット、下部支出バー。
+3. `CognitiveCalendar.tsx` — CSS Grid + `content-visibility: auto`。表示は状態トークン帯（§4.68）。HSL 暖色ヒートは廃止。
 4. VoiceOver: `role="grid"` / `gridcell` + 動的 `aria-label`（例: `7月14日、認知資源 低、支出 4,200円、…の傾向あり`）。装飾 DOM は `aria-hidden`。
-5. 純関数 `cognitiveCalendarView.ts` は `tests-runtime` 依存ゼロ Harness で検証。
+5. 純関数 `cognitiveCalendarView.ts` は `tests-runtime` 依存ゼロ Harness で検証（`cellTelemetryBand` 含む）。
 
-**ハマりどころ:** 日付境界は JST (+09:00) 固定。UTC 日付キーと混在させるな。`aria-label` を削って視覚だけのカレンダーにするな。
+**ハマりどころ:** 日付境界は JST (+09:00) 固定。UTC 日付キーと混在させるな。`aria-label` を削って視覚だけのカレンダーにするな。HSL 塗りを復活させるな。
 
 **検証:** `cargo check|test --features pocket-brain,secure-vault` + `npx tsc --noEmit`。
 
@@ -1251,6 +1251,23 @@ Pocket Brain 経路は M14 tensor + M15 pulse/Rasch + gap sufficiency から loa
 **ハマりどころ:** `.item-list` カード余白を finance に戻すな。金額色を装飾緑に戻すな。
 
 **検証:** `npx tsc --noEmit`。
+
+### 4.68 Metacognitive Calendar 端末美学 (2026-07-22)
+
+**射程:** `CognitiveCalendar.tsx` + `cognitiveCalendarView.ts` + `.cognitive-cal-*` CSS。月次集計 IPC / ARIA ラベル契約は非破壊。
+
+**不変条件:**
+1. コンシューマー向けヒート（HSL 暖色塗り）禁止。`rHeatCss` は常に `null`（互換スタブ）。表示は `cellTelemetryBand` → CSS トークンのみ。
+2. グリッドは `1px solid var(--border)` の表計算マトリクス。ギャップ・角丸・ドロップシャドウ・トランジション禁止（`transition: none`）。
+3. 日付 / R(t) / 支出は `--sys-cyan` + `tabular-nums`。左ボーダー: stable=`--ok`、nominal=`--sys-cyan`、warn=`--err-soft`、danger=`--err`。
+4. band 判定は純関数のみ（R < 0.34 or distortions≥2 → danger / 1 distortion or R < 0.55 → warn）。集計ロジックを壊すな。
+5. VoiceOver `cognitiveDayAriaLabel` を削るな。
+
+**as-built:** テレメトリ・マトリクス UI、凡例、`D×n` 歪み密度、`tests-runtime` band 回帰。
+
+**ハマりどころ:** ポップな背景 hsl を戻すな。今日セルに box-shadow を戻すな（outline のみ）。
+
+**検証:** `npx tsc --noEmit` / `npm run test:boundary`。
 
 ### 4.8 M3 Phase 0-A — SQLCipher / Security.framework iOS link gate (2026-07-18)
 
