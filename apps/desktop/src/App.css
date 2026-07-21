@@ -8,6 +8,7 @@
   --bg-info:     #101010;
   --border:      #2e2e2e;
   --text:        #f2f2f2;
+  --text-main:   #f2f2f2;
   --text-muted:  #8c8c8c;
   --text-dim:    #5a5a5a;
   --accent:      #ffffff;   /* 操作可能要素のみ */
@@ -20,6 +21,8 @@
   --err-bg:      #0d1117;
   --err-bg-raised: #161b22;
   --err-border:  #f0883e;
+  --hud-fill:    rgba(57, 197, 207, 0.05);
+  --hud-fill-strong: rgba(57, 197, 207, 0.12);
 
   /* ---- 等幅のみ (CDN / 外部フォント禁止) ---- */
   --font-mono: "Cascadia Mono", "BIZ UDGothic", "MS Gothic", Consolas, ui-monospace, monospace;
@@ -32,8 +35,8 @@
 
   font-family: var(--font-mono);
   line-height: 1.45;
-  color: var(--text);
-  background-color: var(--bg);
+  color: var(--text-main);
+  background-color: var(--bg-deep);
   font-variant-numeric: tabular-nums;
 }
 
@@ -57,9 +60,26 @@ body {
   margin: 0;
   min-height: 100vh;
   letter-spacing: 0.01em;
+  background-color: var(--bg-deep);
+  color: var(--text-main);
+  position: relative;
 }
 
-/* スキャンライン: 固定オーバーレイ 1 枚・操作非阻害 (opacity 実効 ≤ 0.02) */
+/* Micro-grid (display substrate) — under content, non-interactive */
+body::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 0;
+  background-image:
+    linear-gradient(rgba(57, 197, 207, 0.04) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(57, 197, 207, 0.04) 1px, transparent 1px);
+  background-size: 20px 20px;
+  opacity: 0.55;
+}
+
+/* スキャンライン: 固定オーバーレイ 1 枚・操作非阻害 */
 body::after {
   content: "";
   position: fixed;
@@ -68,9 +88,129 @@ body::after {
   z-index: 9999;
   background: repeating-linear-gradient(
     0deg,
-    rgba(255, 255, 255, 0.012) 0 1px,
+    rgba(255, 255, 255, 0.014) 0 1px,
     transparent 1px 3px
   );
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   Hardware HUD Protocol — form controls (white/Web defaults eradicated)
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+button,
+input,
+select,
+textarea {
+  appearance: none;
+  -webkit-appearance: none;
+  border-radius: 0 !important;
+  font-family: var(--font-mono);
+  font-size: 0.85rem;
+  color: var(--sys-cyan);
+  background: var(--hud-fill);
+  border: 1px solid var(--border);
+  outline: none;
+  box-shadow: none;
+  transition: background var(--t-fast), color var(--t-fast), border-color var(--t-fast);
+}
+
+input,
+select,
+textarea {
+  padding: 6px 8px;
+  color: var(--text-main);
+  caret-color: var(--sys-cyan);
+}
+
+input::placeholder,
+textarea::placeholder {
+  color: var(--text-dim);
+  opacity: 1;
+}
+
+input:hover:not(:disabled),
+select:hover:not(:disabled),
+textarea:hover:not(:disabled) {
+  background: var(--hud-fill-strong);
+  border-color: color-mix(in srgb, var(--sys-cyan) 40%, var(--border));
+}
+
+input:focus,
+select:focus,
+textarea:focus {
+  border-color: var(--sys-cyan);
+  background: rgba(57, 197, 207, 0.08);
+}
+
+option {
+  background: var(--bg-deep);
+  color: var(--sys-cyan);
+}
+
+button {
+  padding: 8px 12px;
+  cursor: pointer;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  font-weight: 700;
+  color: var(--sys-cyan);
+  background: var(--hud-fill);
+  border: 1px solid color-mix(in srgb, var(--sys-cyan) 35%, var(--border));
+  -webkit-tap-highlight-color: transparent;
+}
+
+button:hover:not(:disabled),
+button:active:not(:disabled) {
+  background: var(--sys-cyan);
+  color: #000;
+  border-color: var(--sys-cyan);
+}
+
+button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+  background: transparent;
+  color: var(--text-dim);
+  border-color: var(--border);
+}
+
+.app,
+.content,
+.panel,
+.main-tab-panel {
+  position: relative;
+  z-index: 1;
+}
+
+/* Chassis join — panels mount flush on shared 1px rails */
+.panel {
+  margin: 0;
+  padding: 0;
+  border: 1px solid var(--border);
+  background:
+    linear-gradient(rgba(57, 197, 207, 0.02), rgba(57, 197, 207, 0.02)),
+    var(--bg-deep);
+  background-image:
+    linear-gradient(rgba(57, 197, 207, 0.025) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(57, 197, 207, 0.025) 1px, transparent 1px);
+  background-size: 16px 16px;
+  background-color: var(--bg-deep);
+}
+
+.content {
+  flex: 1;
+  padding: 0;
+  max-width: none;
+  width: 100%;
+  margin: 0;
+  gap: 0;
+}
+
+.term-panel {
+  margin-bottom: 0;
+  margin-top: -1px;
+  padding: var(--s2);
+  background: var(--hud-fill);
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════
@@ -730,16 +870,17 @@ body::after {
 .tabs button,
 .sub-tabs button {
   border: 1px solid var(--border);
-  background: var(--bg);
-  color: var(--text-muted);
-  padding: 6px 10px;
+  background: var(--hud-fill);
+  color: var(--sys-cyan);
+  padding: 8px 10px;
   border-radius: 0;
   cursor: pointer;
   font-family: var(--font-mono);
-  font-size: 0.72rem;
+  font-size: 0.68rem;
   letter-spacing: 0.08em;
   text-transform: uppercase;
   margin-left: -1px;
+  font-weight: 700;
   transition: background var(--t-fast), color var(--t-fast), border-color var(--t-fast);
 }
 
@@ -758,29 +899,29 @@ body::after {
 
 .tabs button:hover:not(.active),
 .sub-tabs button:hover:not(.active) {
-  color: var(--text);
-  background: var(--bg-hover);
-  border-color: var(--text-muted);
+  background: var(--sys-cyan);
+  color: #000;
+  border-color: var(--sys-cyan);
 }
 
 .tabs button.active,
 .sub-tabs button.active {
-  background: var(--bg-selected);
-  border-color: var(--accent);
-  color: var(--accent);
+  background: var(--sys-cyan);
+  border-color: var(--sys-cyan);
+  color: #000;
   z-index: 1;
 }
 
 .tabs button.active::before {
-  color: var(--sys-cyan);
+  color: #000;
 }
 
 .content {
   flex: 1;
-  padding: var(--s3) var(--s4);
-  max-width: 1100px;
+  padding: 0;
+  max-width: none;
   width: 100%;
-  margin: 0 auto;
+  margin: 0;
 }
 
 .hint {
@@ -1404,26 +1545,45 @@ body::after {
 }
 
 button.primary {
-  border: none;
+  border: 1px solid var(--sys-cyan);
   border-radius: 0;
-  padding: 10px 20px;
-  background: var(--accent);
-  color: var(--bg);
-  font-size: 0.95rem;
+  padding: 10px 16px;
+  background: var(--hud-fill);
+  color: var(--sys-cyan);
+  font-size: 0.85rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
   cursor: pointer;
+}
+
+button.primary:hover:not(:disabled),
+button.primary:active:not(:disabled) {
+  background: var(--sys-cyan);
+  color: #000;
+  border-color: var(--sys-cyan);
 }
 
 button.ghost {
   border: 1px solid var(--border);
   background: transparent;
-  color: var(--text-muted);
+  color: var(--sys-cyan);
   padding: 6px 12px;
   border-radius: 0;
   cursor: pointer;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+button.ghost:hover:not(:disabled),
+button.ghost:active:not(:disabled) {
+  background: var(--sys-cyan);
+  color: #000;
+  border-color: var(--sys-cyan);
 }
 
 button:disabled {
-  opacity: 0.6;
+  opacity: 0.45;
   cursor: not-allowed;
 }
 
@@ -1431,11 +1591,12 @@ button:disabled {
    IMPORT で建設、INTERVIEW/PROBE が流用する。適用先はこの3タブのみ (F-14)。 */
 .term-panel {
   position: relative;
-  background: var(--bg-deep);
+  background: var(--hud-fill);
   border: 1px solid var(--border);
   border-radius: 0;
-  padding: var(--s4);
-  margin-bottom: var(--s4);
+  padding: var(--s2);
+  margin: 0;
+  margin-top: -1px;
 }
 
 .term-panel::before,
@@ -1919,14 +2080,43 @@ button:disabled {
 }
 
 .interview-panel .action-row .primary:not(:disabled) {
-  background: var(--accent);
-  color: var(--bg-deep);
-  border: 1px solid var(--accent);
-  font-weight: 600;
+  background: var(--hud-fill);
+  color: var(--sys-cyan);
+  border: 1px solid var(--sys-cyan);
+  font-weight: 700;
+}
+
+.interview-panel .action-row .primary:not(:disabled):hover,
+.interview-panel .action-row .primary:not(:disabled):active {
+  background: var(--sys-cyan);
+  color: #000;
 }
 
 .interview-panel .action-row .primary:disabled {
   opacity: 0.45;
+}
+
+.interview-mode-array > button {
+  font-size: 0.58rem;
+  letter-spacing: 0.04em;
+  padding: 10px 2px;
+}
+
+.interview-panel .magi-mod-head h2 {
+  margin: 0;
+  border: none;
+  padding: 0;
+  font-size: 0.78rem;
+}
+
+.interview-panel .magi-mod-head h2::before {
+  content: none;
+}
+
+.interview-shared-context .term-panel,
+.interview-shared-context .company-facts-form,
+.interview-shared-context .interview-es-base-form {
+  margin-top: -1px;
 }
 
 .line-row {
@@ -4247,6 +4437,22 @@ button.secondary {
 .mobile-chrome .sub-tabs button::before,
 .mobile-chrome .sub-tabs button::after {
   content: none;
+}
+
+.mobile-chrome .sub-tabs-pills button,
+.mobile-chrome .sub-tabs button,
+.mobile-chrome .tactical-array > button {
+  background: var(--hud-fill);
+  color: var(--sys-cyan);
+}
+
+.mobile-chrome .sub-tabs-pills button.active,
+.mobile-chrome .sub-tabs button.active,
+.mobile-chrome .tactical-array > button.active,
+.mobile-chrome .tactical-array > button[aria-selected="true"] {
+  background: var(--sys-cyan);
+  color: #000;
+  border-color: var(--sys-cyan);
 }
 
 .mobile-chrome .gap-tensor-grid {

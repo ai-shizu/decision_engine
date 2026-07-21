@@ -14,31 +14,31 @@ import { MultistageInterviewPanel } from "./interview/MultistageInterviewPanel";
 // M18-E: Interview tab is Coraxis-only (Python consult dual-stack removed).
 type InterviewSurface = "interview_pocket" | "multistage" | "es_pocket" | "coliseum";
 
+/** Hardware HUD mode indicators — top-tier selection simulators. */
 const MODES: { id: InterviewSurface; label: string; shortLabel: string; hint: string }[] = [
   {
     id: "interview_pocket",
-    label: "面接",
-    shortLabel: "面接",
-    hint: "start_interview_session: オフライン企業ファクト + 任意 ES ベース + 1:1 面接ストリーム。",
+    label: "[ 1ON1_TECH ]",
+    shortLabel: "[ 1ON1 ]",
+    hint: "1ON1_TECH: 技術/人物面接ストリーム (企業ファクト + 任意 ES ベース)。",
   },
   {
     id: "multistage",
-    label: "多段面接",
-    shortLabel: "多段",
-    hint: "M17 FSM: Foundation → Pressure → Debrief → Closed。"
-      + "start_multistage_interview / advance_interview_stage をストリーミング結合。",
+    label: "[ SYS_DESIGN ]",
+    shortLabel: "[ SYS_DS ]",
+    hint: "SYS_DESIGN: Foundation → Pressure → Debrief → Closed 多段プロンプト。",
   },
   {
     id: "es_pocket",
-    label: "ES添削",
-    shortLabel: "ES",
-    hint: "review_es_draft: オフライン企業ファクト注入 + RAG 経験 + 採用責任者ストリーム添削。",
+    label: "[ DOC_SCAN ]",
+    shortLabel: "[ DOC ]",
+    hint: "DOC_SCAN: ES/書類解析 — 採用責任者ストリーム添削。",
   },
   {
     id: "coliseum",
-    label: "グループディスカッション",
-    shortLabel: "GD",
-    hint: "Phase 14 Inner Coliseum / GD: Lobby → Arena → Debrief + SovereignBar (SURRENDER 二度押し)。",
+    label: "[ ARENA_GD ]",
+    shortLabel: "[ ARENA ]",
+    hint: "ARENA_GD: Inner Coliseum グループディスカッション闘技場。",
   },
 ];
 
@@ -64,23 +64,24 @@ export function InterviewTab() {
   }
 
   return (
-    <section className="panel interview-panel">
-      <div className="consult-header">
+    <section className="panel interview-panel magi-rack">
+      <div className="magi-mod-head consult-header">
         <h2>
           <span className="desktop-only">
-            INTERVIEW <span className="term-tag term-tag--info">[ SIM ]</span>
+            INTERVIEW <span className="term-tag term-tag--info">[ SIM_RACK ]</span>
           </span>
           <span className="mobile-only">
-            <span className="term-tag term-tag--info">[ 面接 ]</span>
+            <span className="term-tag term-tag--info">[ INTERVIEW ]</span>
           </span>
         </h2>
+        <span className="micro-tel">MODE_LOCK · HUD</span>
       </div>
 
-      <div className="ascii-sep" role="separator">
-        --- MODE ---
-      </div>
-
-      <div className="sub-tabs sub-tabs-pills" role="tablist" aria-label="面接モード">
+      <div
+        className="tactical-array interview-mode-array"
+        role="tablist"
+        aria-label="面接稼働モード"
+      >
         {MODES.map((m) => (
           <button
             key={m.id}
@@ -89,16 +90,21 @@ export function InterviewTab() {
             aria-selected={surface === m.id}
             className={surface === m.id ? "active" : ""}
             onClick={() => switchSurface(m.id)}
+            title={m.hint}
           >
             <span className="desktop-only">{m.label}</span>
             <span className="mobile-only">{m.shortLabel}</span>
           </button>
         ))}
       </div>
-      <p className="hint guide dev-noise">{currentMode.hint}</p>
+
+      <div className="magi-mod-foot">
+        <span className="micro-tel">{currentMode.hint}</span>
+        <span className="micro-tel">SYS.NOMINAL</span>
+      </div>
 
       {isNarrow && surface === "interview_pocket" && (
-        <div className="interview-shared-context interview-section-stack">
+        <div className="interview-shared-context">
           <InterviewEsBaseForm
             esId={esBase.esId}
             esText={esBase.esText}
@@ -118,7 +124,7 @@ export function InterviewTab() {
       )}
 
       {isNarrow && surface !== "interview_pocket" && surface !== "coliseum" && (
-        <div className="interview-shared-context interview-section-stack">
+        <div className="interview-shared-context">
           <CompanyFactsForm
             facts={sharedFacts}
             onPatch={patchSharedFacts}

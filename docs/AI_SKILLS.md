@@ -1440,6 +1440,19 @@ Pocket Brain 経路は M14 tensor + M15 pulse/Rasch + gap sufficiency から loa
 
 **不変条件:** パディング広告アラート枠を復活させるな。生例外を sys-log に出すな（sterile copy のみ）。赤action のクリアランスはオペレータ明示操作のみ。
 
+### 4.76 Hardware HUD Protocol (2026-07-22)
+
+**決定:** Web標準の白ボタン/明るいフォームを撲滅し、MAGI コックピットの基板美学を全域強制する。
+
+**as-built:**
+1. グローバル `button/input/select/textarea`: `appearance:none` · `border-radius:0` · bg=`--hud-fill` · color=cyan/text · hover/active=`bg cyan / color #000`。
+2. `button.primary` も白塗り禁止（cyan 枠 + LED 反転）。
+3. body `::before` マイクログリッド + `::after` スキャンライン。`.panel` にも微細グリッド。
+4. パネル/term-panel は margin 接合（シャーシ化）。`.content` 余白撤去。
+5. INTERVIEW モード: `[ 1ON1_TECH ]` / `[ SYS_DESIGN ]` / `[ DOC_SCAN ]` / `[ ARENA_GD ]` + `.tactical-array`。
+
+**不変条件:** `white` / 明るいグレーの操作面を新設するな。`--accent` 白塗り primary を復活させるな。
+
 ---
 
 ## 6. 高度推論とプロファイリング戦略: 主観と客観の差分分析 (Gap Analysis)
