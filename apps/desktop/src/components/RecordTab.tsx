@@ -6,6 +6,13 @@ import {
 } from "../lib/engine";
 import { formatDateLabel, parseAmount, summarizeDay, todayIso } from "../lib/dateUtils";
 import { isCommitEnter } from "../lib/keyUtils";
+import {
+  formatLedgerYen,
+  ledgerRiskLabel,
+  ledgerRiskLevel,
+  ledgerRowClassName,
+  ledgerTypeCode,
+} from "../lib/ledgerRowView";
 import { defaultTime } from "../lib/timeUtils";
 import { uiErrorMessage } from "../lib/uiErrorMessages";
 import type { RecordEvent, RecordSubTab, Transaction } from "../lib/types";
@@ -317,28 +324,93 @@ export function RecordTab() {
       )}
 
       {subTab === "finance" && (
-        <div className="sub-panel">
-          <p className="finance-summary">
-            収入: {summary.income.toLocaleString()}円 | 支出:{" "}
-            {summary.expense.toLocaleString()}円 | 差引: {summary.net.toLocaleString()}円
-          </p>
-          <ul className="item-list">
+        <div className="sub-panel ledger">
+          <div className="ledger-summary" role="group" aria-label="日次集計">
+            <div className="ledger-summary-cell">
+              <span className="ledger-summary-key">INC</span>
+              <span className="ledger-summary-val">
+                {formatLedgerYen(summary.income)}
+                <span className="ledger-yen">円</span>
+              </span>
+            </div>
+            <div className="ledger-summary-cell">
+              <span className="ledger-summary-key">EXP</span>
+              <span className="ledger-summary-val">
+                {formatLedgerYen(summary.expense)}
+                <span className="ledger-yen">円</span>
+              </span>
+            </div>
+            <div className="ledger-summary-cell">
+              <span className="ledger-summary-key">NET</span>
+              <span
+                className={
+                  summary.net < 0
+                    ? "ledger-summary-val ledger-summary-val--neg"
+                    : "ledger-summary-val"
+                }
+              >
+                {formatLedgerYen(summary.net)}
+                <span className="ledger-yen">円</span>
+              </span>
+            </div>
+          </div>
+
+          <div className="ledger-grid" role="table" aria-label="購買台帳">
+            <div className="ledger-row ledger-row--head" role="row">
+              <span className="ledger-col ledger-col-type" role="columnheader">
+                TYPE
+              </span>
+              <span className="ledger-col ledger-col-cat" role="columnheader">
+                CATEGORY
+              </span>
+              <span className="ledger-col ledger-col-flag" role="columnheader">
+                FLAG
+              </span>
+              <span className="ledger-col ledger-col-amt" role="columnheader">
+                AMOUNT
+              </span>
+            </div>
             {transactions.length === 0 ? (
-              <li className="hint">(この日の取引はまだありません)</li>
+              <div className="ledger-empty hint" role="row">
+                (この日の取引はまだありません)
+              </div>
             ) : (
-              transactions.map((tx, i) => (
-                <li key={i} className="record-item">
-                  <span className="record-item-label">
-                    [{tx.type === "expense" ? "支出" : "収入"}] {tx.category}
-                  </span>
-                  <span className="record-item-amount">{tx.amount.toLocaleString()}円</span>
-                </li>
-              ))
+              transactions.map((tx, i) => {
+                const risk = ledgerRiskLevel(tx.category);
+                const flag = ledgerRiskLabel(risk);
+                return (
+                  <div key={i} className={ledgerRowClassName(risk)} role="row">
+                    <span className="ledger-col ledger-col-type" role="cell">
+                      {ledgerTypeCode(tx.type)}
+                    </span>
+                    <span className="ledger-col ledger-col-cat" role="cell">
+                      {tx.category}
+                    </span>
+                    <span
+                      className={
+                        risk === "danger"
+                          ? "ledger-col ledger-col-flag ledger-flag--danger"
+                          : risk === "warn"
+                            ? "ledger-col ledger-col-flag ledger-flag--warn"
+                            : "ledger-col ledger-col-flag"
+                      }
+                      role="cell"
+                    >
+                      {flag ?? "—"}
+                    </span>
+                    <span className="ledger-col ledger-col-amt" role="cell">
+                      {formatLedgerYen(tx.amount)}
+                      <span className="ledger-yen">円</span>
+                    </span>
+                  </div>
+                );
+              })
             )}
-          </ul>
-          <div className="finance-forms">
-            <div className="form-row">
-              <span className="field-label">支出</span>
+          </div>
+
+          <div className="ledger-forms finance-forms">
+            <div className="form-row ledger-form-row">
+              <span className="field-label">EXP</span>
               <input
                 value={expCat}
                 onChange={(e) => setExpCat(e.target.value)}
@@ -348,9 +420,11 @@ export function RecordTab() {
                     addTx("expense", expCat, expAmt);
                   }
                 }}
-                placeholder="食費・交通費など"
+                placeholder="食費・交通費 / 非計画・破局…"
+                aria-label="支出カテゴリ"
               />
               <input
+                className="ledger-amt-input"
                 value={expAmt}
                 onChange={(e) => setExpAmt(e.target.value)}
                 onKeyDown={(e) => {
@@ -360,13 +434,15 @@ export function RecordTab() {
                   }
                 }}
                 placeholder="5000"
+                inputMode="numeric"
+                aria-label="支出金額"
               />
               <button type="button" onClick={() => addTx("expense", expCat, expAmt)}>
-                追加
+                ADD
               </button>
             </div>
-            <div className="form-row">
-              <span className="field-label">収入</span>
+            <div className="form-row ledger-form-row">
+              <span className="field-label">INC</span>
               <input
                 value={incCat}
                 onChange={(e) => setIncCat(e.target.value)}
@@ -377,8 +453,10 @@ export function RecordTab() {
                   }
                 }}
                 placeholder="給与・副業など"
+                aria-label="収入カテゴリ"
               />
               <input
+                className="ledger-amt-input"
                 value={incAmt}
                 onChange={(e) => setIncAmt(e.target.value)}
                 onKeyDown={(e) => {
@@ -388,9 +466,11 @@ export function RecordTab() {
                   }
                 }}
                 placeholder="300000"
+                inputMode="numeric"
+                aria-label="収入金額"
               />
               <button type="button" onClick={() => addTx("income", incCat, incAmt)}>
-                追加
+                ADD
               </button>
             </div>
           </div>

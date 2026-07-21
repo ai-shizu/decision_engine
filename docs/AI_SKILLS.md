@@ -1235,6 +1235,23 @@ Pocket Brain 経路は M14 tensor + M15 pulse/Rasch + gap sufficiency から loa
 
 **検証:** `npx tsc --noEmit`（apps/desktop）。
 
+### 4.67 Purchase Ledger 端末美学 (2026-07-22)
+
+**射程:** RECORD 家計簿サブパネル + KAKEIBO `ExtractionPanel` のみ。メタ認知カレンダー本体・Vault purchase IPC 配線は対象外。
+
+**不変条件:**
+1. カード UI 禁止。台帳は `1px solid var(--border)` の高密度グリッド（`.ledger` / `.ledger-row`）。
+2. 金額は右揃え + `var(--sys-cyan)` + `tabular-nums`（`.ledger-col-amt` / `.ledger-extract-val--amt`）。
+3. 危険行インジケータはカテゴリ明示マーカーのみ（`lib/ledgerRowView.ts`）。非計画=`--err-soft`、歪み=`--err`。スキーマを捏造してフラグを付与するな。
+4. Extraction の inline style / ハードコード `#ff5555` `#555` を復活させるな — CSS トークンへ寄せよ。
+5. Zustand 禁止。純関数は React 非依存。
+
+**as-built:** `RecordTab` finance → `.ledger` グリッド、`ExtractionPanel` クラス化、`ledgerRowView.ts`、`App.css` ledger/extract 節。
+
+**ハマりどころ:** `.item-list` カード余白を finance に戻すな。金額色を装飾緑に戻すな。
+
+**検証:** `npx tsc --noEmit`。
+
 ### 4.8 M3 Phase 0-A — SQLCipher / Security.framework iOS link gate (2026-07-18)
 
 **射程（Phase 0-A のみ）:** `secure-vault` feature、依存解決、in-memory SQLCipher identity（`PRAGMA key` + `cipher_version`）、Security.framework シンボル（`SecRandom` / `SecAccessControl`）、Tauri command 登録、iOS Simulator 最終リンク証明。スキーマ・repository・UI・本番 Keychain item 作成は対象外。

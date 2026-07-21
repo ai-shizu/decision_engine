@@ -585,6 +585,146 @@ body::after {
 .field-label {
   width: 48px;
   color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  letter-spacing: 0.06em;
+}
+
+/* ─── Purchase ledger (RECORD · finance) ─────────────────────────────────── */
+.ledger {
+  border: 1px solid var(--border);
+  background: var(--bg-deep);
+  padding: 0;
+  margin-bottom: var(--s3);
+}
+
+.ledger-summary {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  border-bottom: 1px solid var(--border);
+}
+
+.ledger-summary-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 6px 8px;
+  border-right: 1px solid var(--border);
+  min-width: 0;
+}
+
+.ledger-summary-cell:last-child {
+  border-right: none;
+}
+
+.ledger-summary-key {
+  font-size: 0.62rem;
+  letter-spacing: 0.1em;
+  color: var(--text-dim);
+}
+
+.ledger-summary-val {
+  font-size: 0.78rem;
+  color: var(--sys-cyan);
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  font-family: var(--font-mono);
+}
+
+.ledger-summary-val--neg {
+  color: var(--err-soft);
+}
+
+.ledger-yen {
+  margin-left: 2px;
+  color: var(--text-dim);
+  font-size: 0.65em;
+}
+
+.ledger-grid {
+  max-height: 240px;
+  overflow-y: auto;
+}
+
+.ledger-row {
+  display: grid;
+  grid-template-columns: 3.2rem minmax(0, 1fr) 5.5rem 6.5rem;
+  align-items: center;
+  min-height: 26px;
+  border-bottom: 1px solid var(--border);
+  padding: 0 0 0 6px;
+  font-size: 0.72rem;
+  font-family: var(--font-mono);
+}
+
+.ledger-row:last-child {
+  border-bottom: none;
+}
+
+.ledger-row--head {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--bg-raised);
+  color: var(--text-dim);
+  letter-spacing: 0.06em;
+  font-size: 0.62rem;
+  min-height: 22px;
+  border-left: 2px solid transparent;
+}
+
+.ledger-row--warn {
+  border-left: 2px solid var(--err-soft);
+  background: color-mix(in srgb, var(--err-soft) 6%, transparent);
+}
+
+.ledger-row--danger {
+  border-left: 2px solid var(--err);
+  background: color-mix(in srgb, var(--err) 7%, transparent);
+}
+
+.ledger-col {
+  padding: 4px 6px;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ledger-col-type {
+  color: var(--text-muted);
+  letter-spacing: 0.04em;
+}
+
+.ledger-col-cat {
+  color: var(--text);
+}
+
+.ledger-col-flag {
+  color: var(--text-dim);
+  font-size: 0.62rem;
+  letter-spacing: 0.04em;
+}
+
+.ledger-flag--warn {
+  color: var(--err-soft);
+}
+
+.ledger-flag--danger {
+  color: var(--err);
+}
+
+.ledger-col-amt {
+  color: var(--sys-cyan);
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  padding-right: 8px;
+}
+
+.ledger-empty {
+  padding: 10px 8px;
+  margin: 0;
+  border-bottom: 1px solid var(--border);
 }
 
 .finance-summary {
@@ -592,9 +732,158 @@ body::after {
   margin: 0 0 8px;
 }
 
-.finance-forms {
+.finance-forms,
+.ledger-forms {
   border-top: 1px solid var(--border);
-  padding-top: 12px;
+  padding: 8px;
+  background: var(--bg);
+}
+
+.ledger-form-row .field-label {
+  width: 2.5rem;
+}
+
+.ledger-amt-input {
+  flex: 0 0 6.5rem !important;
+  min-width: 5rem !important;
+  max-width: 7rem;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  color: var(--sys-cyan);
+}
+
+/* ─── Kakeibo extraction (terminal grid, no card chrome) ─────────────────── */
+.ledger-extract {
+  text-align: left;
+  width: 100%;
+  margin-top: var(--s4);
+  border: 1px solid var(--border);
+  background: var(--bg-deep);
+  padding: 0;
+}
+
+.ledger-extract--friendly {
+  margin-top: 0;
+  border: none;
+  background: transparent;
+}
+
+.ledger-extract-head {
+  display: flex;
+  align-items: baseline;
+  gap: var(--s2);
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--border);
+  font-size: 0.72rem;
+  letter-spacing: 0.06em;
+}
+
+.ledger-extract-meta {
+  color: var(--text-dim);
+  font-size: 0.65rem;
+}
+
+.ledger-extract-body {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px;
+}
+
+.ledger-extract-hint {
+  margin: 0;
+}
+
+.ledger-extract-input {
+  width: 100%;
+  resize: vertical;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: 1rem;
+}
+
+.ledger-extract-actions {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.ledger-extract-actions button {
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.ledger-extract-actions button:hover:not(:disabled) {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+.ledger-extract-actions button:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.ledger-extract-stream {
+  margin: 0;
+  font-size: 0.7rem;
+  color: var(--sys-cyan);
+  font-family: var(--font-mono);
+}
+
+.ledger-extract-result {
+  margin: 0;
+  padding: 0;
+  border: 1px solid var(--border);
+  background: var(--bg);
+}
+
+.ledger-extract-row {
+  display: grid;
+  grid-template-columns: 6.5rem minmax(0, 1fr);
+  gap: 0;
+  align-items: baseline;
+  border-bottom: 1px solid var(--border);
+  padding: 4px 8px;
+  font-size: 0.72rem;
+  font-family: var(--font-mono);
+}
+
+.ledger-extract-row:last-child {
+  border-bottom: none;
+}
+
+.ledger-extract-key {
+  color: var(--text-dim);
+  letter-spacing: 0.04em;
+}
+
+.ledger-extract-val {
+  color: var(--text);
+  text-align: left;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.ledger-extract-val--amt {
+  color: var(--sys-cyan);
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.ledger-extract-val--unk {
+  color: var(--text-muted);
+  font-style: italic;
+  text-decoration: underline dotted;
 }
 
 .diary-editor {
