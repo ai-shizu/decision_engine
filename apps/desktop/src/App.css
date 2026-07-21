@@ -4508,3 +4508,245 @@ button.secondary {
   border-color: var(--text-muted);
   color: var(--text);
 }
+
+/* ─── Phase 14 Debrief (Layer-1 / Layer-2 / Artifact) ─────────────────────── */
+.coliseum-debrief {
+  gap: var(--s2);
+  padding-bottom: var(--s2);
+}
+
+.debrief-frame {
+  padding: var(--s2);
+}
+
+.debrief-layer-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: var(--s2);
+  margin-bottom: 4px;
+}
+
+.debrief-layer-id {
+  font-size: 0.68rem;
+  letter-spacing: 0.08em;
+  font-weight: 700;
+  color: var(--text);
+}
+
+.debrief-layer-tag {
+  font-size: 0.58rem;
+  letter-spacing: 0.1em;
+}
+
+.debrief-layer-sub {
+  font-size: 0.62rem;
+  margin: 0 0 var(--s2);
+}
+
+.debrief-l1-list,
+.debrief-l2-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--s1);
+}
+
+.debrief-l1-row {
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 6px;
+}
+
+.debrief-l1-main {
+  display: grid;
+  grid-template-columns: 1fr auto auto;
+  gap: var(--s2);
+  align-items: center;
+  font-size: 0.72rem;
+}
+
+.debrief-l1-axis {
+  letter-spacing: 0.04em;
+  color: var(--text);
+  font-weight: 600;
+}
+
+.debrief-l1-score {
+  font-variant-numeric: tabular-nums;
+  font-weight: 700;
+}
+
+.debrief-turn-badge {
+  border: 1px solid var(--border);
+  border-radius: 0;
+  background: var(--bg-deep);
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 0.62rem;
+  letter-spacing: 0.04em;
+  padding: 3px 6px;
+  cursor: pointer;
+}
+
+.debrief-turn-badge:hover,
+.debrief-turn-badge-open {
+  border-color: var(--sys-cyan);
+  color: var(--sys-cyan);
+}
+
+.debrief-quote {
+  margin: 6px 0 0;
+  padding: 6px 8px;
+  border-left: 2px solid var(--sys-cyan);
+  background: var(--bg-deep);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  border-radius: 0;
+}
+
+.debrief-quote-meta {
+  font-size: 0.58rem;
+  letter-spacing: 0.08em;
+  color: var(--sys-cyan);
+}
+
+.debrief-quote-text {
+  font-size: 0.72rem;
+  color: var(--text);
+  line-height: 1.4;
+}
+
+.debrief-l1-foot {
+  margin-top: var(--s2);
+  font-size: 0.65rem;
+  letter-spacing: 0.04em;
+}
+
+.debrief-l2-veil {
+  position: relative;
+  border: 1px solid var(--border);
+  background: var(--bg-deep);
+  padding: var(--s2);
+  min-height: 120px;
+  border-radius: 0;
+  overflow: hidden;
+  transition: filter 180ms linear;
+}
+
+.debrief-l2-veil-sealed .debrief-l2-list {
+  filter: blur(7px);
+  user-select: none;
+  pointer-events: none;
+}
+
+.debrief-l2-veil-clear .debrief-l2-list {
+  filter: none;
+}
+
+.debrief-l2-hatch {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: repeating-linear-gradient(
+    -45deg,
+    transparent 0 5px,
+    color-mix(in srgb, var(--text-muted) 18%, transparent) 5px 6px
+  );
+  z-index: 1;
+}
+
+.debrief-l2-row {
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 6px;
+  margin-bottom: 4px;
+  font-size: 0.72rem;
+}
+
+.debrief-l2-link {
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
+  font-size: 0.68rem;
+  letter-spacing: 0.03em;
+}
+
+.debrief-l2-arrow {
+  color: var(--text-muted);
+}
+
+.debrief-l2-label {
+  margin-top: 2px;
+  color: var(--text);
+  font-weight: 600;
+}
+
+.debrief-l2-note {
+  margin-top: 2px;
+  color: var(--text-muted);
+  line-height: 1.4;
+}
+
+.debrief-l2-gate {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s2);
+  margin-top: var(--s2);
+}
+
+.debrief-l2-consent {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--s2);
+  font-size: 0.7rem;
+  color: var(--text);
+  letter-spacing: 0.02em;
+  cursor: pointer;
+}
+
+.debrief-l2-consent input {
+  margin-top: 2px;
+  accent-color: var(--sys-cyan);
+}
+
+.debrief-reveal-btn {
+  align-self: flex-start;
+  border: 1px solid var(--sys-cyan);
+  border-radius: 0;
+  background: transparent;
+  color: var(--sys-cyan);
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  letter-spacing: 0.08em;
+  padding: 8px 12px;
+  cursor: pointer;
+}
+
+.debrief-reveal-btn:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+  border-color: var(--border);
+  color: var(--text-muted);
+}
+
+.debrief-l2-unlocked {
+  margin-top: var(--s2);
+  font-size: 0.62rem;
+  letter-spacing: 0.1em;
+}
+
+.debrief-artifact {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s2) var(--s4);
+  margin-top: var(--s2);
+  padding: var(--s2) 0;
+  border-top: 1px solid var(--border);
+  font-size: 0.58rem;
+  letter-spacing: 0.06em;
+  color: var(--text-muted);
+  opacity: 0.55;
+  font-variant-numeric: tabular-nums;
+}

@@ -1205,6 +1205,19 @@ Pocket Brain 経路は M14 tensor + M15 pulse/Rasch + gap sufficiency から loa
 
 **検証:** `npx tsc --noEmit` / `npm run test:boundary`。
 
+### 4.65 Phase 14 UI — ColiseumDebrief 二層評価 + アーティファクトフッター (2026-07-21)
+
+**射程:** Debrief の Layer-1（常時可視・証拠接地）と Layer-2（二段オプトイン・一方向開示）と不変アーティファクト証明。Zustand 禁止。
+
+**as-built:**
+1. `EvalLayer1` — 軸スコア + `[T-NN]` バッジ。クリック/ホバーで transcript quote 展開（反証可能性）。
+2. `EvalLayer2` — blur 7px + ハッチング封印。consent checkbox → `[ REVEAL ]` → 一方向 unlock。`lib/debriefOptInLogic.ts`。
+3. `ArtifactFooter` — fingerprint / model / seeds を低 opacity 等幅表示。
+
+**ハマりどころ:** Layer-2 をデフォルト開示するな。REVEAL 後に再封印 UI を付けるな。Layer-2 を overall_pass に混ぜるな。
+
+**検証:** `npx tsc --noEmit` / `npm run test:boundary`。
+
 ### 4.8 M3 Phase 0-A — SQLCipher / Security.framework iOS link gate (2026-07-18)
 
 **射程（Phase 0-A のみ）:** `secure-vault` feature、依存解決、in-memory SQLCipher identity（`PRAGMA key` + `cipher_version`）、Security.framework シンボル（`SecRandom` / `SecAccessControl`）、Tauri command 登録、iOS Simulator 最終リンク証明。スキーマ・repository・UI・本番 Keychain item 作成は対象外。
