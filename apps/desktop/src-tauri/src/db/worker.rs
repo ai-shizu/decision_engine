@@ -154,6 +154,7 @@ enum VaultReply {
     ProbeStorePut(Result<(), VaultErrorCode>),
     PulseRunLatest(Result<Option<PulseRunRow>, VaultErrorCode>),
     TwinRunInsert(Result<(), VaultErrorCode>),
+    TwinRunListPayloads(Result<Vec<String>, VaultErrorCode>),
     OracleRunInsert(Result<(), VaultErrorCode>),
     OracleRunLatest(Result<Option<OracleRunRow>, VaultErrorCode>),
     InterviewSessionPut(Result<(), VaultErrorCode>),
@@ -252,6 +253,11 @@ enum VaultRequest {
     },
     TwinRunInsert {
         row: TwinRunRow,
+        control: RequestControl,
+        reply: SyncSender<VaultReply>,
+    },
+    TwinRunListPayloads {
+        limit: u32,
         control: RequestControl,
         reply: SyncSender<VaultReply>,
     },
@@ -744,6 +750,23 @@ impl VaultHandle {
         }
     }
 
+    pub(crate) fn twin_run_list_payloads(&self, limit: u32) -> Result<Vec<String>, VaultErrorCode> {
+        let (reply_sender, receiver) = mpsc::sync_channel(1);
+        let cancelled = Arc::new(AtomicBool::new(false));
+        let request = VaultRequest::TwinRunListPayloads {
+            limit,
+            control: RequestControl {
+                deadline: Instant::now() + SHORT_OPERATION_TIMEOUT,
+                cancelled: Arc::clone(&cancelled),
+            },
+            reply: reply_sender,
+        };
+        match self.submit(request, receiver, cancelled, SHORT_OPERATION_TIMEOUT)? {
+            VaultReply::TwinRunListPayloads(result) => result,
+            _ => Err(VaultErrorCode::Unavailable),
+        }
+    }
+
     pub(crate) fn oracle_run_insert(&self, row: OracleRunRow) -> Result<(), VaultErrorCode> {
         let (reply_sender, receiver) = mpsc::sync_channel(1);
         let cancelled = Arc::new(AtomicBool::new(false));
@@ -1049,6 +1072,18 @@ impl VaultWorker {
                         self.insert_twin_run(row)
                     };
                     let _ = reply.send(VaultReply::TwinRunInsert(result));
+                }
+                VaultRequest::TwinRunListPayloads {
+                    limit,
+                    control,
+                    reply,
+                } => {
+                    let result = if request_expired(&control) {
+                        Err(VaultErrorCode::Timeout)
+                    } else {
+                        self.list_twin_run_payloads(limit)
+                    };
+                    let _ = reply.send(VaultReply::TwinRunListPayloads(result));
                 }
                 VaultRequest::OracleRunInsert {
                     row,
@@ -1394,6 +1429,13 @@ impl VaultWorker {
         }
         let outcome =
             self.read_repository(|connection| oracle_repo::insert_twin_run(connection, &row));
+        self.resolve_repository(outcome)
+    }
+
+    fn list_twin_run_payloads(&mut self, limit: u32) -> Result<Vec<String>, VaultErrorCode> {
+        gate(snapshot_status(&self.status))?;
+        let outcome = self
+            .read_repository(|connection| oracle_repo::list_twin_run_payloads(connection, limit));
         self.resolve_repository(outcome)
     }
 

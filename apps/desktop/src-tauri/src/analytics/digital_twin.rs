@@ -43,6 +43,20 @@ pub struct TwinParams {
     pub n_lapse_test: i32,
     pub gate_passed: bool,
     pub fitted_window: String,
+    /// Phase 5: RLS personalization unlocked.
+    #[serde(default)]
+    pub is_personalized: bool,
+    #[serde(default)]
+    pub identify_confidence: f64,
+    #[serde(default)]
+    pub identify_n_obs: u32,
+    /// `"generic"` | `"fitted"`
+    #[serde(default = "default_param_source")]
+    pub param_source: String,
+}
+
+fn default_param_source() -> String {
+    "generic".into()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -291,23 +305,54 @@ fn snapshot_confidence(input: &TwinSnapshotInput, state: &TwinStateVector) -> (f
 }
 
 /// Deterministic scenario roll-forward from vault multimodal snapshot.
-pub fn evaluate_digital_twin_scenario(input: TwinSnapshotInput) -> TwinScenarioResult {
+///
+/// When `identify` reports `is_personalized`, θ comes from RLS; otherwise prior.
+pub fn evaluate_digital_twin_scenario_with_identify(
+    input: TwinSnapshotInput,
+    identify: Option<&crate::analytics::twin_identify::TwinIdentifyStatus>,
+) -> TwinScenarioResult {
     let horizon = input.horizon_days.clamp(1, MC_HORIZON_MAX);
     let state = derive_state_vector(&input);
     let (bss, n_lapse_test, sources) = snapshot_confidence(&input, &state);
     let gate_passed = bss >= BSS_GATE && sources >= MIN_PROVENANCE_SOURCES && n_lapse_test >= 10;
 
-    let params = TwinParams {
-        rho: PRIOR_RHO,
-        beta1: PRIOR_BETA1,
-        beta2: PRIOR_BETA2,
-        gamma: PRIOR_GAMMA,
-        kappa: 0.8,
-        theta_r: Some(0.45),
-        bss,
-        n_lapse_test,
-        gate_passed,
-        fitted_window: format!("{}..{}", input.today, input.today),
+    let window = format!("{}..{}", input.today, input.today);
+    let params = if let Some(id) = identify.filter(|s| s.is_personalized) {
+        TwinParams {
+            rho: id.rho,
+            beta1: id.beta1,
+            beta2: id.beta2,
+            gamma: id.gamma,
+            kappa: 0.8,
+            theta_r: Some(0.45),
+            bss,
+            n_lapse_test,
+            gate_passed,
+            fitted_window: window,
+            is_personalized: true,
+            identify_confidence: id.confidence,
+            identify_n_obs: id.n_obs,
+            param_source: "fitted".into(),
+        }
+    } else {
+        let conf = identify.map(|s| s.confidence).unwrap_or(0.0);
+        let n_obs = identify.map(|s| s.n_obs).unwrap_or(0);
+        TwinParams {
+            rho: PRIOR_RHO,
+            beta1: PRIOR_BETA1,
+            beta2: PRIOR_BETA2,
+            gamma: PRIOR_GAMMA,
+            kappa: 0.8,
+            theta_r: Some(0.45),
+            bss,
+            n_lapse_test,
+            gate_passed,
+            fitted_window: window,
+            is_personalized: false,
+            identify_confidence: conf,
+            identify_n_obs: n_obs,
+            param_source: "generic".into(),
+        }
     };
 
     let (rec, lsw, lvol, fr) = apply_scenario_loads(&state, &input.scenario);
@@ -393,7 +438,8 @@ mod tests {
 
     #[test]
     fn insufficient_sources_fail_closed() {
-        let out = evaluate_digital_twin_scenario(TwinSnapshotInput {
+        let out = evaluate_digital_twin_scenario_with_identify(
+            TwinSnapshotInput {
             tensor: None,
             pulse_affinity: None,
             rasch_posterior: None,
@@ -402,7 +448,9 @@ mod tests {
             today: "2026-07-20".into(),
             horizon_days: 7,
             scenario: ScenarioModifiers::default(),
-        });
+        },
+            None,
+        );
         assert!(!out.params.gate_passed);
         assert!(out.forecast.r_q50.is_empty());
     }

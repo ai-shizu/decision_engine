@@ -1,4 +1,4 @@
-import { useEffect, useReducer } from "react";
+import { useEffect, useReducer, useState } from "react";
 
 import { TensorRadarChart } from "./TensorRadarChart";
 import {
@@ -15,7 +15,9 @@ import {
   ensureAuthoritativeTensorProfile,
   getLatestGapAnalysis,
   getLatestTensorProfile,
+  getTwinIdentifyStatus,
 } from "../lib/pocketBrain";
+import type { TwinIdentifyStatus } from "../lib/pocketBrain/types";
 import { PB_UI_BUSY, PB_UI_FAIL } from "../lib/pocketBrain/uiFailure";
 import {
   isPocketTensorProfile,
@@ -52,16 +54,21 @@ export function GapTensorDashboard() {
     undefined,
     initialGapTensorDashboardState,
   );
+  const [twinIdentify, setTwinIdentify] = useState<TwinIdentifyStatus | null>(
+    null,
+  );
 
   const busy = state.phase !== "idle";
 
   async function loadLatest() {
     dispatch({ type: "load_begin" });
     try {
-      const [tensor, gap] = await Promise.all([
+      const [tensor, gap, identify] = await Promise.all([
         getLatestTensorProfile(),
         getLatestGapAnalysis(),
+        getTwinIdentifyStatus().catch(() => null),
       ]);
+      setTwinIdentify(identify);
       dispatch({ type: "load_success", tensor, gap });
     } catch {
       dispatch({ type: "load_failure", message: PB_UI_FAIL.gapTensorLoad });
@@ -145,6 +152,25 @@ export function GapTensorDashboard() {
             Vault の最新 Gap 分析と 6D テンソルを表示。権威テンソルは N/A 固定（LLM は権威を更新しない）。
             再計算は RECORD 蓄積データから決定論アルゴリズムのみ（LLM 非呼び出し）。
           </p>
+          {twinIdentify ? (
+            <p
+              className={
+                twinIdentify.is_personalized
+                  ? "twin-identify-badge twin-identify-fitted"
+                  : "twin-identify-badge twin-identify-generic"
+              }
+              role="status"
+              title={
+                twinIdentify.is_personalized
+                  ? `RLS n=${twinIdentify.n_obs} conf=${twinIdentify.confidence.toFixed(3)}`
+                  : `Generic prior · n=${twinIdentify.n_obs}`
+              }
+            >
+              {twinIdentify.is_personalized
+                ? "Fitted to You"
+                : "Generic Prior"}
+            </p>
+          ) : null}
         </div>
         <div className="action-row">
           <button

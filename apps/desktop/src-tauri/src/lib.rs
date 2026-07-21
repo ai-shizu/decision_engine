@@ -180,6 +180,8 @@ pub fn run() {
             #[cfg(all(feature = "secure-vault", target_vendor = "apple"))]
             analytics::commands_oracle::evaluate_digital_twin_scenario,
             #[cfg(all(feature = "secure-vault", target_vendor = "apple"))]
+            analytics::commands_oracle::get_twin_identify_status,
+            #[cfg(all(feature = "secure-vault", target_vendor = "apple"))]
             analytics::commands_oracle::generate_oracle_payload,
             #[cfg(all(
                 feature = "pocket-brain",

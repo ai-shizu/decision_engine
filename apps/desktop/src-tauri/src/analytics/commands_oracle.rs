@@ -8,7 +8,7 @@ use tauri::State;
 
 use crate::analytics::coupling::{coupling_matrix, CouplingMatrix, MAX_LAG};
 use crate::analytics::digital_twin::{
-    evaluate_digital_twin_scenario as run_twin_scenario, ScenarioModifiers, TwinScenarioResult,
+    evaluate_digital_twin_scenario_with_identify, ScenarioModifiers, TwinScenarioResult,
     TwinSnapshotInput, MC_HORIZON_DEFAULT,
 };
 use crate::analytics::oracle::{
@@ -16,9 +16,10 @@ use crate::analytics::oracle::{
     ORACLE_SCHEMA,
 };
 use crate::analytics::tensor::{authoritative_profile, TensorProfile};
-use crate::db::{
-    OracleRunRow, TwinRunRow, VaultErrorCode, VaultHandle,
+use crate::analytics::twin_identify::{
+    resolve_identify_status, warm_rls_from_twin_payloads, TwinIdentifyStatus,
 };
+use crate::db::{OracleRunRow, TwinRunRow, VaultErrorCode, VaultHandle};
 
 fn map_vault(err: VaultErrorCode) -> String {
     format!("{err:?}").to_ascii_lowercase()
@@ -153,6 +154,16 @@ fn optional_coupling(request: &EvaluateTwinRequest) -> Result<Option<CouplingMat
     }
 }
 
+fn warm_identify(vault: &VaultHandle) -> TwinIdentifyStatus {
+    match vault.twin_run_list_payloads(256) {
+        Ok(payloads) => {
+            let filter = warm_rls_from_twin_payloads(&payloads);
+            resolve_identify_status(&filter)
+        }
+        Err(_) => TwinIdentifyStatus::generic_prior(),
+    }
+}
+
 #[tauri::command]
 pub async fn evaluate_digital_twin_scenario(
     vault: State<'_, VaultHandle>,
@@ -160,8 +171,9 @@ pub async fn evaluate_digital_twin_scenario(
 ) -> Result<EvaluateTwinResult, String> {
     let vault = vault.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
+        let identify = warm_identify(&vault);
         let (snapshot, _prov) = load_snapshot_from_vault(&vault, &request)?;
-        let twin = run_twin_scenario(snapshot);
+        let twin = evaluate_digital_twin_scenario_with_identify(snapshot, Some(&identify));
         let coupling = optional_coupling(&request)?;
         let id = new_id("twin");
         let payload_json =
@@ -184,6 +196,16 @@ pub async fn evaluate_digital_twin_scenario(
     })
     .await
     .map_err(|_| "evaluate_digital_twin_scenario join failed".to_string())?
+}
+
+#[tauri::command]
+pub async fn get_twin_identify_status(
+    vault: State<'_, VaultHandle>,
+) -> Result<TwinIdentifyStatus, String> {
+    let vault = vault.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || Ok(warm_identify(&vault)))
+        .await
+        .map_err(|_| "get_twin_identify_status join failed".to_string())?
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -239,7 +261,8 @@ pub async fn generate_oracle_payload(
         provenance.rag_hit_count = request.rag_hit_count;
         provenance.interview_session_id = request.interview_session_id;
 
-        let twin = run_twin_scenario(snapshot);
+        let identify = warm_identify(&vault);
+        let twin = evaluate_digital_twin_scenario_with_identify(snapshot, Some(&identify));
         let coupling = optional_coupling(&eval_req)?;
         let twin_id = new_id("twin");
         let twin_json =

@@ -2228,6 +2228,25 @@ button.secondary {
   margin-bottom: 20px;
 }
 
+.twin-identify-badge {
+  display: inline-block;
+  margin-top: 6px;
+  padding: 2px 0;
+  font-size: 0.75rem;
+  letter-spacing: 0.04em;
+  border-bottom: 1px solid var(--border);
+  color: var(--muted);
+}
+
+.twin-identify-fitted {
+  color: var(--fg, inherit);
+  border-bottom-color: var(--fg, currentColor);
+}
+
+.twin-identify-generic {
+  color: var(--muted);
+}
+
 .gap-tensor-grid {
   display: grid;
   grid-template-columns: 1fr 1fr;

@@ -127,7 +127,15 @@ export function PocketBrainPanel({ variant = "default" }: PocketBrainPanelProps)
   useEffect(() => {
     let active = true;
     void subscribeLlmEvents((event) => {
-      if (!active || event.kind !== "memory_purged") {
+      if (!active) {
+        return;
+      }
+      if (event.kind === "degradation") {
+        // Ambient thermal warn — MemSample also carries the ladder; this is the
+        // out-of-band Serious+ rising edge from the worker.
+        return;
+      }
+      if (event.kind !== "memory_purged") {
         return;
       }
       void cancelGeneration();
@@ -145,6 +153,8 @@ export function PocketBrainPanel({ variant = "default" }: PocketBrainPanelProps)
   }, [ensureModelLoaded]);
 
   const over = mem?.over_threshold ?? false;
+  const thermalWarn =
+    mem?.degradation === "serious" || mem?.degradation === "critical";
 
   if (messenger) {
     return (
@@ -154,13 +164,15 @@ export function PocketBrainPanel({ variant = "default" }: PocketBrainPanelProps)
             <strong>CONSULT</strong>
             <span
               className={
-                over
+                over || thermalWarn
                   ? "pocket-brain-mem pocket-brain-mem-over"
                   : "pocket-brain-mem"
               }
             >
               {mem
-                ? `${fmtMiB(mem.phys_footprint_bytes)} · ${mem.phase}`
+                ? `${fmtMiB(mem.phys_footprint_bytes)} · ${mem.phase}${
+                    thermalWarn ? ` · ${mem.degradation}` : ""
+                  }`
                 : phaseNote}
             </span>
           </div>
@@ -188,14 +200,16 @@ export function PocketBrainPanel({ variant = "default" }: PocketBrainPanelProps)
           justifyContent: "space-between",
           padding: "8px 12px",
           borderBottom: "1px solid #333",
-          color: over ? "var(--err)" : "inherit",
+          color: over || thermalWarn ? "var(--err)" : "inherit",
           fontVariantNumeric: "tabular-nums",
         }}
       >
         <strong>Coraxis · RAG</strong>
         <span>
           {mem
-            ? `${fmtMiB(mem.phys_footprint_bytes)} / ${fmtMiB(mem.threshold_bytes)} · ${mem.phase}`
+            ? `${fmtMiB(mem.phys_footprint_bytes)} / ${fmtMiB(mem.threshold_bytes)} · ${mem.phase}${
+                thermalWarn ? ` · ${mem.degradation}` : ""
+              }`
             : phaseNote}
           {busy && !modelReady ? " · warming" : modelReady ? " · ready" : ""}
         </span>

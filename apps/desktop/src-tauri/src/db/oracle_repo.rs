@@ -46,6 +46,28 @@ pub(crate) fn insert_twin_run(
     Ok(())
 }
 
+/// Oldest-first payloads for RLS warmup (cap keeps Jetsam-friendly).
+pub(crate) fn list_twin_run_payloads(
+    connection: &Connection,
+    limit: u32,
+) -> Result<Vec<String>, RepositoryError> {
+    let limit = limit.clamp(1, 500);
+    let mut stmt = connection
+        .prepare(
+            "SELECT payload_json FROM twin_scenario_runs \
+             ORDER BY created_at ASC, id ASC LIMIT ?1",
+        )
+        .map_err(map_storage_error)?;
+    let rows = stmt
+        .query_map(params![limit], |row| row.get::<_, String>(0))
+        .map_err(map_storage_error)?;
+    let mut out = Vec::new();
+    for row in rows {
+        out.push(row.map_err(map_storage_error)?);
+    }
+    Ok(out)
+}
+
 pub(crate) fn insert_oracle_run(
     connection: &Connection,
     row: &OracleRunRow,

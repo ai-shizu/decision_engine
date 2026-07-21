@@ -34,6 +34,7 @@ import type {
   SimSessionResult,
   TensorProfile,
   TokenEvent,
+  TwinIdentifyStatus,
 } from "./types";
 
 function genPayload(gen?: SimGenParams): Record<string, unknown> | null {
@@ -209,6 +210,10 @@ export function evaluateDigitalTwinScenario(args: {
       n_lanes: null,
     },
   });
+}
+
+export function getTwinIdentifyStatus(): Promise<TwinIdentifyStatus> {
+  return pocketInvoke("get_twin_identify_status");
 }
 
 export function generateOraclePayload(args: {

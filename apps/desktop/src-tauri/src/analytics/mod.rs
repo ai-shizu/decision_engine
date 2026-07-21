@@ -18,3 +18,4 @@ pub mod rasch;
 pub mod romance_pulse;
 pub mod taxonomy;
 pub mod tensor;
+pub mod twin_identify;

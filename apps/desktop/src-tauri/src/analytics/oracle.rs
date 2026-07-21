@@ -561,7 +561,7 @@ pub fn render_oracle_consult(payload: &Value) -> String {
 mod tests {
     use super::*;
     use crate::analytics::digital_twin::{
-        evaluate_digital_twin_scenario, ScenarioModifiers, TwinSnapshotInput,
+        evaluate_digital_twin_scenario_with_identify, ScenarioModifiers, TwinSnapshotInput,
     };
 
     #[test]
@@ -579,16 +579,19 @@ mod tests {
 
     #[test]
     fn generate_fail_closed_when_ungated() {
-        let twin = evaluate_digital_twin_scenario(TwinSnapshotInput {
-            tensor: None,
-            pulse_affinity: None,
-            rasch_posterior: None,
-            gap_data_sufficiency: None,
-            gap_count: None,
-            today: "2026-07-20".into(),
-            horizon_days: 7,
-            scenario: ScenarioModifiers::default(),
-        });
+        let twin = evaluate_digital_twin_scenario_with_identify(
+            TwinSnapshotInput {
+                tensor: None,
+                pulse_affinity: None,
+                rasch_posterior: None,
+                gap_data_sufficiency: None,
+                gap_count: None,
+                today: "2026-07-20".into(),
+                horizon_days: 7,
+                scenario: ScenarioModifiers::default(),
+            },
+            None,
+        );
         let payload = generate_oracle_payload("2026-07-20", &twin, None, 0, 0.0).unwrap();
         assert_eq!(
             payload.pointer("/sufficiency/gate_passed").and_then(|v| v.as_bool()),

@@ -17,6 +17,12 @@ export type MemPhase =
   | "inference"
   | "idle";
 
+export type DegradationLevel =
+  | "nominal"
+  | "fair"
+  | "serious"
+  | "critical";
+
 export interface MemSample {
   phase: MemPhase;
   phys_footprint_bytes: number;
@@ -25,6 +31,8 @@ export interface MemSample {
   over_threshold: boolean;
   headroom_bytes: number;
   t_ms: number;
+  /** Progressive thermal / memory ladder (Phase 4). */
+  degradation: DegradationLevel;
 }
 
 /** Known extraction task ids accepted by the Rust worker. */
@@ -88,18 +96,40 @@ export function cancelGeneration(): Promise<void> {
  * Persistent LLM lifecycle event pushed by the worker (mirrors the Rust
  * `LlmLifecycleEvent`). `memory_purged` means iOS memory pressure forced the
  * model to be dropped; the UI must suspend and await an explicit reload.
+ * `degradation` warns that thermal/memory ladder entered Serious+.
  */
-export type LlmLifecycleEvent = { readonly kind: "memory_purged" };
+export type LlmLifecycleEvent =
+  | { readonly kind: "memory_purged" }
+  | { readonly kind: "degradation"; readonly level: DegradationLevel };
+
+const DEGRADATION_LEVELS: readonly DegradationLevel[] = [
+  "nominal",
+  "fair",
+  "serious",
+  "critical",
+];
+
+function isDegradationLevel(value: unknown): value is DegradationLevel {
+  return (
+    typeof value === "string" &&
+    (DEGRADATION_LEVELS as readonly string[]).includes(value)
+  );
+}
 
 /** Strictly parse a lifecycle event; unknown shapes throw and are ignored. */
 export function parseLlmLifecycleEvent(value: unknown): LlmLifecycleEvent {
-  if (
-    typeof value === "object" &&
-    value !== null &&
-    !Array.isArray(value) &&
-    (value as { kind?: unknown }).kind === "memory_purged"
-  ) {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new Error("llm.event: unexpected shape");
+  }
+  const kind = (value as { kind?: unknown }).kind;
+  if (kind === "memory_purged") {
     return { kind: "memory_purged" };
+  }
+  if (kind === "degradation") {
+    const level = (value as { level?: unknown }).level;
+    if (isDegradationLevel(level)) {
+      return { kind: "degradation", level };
+    }
   }
   throw new Error("llm.event: unexpected shape");
 }

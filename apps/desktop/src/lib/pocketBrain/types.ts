@@ -231,6 +231,22 @@ export interface TwinParams {
   n_lapse_test: number;
   gate_passed: boolean;
   fitted_window: string;
+  is_personalized?: boolean;
+  identify_confidence?: number;
+  identify_n_obs?: number;
+  param_source?: "generic" | "fitted" | string;
+}
+
+/** Phase 5 — RLS personalization status for Digital Twin θ. */
+export interface TwinIdentifyStatus {
+  is_personalized: boolean;
+  confidence: number;
+  n_obs: number;
+  rho: number;
+  beta1: number;
+  beta2: number;
+  gamma: number;
+  source: "generic" | "fitted" | string;
 }
 
 export interface TwinStateVector {
@@ -395,6 +411,7 @@ export const POCKET_BRAIN_COMMANDS = [
   "get_probe_status",
   "get_latest_rasch_state",
   "evaluate_digital_twin_scenario",
+  "get_twin_identify_status",
   "generate_oracle_payload",
   "fetch_edinet_company_facts",
   "start_interview_session",
