@@ -68,6 +68,21 @@ pub(crate) fn list_twin_run_payloads(
     Ok(out)
 }
 
+pub(crate) fn latest_twin_run_payload(
+    connection: &Connection,
+) -> Result<Option<String>, RepositoryError> {
+    use rusqlite::OptionalExtension;
+    connection
+        .query_row(
+            "SELECT payload_json FROM twin_scenario_runs \
+             ORDER BY created_at DESC, id DESC LIMIT 1",
+            [],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(map_storage_error)
+}
+
 pub(crate) fn insert_oracle_run(
     connection: &Connection,
     row: &OracleRunRow,

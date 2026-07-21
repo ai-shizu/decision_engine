@@ -28,6 +28,8 @@ pub mod commands_sim;
 pub mod consult_context;
 #[cfg(all(feature = "secure-vault", target_vendor = "apple"))]
 pub mod interview_machine;
+#[cfg(all(feature = "secure-vault", target_vendor = "apple"))]
+pub mod mentor_zpd;
 
 // Re-exported for `lib.rs`'s `llm::LlmHandle::spawn(...)` wiring. Other types
 // (e.g. `LlmMemoryGovernor`, `LlmLifecycleEvent`) are referenced through their

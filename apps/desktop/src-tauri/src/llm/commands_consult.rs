@@ -1,4 +1,7 @@
 //! M17 mentor consult command — RAG + forced Gap/Oracle injection.
+//!
+//! Phase 6: Twin `R(t)` / `p_lapse` → deterministic ZPD mentor intensity
+//! (Vygotsky 1978 / Yerkes–Dodson 1908 / Bjork 1994) before prompt + temp apply.
 
 use serde::{Deserialize, Serialize};
 use tauri::ipc::Channel;
@@ -6,6 +9,7 @@ use tauri::State;
 
 use crate::db::VaultHandle;
 use crate::llm::consult_context::{build_consult_with_oracle_prompt, load_mentor_context};
+use crate::llm::mentor_zpd::{load_mentor_zpd_signal, MentorZpdSignal};
 use crate::llm::params::GenerationParams;
 use crate::llm::service::TokenEvent;
 use crate::llm::LlmHandle;
@@ -35,6 +39,10 @@ pub struct ConsultWithOracleResult {
     pub oracle_available: bool,
     pub gap_run_id: Option<String>,
     pub oracle_run_id: Option<String>,
+    /// Phase 6 ZPD ladder level (`depleted` / `neutral` / `high_resource`).
+    pub mentor_zpd_level: String,
+    pub mentor_zpd_temperature: f32,
+    pub mentor_zpd_twin_available: bool,
 }
 
 /// Mentor consult: vault Gap+Oracle (fail-safe) + optional RAG → streaming LLM.
@@ -68,6 +76,8 @@ pub async fn consult_with_oracle_context(
     let (prompt, meta) = tauri::async_runtime::spawn_blocking(move || {
         // Fail-safe mentor load: soft sections on missing data; hard error only on vault IPC.
         let mentor = load_mentor_context(&vault).unwrap_or_default();
+        // Twin missing ⇒ Neutral soft-default; vault transport error ⇒ same (never hard-fail consult).
+        let zpd = load_mentor_zpd_signal(&vault).unwrap_or_else(|_| MentorZpdSignal::neutral_default());
         let mut context_ids = Vec::new();
         let prompt = if include_rag {
             let hits = search_sync(&vault, &llm_search, &message_for_search, context_limit)
@@ -91,9 +101,9 @@ pub async fn consult_with_oracle_context(
                 }
             };
             context_ids = hits.into_iter().map(|h| h.id).collect();
-            build_consult_with_oracle_prompt(&message_for_search, &mentor, &rag_only)
+            build_consult_with_oracle_prompt(&message_for_search, &mentor, &rag_only, &zpd)
         } else {
-            build_consult_with_oracle_prompt(&message_for_search, &mentor, "")
+            build_consult_with_oracle_prompt(&message_for_search, &mentor, "", &zpd)
         };
         Ok::<_, String>((
             prompt,
@@ -103,19 +113,21 @@ pub async fn consult_with_oracle_context(
                 mentor.oracle_available,
                 mentor.gap_run_id,
                 mentor.oracle_run_id,
+                zpd,
             ),
         ))
     })
     .await
     .map_err(|_| "consult retrieve task join failed".to_string())??;
 
-    let (context_ids, gap_available, oracle_available, gap_run_id, oracle_run_id) = meta;
+    let (context_ids, gap_available, oracle_available, gap_run_id, oracle_run_id, zpd) = meta;
 
+    // ZPD temperature is the deterministic default; explicit FE `temp` overrides (debug/tests).
     let gen = GenerationParams {
         prompt,
         n_ctx: opts.n_ctx.unwrap_or(DEFAULT_N_CTX),
         max_tokens: opts.max_tokens.unwrap_or(DEFAULT_MAX_TOKENS),
-        temp: opts.temp.unwrap_or(0.6),
+        temp: opts.temp.unwrap_or(zpd.temperature),
         top_k: opts.top_k.unwrap_or(40),
         top_p: opts.top_p.unwrap_or(0.95),
         seed: opts.seed.unwrap_or(0),
@@ -129,5 +141,8 @@ pub async fn consult_with_oracle_context(
         oracle_available,
         gap_run_id,
         oracle_run_id,
+        mentor_zpd_level: zpd.level.as_str().to_string(),
+        mentor_zpd_temperature: zpd.temperature,
+        mentor_zpd_twin_available: zpd.twin_available,
     })
 }

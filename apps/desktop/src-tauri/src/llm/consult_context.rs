@@ -3,18 +3,22 @@
 //! Fail-safe: missing / ungated vault rows produce explicit "unavailable" notes
 //! rather than errors. Never invent scores. Discussion-phase interview must NOT
 //! call this (I-22); debrief/consult only.
+//!
+//! # Adaptive mentor preamble (Phase 6 / ZPD)
+//!
+//! The former fixed `MENTOR_PREAMBLE` is replaced by a level-selected preamble from
+//! [`crate::llm::mentor_zpd`], grounded in:
+//! 1. **ZPD** — Vygotsky (1978): scaffolding intensity tracks current capability.
+//! 2. **Yerkes–Dodson** (1908): inverted-U arousal → Neutral analytic load at mid R.
+//! 3. **Desirable Difficulties** — Bjork (1994): high R + low p_lapse → Devil's Advocate.
+//!
+//! Mapping is deterministic (F-14): Twin `R(t)` / `p_lapse` only; no RNG / egress.
 
 use serde_json::Value;
 
 use crate::analytics::oracle::render_oracle_consult;
 use crate::db::{VaultErrorCode, VaultHandle};
-
-const MENTOR_PREAMBLE: &str = "\
-あなたは司令官の意思決定を支える冷徹なメンターである。同意・共感だけで終わらせるな。\
-下記の「主観×客観ギャップ」「Tensorプロファイル」「Oracle予測」および参考情報に定量根拠がある場合はそれを優先し、\
-ユーザーの自己申告と矛盾する事実があれば「本当にそうか？」と突き、過去メモとの食い違いを明示せよ。\
-一般論でごまかすな。助言の自己検証を行い、行動可能な次手を1〜3個に絞れ。\
-データが不足と明示されている場合は推測で埋めず、観測継続を促せ。";
+use crate::llm::mentor_zpd::MentorZpdSignal;
 
 const GAP_SECTION_BUDGET: usize = 2_500;
 const ORACLE_SECTION_BUDGET: usize = 1_500;
@@ -182,14 +186,17 @@ pub fn load_mentor_context(vault: &VaultHandle) -> Result<MentorContextSections,
     Ok(sections)
 }
 
-/// Mentor consult prompt: preamble + gap + tensor + oracle + optional RAG + user message.
+/// Mentor consult prompt: ZPD preamble + gap + tensor + oracle + optional RAG + user message.
+///
+/// `zpd` selects the Vygotsky / Yerkes–Dodson / Bjork preamble (see `mentor_zpd`).
 pub fn build_consult_with_oracle_prompt(
     message: &str,
     mentor: &MentorContextSections,
     rag_block: &str,
+    zpd: &MentorZpdSignal,
 ) -> String {
     let mut out = String::with_capacity(message.len() + 2048);
-    out.push_str(MENTOR_PREAMBLE);
+    out.push_str(zpd.level.preamble());
     out.push_str("\n\n## 主観×客観ギャップ（決定論・Vault）\n");
     out.push_str(&mentor.gap_block);
     out.push_str("\n## Tensorプロファイル（決定論・Vault）\n");

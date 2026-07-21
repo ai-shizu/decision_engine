@@ -947,6 +947,39 @@ Pocket Brain 経路は M14 tensor + M15 pulse/Rasch + gap sufficiency から loa
 
 **検証:** `cargo check|test --features pocket-brain,secure-vault`。
 
+### 4.48 Phase 5 — Digital Twin RLS personal identification (2026-07-21)
+
+**射程:** Twin 状態方程式 θ=`[ρ,β₁,β₂,γ]` の決定論 RLS オンライン同定。乱数・nalgebra 禁止。LLM は θ を更新しない。
+
+**as-built:**
+1. `analytics/twin_identify.rs` — 手回し 4×4 RLS（λ=0.98）。線形化 `ΔR = xᵀθ`、`x=[(1−R)rec, −ℓ_sw, −ℓ_vol, −frict]`。
+2. Vault `twin_scenario_runs` を oldest→newest でウォーム。`confidence` = in-sample R²。`is_personalized` iff `confidence ≥ BSS_GATE` ∧ `n_obs ≥ 10`。未達時は generic prior。
+3. `evaluate_digital_twin_scenario` / Oracle 経路は fitted θ を注入。`get_twin_identify_status` を FE へ公開。
+4. `GapTensorDashboard` — 「Generic Prior」/「Fitted to You」バッジ。
+
+**ハマりどころ:** clip 付き状態方程式の線形化は近似。履歴が単一スナップショット連続だと ΔR≈0 で confidence が立たない — Twin 評価を重ねて観測を増やせ。
+
+**検証:** `cargo check|test --features pocket-brain,secure-vault` / `npx tsc --noEmit`。
+
+### 4.49 Phase 6 — ZPD adaptive mentor intensity (2026-07-21)
+
+**射程:** Twin 最新 `R(t)` と `p_lapse` からメンター強度を決定論マッピングし、consult の preamble と `GenerationParams.temp` に注入。RNG・外部 API 禁止（F-14）。
+
+**学術根拠（コメントに永続化済み）:**
+1. **ZPD** — Vygotsky (1978): 足場かけ（Depleted）。
+2. **Yerkes–Dodson** (1908): 最適覚醒（Neutral）。
+3. **Desirable Difficulties** — Bjork (1994): Devil's Advocate（High Resource）。
+
+**as-built:**
+1. `llm/mentor_zpd.rs` — 閾値 `R_DEPLETED=0.40` / `R_HIGH=0.70` / `P_LAPSE_HIGH=0.55` / `P_LAPSE_LOW=0.25`。温度 0.3 / 0.5 / 0.7、要求アクション 1 / 2 / 3。
+2. Vault `twin_run_latest_payload`（worker + `oracle_repo`）。欠測・パース失敗は Neutral soft-default（consult を落とさない）。
+3. `build_consult_with_oracle_prompt(..., zpd)` が固定 `MENTOR_PREAMBLE` を差し替え。`consult_with_oracle_context` は `opts.temp.unwrap_or(zpd.temperature)`。
+4. 結果に `mentor_zpd_level` / `mentor_zpd_temperature` / `mentor_zpd_twin_available` を返す。
+
+**ハマりどころ:** High Resource は R 高 ∧ p_lapse 低の AND。高 R でも lapse 高なら Depleted（安全優先）。FE が `temp` を明示すると ZPD 温度を上書きする。
+
+**検証:** `cargo check|test --features pocket-brain,secure-vault`。
+
 ### 4.8 M3 Phase 0-A — SQLCipher / Security.framework iOS link gate (2026-07-18)
 
 **射程（Phase 0-A のみ）:** `secure-vault` feature、依存解決、in-memory SQLCipher identity（`PRAGMA key` + `cipher_version`）、Security.framework シンボル（`SecRandom` / `SecAccessControl`）、Tauri command 登録、iOS Simulator 最終リンク証明。スキーマ・repository・UI・本番 Keychain item 作成は対象外。
