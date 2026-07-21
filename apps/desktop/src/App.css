@@ -3636,6 +3636,7 @@ button.secondary {
 
 .coliseum-rt-fill-ok { background: var(--ok); }
 .coliseum-rt-fill-warn { background: var(--err-soft); }
+.coliseum-rt-fill-cyan { background: var(--sys-cyan); }
 
 .coliseum-rt-readout {
   display: flex;
@@ -3643,6 +3644,157 @@ button.secondary {
   gap: var(--s2);
   font-size: 0.7rem;
   font-variant-numeric: tabular-nums;
+}
+
+.coliseum-lobby-metrics {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: var(--s2);
+}
+
+.coliseum-lobby-metric {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 0.65rem;
+  letter-spacing: 0.04em;
+}
+
+.coliseum-lobby-metric-val {
+  font-size: 1.05rem;
+  font-variant-numeric: tabular-nums;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+
+.coliseum-lobby-gauge {
+  position: relative;
+  height: 12px;
+}
+
+.coliseum-lobby-tick {
+  position: absolute;
+  top: -2px;
+  bottom: -2px;
+  width: 1px;
+  background: var(--text);
+  opacity: 0.55;
+  pointer-events: none;
+}
+
+.coliseum-lobby-tick-labels {
+  display: flex;
+  justify-content: space-between;
+  font-size: 0.58rem;
+  letter-spacing: 0.03em;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.coliseum-mode-row {
+  display: flex;
+  gap: 0;
+}
+
+.coliseum-mode-btn {
+  flex: 1;
+  border: 1px solid var(--border);
+  border-radius: 0;
+  background: var(--bg-deep);
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  letter-spacing: 0.08em;
+  padding: 10px 8px;
+  cursor: pointer;
+  margin-left: -1px;
+}
+
+.coliseum-mode-btn-active {
+  color: var(--sys-cyan);
+  border-color: var(--sys-cyan);
+  z-index: 1;
+}
+
+.coliseum-mode-btn-devil-active {
+  color: var(--ok);
+  border-color: var(--ok);
+  z-index: 1;
+}
+
+.coliseum-mode-btn-locked {
+  color: var(--ok);
+  border-color: var(--ok);
+  opacity: 0.85;
+}
+
+.coliseum-protection-notice {
+  border: 1px solid var(--ok);
+  background: color-mix(in srgb, var(--ok) 8%, var(--bg-deep));
+  padding: var(--s3);
+  display: flex;
+  flex-direction: column;
+  gap: var(--s2);
+  border-radius: 0;
+}
+
+.coliseum-protection-title {
+  color: var(--ok);
+  font-size: 0.7rem;
+  letter-spacing: 0.12em;
+  font-weight: 700;
+}
+
+.coliseum-protection-body,
+.coliseum-protection-egress {
+  margin: 0;
+  color: var(--ok);
+  font-size: 0.78rem;
+  line-height: 1.45;
+}
+
+.coliseum-protection-egress {
+  opacity: 0.9;
+}
+
+.coliseum-protection-math {
+  margin: 0;
+  padding: var(--s2);
+  border: 1px solid color-mix(in srgb, var(--ok) 45%, var(--border));
+  background: var(--bg);
+  color: var(--ok);
+  font-size: 0.62rem;
+  line-height: 1.4;
+  border-radius: 0;
+  overflow-x: auto;
+}
+
+.coliseum-lobby-actions {
+  display: flex;
+  gap: var(--s2);
+}
+
+.coliseum-lobby-debug {
+  border: 1px dashed var(--border);
+  padding: var(--s3);
+  display: flex;
+  flex-direction: column;
+  gap: var(--s2);
+  border-radius: 0;
+}
+
+.coliseum-lobby-slider {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 0.7rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.coliseum-lobby-slider input[type="range"] {
+  width: 100%;
+  accent-color: var(--sys-cyan);
+  border-radius: 0;
 }
 
 .coliseum-lock-row {
@@ -3661,8 +3813,8 @@ button.secondary {
 }
 
 .coliseum-lock-closed {
-  color: var(--err-soft);
-  border-color: var(--err-soft);
+  color: var(--ok);
+  border-color: var(--ok);
 }
 
 .coliseum-lock-open {

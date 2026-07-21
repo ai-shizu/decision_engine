@@ -1164,7 +1164,20 @@ Pocket Brain 経路は M14 tensor + M15 pulse/Rasch + gap sufficiency から loa
 
 **ハマりどころ:** 汎用チャット UI を流用するな。SovereignBar を view 切替で unmount するな。Zustand 禁止。
 
-**検証:** `npx tsc --noEmit`（apps/desktop）/ `npx tsx tests-runtime/sovereignBarLogic.test.ts`。
+**検証:** `npx tsc --noEmit` / `npm run test:boundary`。
+
+### 4.62 Phase 14 UI — ColiseumLobby ZPD 保護ゲート (2026-07-21)
+
+**射程:** Lobby の R(t)/P_LAPSE 表示と Devil Mode ハードゲート。ロックはエラーではなく保護（`--ok` エメラルドのみ。Lobby で `--err` 禁止）。
+
+**as-built:**
+1. `lib/coliseumLobbyLogic.ts` — `evaluateDevilGate` / `resolveModeSelection`（`R≥0.40 ∧ P_LAPSE≤0.55`）。
+2. `ColiseumLobby.tsx` — `ResourceGauge`（シアン数値）+ `ModeSelect` + `ProtectionNotice`（ARIA status/live、英語保護文言）。
+3. DEBUG スライダーで R(t)/P_LAPSE をシミュレート。Devil 試行時は STANDARD へ強制フォールバック。
+
+**ハマりどころ:** ロック表示にクリムゾンを使うな。「失敗」コピーを書くな。退路（Standard remains available）を消すな。
+
+**検証:** `npx tsc --noEmit` / `npm run test:boundary`。
 
 ### 4.8 M3 Phase 0-A — SQLCipher / Security.framework iOS link gate (2026-07-18)
 

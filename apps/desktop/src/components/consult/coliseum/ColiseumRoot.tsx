@@ -67,7 +67,9 @@ export function ColiseumRoot({
       </header>
 
       <main className="coliseum-stage" aria-live="polite">
-        {view === "lobby" && <ColiseumLobby onEnterArena={() => setView("arena")} />}
+        {view === "lobby" && (
+          <ColiseumLobby onEnterArena={() => setView("arena")} />
+        )}
         {view === "arena" && <ColiseumArena onRequestDebrief={() => setView("debrief")} />}
         {view === "debrief" && <ColiseumDebrief halted={halted} />}
       </main>
