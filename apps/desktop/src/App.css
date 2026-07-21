@@ -3826,35 +3826,41 @@ button.secondary {
   font-size: 0.72rem;
 }
 
-/* Pill / segmented sub-nav — one row, swipe horizontally */
+/* Equal-width terminal grid — full bleed, no dead space / no pill scroll */
 .mobile-chrome .sub-tabs-pills,
 .mobile-chrome .sub-tabs {
   display: flex;
   flex-wrap: nowrap;
-  gap: 6px;
+  width: 100%;
+  gap: 0;
   margin: 0 0 8px;
-  padding: 0 0 2px;
-  overflow-x: auto;
-  overflow-y: hidden;
-  -webkit-overflow-scrolling: touch;
-  scrollbar-width: none;
-}
-
-.mobile-chrome .sub-tabs-pills::-webkit-scrollbar,
-.mobile-chrome .sub-tabs::-webkit-scrollbar {
-  display: none;
+  padding: 0;
+  overflow: hidden;
 }
 
 .mobile-chrome .sub-tabs-pills button,
 .mobile-chrome .sub-tabs button {
-  flex: 0 0 auto;
+  flex: 1 1 0;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
   white-space: nowrap;
-  padding: 6px 12px;
+  margin-left: -1px;
+  padding: 8px 4px;
   font-size: 0.72rem;
   letter-spacing: 0.04em;
   text-transform: none;
-  min-height: 32px;
+  min-height: 36px;
   line-height: 1.2;
+  border: 1px solid var(--border);
+  border-radius: 0;
+}
+
+.mobile-chrome .sub-tabs-pills button:first-child,
+.mobile-chrome .sub-tabs button:first-child {
+  margin-left: 0;
 }
 
 .mobile-chrome .sub-tabs-pills button::before,
