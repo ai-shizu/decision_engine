@@ -4,3 +4,5 @@ export { SovereignBar } from "./SovereignBar";
 export { ColiseumLobby } from "./ColiseumLobby";
 export { ColiseumArena } from "./ColiseumArena";
 export { ColiseumDebrief } from "./ColiseumDebrief";
+export { AsymmetryProbe } from "./AsymmetryProbe";
+export type { AsymmetryProbeProps } from "./AsymmetryProbe";

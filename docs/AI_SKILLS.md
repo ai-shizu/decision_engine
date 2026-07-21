@@ -1179,6 +1179,19 @@ Pocket Brain 経路は M14 tensor + M15 pulse/Rasch + gap sufficiency から loa
 
 **検証:** `npx tsc --noEmit` / `npm run test:boundary`。
 
+### 4.63 Phase 14 UI — AsymmetryProbe (I-22 視覚証明) (2026-07-21)
+
+**射程:** Arena 内で「Vault 生データは LLM に渡らない」を UI で証明する。外部アイコン禁止。角丸0・等幅。
+
+**as-built:**
+1. `AsymmetryProbe.tsx` — `[VAULT SEALED]`（`--err`）→ `[TACTICS ONLY]`（`--ok`）。コンテキスト証明行 + 除外行（低 opacity）。
+2. 封印化石は blur + ハッチング。コンパイル境界 `NON-INVERTIBLE COMPILE`。戦術リストは emerald。
+3. Props: `activeTactics: string[]`。`ColiseumArena` からモック戦術を注入。
+
+**ハマりどころ:** 封印側を読める鮮明テキストにするな。戦術側に purchase/distortion 生文字列を出すな。
+
+**検証:** `npx tsc --noEmit` / `npm run test:boundary`。
+
 ### 4.8 M3 Phase 0-A — SQLCipher / Security.framework iOS link gate (2026-07-18)
 
 **射程（Phase 0-A のみ）:** `secure-vault` feature、依存解決、in-memory SQLCipher identity（`PRAGMA key` + `cipher_version`）、Security.framework シンボル（`SecRandom` / `SecAccessControl`）、Tauri command 登録、iOS Simulator 最終リンク証明。スキーマ・repository・UI・本番 Keychain item 作成は対象外。

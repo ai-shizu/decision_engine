@@ -1,6 +1,8 @@
 /**
- * Phase 14 skeleton — Arena: virtual transcript + asymmetry probe frame.
+ * Phase 14 — Arena: virtual transcript + I-22 AsymmetryProbe.
  */
+
+import { AsymmetryProbe } from "./AsymmetryProbe";
 
 const MOCK_TURNS = [
   { id: "t-0", role: "INTERVIEWER", text: "まず論点を MECE に分割してください。" },
@@ -9,10 +11,21 @@ const MOCK_TURNS = [
   { id: "t-3", role: "CANDIDATE", text: "10^7 規模。感度は価格弾性に依存。" },
 ] as const;
 
+/** Mock AbstractTacticSet ids (Finding 1 compile output — no vault fossils). */
+const MOCK_ACTIVE_TACTICS = [
+  "probe_overgeneralization",
+  "stress_quant_backing",
+  "force_nuanced_tradeoff",
+  "probe_reproducibility",
+] as const;
+
 export function ColiseumArena({
   onRequestDebrief,
+  activeTactics = [...MOCK_ACTIVE_TACTICS],
 }: {
   onRequestDebrief?: () => void;
+  /** Override compiled tactics for live sessions later. */
+  activeTactics?: string[];
 }) {
   return (
     <section className="coliseum-panel" aria-label="Coliseum arena">
@@ -41,31 +54,13 @@ export function ColiseumArena({
               </li>
             ))}
           </ul>
-        </div>
-
-        <div className="coliseum-frame coliseum-frame-tall">
-          <div className="coliseum-frame-label">ASYMMETRY PROBE · I-22</div>
-          <div className="coliseum-probe-grid">
-            <div className="coliseum-probe-cell">
-              <span className="coliseum-text-muted">PUBLIC BRIEF</span>
-              <span>SWE / IB CASE · NO VAULT</span>
-            </div>
-            <div className="coliseum-probe-cell">
-              <span className="coliseum-text-muted">FROZEN DIRECTIVES</span>
-              <span className="coliseum-text-cyan">AbstractTacticSet · sealed</span>
-            </div>
-            <div className="coliseum-probe-cell">
-              <span className="coliseum-text-muted">LEAK GUARD</span>
-              <span className="coliseum-text-ok">render_guard · PASS</span>
-            </div>
-            <div className="coliseum-probe-cell">
-              <span className="coliseum-text-muted">CIRCUIT</span>
-              <span className="coliseum-text-amber">lexicon ∪ short-streak</span>
-            </div>
-          </div>
           <button type="button" className="coliseum-btn-cyan" onClick={onRequestDebrief}>
             ADVANCE → DEBRIEF
           </button>
+        </div>
+
+        <div className="coliseum-frame coliseum-frame-tall coliseum-frame-asym">
+          <AsymmetryProbe activeTactics={activeTactics} />
         </div>
       </div>
     </section>
