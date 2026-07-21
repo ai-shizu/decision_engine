@@ -31,7 +31,7 @@ const STAGE_LABELS_JA: Record<(typeof STAGE_ORDER)[number], string> = {
 };
 
 /**
- * M15 PROBE funnel — MAGI instrument rack + classified vault strip.
+ * M15 PROBE funnel — dense rack, Japanese-first, classified vault strip.
  */
 export function PocketProbePanel() {
   const [state, dispatch] = useReducer(
@@ -100,30 +100,27 @@ export function PocketProbePanel() {
   const activeStage = state.question?.stage ?? null;
   const charCount = state.answer.length;
   const vaultDump = state.status
-    ? `completed=${state.status.completed_stages}/${state.status.total_stages} progress=${state.status.progress_percent}% bank=${state.bank.length} phase=${state.phase}`
-    : `phase=${state.phase} bank=${state.bank.length} · awaiting status frame`;
+    ? `完了 ${state.status.completed_stages}/${state.status.total_stages} · 進捗 ${state.status.progress_percent}% · 設問庫 ${state.bank.length}`
+    : `設問庫 ${state.bank.length} · 状態取得待ち`;
 
   return (
     <div className="pocket-probe-panel magi-rack">
       <div className="magi-mod">
         <div className="magi-mod-head">
-          <span>[ PROBE_FUNNEL ]</span>
-          <span className="micro-tel">
-            SEQ_{activeStage ?? "IDLE"} · T-MINUS
+          <span>進捗</span>
+          <span className="term-tag term-tag--info">
+            [ {progress !== null ? `${progress}%` : "—"} ]
           </span>
         </div>
         <div className="magi-mod-body">
           <div className="probe-topline" style={{ border: "none", padding: 0 }}>
-            <span className="term-tag term-tag--info">
-              [ {progress !== null ? `${progress}%` : "—"} ]
-            </span>
             <button
               type="button"
               className="ghost"
               disabled={busy}
               onClick={() => void refreshAll()}
             >
-              {state.phase === "loading" ? "SYNC…" : "RESYNC"}
+              {state.phase === "loading" ? "更新中…" : "状態を更新"}
             </button>
           </div>
           <div
@@ -140,17 +137,13 @@ export function PocketProbePanel() {
             />
           </div>
         </div>
-        <div className="magi-mod-foot">
-          <span>SYS.NOMINAL</span>
-          <span>M15 · CORAXIS</span>
-        </div>
       </div>
 
       {state.phase === "loading" && (
         <div className="magi-mod">
           <div className="magi-mod-body">
             <p className="sys-log" role="status">
-              {`> SYS_INF :: [BUSY] ${PB_UI_BUSY.probeStatus}`}
+              {`> ${PB_UI_BUSY.probeStatus}`}
             </p>
           </div>
         </div>
@@ -158,14 +151,9 @@ export function PocketProbePanel() {
 
       <div className="magi-mod">
         <div className="magi-mod-head">
-          <span>[ STAGE_ARRAY ]</span>
-          <span className="micro-tel">HARDWARE TOGGLE · GAP 0</span>
+          <span>段階</span>
         </div>
-        <div
-          className="tactical-array"
-          role="group"
-          aria-label="ファネル段階"
-        >
+        <div className="tactical-array" role="group" aria-label="ファネル段階">
           {STAGE_ORDER.map((stage) => {
             const idx = STAGE_ORDER.indexOf(stage);
             const activeIdx = activeStage
@@ -181,8 +169,7 @@ export function PocketProbePanel() {
                 disabled
                 aria-pressed={active}
               >
-                <span className="desktop-only">{stage}</span>
-                <span className="mobile-only">{STAGE_LABELS_JA[stage]}</span>
+                {STAGE_LABELS_JA[stage]}
               </button>
             );
           })}
@@ -191,36 +178,31 @@ export function PocketProbePanel() {
 
       <div className="magi-mod hatch-danger">
         <div className="magi-mod-head">
-          <span className="term-tag term-tag--danger">[ VAULT SEALED ]</span>
+          <span className="term-tag term-tag--danger">[ 封印データ ]</span>
           <button
             type="button"
             className="ghost"
             onClick={() => setVaultRevealed((v) => !v)}
           >
-            {vaultRevealed ? "[ RE-SEAL ]" : "[ DECRYPT ]"}
+            {vaultRevealed ? "再封印" : "復号"}
           </button>
         </div>
         <div
           className={`magi-mod-body data-sealed-host${vaultRevealed ? " is-revealed" : ""}`}
         >
-          <span className="term-tag term-tag--danger">[ LLM-OPAQUE ]</span>
-          <p className="text-redacted data-sealed micro-tel">{vaultDump}</p>
-        </div>
-        <div className="magi-mod-foot">
-          <span>PRE-COMPILE FOSSIL</span>
-          <span>I-22 ASYMMETRY</span>
+          <span className="term-tag term-tag--danger">[ LLM非公開 ]</span>
+          <p className="text-redacted data-sealed hint guide">{vaultDump}</p>
         </div>
       </div>
 
       {state.phase === "complete" && (
         <div className="magi-mod hatch-ok">
           <div className="magi-mod-head">
-            <span className="term-tag term-tag--ok">[ SESSION_COMPLETE ]</span>
-            <span className="micro-tel">SYS.OK</span>
+            <span className="term-tag term-tag--ok">[ 完了 ]</span>
           </div>
           <div className="magi-mod-body">
             <p className="sys-log sys-log--ok">
-              {"> SYS_OK :: [COMPLETE] この軸の次質問はありません。"}
+              {"> この軸の次の質問はありません。"}
             </p>
             <button
               type="button"
@@ -236,29 +218,23 @@ export function PocketProbePanel() {
       {state.phase !== "complete" && (
         <div className="magi-mod">
           <div className="magi-mod-head">
-            <span>[ ACTIVE_QUERY ]</span>
-            <span className="micro-tel">
-              {state.question
-                ? `AXIS/${state.question.stage}`
-                : "AWAITING_DISPATCH"}
-            </span>
+            <span>現在の問い</span>
+            {state.question ? (
+              <span className="term-tag term-tag--ok">[ 出題中 ]</span>
+            ) : (
+              <span className="term-tag term-tag--warn">[ 待機 ]</span>
+            )}
           </div>
           <div className="magi-mod-body probe-question" aria-live="polite">
             {state.question ? (
               <>
                 <p className="term-label">
                   {AXIS_LABELS[state.question.axis] ?? state.question.axis}
-                  <span className="probe-axis-metric">
-                    {" "}
-                    pri {state.question.priority.toFixed(3)}
-                  </span>
                 </p>
                 <p>{state.question.question}</p>
               </>
             ) : (
-              <p className="sys-log">
-                {"> SYS_INF :: [STANDBY] 「次の質問」で自己探索を開始。"}
-              </p>
+              <p className="hint guide">「次の質問」で自己探索を開始します。</p>
             )}
 
             {state.question && (
@@ -284,7 +260,7 @@ export function PocketProbePanel() {
                 <div
                   className={`probe-char-counter${charCount >= 120 ? " sys-log--err" : ""}`}
                 >
-                  {charCount}/120 · BUF
+                  {charCount}/120
                 </div>
                 <div className="action-row">
                   <button
@@ -294,8 +270,8 @@ export function PocketProbePanel() {
                     onClick={() => void onSubmit()}
                   >
                     {state.phase === "submitting"
-                      ? "TX…"
-                      : "送信 (Ctrl+Enter)"}
+                      ? "送信中…"
+                      : "回答を送信 (Ctrl+Enter)"}
                   </button>
                 </div>
               </>
@@ -309,14 +285,10 @@ export function PocketProbePanel() {
                   disabled={busy}
                   onClick={() => void onNext()}
                 >
-                  {state.phase === "fetching_question" ? "RX…" : "次の質問"}
+                  {state.phase === "fetching_question" ? "取得中…" : "次の質問"}
                 </button>
               </div>
             )}
-          </div>
-          <div className="magi-mod-foot">
-            <span>BANK={state.bank.length}</span>
-            <span>CH_MONO</span>
           </div>
         </div>
       )}
@@ -325,7 +297,7 @@ export function PocketProbePanel() {
         <div className="magi-mod">
           <div className="magi-mod-body">
             <p className="sys-log sys-log--err" role="alert">
-              {`> SYS_ERR :: [PROBE_FAIL] ${state.error}`}
+              {`> ${state.error}`}
             </p>
           </div>
         </div>

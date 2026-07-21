@@ -6,7 +6,7 @@ import { PulseRaschDashboard } from "./PulseRaschDashboard";
 type ProbeSurface = "pb_probe" | "pulse_rasch";
 
 /**
- * PROBE tab — MAGI multi-monitor rack + tactical surface array.
+ * PROBE tab — stoic instrument rack (Japanese-first, no flavor noise).
  */
 export function ProbeTab() {
   const isNarrow = useIsNarrowViewport();
@@ -16,8 +16,7 @@ export function ProbeTab() {
     return (
       <section className="panel probe-panel probe-panel-mobile magi-rack">
         <div className="magi-mod-head" style={{ borderBottom: "1px solid var(--border)" }}>
-          <span className="term-tag term-tag--info">[ PROBE ]</span>
-          <span className="micro-tel">MOBILE · FUNNEL</span>
+          <span>自己探索</span>
         </div>
         <PocketProbePanel />
       </section>
@@ -27,17 +26,10 @@ export function ProbeTab() {
   return (
     <section className="panel probe-panel magi-rack">
       <div className="probe-topline">
-        <h2>
-          PROBE <span className="term-tag term-tag--info">[ SELF-PROBE ]</span>
-        </h2>
-        <span className="micro-tel">SYS.NOMINAL · MAGI-RACK</span>
+        <h2>自己探索</h2>
       </div>
 
-      <div
-        className="tactical-array"
-        role="tablist"
-        aria-label="PROBE面"
-      >
+      <div className="tactical-array" role="tablist" aria-label="PROBE面">
         <button
           type="button"
           role="tab"
@@ -45,7 +37,7 @@ export function ProbeTab() {
           className={surface === "pb_probe" ? "active" : ""}
           onClick={() => setSurface("pb_probe")}
         >
-          FUNNEL
+          [ 探索 ]
         </button>
         <button
           type="button"
@@ -54,23 +46,15 @@ export function ProbeTab() {
           className={surface === "pulse_rasch" ? "active" : ""}
           onClick={() => setSurface("pulse_rasch")}
         >
-          PULSE/RASCH
+          [ パルス ]
         </button>
-      </div>
-
-      <div className="magi-mod">
-        <div className="magi-mod-foot" style={{ borderTop: "none" }}>
-          <span>-&gt; {surface === "pb_probe" ? "FUNNEL" : "PULSE"} -&gt;</span>
-          <span>SURFACE_LOCK</span>
-        </div>
       </div>
 
       {surface === "pb_probe" && <PocketProbePanel />}
       {surface === "pulse_rasch" && (
         <div className="magi-mod">
           <div className="magi-mod-head">
-            <span>[ PULSE_RASCH ]</span>
-            <span className="micro-tel">TELEMETRY</span>
+            <span>パルス / Rasch</span>
           </div>
           <div className="magi-mod-body">
             <PulseRaschDashboard />

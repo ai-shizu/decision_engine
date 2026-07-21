@@ -14,31 +14,30 @@ import { MultistageInterviewPanel } from "./interview/MultistageInterviewPanel";
 // M18-E: Interview tab is Coraxis-only (Python consult dual-stack removed).
 type InterviewSurface = "interview_pocket" | "multistage" | "es_pocket" | "coliseum";
 
-/** Hardware HUD mode indicators — top-tier selection simulators. */
 const MODES: { id: InterviewSurface; label: string; shortLabel: string; hint: string }[] = [
   {
     id: "interview_pocket",
-    label: "[ 1ON1_TECH ]",
-    shortLabel: "[ 1ON1 ]",
-    hint: "1ON1_TECH: 技術/人物面接ストリーム (企業ファクト + 任意 ES ベース)。",
+    label: "[ 1on1面接 ]",
+    shortLabel: "[ 1on1 ]",
+    hint: "技術・人物の1対1面接。企業コンテキストと任意のESを前提に進めます。",
   },
   {
     id: "multistage",
-    label: "[ SYS_DESIGN ]",
-    shortLabel: "[ SYS_DS ]",
-    hint: "SYS_DESIGN: Foundation → Pressure → Debrief → Closed 多段プロンプト。",
+    label: "[ 多段設計 ]",
+    shortLabel: "[ 多段 ]",
+    hint: "Foundation → Pressure → Debrief → Closed の多段面接。",
   },
   {
     id: "es_pocket",
-    label: "[ DOC_SCAN ]",
-    shortLabel: "[ DOC ]",
-    hint: "DOC_SCAN: ES/書類解析 — 採用責任者ストリーム添削。",
+    label: "[ ES解析 ]",
+    shortLabel: "[ ES ]",
+    hint: "提出ESを採用責任者視点で添削します。",
   },
   {
     id: "coliseum",
-    label: "[ ARENA_GD ]",
-    shortLabel: "[ ARENA ]",
-    hint: "ARENA_GD: Inner Coliseum グループディスカッション闘技場。",
+    label: "[ GD闘技 ]",
+    shortLabel: "[ GD ]",
+    hint: "グループディスカッションの闘技シミュレーション。",
   },
 ];
 
@@ -67,20 +66,15 @@ export function InterviewTab() {
     <section className="panel interview-panel magi-rack">
       <div className="magi-mod-head consult-header">
         <h2>
-          <span className="desktop-only">
-            INTERVIEW <span className="term-tag term-tag--info">[ SIM_RACK ]</span>
-          </span>
-          <span className="mobile-only">
-            <span className="term-tag term-tag--info">[ INTERVIEW ]</span>
-          </span>
+          <span className="desktop-only">面接シミュレーター</span>
+          <span className="mobile-only">面接</span>
         </h2>
-        <span className="micro-tel">MODE_LOCK · HUD</span>
       </div>
 
       <div
         className="tactical-array interview-mode-array"
         role="tablist"
-        aria-label="面接稼働モード"
+        aria-label="面接モード"
       >
         {MODES.map((m) => (
           <button
@@ -98,10 +92,9 @@ export function InterviewTab() {
         ))}
       </div>
 
-      <div className="magi-mod-foot">
-        <span className="micro-tel">{currentMode.hint}</span>
-        <span className="micro-tel">SYS.NOMINAL</span>
-      </div>
+      <p className="hint guide" style={{ margin: "6px 8px" }}>
+        {currentMode.hint}
+      </p>
 
       {isNarrow && surface === "interview_pocket" && (
         <div className="interview-shared-context">

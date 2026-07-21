@@ -21,14 +21,22 @@ export function InterviewEsBaseForm({
   onEsIdChange,
   onEsTextChange,
 }: InterviewEsBaseFormProps) {
+  const ready = Boolean(esId || esText.trim());
+
   return (
-    <div className="term-panel interview-es-base-form interview-section">
+    <div
+      className={`term-panel interview-es-base-form interview-section${ready ? " is-ready" : ""}`}
+    >
       <p className="term-header">
-        <span className="desktop-only">ES_BASE (面接の前提)</span>
-        <span className="mobile-only">ベースとなるES</span>
+        ベースとなるES
+        {ready ? (
+          <span className="term-tag term-tag--ok"> [ 設定済み ]</span>
+        ) : (
+          <span className="term-tag term-tag--warn"> [ ゼロベース ]</span>
+        )}
       </p>
       <p className="hint guide">
-        登録済み ES を選ぶか、下に本文を直接入力します。未指定ならゼロベース面接です。
+        登録済みESを選ぶか、本文を直接入力します。未指定ならゼロベース面接です。
       </p>
       <div className="term-row config-row">
         <span className="term-source-name">対象企業のES</span>
@@ -54,15 +62,15 @@ export function InterviewEsBaseForm({
           value={esText}
           disabled={disabled}
           onChange={(e) => onEsTextChange(e.target.value)}
-          placeholder="選択した ES の本文、またはここに貼り付け / 直接入力"
+          placeholder="選択したESの本文、またはここに貼り付け / 直接入力"
         />
       </div>
       <p className="hint guide">
         {esId
-          ? "選択した企業の ES を面接官 AI の前提として使います。"
+          ? "選択した企業のESを面接の前提として使います。"
           : esText.trim()
-            ? "貼り付けた ES 本文を前提に面接します。"
-            : "ES を使わず、企業コンテキストのみでゼロベースの面接にします。"}
+            ? "貼り付けたES本文を前提に面接します。"
+            : "ESなし。企業コンテキストのみで進めます。"}
       </p>
     </div>
   );

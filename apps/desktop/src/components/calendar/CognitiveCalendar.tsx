@@ -90,7 +90,7 @@ export function CognitiveCalendar() {
       aria-labelledby="cognitive-cal-title"
     >
       <div className="magi-mod-head cognitive-cal-toolbar">
-        <h2 id="cognitive-cal-title">[ METACOG · MATRIX ]</h2>
+        <h2 id="cognitive-cal-title">認知カレンダー</h2>
         <div className="cognitive-cal-nav">
           <button type="button" className="ghost" onClick={() => go(-1)} aria-label="前月">
             ‹
@@ -105,24 +105,23 @@ export function CognitiveCalendar() {
         </div>
       </div>
 
-      <div className="magi-mod-foot" style={{ borderTop: "none", borderBottom: "1px solid var(--border)" }}>
-        <span>-&gt; R(t) · DISTORTION · EXPENSE -&gt;</span>
-        <span className="micro-tel">SYS.NOMINAL · HATCH=HAZARD</span>
-      </div>
+      <p className="hint guide" style={{ margin: "4px 8px" }}>
+        枠線 = 状態 · 斜線 = 危険日 · 数値 = テレメトリ
+      </p>
 
       {error ? (
         <div className="magi-mod-body">
           <p className="sys-log sys-log--err" role="alert">
-            {`> SYS_ERR :: [CAL_FAIL] ${error}`}
+            {`> ${error}`}
           </p>
         </div>
       ) : null}
 
       <div className="tactical-array cognitive-cal-legend" aria-hidden="true">
-        <span className="tactical-cell term-tag term-tag--ok">STABLE</span>
-        <span className="tactical-cell term-tag term-tag--info">NOMINAL</span>
-        <span className="tactical-cell term-tag term-tag--warn">WARN</span>
-        <span className="tactical-cell term-tag term-tag--danger">DANGER</span>
+        <span className="tactical-cell term-tag term-tag--ok">安定</span>
+        <span className="tactical-cell term-tag term-tag--info">通常</span>
+        <span className="tactical-cell term-tag term-tag--warn">注意</span>
+        <span className="tactical-cell term-tag term-tag--danger">危険</span>
       </div>
 
       <div
@@ -219,8 +218,7 @@ export function CognitiveCalendar() {
       </div>
 
       <div className="magi-mod-foot">
-        <span>MATRIX_ONLINE</span>
-        <span className="micro-tel">CELLS={days.length} · MAX_EXP={monthMax || 0}</span>
+        <span className="hint guide">記録日 {days.length} · 最大支出 {monthMax || 0}</span>
       </div>
     </section>
   );
