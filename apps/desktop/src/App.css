@@ -4281,3 +4281,230 @@ button.secondary {
     letter-spacing: 0.12em;
   }
 }
+
+/* ─── Phase 14 TranscriptStream + CircuitBreakerGauge ───────────────────── */
+.coliseum-arena {
+  gap: var(--s2);
+}
+
+.coliseum-frame-tx {
+  padding: var(--s2);
+  display: flex;
+  flex-direction: column;
+  gap: var(--s2);
+  min-height: 280px;
+}
+
+.coliseum-arena-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s2);
+  margin-top: auto;
+}
+
+.tx-stream {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s1);
+  min-height: 0;
+  flex: 1;
+  font-family: var(--font-mono);
+  border-radius: 0;
+}
+
+.tx-stream-label {
+  font-size: 0.6rem;
+  letter-spacing: 0.1em;
+  color: var(--text-muted);
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 4px;
+}
+
+.tx-stream-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  overflow: auto;
+  max-height: 340px;
+}
+
+.tx-msg {
+  padding: 6px 8px;
+  border-radius: 0;
+  border-left: 2px solid var(--border);
+}
+
+.tx-msg-interviewer {
+  background: var(--bg);
+  border-left-color: #3a3a3a;
+}
+
+.tx-msg-candidate {
+  background: var(--bg-raised);
+  border-left-color: #555;
+}
+
+.tx-msg-meta {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--s2);
+  font-size: 0.62rem;
+  letter-spacing: 0.06em;
+  color: var(--text-muted);
+  margin-bottom: 4px;
+}
+
+.tx-msg-role {
+  font-weight: 600;
+  color: #a0a0a0;
+}
+
+.tx-msg-turn {
+  font-variant-numeric: tabular-nums;
+  color: #6e6e6e;
+}
+
+.tx-msg-body {
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  line-height: 1.45;
+  color: var(--text);
+  background: transparent;
+  border: none;
+  padding: 0;
+}
+
+.cb-gauge {
+  border: 1px solid var(--border);
+  background: var(--bg-raised);
+  padding: var(--s2) var(--s3);
+  display: flex;
+  flex-direction: column;
+  gap: var(--s1);
+  border-radius: 0;
+  font-family: var(--font-mono);
+}
+
+.cb-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: var(--s2);
+}
+
+.cb-title {
+  font-size: 0.7rem;
+  letter-spacing: 0.12em;
+  font-weight: 700;
+  color: var(--text);
+}
+
+.cb-status {
+  font-size: 0.65rem;
+  letter-spacing: 0.1em;
+  font-weight: 700;
+}
+
+.cb-status-nominal {
+  color: var(--text-muted);
+}
+
+.cb-status-warn {
+  color: var(--err-soft);
+}
+
+.cb-status-trip {
+  color: var(--err);
+}
+
+.cb-track {
+  position: relative;
+  height: 10px;
+  border: 1px solid var(--border);
+  background: var(--bg-deep);
+  border-radius: 0;
+  overflow: hidden;
+}
+
+.cb-fill {
+  height: 100%;
+  border-radius: 0;
+  transition: width var(--t-fast) linear, background-color var(--t-fast) linear;
+}
+
+.cb-fill-nominal {
+  background: #5a5a5a;
+}
+
+.cb-fill-warn {
+  background: var(--err-soft);
+}
+
+.cb-fill-trip {
+  background: var(--err);
+}
+
+.cb-warn-marker {
+  position: absolute;
+  top: -3px;
+  bottom: -3px;
+  width: 2px;
+  background: var(--err-soft);
+  opacity: 0.95;
+  pointer-events: none;
+  z-index: 2;
+}
+
+.cb-scale {
+  display: flex;
+  justify-content: space-between;
+  font-size: 0.58rem;
+  letter-spacing: 0.04em;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.cb-scale-warn {
+  color: var(--err-soft);
+}
+
+.cb-scale-trip {
+  color: var(--err);
+}
+
+.cb-tele {
+  font-size: 0.62rem;
+  letter-spacing: 0.03em;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.cb-debug {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s1);
+  margin-top: 2px;
+}
+
+.cb-debug-btn {
+  border: 1px solid var(--border);
+  border-radius: 0;
+  background: var(--bg-deep);
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 0.62rem;
+  letter-spacing: 0.04em;
+  padding: 6px 8px;
+  cursor: pointer;
+}
+
+.cb-debug-btn:hover {
+  border-color: var(--text-muted);
+  color: var(--text);
+}

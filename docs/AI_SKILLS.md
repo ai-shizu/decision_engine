@@ -1192,6 +1192,19 @@ Pocket Brain 経路は M14 tensor + M15 pulse/Rasch + gap sufficiency から loa
 
 **検証:** `npx tsc --noEmit` / `npm run test:boundary`。
 
+### 4.64 Phase 14 UI — TranscriptStream + CircuitBreakerGauge (2026-07-21)
+
+**射程:** Arena の対話ログ密度と精神的枯渇サーキットの可視化。ログ本文はモノクロ。警告=`--err-soft`、トリップ=`--err`。
+
+**as-built:**
+1. `TranscriptStream.tsx` — `ROLE [STAGE]` + `T-NN` メタ。モック配列描画（仮想化は後続）。
+2. `CircuitBreakerGauge.tsx` + `lib/circuitBreakerLogic.ts` — WARN@78% / TRIP@100%。`[SIMULATE DISTRESS ▲]` / `[RESET]`。
+3. `ColiseumArena` に組み込み。TRIPPED で DEBRIEF 誘導。
+
+**ハマりどころ:** ログ本文にシアン/エメラルドを塗るな。WARN マーカーを消すな。Zustand 禁止。
+
+**検証:** `npx tsc --noEmit` / `npm run test:boundary`。
+
 ### 4.8 M3 Phase 0-A — SQLCipher / Security.framework iOS link gate (2026-07-18)
 
 **射程（Phase 0-A のみ）:** `secure-vault` feature、依存解決、in-memory SQLCipher identity（`PRAGMA key` + `cipher_version`）、Security.framework シンボル（`SecRandom` / `SecAccessControl`）、Tauri command 登録、iOS Simulator 最終リンク証明。スキーマ・repository・UI・本番 Keychain item 作成は対象外。

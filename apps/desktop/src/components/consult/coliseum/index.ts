@@ -6,3 +6,6 @@ export { ColiseumArena } from "./ColiseumArena";
 export { ColiseumDebrief } from "./ColiseumDebrief";
 export { AsymmetryProbe } from "./AsymmetryProbe";
 export type { AsymmetryProbeProps } from "./AsymmetryProbe";
+export { TranscriptStream } from "./TranscriptStream";
+export type { TranscriptMessage } from "./TranscriptStream";
+export { CircuitBreakerGauge } from "./CircuitBreakerGauge";
