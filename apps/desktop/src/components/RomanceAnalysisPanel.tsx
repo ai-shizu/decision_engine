@@ -1,7 +1,7 @@
-import type { RomanceAnalysisResult } from "../lib/engine";
+import type { RomanceAnalysisV1 } from "../lib/pocketBrain/types";
 
 interface Props {
-  result: RomanceAnalysisResult | null;
+  result: RomanceAnalysisV1 | null;
 }
 
 function clampScore(value: number | null | undefined): number | null {

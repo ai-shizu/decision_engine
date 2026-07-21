@@ -1,15 +1,10 @@
 import { useCallback, useEffect, useState } from "react";
+import { runProfiler, sourceCode, tensorRebuild } from "../lib/engine";
+import { todayIso } from "../lib/dateUtils";
 import {
-  oraclePayload,
-  oracleReport,
-  runProfiler,
-  sourceCode,
-  tensorRebuild,
-  twinForecast,
-  type OraclePayload,
-  type TwinForecast,
-  type TwinScenario,
-} from "../lib/engine";
+  evaluateDigitalTwinScenario,
+  generateOraclePayload,
+} from "../lib/pocketBrain";
 import type { SourceCodeView } from "../lib/types";
 import { uiErrorMessage } from "../lib/uiErrorMessages";
 import { ContextObservatoryContainer } from "./ContextObservatoryContainer";
@@ -24,27 +19,96 @@ function fmtNum(value: number | null | undefined, digits = 3): string {
   return value.toFixed(digits);
 }
 
+function asRecord(value: unknown): Record<string, unknown> | null {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return null;
+  }
+  return value as Record<string, unknown>;
+}
+
+function readNum(obj: Record<string, unknown> | null, key: string): number | null {
+  if (!obj) return null;
+  const v = obj[key];
+  return typeof v === "number" && Number.isFinite(v) ? v : null;
+}
+
+function readBool(obj: Record<string, unknown> | null, key: string): boolean | null {
+  if (!obj) return null;
+  const v = obj[key];
+  return typeof v === "boolean" ? v : null;
+}
+
+function readStr(obj: Record<string, unknown> | null, key: string): string | null {
+  if (!obj) return null;
+  const v = obj[key];
+  return typeof v === "string" ? v : null;
+}
+
+interface OracleView {
+  sufficiency: Record<string, unknown> | null;
+  state: Record<string, unknown> | null;
+  couplings: Record<string, unknown>[];
+  forecast: Record<string, unknown> | null;
+  findings: Record<string, unknown>[];
+  interventions: Record<string, unknown>[];
+}
+
+function parseOracleView(payload: Record<string, unknown>): OracleView {
+  const sufficiency = asRecord(payload.sufficiency);
+  const state = asRecord(payload.state);
+  const forecast = asRecord(payload.forecast);
+  const couplingsRaw = payload.couplings;
+  const findingsRaw = payload.findings;
+  const interventionsRaw = payload.interventions;
+  return {
+    sufficiency,
+    state,
+    forecast,
+    couplings: Array.isArray(couplingsRaw)
+      ? couplingsRaw.filter((c): c is Record<string, unknown> => asRecord(c) !== null)
+      : [],
+    findings: Array.isArray(findingsRaw)
+      ? findingsRaw.filter((f): f is Record<string, unknown> => asRecord(f) !== null)
+      : [],
+    interventions: Array.isArray(interventionsRaw)
+      ? interventionsRaw.filter((i): i is Record<string, unknown> => asRecord(i) !== null)
+      : [],
+  };
+}
+
+interface TwinView {
+  gate_passed: boolean;
+  critical_days: string[];
+  r_q50: number[];
+  reason?: string;
+}
+
 export function ProfileTab() {
   const [source, setSource] = useState<SourceCodeView | null>(null);
-  const [oracle, setOracle] = useState<OraclePayload | null>(null);
+  const [oracle, setOracle] = useState<OracleView | null>(null);
   const [oracleAnalysis, setOracleAnalysis] = useState("");
-  const [forecast, setForecast] = useState<TwinForecast | null>(null);
+  const [forecast, setForecast] = useState<TwinView | null>(null);
   const [tensorResult, setTensorResult] = useState<{ rebuilt: boolean; rows: number } | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState("");
 
   const [horizonDays, setHorizonDays] = useState(14);
-  const [twinMode, setTwinMode] = useState<"daily" | "interview">("daily");
-  const [interviewTurns, setInterviewTurns] = useState(0);
   const [profilerMsg, setProfilerMsg] = useState("");
 
   const loadSterile = useCallback(async () => {
     setBusy("refresh");
     setError("");
     try {
-      const [sc, op] = await Promise.all([sourceCode(), oraclePayload("global")]);
+      const today = todayIso();
+      const [sc, op] = await Promise.all([
+        sourceCode(),
+        generateOraclePayload({ today }),
+      ]);
       setSource(sc);
-      setOracle(op);
+      setOracle(parseOracleView(op.payload));
+      if (op.languageization_prompt) {
+        setOracleAnalysis(op.languageization_prompt);
+      }
     } catch {
       setError(uiErrorMessage("PROFILE_LOAD"));
     } finally {
@@ -60,9 +124,9 @@ export function ProfileTab() {
     setBusy("oracle");
     setError("");
     try {
-      const res = await oracleReport("global");
-      setOracle(res.payload);
-      setOracleAnalysis(res.analysis);
+      const res = await generateOraclePayload({ today: todayIso() });
+      setOracle(parseOracleView(res.payload));
+      setOracleAnalysis(res.languageization_prompt);
     } catch {
       setError(uiErrorMessage("ORACLE_REPORT"));
     } finally {
@@ -71,17 +135,23 @@ export function ProfileTab() {
   }
 
   async function handleTwinForecast() {
-    const scenario: TwinScenario = {
-      horizon_days: Math.max(1, Math.min(60, Math.round(horizonDays))),
-      calendar: [],
-      mode: twinMode,
-      interview_turns: twinMode === "interview" ? Math.max(0, Math.min(20, Math.round(interviewTurns))) : null,
-    };
     setBusy("twin");
     setError("");
     try {
-      const res = await twinForecast(scenario, "global");
-      setForecast(res);
+      const res = await evaluateDigitalTwinScenario({
+        today: todayIso(),
+        horizonDays: Math.max(1, Math.min(60, Math.round(horizonDays))),
+      });
+      const twin = res.twin;
+      setForecast({
+        gate_passed: Boolean(twin.params?.gate_passed),
+        critical_days: Array.isArray(twin.forecast?.critical_days)
+          ? twin.forecast.critical_days.filter((d): d is string => typeof d === "string")
+          : [],
+        r_q50: Array.isArray(twin.forecast?.r_q50)
+          ? twin.forecast.r_q50.filter((v): v is number => typeof v === "number")
+          : [],
+      });
     } catch {
       setError(uiErrorMessage("TWIN_FORECAST"));
     } finally {
@@ -116,6 +186,21 @@ export function ProfileTab() {
       setBusy(null);
     }
   }
+
+  const daysObserved = readNum(oracle?.sufficiency ?? null, "days_observed");
+  const coverage = readNum(oracle?.sufficiency ?? null, "coverage");
+  const twinBss = readNum(oracle?.sufficiency ?? null, "twin_bss");
+  const gatePassed = readBool(oracle?.sufficiency ?? null, "gate_passed");
+  const rNow = readNum(oracle?.state ?? null, "r_now");
+  const rTrend = readNum(oracle?.state ?? null, "r_trend_7d");
+  const oiiEma = readNum(oracle?.state ?? null, "oii_ema");
+  const oiiStreak = readNum(oracle?.state ?? null, "oii_streak_days");
+  const criticalFromOracle = (() => {
+    const raw = oracle?.forecast?.critical_days;
+    return Array.isArray(raw)
+      ? raw.filter((d): d is string => typeof d === "string")
+      : [];
+  })();
 
   return (
     <section className="panel profile-panel">
@@ -177,61 +262,68 @@ export function ProfileTab() {
             <>
               <div className="profile-metric-row">
                 <span className="term-source-name">sufficiency.days_observed</span>
-                <span className="term-value">{oracle.sufficiency.days_observed}</span>
+                <span className="term-value">{daysObserved ?? "—"}</span>
               </div>
               <div className="profile-metric-row">
                 <span className="term-source-name">sufficiency.coverage</span>
-                <span className="term-value">{fmtNum(oracle.sufficiency.coverage)}</span>
+                <span className="term-value">{fmtNum(coverage)}</span>
               </div>
               <div className="profile-metric-row">
                 <span className="term-source-name">sufficiency.twin_bss</span>
-                <span className="term-value">{fmtNum(oracle.sufficiency.twin_bss)}</span>
+                <span className="term-value">{fmtNum(twinBss)}</span>
               </div>
               <div className="profile-metric-row">
                 <span className="term-source-name">sufficiency.gate_passed</span>
-                <span className="term-value">{oracle.sufficiency.gate_passed ? "true" : "false"}</span>
+                <span className="term-value">
+                  {gatePassed === null ? "—" : gatePassed ? "true" : "false"}
+                </span>
               </div>
               <div className="profile-metric-row">
                 <span className="term-source-name">state.r_now</span>
-                <span className="term-value">{fmtNum(oracle.state.r_now)}</span>
+                <span className="term-value">{fmtNum(rNow)}</span>
               </div>
               <div className="profile-metric-row">
                 <span className="term-source-name">state.r_trend_7d</span>
-                <span className="term-value">{fmtNum(oracle.state.r_trend_7d)}</span>
+                <span className="term-value">{fmtNum(rTrend)}</span>
               </div>
               <div className="profile-metric-row">
                 <span className="term-source-name">state.oii_ema</span>
-                <span className="term-value">{fmtNum(oracle.state.oii_ema)}</span>
+                <span className="term-value">{fmtNum(oiiEma)}</span>
               </div>
               <div className="profile-metric-row">
                 <span className="term-source-name">state.oii_streak_days</span>
-                <span className="term-value">{oracle.state.oii_streak_days}</span>
+                <span className="term-value">{oiiStreak ?? "—"}</span>
               </div>
-              {oracle.couplings.filter((c) => c.sig).map((c, i) => (
-                <div key={`${c.src}-${c.dst}-${i}`} className="profile-metric-row">
-                  <span className="term-source-name">coupling {c.src}→{c.dst}</span>
-                  <span className="term-value">
-                    lag {c.lag_days}d ρ {fmtNum(c.rho)} n {c.n_eff}
-                  </span>
-                </div>
-              ))}
-              {oracle.forecast.critical_days.length > 0 && (
+              {oracle.couplings
+                .filter((c) => c.sig === true)
+                .map((c, i) => (
+                  <div key={`${String(c.src)}-${String(c.dst)}-${i}`} className="profile-metric-row">
+                    <span className="term-source-name">
+                      coupling {String(c.src ?? "?")}→{String(c.dst ?? "?")}
+                    </span>
+                    <span className="term-value">
+                      lag {String(c.lag ?? c.lag_days ?? "—")}d ρ {fmtNum(readNum(c, "rho"))} n{" "}
+                      {String(c.n_eff ?? "—")}
+                    </span>
+                  </div>
+                ))}
+              {criticalFromOracle.length > 0 && (
                 <div className="profile-metric-row">
                   <span className="term-source-name">forecast.critical_days</span>
-                  <span className="term-value">{oracle.forecast.critical_days.join(", ")}</span>
+                  <span className="term-value">{criticalFromOracle.join(", ")}</span>
                 </div>
               )}
-              {oracle.findings.map((f) => (
-                <div key={f.rule_id} className="profile-metric-row">
-                  <span className="term-source-name">finding {f.rule_id}</span>
-                  <span className="term-value">severity {fmtNum(f.severity, 2)}</span>
+              {oracle.findings.map((f, i) => (
+                <div key={`${readStr(f, "rule_id") ?? i}`} className="profile-metric-row">
+                  <span className="term-source-name">finding {readStr(f, "rule_id") ?? "?"}</span>
+                  <span className="term-value">severity {fmtNum(readNum(f, "severity"), 2)}</span>
                 </div>
               ))}
-              {oracle.interventions.map((iv) => (
-                <div key={iv.bank_id} className="profile-metric-row">
-                  <span className="term-source-name">intervention {iv.bank_id}</span>
+              {oracle.interventions.map((iv, i) => (
+                <div key={`${readStr(iv, "bank_id") ?? i}`} className="profile-metric-row">
+                  <span className="term-source-name">intervention {readStr(iv, "bank_id") ?? "?"}</span>
                   <span className="term-value">
-                    rule {iv.trigger_rule} lane {iv.target_lane}
+                    rule {readStr(iv, "trigger_rule") ?? "—"} lane {String(iv.target_lane ?? "—")}
                   </span>
                 </div>
               ))}
@@ -251,7 +343,7 @@ export function ProfileTab() {
           数値の代わりに、いまの傾向を文章で説明します。ボタンを押したときだけ生成します。
         </p>
         <p className="hint dev-noise desktop-only">
-          7B 言語化レポート。数値表示には使わない。明示クリックでのみ生成。
+          Coraxis `generate_oracle_payload` の languageization_prompt。明示クリックでのみ再生成。
         </p>
         <button
           type="button"
@@ -288,26 +380,6 @@ export function ProfileTab() {
               onChange={(e) => setHorizonDays(Number(e.target.value))}
             />
           </label>
-          <label>
-            <span className="desktop-only">mode</span>
-            <span className="mobile-only">モード</span>
-            <select value={twinMode} onChange={(e) => setTwinMode(e.target.value as "daily" | "interview")}>
-              <option value="daily">日常</option>
-              <option value="interview">面接</option>
-            </select>
-          </label>
-          <label>
-            <span className="desktop-only">interview_turns</span>
-            <span className="mobile-only">面接ターン数</span>
-            <input
-              type="number"
-              min={0}
-              max={20}
-              value={interviewTurns}
-              disabled={twinMode !== "interview"}
-              onChange={(e) => setInterviewTurns(Number(e.target.value))}
-            />
-          </label>
         </div>
         <button
           type="button"
@@ -335,13 +407,13 @@ export function ProfileTab() {
                 <span className="term-value">{forecast.reason}</span>
               </div>
             )}
-            {forecast.critical_days && forecast.critical_days.length > 0 && (
+            {forecast.critical_days.length > 0 && (
               <div className="profile-metric-row">
                 <span className="term-source-name">critical_days</span>
                 <span className="term-value">{forecast.critical_days.join(", ")}</span>
               </div>
             )}
-            {forecast.r_q50 && (
+            {forecast.r_q50.length > 0 && (
               <div className="profile-metric-row">
                 <span className="term-source-name">r_q50 (head)</span>
                 <span className="term-value">

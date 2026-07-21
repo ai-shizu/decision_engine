@@ -19,7 +19,6 @@ import type {
   GenerateOracleResult,
   IngestKnowledgeResult,
   InterviewSession,
-  ItemSelection,
   LatestGapAnalysisResult,
   MultistageInterviewResult,
   ProbeAnswerResultV1,
@@ -33,7 +32,6 @@ import type {
   SendRagChatResult,
   SimGenParams,
   SimSessionResult,
-  SyncDailyContextResult,
   TensorProfile,
   TokenEvent,
 } from "./types";
@@ -95,18 +93,6 @@ export function sendRagChat(
   });
 }
 
-export function syncDailyContext(
-  dateStr: string,
-  eventsJson: string,
-  dailyLog: string,
-): Promise<SyncDailyContextResult> {
-  return pocketInvoke("sync_daily_context", {
-    dateStr,
-    eventsJson,
-    dailyLog,
-  });
-}
-
 // ─── Gap / Tensor ───────────────────────────────────────────────────────────
 
 export function calculateGapAnalysis(
@@ -148,18 +134,6 @@ export function evaluateRaschScale(
       item_id: request.item_id,
       response: request.response,
       excluded: request.excluded ?? null,
-    },
-  });
-}
-
-export function raschSelectNextItem(args: {
-  posterior?: number[] | null;
-  excluded?: string[] | null;
-}): Promise<ItemSelection | null> {
-  return pocketInvoke("rasch_select_next_item", {
-    request: {
-      posterior: args.posterior ?? null,
-      excluded: args.excluded ?? null,
     },
   });
 }

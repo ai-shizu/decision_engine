@@ -4,7 +4,6 @@ import { Channel, invoke } from "@tauri-apps/api/core";
 
 import {
   buildChatCreateRequest,
-  buildChatDeleteRequest,
   buildChatsListRequest,
   buildMessageAppendRequest,
   buildMessagesListRequest,
@@ -15,9 +14,7 @@ import {
   parseVaultMessageRecord,
   parseVaultMessageRecords,
   parseVaultStatus,
-  parseVaultUnit,
   type VaultChatCreateInput,
-  type VaultChatDeleteInput,
   type VaultChatRecord,
   type VaultChatsListInput,
   type VaultErrorCode,
@@ -30,7 +27,6 @@ import {
 
 export type {
   VaultChatCreateInput,
-  VaultChatDeleteInput,
   VaultChatRecord,
   VaultChatsListInput,
   VaultErrorCode,
@@ -46,9 +42,7 @@ type VaultIpcCommand =
   | "vault_status"
   | "vault_unlock"
   | "vault_lock"
-  | "check_db_health"
   | "vault_chat_create"
-  | "vault_chat_delete"
   | "vault_chats_list"
   | "vault_message_append"
   | "vault_messages_list";
@@ -93,10 +87,6 @@ export function vaultLock(): Promise<VaultStatus> {
   return invokeVault("vault_lock", parseVaultStatus);
 }
 
-export function checkDbHealth(): Promise<VaultStatus> {
-  return invokeVault("check_db_health", parseVaultStatus);
-}
-
 /**
  * Subscribe to worker-pushed lifecycle events and return the current status.
  * Creates exactly one `Channel`; the caller must invoke this once (e.g. a
@@ -125,14 +115,6 @@ export function vaultChatCreate(
     "vault_chat_create",
     parseVaultChatRecord,
     buildChatCreateRequest(input),
-  );
-}
-
-export function vaultChatDelete(input: VaultChatDeleteInput): Promise<void> {
-  return invokeVault(
-    "vault_chat_delete",
-    parseVaultUnit,
-    buildChatDeleteRequest(input),
   );
 }
 

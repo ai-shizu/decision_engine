@@ -1,8 +1,8 @@
 //! [B] Jetsam Monitor (docs/architecture_blueprint.md §3.3).
 //!
-//! Sampler thread + phase attribution. Tauri commands live in
-//! `llm::commands_llm::{memory_monitor_start, memory_monitor_stop}` and are
-//! registered from `lib.rs` under `#[cfg(feature = "pocket-brain")]` only.
+//! Sampler thread + phase attribution. Tauri command lives in
+//! `llm::commands_llm::memory_monitor_start` and is registered from `lib.rs`
+//! under `#[cfg(feature = "pocket-brain")]` only.
 
 mod probe;
 

@@ -42,18 +42,6 @@ pub async fn llm_cancel(handle: State<'_, LlmHandle>) -> Result<(), String> {
     Ok(())
 }
 
-/// M9 foundation: embed `text` on the LLM worker (blocking). Returns the raw
-/// `f32` vector (`model.n_embd()` long). No React caller yet — backend-only.
-#[tauri::command]
-pub async fn llm_embed(
-    handle: State<'_, LlmHandle>,
-    text: String,
-    n_ctx: Option<u32>,
-) -> Result<Vec<f32>, String> {
-    let n_ctx = n_ctx.unwrap_or(super::embed::EMBED_DEFAULT_N_CTX);
-    handle.embed(text, n_ctx)
-}
-
 /// Register a persistent frontend sink for LLM lifecycle events (e.g. an
 /// out-of-band memory purge). One sink; a later call replaces it. Mirrors M6's
 /// `vault_events`.
@@ -85,12 +73,5 @@ pub async fn memory_monitor_start(
         threshold_bytes,
         Some(hook),
     );
-    Ok(())
-}
-
-/// Stop the Jetsam monitor sampler thread.
-#[tauri::command]
-pub async fn memory_monitor_stop(monitor: State<'_, Arc<MemoryMonitor>>) -> Result<(), String> {
-    monitor.stop();
     Ok(())
 }

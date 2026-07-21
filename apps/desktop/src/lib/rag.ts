@@ -13,5 +13,4 @@ export {
   ingestKnowledge,
   searchKnowledge,
   sendRagChat,
-  syncDailyContext,
 } from "./pocketBrain/api";

@@ -1,6 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
 import type { ContextManifestResponseV1 } from "./manifest";
-import { parseConsultResponse, type ConsultResponse } from "./parseConsultResponse";
 import { parseKnowledgePolicy } from "./parseKnowledgePolicy";
 import {
   parseBoolean,
@@ -10,17 +9,9 @@ import {
   parseDocumentImportResult,
   parseEngineHealth,
   parseEsList,
-  parseEsView,
   parseImportStats,
-  parseKnowledgeFetchSummary,
   parseKnowledgeResearchReceipt,
   parseLineImportResult,
-  parseNarrativeCompileResult,
-  parseOraclePayload,
-  parseOracleReport,
-  parseProbeAnswerResult,
-  parseProbeQuestion,
-  parseProbeStatus,
   parseProfilerResult,
   parseRecordData,
   parseRecordSaveResult,
@@ -28,28 +19,17 @@ import {
   parseSettingsData,
   parseSourceCodeView,
   parseTensorRebuildResult,
-  parseTwinForecast,
   type CalendarSyncResult,
   type DocumentImportResult,
-  type KnowledgeFetchSummary,
   type KnowledgeResearchReceipt,
   type LineImportResult,
-  type NarrativeCompileResult,
-  type OraclePayload,
-  type OracleReportResult,
   type ProfilerResult,
-  type TwinForecast,
 } from "./parseEngineResponse";
 import { parseContextManifestResponseV1 } from "./parseManifest";
 import { readTextLenient } from "./textDecode";
 import type {
   ClassifyResult,
   EsListItem,
-  EsView,
-  InterviewConfig,
-  ProbeAnswerResult,
-  ProbeQuestionView,
-  ProbeStatus,
   RecordData,
   SettingsData,
   SourceCodeView,
@@ -57,6 +37,7 @@ import type {
 } from "./types";
 
 
+/** FE-invoked Python sidecar commands only (Coraxis dual-stack wrappers removed). */
 type EngineIpcCommand =
   | "engine_ready"
   | "engine_health"
@@ -64,9 +45,7 @@ type EngineIpcCommand =
   | "record_save"
   | "calendar_event_dates"
   | "import_stats"
-  | "es_view"
   | "es_list"
-  | "consult"
   | "calendar_sync_ics"
   | "calendar_sync_apple"
   | "import_line_single"
@@ -77,19 +56,11 @@ type EngineIpcCommand =
   | "settings_get"
   | "settings_save_fixed"
   | "settings_run_profiler"
-  | "oracle_payload"
-  | "oracle_report"
-  | "twin_forecast"
   | "tensor_rebuild"
   | "profile_source_code"
-  | "narrative_compile"
-  | "knowledge_fetch_pending"
   | "knowledge_research"
   | "knowledge_policy_get"
   | "knowledge_policy_set"
-  | "probe_status"
-  | "probe_next"
-  | "probe_answer"
   | "context_manifest_latest";
 
 
@@ -152,34 +123,8 @@ export async function importStats(): Promise<Record<string, SourceStat>> {
 }
 
 
-export async function esView(): Promise<EsView> {
-  return invokeEngine("es_view", parseEsView);
-}
-
-
 export async function esList(): Promise<EsListItem[]> {
   return invokeEngine("es_list", parseEsList);
-}
-
-
-export interface ConsultOptions {
-  mode?: "consult" | "interview_sim" | "es_review" | "gd_sim" | "romance_analysis";
-  personas?: { name: string; trait: string }[];
-  response_time_sec?: number;
-  config?: InterviewConfig;
-  external_research_id?: string;
-}
-
-
-export type { RomanceAnalysisResult } from "./parseConsultResponse";
-
-
-export async function consult(
-  query: string,
-  opts: ConsultOptions = {},
-  cid?: number,
-): Promise<ConsultResponse> {
-  return invokeEngine("consult", parseConsultResponse, { query, ...opts }, cid);
 }
 
 
@@ -343,51 +288,6 @@ export async function runProfiler(): Promise<ProfilerResult> {
 }
 
 
-export async function oraclePayload(
-  scope: "global" | "dyad" = "global",
-  alias?: string,
-): Promise<OraclePayload> {
-  return invokeEngine(
-    "oracle_payload",
-    parseOraclePayload,
-    { scope, alias: alias ?? null },
-  );
-}
-
-
-export async function oracleReport(
-  scope: "global" | "dyad" = "global",
-  alias?: string,
-): Promise<OracleReportResult> {
-  return invokeEngine(
-    "oracle_report",
-    parseOracleReport,
-    { scope, alias: alias ?? null },
-  );
-}
-
-
-export interface TwinScenario {
-  horizon_days: number;
-  calendar: { date: string; time: string; title: string }[];
-  mode?: "daily" | "interview";
-  interview_turns?: number | null;
-}
-
-
-export async function twinForecast(
-  scenario: TwinScenario,
-  scope: "global" | "dyad" = "global",
-  alias?: string,
-): Promise<TwinForecast> {
-  return invokeEngine(
-    "twin_forecast",
-    parseTwinForecast,
-    { scenario, scope, alias: alias ?? null },
-  );
-}
-
-
 export async function tensorRebuild(): Promise<{ rebuilt: boolean; rows: number }> {
   return invokeEngine("tensor_rebuild", parseTensorRebuildResult);
 }
@@ -395,20 +295,6 @@ export async function tensorRebuild(): Promise<{ rebuilt: boolean; rows: number 
 
 export async function sourceCode(): Promise<SourceCodeView> {
   return invokeEngine("profile_source_code", parseSourceCodeView);
-}
-
-
-export async function narrativeCompile(targetDomain?: string): Promise<NarrativeCompileResult> {
-  return invokeEngine(
-    "narrative_compile",
-    parseNarrativeCompileResult,
-    { target_domain: targetDomain ?? null },
-  );
-}
-
-
-export async function knowledgeFetchPending(): Promise<KnowledgeFetchSummary> {
-  return invokeEngine("knowledge_fetch_pending", parseKnowledgeFetchSummary);
 }
 
 
@@ -427,35 +313,6 @@ export async function setKnowledgeResearchPolicy(enabled: boolean) {
 }
 
 
-export async function probeStatus(today: string): Promise<ProbeStatus> {
-  return invokeEngine("probe_status", parseProbeStatus, { today });
-}
-
-
-export async function probeNext(today: string): Promise<ProbeQuestionView> {
-  return invokeEngine("probe_next", parseProbeQuestion, { today });
-}
-
-
-export async function probeAnswer(
-  sessionId: string,
-  questionId: string,
-  answer: string,
-  today: string,
-): Promise<ProbeAnswerResult> {
-  return invokeEngine(
-    "probe_answer",
-    parseProbeAnswerResult,
-    {
-      session_id: sessionId,
-      question_id: questionId,
-      answer,
-      today,
-    },
-  );
-}
-
-
 export async function latestContextManifest(): Promise<ContextManifestResponseV1> {
   return invokeEngine(
     "context_manifest_latest",
@@ -467,11 +324,6 @@ export async function latestContextManifest(): Promise<ContextManifestResponseV1
 export type {
   CalendarSyncResult,
   DocumentImportResult,
-  KnowledgeFetchSummary,
   LineImportResult,
-  NarrativeCompileResult,
-  OraclePayload,
-  OracleReportResult,
   ProfilerResult,
-  TwinForecast,
 };
