@@ -929,6 +929,24 @@ Pocket Brain 経路は M14 tensor + M15 pulse/Rasch + gap sufficiency から loa
 
 **検証:** `npx tsc --noEmit` / `npm run test:boundary`。
 
+### 4.47 Phase 4 — Foundation extreme (SQLCipher PRAGMA + thermal ladder) (2026-07-21)
+
+**射程:** 暗号化 vault のストレージ PRAGMA 最適化と、Jetsam 500ms 常時ポーリングの廃止。オフライン原則・§1.1 lock-free purge・Zero Warnings は不変。
+
+**as-built (DB):**
+1. `connection::apply_storage_engine_pragmas` — `journal_mode=WAL` / `auto_vacuum=INCREMENTAL` / `cache_size=-2000` (2MiB) / `mmap_size=8MiB` / `synchronous=NORMAL`。鍵検証後・migration 前。
+2. `maintain_encrypted_database` — `PRAGMA optimize` + `incremental_vacuum`。`VaultWorker::lock` と `check_health` で best-effort 実行。
+
+**as-built (Monitor):**
+1. `DegradationLevel` ladder: Nominal → Fair → Serious → Critical（thermal × pressure × footprint の max）。
+2. Apple: `DISPATCH_SOURCE_TYPE_MEMORYPRESSURE` + `NSProcessInfo.thermalState`（ObjC FFI）。テレメトリ間隔 ≥5s（500ms 要求は無視）。
+3. Fair: LLM embed 再ウォーム抑制（hashed fallback）。Serious: `n_ctx` 半減 + token sleep + FE/`MemSample.degradation` 警告 + `LlmLifecycleEvent::Degradation`。Critical: 既存 `request_purge`。
+4. 非 Apple: footprint 比に応じた 1s/2s/5s 適応ポーリング。
+
+**ハマりどころ:** ObjC コールバック内で Mutex / model Drop 禁止（§1.1）。`auto_vacuum` は既存 DB ではフル VACUUM 無しでは効かない — `incremental_vacuum` は freelist があるときだけ収縮する。
+
+**検証:** `cargo check|test --features pocket-brain,secure-vault`。
+
 ### 4.8 M3 Phase 0-A — SQLCipher / Security.framework iOS link gate (2026-07-18)
 
 **射程（Phase 0-A のみ）:** `secure-vault` feature、依存解決、in-memory SQLCipher identity（`PRAGMA key` + `cipher_version`）、Security.framework シンボル（`SecRandom` / `SecAccessControl`）、Tauri command 登録、iOS Simulator 最終リンク証明。スキーマ・repository・UI・本番 Keychain item 作成は対象外。

@@ -17,7 +17,7 @@
 
 use std::num::NonZeroU32;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
 use std::thread;
 use std::time::Duration;
@@ -35,7 +35,7 @@ use llama_cpp_2::sampling::LlamaSampler;
 use super::params::{GenerationParams, LoadParams};
 use super::prompt::{build_prompt, TASK_KAKEIBO_V1};
 use super::schema::{KakeiboEntryV1, KAKEIBO_V1_GBNF};
-use crate::monitor::{MemPhase, MemoryMonitor};
+use crate::monitor::{DegradationLevel, MemPhase, MemoryMonitor};
 
 /// Idle wake cadence for the worker's command loop. Bounds how long the worker
 /// may sit blocked before it observes a purge request and frees the model when
@@ -55,6 +55,8 @@ pub struct LlmMemoryGovernor {
     cancel: AtomicBool,
     /// Instructs the worker to drop the model/context and return memory to iOS.
     purge_requested: AtomicBool,
+    /// Progressive degradation ladder (Nominal→Critical). Updated lock-free.
+    degradation: AtomicU8,
 }
 
 impl LlmMemoryGovernor {
@@ -62,6 +64,7 @@ impl LlmMemoryGovernor {
         Self {
             cancel: AtomicBool::new(false),
             purge_requested: AtomicBool::new(false),
+            degradation: AtomicU8::new(DegradationLevel::Nominal.as_u8()),
         }
     }
 
@@ -78,6 +81,15 @@ impl LlmMemoryGovernor {
     pub fn request_purge(&self) {
         self.cancel.store(true, Ordering::SeqCst);
         self.purge_requested.store(true, Ordering::SeqCst);
+    }
+
+    /// Sync ladder rung from the thermal / pressure monitor (lock-free).
+    pub fn set_degradation(&self, level: DegradationLevel) {
+        self.degradation.store(level.as_u8(), Ordering::SeqCst);
+    }
+
+    pub fn degradation(&self) -> DegradationLevel {
+        DegradationLevel::from_u8(self.degradation.load(Ordering::SeqCst))
     }
 
     fn is_cancelled(&self) -> bool {
@@ -103,6 +115,8 @@ pub enum LlmLifecycleEvent {
     /// The model was dropped to survive memory pressure; the UI must suspend and
     /// await an explicit reload.
     MemoryPurged,
+    /// Thermal / memory ladder entered Serious or Critical — UI shows ambient warn.
+    Degradation { level: DegradationLevel },
 }
 
 /// One streamed token pushed to the frontend over `tauri::ipc::Channel`.
@@ -328,6 +342,7 @@ fn worker_loop(
     };
     let mut model: Option<Arc<LlamaModel>> = None;
     let mut events: Option<Channel<LlmLifecycleEvent>> = None;
+    let mut last_degradation_emit = DegradationLevel::Nominal;
 
     loop {
         // Commit any pending purge FIRST — including after a generation the
@@ -344,9 +359,23 @@ fn worker_loop(
 
         let cmd = match rx.recv_timeout(PURGE_POLL_INTERVAL) {
             Ok(cmd) => cmd,
-            // Idle wake: loop back to re-check the purge flag with no lock/send
-            // required on the callback side.
-            Err(mpsc::RecvTimeoutError::Timeout) => continue,
+            // Idle wake: re-check purge + emit Serious+ degradation once.
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                let level = governor.degradation();
+                if level.throttle_generation()
+                    && last_degradation_emit < DegradationLevel::Serious
+                {
+                    if let Some(sink) = events.as_ref() {
+                        let _ = sink.send(LlmLifecycleEvent::Degradation { level });
+                    }
+                }
+                last_degradation_emit = if level.throttle_generation() {
+                    level
+                } else {
+                    DegradationLevel::Nominal
+                };
+                continue;
+            }
             Err(mpsc::RecvTimeoutError::Disconnected) => break,
         };
 
@@ -392,6 +421,12 @@ fn worker_loop(
                 n_ctx,
                 reply,
             } => {
+                // Fair+: suppress expensive LLM embed re-warm; callers fall back
+                // to hashed-ngram (embed_knowledge).
+                if governor.degradation().suppress_background() {
+                    let _ = reply.send(Err("degraded: background embed suppressed".into()));
+                    continue;
+                }
                 let result = match model.as_ref() {
                     None => Err("model not loaded".into()),
                     Some(model) => {
@@ -467,7 +502,11 @@ fn generate(
         }
     };
 
-    let ctx_params = LlamaContextParams::default().with_n_ctx(NonZeroU32::new(g.n_ctx));
+    let level = governor.degradation();
+    let scaled_ctx = ((g.n_ctx as f32) * level.context_factor())
+        .round()
+        .clamp(512.0, g.n_ctx as f32) as u32;
+    let ctx_params = LlamaContextParams::default().with_n_ctx(NonZeroU32::new(scaled_ctx));
     let mut ctx = model
         .new_context(backend, ctx_params)
         .map_err(|e| format!("context create: {e}"))?;
@@ -513,6 +552,10 @@ fn generate(
         if governor.is_cancelled() {
             cancelled = true;
             break;
+        }
+        if governor.degradation().throttle_generation() {
+            // Serious+: soft rate-limit decode to shed thermal load.
+            std::thread::sleep(std::time::Duration::from_millis(10));
         }
         let token = sampler.sample(&ctx, batch.n_tokens() - 1);
         if model.is_eog_token(token) {

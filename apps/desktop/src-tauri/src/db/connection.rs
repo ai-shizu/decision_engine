@@ -115,9 +115,49 @@ fn open_encrypted_database_with_key(
 
     apply_sqlcipher_key(&connection, key)?;
     verify_encrypted_connection(&connection)?;
+    apply_storage_engine_pragmas(&connection)?;
     super::sqlite_vec_ext::activate_sqlite_vec(&connection)
         .map_err(|_| VaultConnectionError::SqliteVecUnavailable)?;
     Ok(connection)
+}
+
+/// WAL + incremental vacuum prep + mobile-safe mmap/cache budgets.
+///
+/// Called after the SQLCipher key is live and schema identity is verified,
+/// before migrations so a brand-new file can adopt `auto_vacuum=INCREMENTAL`.
+fn apply_storage_engine_pragmas(connection: &Connection) -> Result<(), VaultConnectionError> {
+    // journal_mode returns the mode string; treat any error as open failure class.
+    connection
+        .pragma_update(None, "journal_mode", "WAL")
+        .map_err(|error| classify_sqlite_error(error, VaultConnectionError::OpenFailed))?;
+
+    // No-op rewrite on already-populated DBs until a full VACUUM; still required
+    // so incremental_vacuum can reclaim freelist pages when the mode is active.
+    let _ = connection.pragma_update(None, "auto_vacuum", "INCREMENTAL");
+
+    // Mobile / Jetsam-safe budgets (negative cache_size = KiB).
+    // 2 MiB page cache + 8 MiB mmap — enough for vault RAG, not a GB trap.
+    connection
+        .pragma_update(None, "cache_size", -2000i64)
+        .map_err(|error| classify_sqlite_error(error, VaultConnectionError::OpenFailed))?;
+    connection
+        .pragma_update(None, "mmap_size", 8i64 * 1024 * 1024)
+        .map_err(|error| classify_sqlite_error(error, VaultConnectionError::OpenFailed))?;
+
+    // WAL + NORMAL is the battery-friendly durability point for a local vault.
+    let _ = connection.pragma_update(None, "synchronous", "NORMAL");
+
+    Ok(())
+}
+
+/// Idle / lock-path maintenance: refresh query planner stats and reclaim freelist.
+///
+/// Best-effort — never fails the vault lock or health path.
+pub(crate) fn maintain_encrypted_database(connection: &Connection) {
+    let _ = connection.execute_batch(
+        "PRAGMA optimize;\n\
+         PRAGMA incremental_vacuum;",
+    );
 }
 
 fn apply_sqlcipher_key(connection: &Connection, key: &[u8]) -> Result<(), VaultConnectionError> {
@@ -275,6 +315,9 @@ mod tests {
                 "CREATE TABLE phase1b_probe(value TEXT NOT NULL);\
                  INSERT INTO phase1b_probe(value) VALUES ('encrypted-marker');",
             )?;
+            let mode: String = connection.query_row("PRAGMA journal_mode;", [], |row| row.get(0))?;
+            assert_eq!(mode.to_ascii_lowercase(), "wal");
+            maintain_encrypted_database(&connection);
         }
 
         let header = fs::read(database.path())?;

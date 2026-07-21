@@ -24,7 +24,10 @@ use crate::ipc_contract::MAX_TEXT_BYTES;
 
 use super::{
     analytics_repo::{self, GapAnalysisRow, TensorProfileRow},
-    connection::{open_encrypted_database, verify_encrypted_connection, VaultConnectionError},
+    connection::{
+        maintain_encrypted_database, open_encrypted_database, verify_encrypted_connection,
+        VaultConnectionError,
+    },
     knowledge_repo::{self, KnowledgeChunkRow, KnowledgeSearchHit},
     migrations::{run_migrations, MigrationError},
     oracle_repo::{self, InterviewSessionRow, OracleRunRow, TwinRunRow},
@@ -1186,7 +1189,10 @@ impl VaultWorker {
 
     fn lock(&mut self) -> Result<VaultStatus, VaultErrorCode> {
         self.set_status(VaultStatus::Locking);
-        self.connection.take();
+        if let Some(connection) = self.connection.take() {
+            maintain_encrypted_database(&connection);
+            drop(connection);
+        }
         self.set_status(VaultStatus::Locked);
         Ok(VaultStatus::Locked)
     }
@@ -1200,6 +1206,9 @@ impl VaultWorker {
             self.set_status(status);
             return Err(code);
         }
+
+        // Idle health probe also runs planner optimize + incremental vacuum.
+        maintain_encrypted_database(connection);
 
         Ok(VaultStatus::Unlocked)
     }

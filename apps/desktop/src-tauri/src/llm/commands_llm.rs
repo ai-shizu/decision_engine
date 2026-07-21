@@ -53,8 +53,8 @@ pub async fn llm_events(
     handle.register_events(on_event)
 }
 
-/// Start the Jetsam monitor, streaming `MemSample`s over `on_sample`.
-/// Rising-edge `over_threshold` lock-free-signals the LLM governor to purge.
+/// Start the thermal / Jetsam monitor, streaming `MemSample`s over `on_sample`.
+/// Critical / over-threshold rising-edge lock-free-signals the LLM governor to purge.
 #[tauri::command]
 pub async fn memory_monitor_start(
     monitor: State<'_, Arc<MemoryMonitor>>,
@@ -64,14 +64,24 @@ pub async fn memory_monitor_start(
     threshold_bytes: u64,
 ) -> Result<(), String> {
     let governor = handle.governor();
-    let hook: crate::monitor::OverThresholdHook = Arc::new(move || {
-        governor.request_purge();
+    let purge_hook: crate::monitor::OverThresholdHook = Arc::new({
+        let governor = Arc::clone(&governor);
+        move || {
+            governor.request_purge();
+        }
+    });
+    let degradation_hook: crate::monitor::DegradationHook = Arc::new({
+        let governor = Arc::clone(&governor);
+        move |level| {
+            governor.set_degradation(level);
+        }
     });
     monitor.start(
         on_sample,
         interval_ms,
         threshold_bytes,
-        Some(hook),
+        Some(purge_hook),
+        Some(degradation_hook),
     );
     Ok(())
 }
