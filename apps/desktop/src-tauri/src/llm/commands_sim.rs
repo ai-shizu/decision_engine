@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 use tauri::ipc::Channel;
 use tauri::State;
 
-use crate::db::{KnowledgeSearchHit as DbHit, VaultErrorCode, VaultHandle};
+use crate::db::{VaultErrorCode, VaultHandle};
 use crate::knowledge::edinet_client::{
     sanitize_company_facts, subscription_key_from_env, CompanyFacts, EdinetError,
 };
@@ -22,7 +22,7 @@ use crate::llm::params::GenerationParams;
 use crate::llm::prompt_sim::{build_es_review_prompt, build_interview_prompt, ExperienceRef};
 use crate::llm::service::TokenEvent;
 use crate::llm::LlmHandle;
-use crate::rag::embed_knowledge::embed_for_knowledge;
+use crate::rag::commands_rag::search_sync;
 
 const MAX_TEXT_BYTES: usize = 64 * 1024;
 const DEFAULT_CONTEXT_LIMIT: u32 = 5;
@@ -100,18 +100,6 @@ fn map_vault_err(code: VaultErrorCode) -> String {
 
 fn map_edinet_err(err: EdinetError) -> String {
     err.to_string()
-}
-
-fn search_sync(
-    vault: &VaultHandle,
-    llm: &LlmHandle,
-    query: &str,
-    limit: u32,
-) -> Result<Vec<DbHit>, String> {
-    let embedding = embed_for_knowledge(llm, query)?;
-    vault
-        .knowledge_search(embedding, limit)
-        .map_err(map_vault_err)
 }
 
 fn resolve_gen(gen: Option<&SimGenParams>) -> (u32, GenerationParams) {

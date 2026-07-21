@@ -4,17 +4,23 @@
 //! blocked by the embed loop. Embeddings go through `LlmHandle` (LLM worker);
 //! SQL goes through `VaultHandle` (vault worker) — never from the main thread.
 //! Generation streams over the existing M6 `Channel<TokenEvent>` pipeline.
+//!
+//! Phase 7 search path: lexical hashed KNN ⊕ optional dense KNN → RRF (k=60) →
+//! Ebbinghaus time decay (UTC). See `associative_recall`.
 
+use std::collections::HashMap;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 use tauri::ipc::Channel;
 use tauri::State;
 
+use super::associative_recall::{default_tau_days, fuse_and_rerank, RRF_K};
 use super::chunk::{chunk_markdown, MAX_CHUNKS};
-use super::embed_knowledge::embed_for_knowledge;
+use super::embed_knowledge::{embed_for_knowledge, lexical_hash_embed, try_dense_passage_embed};
 use super::prompt::{build_rag_prompt, RagContextRef};
 use crate::db::{KnowledgeChunkRow, KnowledgeSearchHit as DbHit, VaultErrorCode, VaultHandle};
+use crate::llm::hashed_embed::hashed_ngram_embed_384;
 use crate::llm::params::GenerationParams;
 use crate::llm::service::TokenEvent;
 use crate::llm::LlmHandle;
@@ -40,6 +46,10 @@ pub struct SearchKnowledgeHit {
     pub id: String,
     pub text_content: String,
     pub distance: f64,
+    /// Final associative recall score (RRF × Ebbinghaus retention).
+    pub recall_score: f64,
+    /// Chunk creation time (Unix UTC seconds).
+    pub created_at: i64,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -90,16 +100,109 @@ fn validate_source_id(source_id: &str) -> Result<(), String> {
     Ok(())
 }
 
+fn candidate_pool(limit: u32) -> u32 {
+    limit.saturating_mul(3).clamp(limit, MAX_SEARCH_LIMIT)
+}
+
+fn merge_hit_meta(meta: &mut HashMap<String, (String, f64, i64)>, hits: &[DbHit]) {
+    for hit in hits {
+        match meta.get_mut(&hit.id) {
+            Some((_text, dist, created)) => {
+                if hit.distance < *dist {
+                    *dist = hit.distance;
+                }
+                if *created == 0 && hit.created_at != 0 {
+                    *created = hit.created_at;
+                }
+            }
+            None => {
+                meta.insert(
+                    hit.id.clone(),
+                    (hit.text_content.clone(), hit.distance, hit.created_at),
+                );
+            }
+        }
+    }
+}
+
+/// Lexical ranking over a candidate pool via hashed-ngram cosine (L2 ⇒ dot).
+///
+/// Independent of the vault embedding space: when the index is dense (DPR), this
+/// still supplies a true lexical channel for RRF; when the index is hashed, it
+/// diversifies order within the KNN pool without a second wrong-space query.
+fn lexical_rank_ids(query: &str, hits: &[DbHit]) -> Vec<String> {
+    let q = hashed_ngram_embed_384(query);
+    let mut scored: Vec<(f64, &str)> = hits
+        .iter()
+        .map(|h| {
+            let v = hashed_ngram_embed_384(&h.text_content);
+            let mut dot = 0.0f64;
+            for (a, b) in q.iter().zip(v.iter()) {
+                dot += f64::from(*a) * f64::from(*b);
+            }
+            (dot, h.id.as_str())
+        })
+        .collect();
+    scored.sort_by(|a, b| {
+        b.0.partial_cmp(&a.0)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| a.1.cmp(b.1))
+    });
+    scored.into_iter().map(|(_, id)| id.to_string()).collect()
+}
+
+/// Hybrid associative recall: index-space KNN ⊕ lexical hash rank → RRF → Ebbinghaus.
+///
+/// Primary channel:
+/// - **DPR** ([`try_dense_passage_embed`]) when a true 384-d model is loaded
+///   (Karpukhin et al., 2020) — same space as dense ingest.
+/// - else **hashed** ([`lexical_hash_embed`]) — same space as hashed ingest.
+///
+/// Lexical RRF partner always re-ranks the candidate pool by hashed-ngram cosine
+/// over `text_content`, so fusion stays valid when vault vectors are dense
+/// (never issues a second KNN in the wrong embedding space).
 pub(crate) fn search_sync(
     vault: &VaultHandle,
     llm: &LlmHandle,
     query: &str,
     limit: u32,
 ) -> Result<Vec<DbHit>, String> {
-    let embedding = embed_for_knowledge(llm, query)?;
-    vault
-        .knowledge_search(embedding, limit)
-        .map_err(map_vault_err)
+    let pool = candidate_pool(limit);
+    let primary_emb = match try_dense_passage_embed(llm, query) {
+        Some(dense) => dense,
+        None => lexical_hash_embed(query)?,
+    };
+    let primary_hits = vault
+        .knowledge_search(primary_emb, pool)
+        .map_err(map_vault_err)?;
+
+    let primary_ids: Vec<String> = primary_hits.iter().map(|h| h.id.clone()).collect();
+    let lexical_ids = lexical_rank_ids(query, &primary_hits);
+
+    let mut meta: HashMap<String, (String, f64, i64)> = HashMap::new();
+    merge_hit_meta(&mut meta, &primary_hits);
+
+    let now = now_unix_secs();
+    let ranked = fuse_and_rerank(
+        &primary_ids,
+        &lexical_ids,
+        &meta,
+        now,
+        default_tau_days(),
+        RRF_K,
+        limit as usize,
+    );
+
+    Ok(ranked
+        .into_iter()
+        .map(|h| DbHit {
+            id: h.id,
+            text_content: h.text_content,
+            distance: h.distance,
+            created_at: h.created_at,
+            recall_score: h.recall_score,
+        })
+        .collect())
 }
 
 fn to_ipc_hits(hits: Vec<DbHit>) -> Vec<SearchKnowledgeHit> {
@@ -108,6 +211,8 @@ fn to_ipc_hits(hits: Vec<DbHit>) -> Vec<SearchKnowledgeHit> {
             id: hit.id,
             text_content: hit.text_content,
             distance: hit.distance,
+            recall_score: hit.recall_score,
+            created_at: hit.created_at,
         })
         .collect()
 }
@@ -169,7 +274,7 @@ pub async fn ingest_knowledge(
     .map_err(|_| "ingest task join failed".to_string())?
 }
 
-/// Embed `query` and run sqlite-vec KNN over `knowledge_chunks`.
+/// Hybrid recall over `knowledge_chunks` (RRF + Ebbinghaus).
 #[tauri::command]
 pub async fn search_knowledge(
     vault: State<'_, VaultHandle>,

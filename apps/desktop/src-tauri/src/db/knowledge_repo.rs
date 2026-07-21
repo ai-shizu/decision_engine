@@ -17,12 +17,16 @@ pub(crate) struct KnowledgeChunkRow {
     pub created_at: i64,
 }
 
-/// One KNN hit returned to IPC.
+/// One KNN hit returned to IPC / hybrid recall.
 #[derive(Debug, Clone)]
 pub(crate) struct KnowledgeSearchHit {
     pub id: String,
     pub text_content: String,
     pub distance: f64,
+    /// Unix UTC seconds when the chunk was ingested.
+    pub created_at: i64,
+    /// Associative recall score after RRF × Ebbinghaus (0 until fused).
+    pub recall_score: f64,
 }
 
 fn embedding_blob(embedding: &[f32]) -> Result<Vec<u8>, RepositoryError> {
@@ -79,7 +83,7 @@ pub(crate) fn search_chunks(
     let k = i64::from(limit.max(1));
     let mut statement = connection
         .prepare(
-            "SELECT id, text_content, distance \
+            "SELECT id, text_content, distance, created_at \
              FROM knowledge_chunks \
              WHERE embedding MATCH ?1 AND k = ?2",
         )
@@ -91,6 +95,8 @@ pub(crate) fn search_chunks(
                 id: row.get(0)?,
                 text_content: row.get::<_, Option<String>>(1)?.unwrap_or_default(),
                 distance: row.get(2)?,
+                created_at: row.get::<_, Option<i64>>(3)?.unwrap_or(0),
+                recall_score: 0.0,
             })
         })
         .map_err(map_storage_error)?;

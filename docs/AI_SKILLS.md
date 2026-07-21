@@ -980,6 +980,25 @@ Pocket Brain 経路は M14 tensor + M15 pulse/Rasch + gap sufficiency から loa
 
 **検証:** `cargo check|test --features pocket-brain,secure-vault`。
 
+### 4.50 Phase 7 — Associative recall (RRF + Ebbinghaus) (2026-07-21)
+
+**射程:** Vault RAG を語彙ハッシュ KNN 単体から、密検索とのハイブリッド融合 + 時間減衰リランクへ進化。RNG・外部 API 禁止（F-14）。時刻は Unix UTC。
+
+**学術根拠（コメントに永続化済み）:**
+1. **DPR** — Karpukhin et al. (2020): 384-d 密ベクトル KNN（モデルが真に 384-d のときのみ）。
+2. **RRF** — Cormack, Clarke & Büttcher (2009): `Score = Σ 1/(k+rank)`, `k=60`。
+3. **Forgetting curve** — Ebbinghaus (1885): `W = exp(−Δt/τ)`, `τ = T½/ln(2)`（半減期 30 日）。
+
+**as-built:**
+1. `rag/associative_recall.rs` — `apply_rrf` / `RankedRetriever` / `apply_ebbinghaus_rerank` / `fuse_and_rerank`。決定論ソート（score desc, id asc）。
+2. `embed_knowledge::{lexical_hash_embed, try_dense_passage_embed}` — 主チャネルは密(384)優先、否则ハッシュ。語彙チャネルは候補 `text_content` の hashed cosine 再順位（単一 vec0 で空間不一致 KNN を避ける）。
+3. `commands_rag::search_sync` — `limit×3` プール → 主KNN ⊕ 語彙再順位 → RRF(k=60) → Ebbinghaus(`τ=T½/ln2`, T½=30d) → top-`limit`。
+4. `knowledge_chunks` SELECT に `created_at`。IPC `SearchKnowledgeHit` に `recall_score` / `created_at`。面接/ES も同一 `search_sync`。
+
+**ハマりどころ:** 語彙側を「別の hashed KNN」にすると、密ベクトル索引に対して誤空間検索になる。語彙は常にテキスト再順位。密モデル未ロード時も RRF は主ハッシュ順位×語彙再順位で動く。
+
+**検証:** `cargo check|test --features pocket-brain,secure-vault`。
+
 ### 4.8 M3 Phase 0-A — SQLCipher / Security.framework iOS link gate (2026-07-18)
 
 **射程（Phase 0-A のみ）:** `secure-vault` feature、依存解決、in-memory SQLCipher identity（`PRAGMA key` + `cipher_version`）、Security.framework シンボル（`SecRandom` / `SecAccessControl`）、Tauri command 登録、iOS Simulator 最終リンク証明。スキーマ・repository・UI・本番 Keychain item 作成は対象外。
