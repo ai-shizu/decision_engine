@@ -504,6 +504,8 @@ body::after {
   background: var(--bg-deep);
   color: var(--text);
   font-family: inherit;
+  /* ≥16px: prevent iOS Safari autofocus zoom */
+  font-size: 1rem;
 }
 
 .form-row input[type="time"] {
@@ -1235,7 +1237,7 @@ button:disabled {
   background: var(--bg-deep);
   color: var(--text);
   font-family: inherit;
-  font-size: 0.85rem;
+  font-size: 1rem;
 }
 
 .persona-row input {
@@ -1255,7 +1257,8 @@ button:disabled {
   background: var(--bg-deep);
   color: var(--text);
   font-family: inherit;
-  font-size: 0.85rem;
+  /* ≥16px: prevent iOS Safari autofocus zoom */
+  font-size: 1rem;
   flex: 1 1 auto;
   min-width: 0;
 }
@@ -1383,7 +1386,7 @@ button:disabled {
   background: var(--bg-deep);
   color: var(--text);
   font-family: var(--font-mono);
-  font-size: 0.9rem;
+  font-size: 1rem;
   text-align: right;
 }
 
@@ -2069,6 +2072,7 @@ button.secondary {
   color: var(--text);
   padding: var(--s2);
   font: inherit;
+  font-size: 1rem;
 }
 
 .vault-chat-list,
@@ -2391,8 +2395,8 @@ button.secondary {
   display: flex;
   flex-direction: column;
   flex: 1;
-  min-height: 100dvh;
   min-height: 100vh;
+  min-height: 100dvh;
 }
 
 .desktop-chrome {
@@ -2914,14 +2918,19 @@ button.secondary {
 
 .mobile-status-banner-dismiss {
   flex-shrink: 0;
-  width: 28px;
-  height: 28px;
+  box-sizing: border-box;
+  min-width: 44px;
+  min-height: 44px;
+  width: 44px;
+  height: 44px;
+  padding: 0;
   border: 1px solid var(--err-border);
   background: var(--err-bg);
   color: var(--err-soft);
   font-size: 1rem;
   line-height: 1;
   cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
 }
 
 /* M20-H: mobile company-facts — stack label above field (no squeezed vertical glyphs) */
@@ -2945,6 +2954,7 @@ button.secondary {
   width: 100%;
   flex: none;
   min-width: 0;
+  font-size: 1rem;
 }
 
 .mobile-chrome .interview-shared-context .company-facts-form textarea {
@@ -2978,7 +2988,7 @@ button.secondary {
   background: var(--bg-deep);
   color: var(--text);
   font-family: var(--font-ui);
-  font-size: 0.9rem;
+  font-size: 1rem;
   line-height: 1.35;
   padding: 8px 10px;
 }
@@ -3233,6 +3243,7 @@ button.secondary {
 .mobile-chrome textarea.pulse-transcript {
   min-height: 96px;
   max-height: 140px;
+  font-size: 1rem;
 }
 
 .mobile-chrome .pocket-brain-mem {
@@ -3272,8 +3283,8 @@ button.secondary {
   }
 
   .shell {
-    min-height: 100dvh;
     min-height: 100vh;
+    min-height: 100dvh;
   }
 
   /* Loading-screen max-width centering is desktop-only; mobile uses full width. */
