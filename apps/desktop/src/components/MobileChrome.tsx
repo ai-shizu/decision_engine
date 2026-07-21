@@ -104,13 +104,15 @@ export function MobileChrome({
           chatActive ? "mobile-content mobile-content-rag" : "mobile-content"
         }
       >
-        {/* N1: CONSULT PocketBrain stays mounted for mobile shell lifetime. */}
+        {/* N1: CONSULT PocketBrain stays mounted for mobile shell lifetime.
+            Visual exclusivity is [hidden] + CSS (never display:!important pierce). */}
         <div
           id="mobile-panel-consult"
           className="mobile-panel mobile-panel-rag"
           role="tabpanel"
           aria-labelledby="mobile-tab-consult"
           hidden={surface !== "consult"}
+          inert={surface !== "consult"}
         >
           <PocketBrainPanel variant="messenger" />
         </div>
@@ -126,6 +128,7 @@ export function MobileChrome({
                 : `mobile-tab-${id}`
             }
             hidden={surface !== id}
+            inert={surface !== id}
           >
             {surface === id &&
               renderMobileSurface(id, engineReady, () => {

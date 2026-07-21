@@ -2917,6 +2917,19 @@ button.secondary {
   width: 100%;
 }
 
+/* Keep-alive CONSULT panel: never let display:flex beat the hidden attribute
+   (WKWebView / iOS — otherwise CONSULT paints above RECORD/PROBE). */
+.mobile-panel[hidden],
+.mobile-panel-rag[hidden] {
+  display: none !important;
+  flex: 0 !important;
+  height: 0 !important;
+  min-height: 0 !important;
+  overflow: hidden !important;
+  visibility: hidden !important;
+  pointer-events: none !important;
+}
+
 .mobile-panel-rag {
   flex: 1;
   min-height: 0;
@@ -3462,17 +3475,17 @@ button.secondary {
   background: var(--bg-raised);
 }
 
-/* M20-G/H: never let overflow clip the messenger composer behind the dock */
-.mobile-chrome .rag-composer {
+/* M20-G/H: fixed composer only while CONSULT surface is active.
+   Never use bare `.mobile-chrome .rag-composer` — display:!important would
+   pierce [hidden] keep-alive and float over RECORD/PROBE. */
+.mobile-chrome .mobile-content-rag .rag-composer {
   position: fixed;
   left: 0;
   right: 0;
   /* Sit fully above dock (70px) + home indicator */
   bottom: calc(var(--mobile-dock-h) + env(safe-area-inset-bottom, 0px));
   z-index: 190;
-  display: flex !important;
-  visibility: visible !important;
-  opacity: 1 !important;
+  display: flex;
   align-items: center;
   gap: 10px;
   background: var(--bg-raised);
@@ -3483,14 +3496,14 @@ button.secondary {
   min-height: var(--mobile-composer-h);
 }
 
-.mobile-chrome .rag-composer-action {
+.mobile-chrome .mobile-content-rag .rag-composer-action {
   width: 44px;
   height: 44px;
   font-size: 1.5rem;
   flex-shrink: 0;
 }
 
-.mobile-chrome .rag-composer-input {
+.mobile-chrome .mobile-content-rag .rag-composer-input {
   flex: 1;
   min-width: 0;
   min-height: 44px;
@@ -3498,7 +3511,7 @@ button.secondary {
   font-size: 1rem;
 }
 
-.mobile-chrome .rag-composer-send {
+.mobile-chrome .mobile-content-rag .rag-composer-send {
   flex-shrink: 0;
   min-height: 44px;
   min-width: 72px;
