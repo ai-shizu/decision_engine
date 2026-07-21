@@ -1065,6 +1065,23 @@ Pocket Brain 経路は M14 tensor + M15 pulse/Rasch + gap sufficiency から loa
 
 **検証:** `cargo check|test --features pocket-brain,secure-vault`。
 
+### 4.55 Phase 12 — 認知ヒートマップ / メタ認知カレンダー (2026-07-21)
+
+**射程:** Twin $R(t)$・支出・CBT distortions を同一月グリッドで時空間同期。重いカレンダーライブラリ禁止。RNG・外部 API 禁止。
+
+**学術根拠:** メタ認知可視化（資源枯渇と支出・バイアスの共起）+ WAI-ARIA grid による非視覚アクセス。
+
+**as-built:**
+1. `get_cognitive_month_view(year, month)` — Vault `purchases` を JST 月境界で一括取得し、日次 `r_value`（平均）/ `total_expense` / 一意 `distortions` を dense 配列で返す。
+2. `purchase_repo::list_purchases_in_range` + `VaultHandle::purchase_list_range`（集計は Rust、FE は描画のみ）。
+3. `CognitiveCalendar.tsx` — CSS Grid + `content-visibility: auto`。背景ヒートマップ（低 R=暖色 / 高 R=寒色）、上部バイアスドット、下部支出バー。
+4. VoiceOver: `role="grid"` / `gridcell` + 動的 `aria-label`（例: `7月14日、認知資源 低、支出 4,200円、…の傾向あり`）。装飾 DOM は `aria-hidden`。
+5. 純関数 `cognitiveCalendarView.ts` は `tests-runtime` 依存ゼロ Harness で検証。
+
+**ハマりどころ:** 日付境界は JST (+09:00) 固定。UTC 日付キーと混在させるな。`aria-label` を削って視覚だけのカレンダーにするな。
+
+**検証:** `cargo check|test --features pocket-brain,secure-vault` + `npx tsc --noEmit`。
+
 ### 4.8 M3 Phase 0-A — SQLCipher / Security.framework iOS link gate (2026-07-18)
 
 **射程（Phase 0-A のみ）:** `secure-vault` feature、依存解決、in-memory SQLCipher identity（`PRAGMA key` + `cipher_version`）、Security.framework シンボル（`SecRandom` / `SecAccessControl`）、Tauri command 登録、iOS Simulator 最終リンク証明。スキーマ・repository・UI・本番 Keychain item 作成は対象外。

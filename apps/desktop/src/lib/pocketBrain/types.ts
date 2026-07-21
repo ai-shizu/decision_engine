@@ -446,6 +446,21 @@ export interface MultistageInterviewResult {
   outcome: string;
 }
 
+/** Phase 12 — one day in the metacognitive calendar month view. */
+export interface CognitiveDayView {
+  date: string;
+  r_value: number | null;
+  total_expense: number;
+  distortions: string[];
+}
+
+/** Phase 12 — dense JST month aggregates from `get_cognitive_month_view`. */
+export interface CognitiveMonthView {
+  year: number;
+  month: number;
+  days: CognitiveDayView[];
+}
+
 /** Canonical list of M11–M17 Coraxis on-device Tauri commands (invoke names). */
 export const POCKET_BRAIN_COMMANDS = [
   "ingest_knowledge",
@@ -476,6 +491,8 @@ export const POCKET_BRAIN_COMMANDS = [
   "get_interview_session",
   "record_cognitive_distortions",
   "get_cognitive_bias_profile",
+  "record_purchase_with_snapshot",
+  "get_cognitive_month_view",
 ] as const;
 
 export type PocketBrainCommand = (typeof POCKET_BRAIN_COMMANDS)[number];

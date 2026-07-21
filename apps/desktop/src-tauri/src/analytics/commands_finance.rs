@@ -1,4 +1,4 @@
-//! Phase 11 — cognitive-snapshot purchase insert (hierarchical 家計簿).
+//! Phase 11–12 — cognitive-snapshot purchases + month-view aggregation.
 //!
 //! On insert we bake:
 //! - `r_at_decision` from latest Digital Twin `R(t)`
@@ -7,6 +7,7 @@
 //!
 //! Fail-closed: checksum mismatch → `verified = 0` (no RNG retry).
 
+use std::collections::{BTreeMap, BTreeSet};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
@@ -251,6 +252,198 @@ pub async fn record_purchase_with_snapshot(
     .map_err(|_| "record_purchase_with_snapshot join failed".to_string())?
 }
 
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CognitiveMonthViewParams {
+    pub year: i32,
+    pub month: u32,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub struct CognitiveDayView {
+    pub date: String,
+    pub r_value: Option<f64>,
+    pub total_expense: i64,
+    pub distortions: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub struct CognitiveMonthView {
+    pub year: i32,
+    pub month: u32,
+    pub days: Vec<CognitiveDayView>,
+}
+
+/// JST (+09:00) civil midnight → unix seconds.
+fn jst_midnight_unix(year: i32, month: u32, day: u32) -> i64 {
+    let days = approx_days_since_epoch(year as i64, month as i64, day as i64);
+    days.saturating_mul(86_400).saturating_sub(9 * 3_600)
+}
+
+fn days_in_month(year: i32, month: u32) -> u32 {
+    match month {
+        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
+        4 | 6 | 9 | 11 => 30,
+        2 => {
+            let leap = year % 4 == 0 && (year % 100 != 0 || year % 400 == 0);
+            if leap {
+                29
+            } else {
+                28
+            }
+        }
+        _ => 0,
+    }
+}
+
+/// Half-open `[start, end)` unix range covering the JST calendar month.
+fn jst_month_bounds(year: i32, month: u32) -> Result<(i64, i64), String> {
+    if !(1..=12).contains(&month) {
+        return Err("invalid month".into());
+    }
+    if year < 1970 || year > 2100 {
+        return Err("invalid year".into());
+    }
+    let start = jst_midnight_unix(year, month, 1);
+    let (ny, nm) = if month == 12 {
+        (year + 1, 1)
+    } else {
+        (year, month + 1)
+    };
+    let end = jst_midnight_unix(ny, nm, 1);
+    Ok((start, end))
+}
+
+/// Howard Hinnant civil_from_days (public domain).
+fn civil_from_days(z: i64) -> (i32, u32, u32) {
+    let z = z + 719_468;
+    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let y = if m <= 2 { y + 1 } else { y };
+    (y as i32, m as u32, d as u32)
+}
+
+fn unix_to_jst_date(unix: i64) -> String {
+    let jst = unix.saturating_add(9 * 3_600);
+    let days = jst.div_euclid(86_400);
+    let (y, m, d) = civil_from_days(days);
+    format!("{y:04}-{m:02}-{d:02}")
+}
+
+struct DayAcc {
+    total_expense: i64,
+    r_sum: f64,
+    r_count: u32,
+    distortions: BTreeSet<String>,
+}
+
+fn parse_distortion_categories(raw: &str) -> Vec<String> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() || trimmed == "[]" {
+        return Vec::new();
+    }
+    match serde_json::from_str::<Vec<String>>(trimmed) {
+        Ok(items) => items
+            .into_iter()
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .collect(),
+        Err(_) => Vec::new(),
+    }
+}
+
+fn aggregate_month_days(
+    rows: &[crate::db::PurchaseRow],
+) -> BTreeMap<String, DayAcc> {
+    let mut map: BTreeMap<String, DayAcc> = BTreeMap::new();
+    for row in rows {
+        let date = unix_to_jst_date(row.occurred_at);
+        let acc = map.entry(date).or_insert_with(|| DayAcc {
+            total_expense: 0,
+            r_sum: 0.0,
+            r_count: 0,
+            distortions: BTreeSet::new(),
+        });
+        acc.total_expense = acc.total_expense.saturating_add(row.total_amount);
+        if row.r_at_decision.is_finite() {
+            acc.r_sum += row.r_at_decision.clamp(0.0, 1.0);
+            acc.r_count = acc.r_count.saturating_add(1);
+        }
+        for cat in parse_distortion_categories(&row.active_distortions_json) {
+            acc.distortions.insert(cat);
+        }
+    }
+    map
+}
+
+fn dense_month_days(
+    year: i32,
+    month: u32,
+    sparse: BTreeMap<String, DayAcc>,
+) -> Vec<CognitiveDayView> {
+    let n = days_in_month(year, month);
+    let mut days = Vec::with_capacity(n as usize);
+    for day in 1..=n {
+        let date = format!("{year:04}-{month:02}-{day:02}");
+        match sparse.get(&date) {
+            Some(acc) => {
+                let r_value = if acc.r_count > 0 {
+                    Some((acc.r_sum / f64::from(acc.r_count)).clamp(0.0, 1.0))
+                } else {
+                    None
+                };
+                days.push(CognitiveDayView {
+                    date,
+                    r_value,
+                    total_expense: acc.total_expense,
+                    distortions: acc.distortions.iter().cloned().collect(),
+                });
+            }
+            None => days.push(CognitiveDayView {
+                date,
+                r_value: None,
+                total_expense: 0,
+                distortions: Vec::new(),
+            }),
+        }
+    }
+    days
+}
+
+/// One-month daily aggregates: Twin R(t), expenses, unique CBT distortions.
+#[tauri::command]
+pub async fn get_cognitive_month_view(
+    vault: State<'_, VaultHandle>,
+    params: CognitiveMonthViewParams,
+) -> Result<CognitiveMonthView, String> {
+    let year = params.year;
+    let month = params.month;
+    let (start_unix, end_unix) = jst_month_bounds(year, month)?;
+    let vault = vault.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let rows = vault
+            .purchase_list_range(start_unix, end_unix)
+            .map_err(map_vault)?;
+        let sparse = aggregate_month_days(&rows);
+        Ok(CognitiveMonthView {
+            year,
+            month,
+            days: dense_month_days(year, month, sparse),
+        })
+    })
+    .await
+    .map_err(|_| "get_cognitive_month_view join failed".to_string())?
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -275,5 +468,66 @@ mod tests {
             ..ok
         };
         assert!(!bad.checksum_ok());
+    }
+
+    #[test]
+    fn jst_month_bounds_july_2026() {
+        let (start, end) = jst_month_bounds(2026, 7).expect("bounds");
+        // 2026-07-01 00:00 JST == 2026-06-30 15:00 UTC
+        assert_eq!(start, jst_midnight_unix(2026, 7, 1));
+        assert_eq!(end, jst_midnight_unix(2026, 8, 1));
+        assert!(end > start);
+        assert_eq!(unix_to_jst_date(start), "2026-07-01");
+        assert_eq!(unix_to_jst_date(end - 1), "2026-07-31");
+    }
+
+    #[test]
+    fn aggregate_unique_distortions_and_mean_r() {
+        use crate::db::PurchaseRow;
+        let rows = vec![
+            PurchaseRow {
+                id: "a".into(),
+                occurred_at: jst_midnight_unix(2026, 7, 14) + 3600,
+                merchant_norm: "x".into(),
+                total_amount: 2000,
+                tax: 0,
+                verified: 1,
+                r_at_decision: 0.2,
+                active_distortions_json: r#"["labeling","all_or_nothing"]"#.into(),
+            },
+            PurchaseRow {
+                id: "b".into(),
+                occurred_at: jst_midnight_unix(2026, 7, 14) + 7200,
+                merchant_norm: "y".into(),
+                total_amount: 2200,
+                tax: 0,
+                verified: 1,
+                r_at_decision: 0.4,
+                active_distortions_json: r#"["labeling","should_statements"]"#.into(),
+            },
+        ];
+        let sparse = aggregate_month_days(&rows);
+        let day = sparse.get("2026-07-14").expect("day");
+        assert_eq!(day.total_expense, 4200);
+        assert_eq!(day.r_count, 2);
+        assert!((day.r_sum / 2.0 - 0.3).abs() < 1e-9);
+        let cats: Vec<_> = day.distortions.iter().cloned().collect();
+        assert_eq!(
+            cats,
+            vec![
+                "all_or_nothing".to_string(),
+                "labeling".to_string(),
+                "should_statements".to_string()
+            ]
+        );
+        let dense = dense_month_days(2026, 7, sparse);
+        assert_eq!(dense.len(), 31);
+        let cell = dense.iter().find(|d| d.date == "2026-07-14").unwrap();
+        assert_eq!(cell.total_expense, 4200);
+        assert!((cell.r_value.unwrap() - 0.3).abs() < 1e-9);
+        let empty = dense.iter().find(|d| d.date == "2026-07-15").unwrap();
+        assert_eq!(empty.total_expense, 0);
+        assert!(empty.r_value.is_none());
+        assert!(empty.distortions.is_empty());
     }
 }

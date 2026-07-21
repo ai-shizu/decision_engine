@@ -13,6 +13,7 @@ import type {
   CalculateGapAnalysisResult,
   CalculatePulseResult,
   CognitiveBiasProfile,
+  CognitiveMonthView,
   CognitiveDistortionReportV1,
   CompanyFacts,
   ConsultWithOracleResult,
@@ -422,4 +423,12 @@ export function getCognitiveBiasProfile(
   return pocketInvoke("get_cognitive_bias_profile", {
     limit: limit ?? null,
   });
+}
+
+/** Phase 12 — daily Twin R(t) / expense / CBT aggregates for one JST month. */
+export function getCognitiveMonthView(
+  year: number,
+  month: number,
+): Promise<CognitiveMonthView> {
+  return pocketInvoke("get_cognitive_month_view", { year, month });
 }

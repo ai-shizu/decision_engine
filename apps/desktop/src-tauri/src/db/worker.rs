@@ -165,6 +165,7 @@ enum VaultReply {
     DistortionTagsInsert(Result<usize, VaultErrorCode>),
     DistortionTagsList(Result<Vec<DistortionTagRow>, VaultErrorCode>),
     PurchaseInsert(Result<(), VaultErrorCode>),
+    PurchaseListRange(Result<Vec<PurchaseRow>, VaultErrorCode>),
 }
 
 enum VaultRequest {
@@ -303,6 +304,12 @@ enum VaultRequest {
     PurchaseInsert {
         purchase: PurchaseRow,
         lines: Vec<PurchaseLineRow>,
+        control: RequestControl,
+        reply: SyncSender<VaultReply>,
+    },
+    PurchaseListRange {
+        start_unix: i64,
+        end_unix: i64,
         control: RequestControl,
         reply: SyncSender<VaultReply>,
     },
@@ -943,6 +950,28 @@ impl VaultHandle {
             _ => Err(VaultErrorCode::Unavailable),
         }
     }
+
+    pub(crate) fn purchase_list_range(
+        &self,
+        start_unix: i64,
+        end_unix: i64,
+    ) -> Result<Vec<PurchaseRow>, VaultErrorCode> {
+        let (reply_sender, receiver) = mpsc::sync_channel(1);
+        let cancelled = Arc::new(AtomicBool::new(false));
+        let request = VaultRequest::PurchaseListRange {
+            start_unix,
+            end_unix,
+            control: RequestControl {
+                deadline: Instant::now() + SHORT_OPERATION_TIMEOUT,
+                cancelled: Arc::clone(&cancelled),
+            },
+            reply: reply_sender,
+        };
+        match self.submit(request, receiver, cancelled, SHORT_OPERATION_TIMEOUT)? {
+            VaultReply::PurchaseListRange(result) => result,
+            _ => Err(VaultErrorCode::Unavailable),
+        }
+    }
 }
 
 
@@ -1278,6 +1307,19 @@ impl VaultWorker {
                         self.insert_purchase(purchase, lines)
                     };
                     let _ = reply.send(VaultReply::PurchaseInsert(result));
+                }
+                VaultRequest::PurchaseListRange {
+                    start_unix,
+                    end_unix,
+                    control,
+                    reply,
+                } => {
+                    let result = if request_expired(&control) {
+                        Err(VaultErrorCode::Timeout)
+                    } else {
+                        self.list_purchases_in_range(start_unix, end_unix)
+                    };
+                    let _ = reply.send(VaultReply::PurchaseListRange(result));
                 }
                 VaultRequest::RegisterEvents {
                     channel,
@@ -1686,6 +1728,21 @@ impl VaultWorker {
         }
         let outcome = self.read_repository(|connection| {
             purchase_repo::insert_purchase_with_lines(connection, &purchase, &lines)
+        });
+        self.resolve_repository(outcome)
+    }
+
+    fn list_purchases_in_range(
+        &mut self,
+        start_unix: i64,
+        end_unix: i64,
+    ) -> Result<Vec<PurchaseRow>, VaultErrorCode> {
+        gate(snapshot_status(&self.status))?;
+        if end_unix < start_unix {
+            return Err(VaultErrorCode::InvalidInput);
+        }
+        let outcome = self.read_repository(|connection| {
+            purchase_repo::list_purchases_in_range(connection, start_unix, end_unix)
         });
         self.resolve_repository(outcome)
     }

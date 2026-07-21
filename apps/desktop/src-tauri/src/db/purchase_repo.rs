@@ -75,3 +75,45 @@ pub(crate) fn insert_purchase_with_lines(
     }
     Ok(())
 }
+
+const MONTH_VIEW_ROW_CAP: usize = 10_000;
+
+/// List purchase snapshot rows in `[start_unix, end_unix)` for month aggregation.
+pub(crate) fn list_purchases_in_range(
+    connection: &Connection,
+    start_unix: i64,
+    end_unix: i64,
+) -> Result<Vec<PurchaseRow>, RepositoryError> {
+    let mut statement = connection
+        .prepare(
+            "SELECT id, occurred_at, merchant_norm, total_amount, tax, verified, \
+                    r_at_decision, active_distortions_json \
+             FROM purchases \
+             WHERE occurred_at >= ?1 AND occurred_at < ?2 \
+             ORDER BY occurred_at ASC \
+             LIMIT ?3",
+        )
+        .map_err(map_storage_error)?;
+    let rows = statement
+        .query_map(
+            params![start_unix, end_unix, MONTH_VIEW_ROW_CAP as i64],
+            |row| {
+                Ok(PurchaseRow {
+                    id: row.get(0)?,
+                    occurred_at: row.get(1)?,
+                    merchant_norm: row.get(2)?,
+                    total_amount: row.get(3)?,
+                    tax: row.get(4)?,
+                    verified: row.get(5)?,
+                    r_at_decision: row.get(6)?,
+                    active_distortions_json: row.get(7)?,
+                })
+            },
+        )
+        .map_err(map_storage_error)?;
+    let mut out = Vec::new();
+    for row in rows {
+        out.push(row.map_err(map_storage_error)?);
+    }
+    Ok(out)
+}

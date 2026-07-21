@@ -3325,3 +3325,135 @@ button.secondary {
     max-width: none;
   }
 }
+
+
+/* Phase 12 — metacognitive calendar */
+.cognitive-calendar-panel {
+  margin-bottom: 16px;
+}
+
+.cognitive-cal-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+
+.cognitive-cal-toolbar h2 {
+  margin: 0;
+  font-size: 1.05rem;
+}
+
+.cognitive-cal-nav {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.cognitive-cal-month {
+  min-width: 7.5rem;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+
+.cognitive-cal-hint {
+  margin: 0 0 10px;
+  font-size: 0.8rem;
+}
+
+.cognitive-cal-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.cognitive-cal-row {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: 3px;
+}
+
+.cognitive-cal-head {
+  text-align: center;
+  font-size: 0.7rem;
+  color: var(--text-muted);
+  padding: 2px 0;
+}
+
+.cognitive-cal-pad {
+  min-height: 4.2rem;
+  content-visibility: auto;
+  contain-intrinsic-size: auto 4.2rem;
+}
+
+.cognitive-cal-cell {
+  position: relative;
+  min-height: 4.2rem;
+  border: 1px solid var(--border);
+  background: var(--bg-deep);
+  color: var(--text);
+  content-visibility: auto;
+  contain-intrinsic-size: auto 4.2rem;
+  outline-offset: 2px;
+}
+
+.cognitive-cal-cell.is-today {
+  border-color: var(--accent);
+  box-shadow: inset 0 0 0 1px var(--accent);
+}
+
+.cognitive-cal-cell:focus-visible {
+  outline: 2px solid var(--accent);
+}
+
+.cognitive-cal-cell-visual {
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  height: 100%;
+  padding: 4px 5px 3px;
+  pointer-events: none;
+}
+
+.cognitive-cal-daynum {
+  font-size: 0.78rem;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.1;
+}
+
+.cognitive-cal-bias-dots {
+  display: flex;
+  gap: 3px;
+  min-height: 6px;
+  margin-top: 2px;
+}
+
+.cognitive-cal-bias-dot {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: #c45c26;
+}
+
+.cognitive-cal-expense {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-top: auto;
+}
+
+.cognitive-cal-expense-bar {
+  display: block;
+  height: 3px;
+  max-width: 100%;
+  background: color-mix(in srgb, var(--text) 55%, transparent);
+}
+
+.cognitive-cal-expense-amt {
+  font-size: 0.62rem;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+}

@@ -13,6 +13,7 @@ import {
 import type { SourceCodeView } from "../lib/types";
 import { uiErrorMessage } from "../lib/uiErrorMessages";
 import { ContextObservatoryContainer } from "./ContextObservatoryContainer";
+import { CognitiveCalendar } from "./calendar/CognitiveCalendar";
 import { GapTensorDashboard } from "./GapTensorDashboard";
 
 function evidenceCount(evidence: unknown): number {
@@ -216,6 +217,8 @@ export function ProfileTab() {
 
   return (
     <section className="panel profile-panel">
+      <CognitiveCalendar />
+
       <GapTensorDashboard />
 
       <div className="profile-topline">

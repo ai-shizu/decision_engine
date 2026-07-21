@@ -37,10 +37,11 @@ export interface MemSample {
 }
 
 /** Known extraction task ids accepted by the Rust worker. */
-export type LlmTaskId = "kakeibo_v1" | "cognitive_distortion_v1";
+export type LlmTaskId = "kakeibo_v1" | "cognitive_distortion_v1" | "receipt_ocr_v1";
 
 export const TASK_KAKEIBO_V1: LlmTaskId = "kakeibo_v1";
 export const TASK_COGNITIVE_DISTORTION_V1: LlmTaskId = "cognitive_distortion_v1";
+export const TASK_RECEIPT_OCR_V1: LlmTaskId = "receipt_ocr_v1";
 
 /** Burns (1980) / Beck (1976) cognitive distortion category ids. */
 export type DistortionCategory =
@@ -65,6 +66,21 @@ export interface CognitiveDistortionReportV1 {
   detected_distortions: DistortionDetectionV1[];
 }
 
+export interface ReceiptLineV1 {
+  item_name: string;
+  unit_price: number;
+  qty: number;
+  amount: number;
+}
+
+export interface ReceiptOcrV1 {
+  merchant: string;
+  occurred_at: string;
+  tax: number;
+  total: number;
+  lines: ReceiptLineV1[];
+}
+
 export interface TokenEvent {
   seq: number;
   text: string;
@@ -74,6 +90,10 @@ export interface TokenEvent {
   validated: KakeiboEntryV1 | null;
   /** Set only on successful CBT distortion extraction completion. */
   validated_distortions: CognitiveDistortionReportV1 | null;
+  /** Set only on successful receipt OCR extraction completion. */
+  validated_receipt: ReceiptOcrV1 | null;
+  /** Deterministic checksum: sum(line.amount)+tax === total. */
+  receipt_verified: boolean | null;
 }
 
 export interface LoadParams {
