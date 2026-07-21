@@ -1032,6 +1032,23 @@ Pocket Brain 経路は M14 tensor + M15 pulse/Rasch + gap sufficiency から loa
 
 **検証:** `cargo check|test --features pocket-brain,secure-vault` / `npx tsc --noEmit`。
 
+### 4.53 Phase 10 — iOS lifecycle restore + Haptics + VoiceOver (2026-07-21)
+
+**射程:** (1) 前景復帰時の順序保証リストア (2) メタ認知イベントの Taptic Engine (3) SVG 可視化の WAI-ARIA / VoiceOver。RNG・外部 API・`navigator.vibrate` 禁止。
+
+**学術根拠:** 認知支援としての触覚フィードバック（metacognitive cue）+ WAI-ARIA 実務。Jetsam / OS vault lock 後の deterministic re-sync。
+
+**as-built:**
+1. `foregroundRestore.ts` + `useForegroundRestore` — `visibilitychange` → **Vault probe → LLM is_loaded/warm → Twin/CBT freshness** の順。結果は `coraxis:foreground-restore` CustomEvent。`p_lapse≥0.5` または `critical_days>0` で Warning haptic。
+2. `haptics.rs` + `haptic_feedback` — UIKit `UISelectionFeedbackGenerator` / `UIImpactFeedbackGenerator` / `UINotificationFeedbackGenerator`（iOS+secure-vault）。他環境は soft no-op。FE: `lib/haptics.ts`。
+3. トリガ: Rasch Likert/確定 → Selection、CBT `validated_distortions` / `recordCognitiveDistortions` → Impact、Twin 危険域 → Warning+Heavy。
+4. `llm_is_loaded` — Jetsam 後のモデル在席プローブ。
+5. `TensorRadarChart` / `GapTensorDashboard` — `role="img"` + `aria-label` + `.sr-only` + `aria-live="polite"`。Fitted/Generic バッジも sr-only 要約。
+
+**ハマりどころ:** Haptics は main thread 必須（`AppHandle::run_on_main_thread`）。リストア中に入力を `disabled` にするな（アンビエント）。`#[allow(dead_code)]` で警告隠蔽禁止。
+
+**検証:** `cargo check|test --features pocket-brain,secure-vault` / `npx tsc --noEmit`。
+
 ### 4.8 M3 Phase 0-A — SQLCipher / Security.framework iOS link gate (2026-07-18)
 
 **射程（Phase 0-A のみ）:** `secure-vault` feature、依存解決、in-memory SQLCipher identity（`PRAGMA key` + `cipher_version`）、Security.framework シンボル（`SecRandom` / `SecAccessControl`）、Tauri command 登録、iOS Simulator 最終リンク証明。スキーマ・repository・UI・本番 Keychain item 作成は対象外。

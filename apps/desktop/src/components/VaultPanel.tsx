@@ -25,6 +25,7 @@ import {
   type VaultMessageRecord,
 } from "../lib/vault";
 import { cancelGeneration, generate } from "../lib/llm";
+import { FOREGROUND_RESTORE_EVENT } from "../lib/foregroundRestore";
 import {
   vaultErrorMessage,
   vaultStatusDescription,
@@ -455,18 +456,15 @@ export function VaultPanel(): ReactElement | null {
   }, []);
 
   // Re-sync status when the app returns to the foreground. On iOS the native
-  // lifecycle observer locks the vault on backgrounding; this re-probe makes
-  // the UI observe that lock (reducer purges plaintext via `statusReceived`).
-  // One-shot per visibility change — never polls.
+  // lifecycle observer locks the vault on backgrounding; App's Phase 10 restore
+  // coordinator probes first — this listens to that event (and still re-probes
+  // on bare visibility as a belt-and-suspenders path for desktop VaultPanel).
   useEffect(() => {
     if (probe !== "ready") {
       return;
     }
     let active = true;
-    function onVisibility(): void {
-      if (document.visibilityState !== "visible") {
-        return;
-      }
+    function applyStatus(): void {
       void vaultStatus()
         .then((status) => {
           if (active) {
@@ -477,10 +475,21 @@ export function VaultPanel(): ReactElement | null {
           // Keep the last known state on a failed re-probe (closed error policy).
         });
     }
+    function onVisibility(): void {
+      if (document.visibilityState !== "visible") {
+        return;
+      }
+      applyStatus();
+    }
+    function onRestore(): void {
+      applyStatus();
+    }
     document.addEventListener("visibilitychange", onVisibility);
+    window.addEventListener(FOREGROUND_RESTORE_EVENT, onRestore);
     return () => {
       active = false;
       document.removeEventListener("visibilitychange", onVisibility);
+      window.removeEventListener(FOREGROUND_RESTORE_EVENT, onRestore);
     };
   }, [probe]);
 

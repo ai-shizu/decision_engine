@@ -17,6 +17,7 @@ import { TitleBar } from "./components/TitleBar";
 import { VaultPanel } from "./components/VaultPanel";
 import { engineHealth, engineReady, warmConsultRuntime } from "./lib/engine";
 import type { MainTab } from "./lib/types";
+import { useForegroundRestore } from "./lib/useForegroundRestore";
 import { useIsNarrowViewport } from "./lib/useIsNarrowViewport";
 import "./App.css";
 
@@ -100,6 +101,9 @@ export default function App() {
   const [status, setStatus] = useState("Coraxis を起動しています…");
   const [tab, setTab] = useState<MainTab>("record");
   const isNarrow = useIsNarrowViewport();
+
+  // Phase 10: Jetsam / vault-lock → ordered vault→LLM→analytics resync.
+  useForegroundRestore(modelGateDone);
 
   useEffect(() => {
     if (!modelGateDone) return;

@@ -5,6 +5,7 @@
 
 import { Channel } from "@tauri-apps/api/core";
 
+import { hapticBiasDetected } from "../haptics";
 import { pocketInvoke } from "./invoke";
 import type {
   AnalyticsDailyDay,
@@ -66,7 +67,18 @@ function ragParamsPayload(params: RagChatParams): Record<string, unknown> {
 }
 
 function tokenChannel(onToken: (event: TokenEvent) => void): Channel<TokenEvent> {
-  return new Channel<TokenEvent>(onToken);
+  return new Channel<TokenEvent>((event) => {
+    // Phase 10: CBT detections → Impact haptic (metacognitive cue).
+    const report = event.validated_distortions;
+    if (
+      report &&
+      Array.isArray(report.detected_distortions) &&
+      report.detected_distortions.length > 0
+    ) {
+      hapticBiasDetected();
+    }
+    onToken(event);
+  });
 }
 
 // ─── RAG ────────────────────────────────────────────────────────────────────
@@ -381,16 +393,26 @@ export function getInterviewSession(
 }
 
 /** Persist a GBNF-validated CBT extraction report into vault `distortion_tags`. */
-export function recordCognitiveDistortions(args: {
+export async function recordCognitiveDistortions(args: {
   report: CognitiveDistortionReportV1;
   sourceKind: string;
   sourceId: string;
 }): Promise<RecordCognitiveDistortionsResult> {
-  return pocketInvoke("record_cognitive_distortions", {
-    report: args.report,
-    sourceKind: args.sourceKind,
-    sourceId: args.sourceId,
-  });
+  const result = await pocketInvoke<RecordCognitiveDistortionsResult>(
+    "record_cognitive_distortions",
+    {
+      report: args.report,
+      sourceKind: args.sourceKind,
+      sourceId: args.sourceId,
+    },
+  );
+  if (
+    result.inserted > 0 ||
+    (args.report.detected_distortions?.length ?? 0) > 0
+  ) {
+    hapticBiasDetected();
+  }
+  return result;
 }
 
 /** Deterministic Burns-category fingerprint over accumulated distortion tags. */

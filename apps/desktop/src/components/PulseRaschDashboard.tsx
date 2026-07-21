@@ -7,6 +7,7 @@ import {
   getProbeQuestions,
   isPocketBrainInvokeError,
 } from "../lib/pocketBrain";
+import { hapticSelectionChanged } from "../lib/haptics";
 import {
   expectedAbility,
   initialPulseViewState,
@@ -67,49 +68,59 @@ function PosteriorSparkline({ posterior }: { posterior: number[] }) {
   const h = 80;
   const pad = 4;
   const barW = (w - pad * 2) / posterior.length;
+  const peakIdx = posterior.indexOf(max);
+  const peakAbility = RASCH_ABILITY_GRID[peakIdx] ?? 0;
+  const summary = `Rasch 事後分布。格子 ${posterior.length} 点。ピーク能力値 ${peakAbility.toFixed(2)}、相対密度 ${max.toFixed(4)}。`;
   return (
-    <svg
-      className="rasch-posterior-svg"
-      viewBox={`0 0 ${w} ${h}`}
-      role="img"
-      aria-label="Rasch 事後分布"
-    >
-      <title>Dynamic Ordinal Rasch posterior</title>
-      {posterior.map((p, i) => {
-        const bh = ((p / max) * (h - 16));
-        const x = pad + i * barW;
-        const y = h - 12 - bh;
-        return (
-          <rect
-            key={RASCH_ABILITY_GRID[i]}
-            className="rasch-posterior-bar"
-            x={x + 1}
-            y={y}
-            width={Math.max(1, barW - 2)}
-            height={Math.max(0.5, bh)}
-          />
-        );
-      })}
-      <text className="rasch-posterior-axis" x={pad} y={h - 2}>
-        −4
-      </text>
-      <text
-        className="rasch-posterior-axis"
-        x={w / 2}
-        y={h - 2}
-        textAnchor="middle"
+    <>
+      <svg
+        className="rasch-posterior-svg"
+        viewBox={`0 0 ${w} ${h}`}
+        role="img"
+        aria-label={summary}
       >
-        0
-      </text>
-      <text
-        className="rasch-posterior-axis"
-        x={w - pad}
-        y={h - 2}
-        textAnchor="end"
-      >
-        +4
-      </text>
-    </svg>
+        <title>Dynamic Ordinal Rasch posterior</title>
+        {posterior.map((p, i) => {
+          const bh = (p / max) * (h - 16);
+          const x = pad + i * barW;
+          const y = h - 12 - bh;
+          return (
+            <rect
+              key={RASCH_ABILITY_GRID[i]}
+              className="rasch-posterior-bar"
+              x={x + 1}
+              y={y}
+              width={Math.max(1, barW - 2)}
+              height={Math.max(0.5, bh)}
+            />
+          );
+        })}
+        <text className="rasch-posterior-axis" x={pad} y={h - 2} aria-hidden="true">
+          −4
+        </text>
+        <text
+          className="rasch-posterior-axis"
+          x={w / 2}
+          y={h - 2}
+          textAnchor="middle"
+          aria-hidden="true"
+        >
+          0
+        </text>
+        <text
+          className="rasch-posterior-axis"
+          x={w - pad}
+          y={h - 2}
+          textAnchor="end"
+          aria-hidden="true"
+        >
+          +4
+        </text>
+      </svg>
+      <p className="sr-only" aria-live="polite" aria-atomic="true">
+        {summary}
+      </p>
+    </>
   );
 }
 
@@ -177,6 +188,8 @@ export function PulseRaschDashboard() {
         excluded,
       });
       dispatch({ type: "rasch_success", result });
+      // Phase 10: Rasch response commit → Selection Changed.
+      hapticSelectionChanged();
     } catch (e) {
       const message = isPocketBrainInvokeError(e)
         ? e.message
@@ -361,9 +374,10 @@ export function PulseRaschDashboard() {
                   value={opt.value}
                   checked={state.response === opt.value}
                   disabled={busy}
-                  onChange={() =>
-                    dispatch({ type: "set_response", value: opt.value })
-                  }
+                  onChange={() => {
+                    dispatch({ type: "set_response", value: opt.value });
+                    hapticSelectionChanged();
+                  }}
                 />
                 {opt.label}
               </label>

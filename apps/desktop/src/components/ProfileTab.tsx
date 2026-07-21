@@ -5,6 +5,11 @@ import {
   evaluateDigitalTwinScenario,
   generateOraclePayload,
 } from "../lib/pocketBrain";
+import { hapticTwinWarning } from "../lib/haptics";
+import {
+  maxPLapseFromArray,
+  twinNeedsWarning,
+} from "../lib/foregroundRestore";
 import type { SourceCodeView } from "../lib/types";
 import { uiErrorMessage } from "../lib/uiErrorMessages";
 import { ContextObservatoryContainer } from "./ContextObservatoryContainer";
@@ -80,6 +85,7 @@ interface TwinView {
   gate_passed: boolean;
   critical_days: string[];
   r_q50: number[];
+  max_p_lapse: number | null;
   reason?: string;
 }
 
@@ -143,15 +149,21 @@ export function ProfileTab() {
         horizonDays: Math.max(1, Math.min(60, Math.round(horizonDays))),
       });
       const twin = res.twin;
+      const critical_days = Array.isArray(twin.forecast?.critical_days)
+        ? twin.forecast.critical_days.filter((d): d is string => typeof d === "string")
+        : [];
+      const max_p_lapse = maxPLapseFromArray(twin.forecast?.p_lapse);
       setForecast({
         gate_passed: Boolean(twin.params?.gate_passed),
-        critical_days: Array.isArray(twin.forecast?.critical_days)
-          ? twin.forecast.critical_days.filter((d): d is string => typeof d === "string")
-          : [],
+        critical_days,
         r_q50: Array.isArray(twin.forecast?.r_q50)
           ? twin.forecast.r_q50.filter((v): v is number => typeof v === "number")
           : [],
+        max_p_lapse,
       });
+      if (twinNeedsWarning(max_p_lapse, critical_days.length)) {
+        hapticTwinWarning();
+      }
     } catch {
       setError(uiErrorMessage("TWIN_FORECAST"));
     } finally {

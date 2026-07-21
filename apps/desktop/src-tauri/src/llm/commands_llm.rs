@@ -62,6 +62,12 @@ pub async fn llm_cancel(handle: State<'_, LlmHandle>) -> Result<(), String> {
     Ok(())
 }
 
+/// Phase 10: probe whether the GGUF is still resident after Jetsam / purge.
+#[tauri::command]
+pub async fn llm_is_loaded(handle: State<'_, LlmHandle>) -> Result<bool, String> {
+    handle.is_loaded()
+}
+
 /// Register a persistent frontend sink for LLM lifecycle events (e.g. an
 /// out-of-band memory purge). One sink; a later call replaces it. Mirrors M6's
 /// `vault_events`.

@@ -256,6 +256,10 @@ enum LlmCommand {
         n_ctx: u32,
         reply: mpsc::Sender<Result<Vec<f32>, String>>,
     },
+    /// Phase 10: Jetsam / foreground restore — is the GGUF still resident?
+    IsLoaded {
+        reply: mpsc::Sender<bool>,
+    },
     RegisterEvents {
         channel: Channel<LlmLifecycleEvent>,
     },
@@ -336,6 +340,18 @@ impl LlmHandle {
                 tokens,
             })
             .map_err(|_| "llm worker gone".to_string())
+    }
+
+    /// Phase 10: whether the worker still holds a loaded GGUF (Jetsam may have purged).
+    pub fn is_loaded(&self) -> Result<bool, String> {
+        let (reply, ack) = mpsc::channel();
+        self.tx
+            .lock()
+            .map_err(|_| "llm tx poisoned".to_string())?
+            .send(LlmCommand::IsLoaded { reply })
+            .map_err(|_| "llm worker gone".to_string())?;
+        ack.recv()
+            .map_err(|_| "llm worker dropped reply".to_string())
     }
 
     /// Blocking: embed `text` and return little-endian f32 bytes (Phase 9 binary IPC).
@@ -469,6 +485,9 @@ fn worker_loop(
                     let _ = tokens.send(error_done_event(0, e));
                 }
                 monitor.set_phase(MemPhase::Idle);
+            }
+            LlmCommand::IsLoaded { reply } => {
+                let _ = reply.send(model.is_some());
             }
             LlmCommand::Embed {
                 text,

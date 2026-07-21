@@ -14,6 +14,10 @@ import {
   subscribeLlmEvents,
   type MemSample,
 } from "../lib/llm";
+import {
+  FOREGROUND_RESTORE_EVENT,
+  type ForegroundRestoreDetail,
+} from "../lib/foregroundRestore";
 import { ExtractionPanel } from "./ExtractionPanel";
 import { RagChatPanel } from "./rag/RagChatPanel";
 
@@ -149,6 +153,29 @@ export function PocketBrainPanel({ variant = "default" }: PocketBrainPanelProps)
     });
     return () => {
       active = false;
+    };
+  }, [ensureModelLoaded]);
+
+  // Phase 10: sync ready flag after App's ordered foreground restore.
+  useEffect(() => {
+    function onRestore(ev: Event): void {
+      const detail = (ev as CustomEvent<ForegroundRestoreDetail>).detail;
+      const report = detail?.report;
+      if (!report) return;
+      if (report.llmWasLoaded || report.llmWarmed) {
+        setModelReady(true);
+        setPhaseNote("準備完了");
+        setError(null);
+        return;
+      }
+      // Warm failed or probe unavailable — retry via existing path.
+      setModelReady(false);
+      setPhaseNote("前景復帰後に再準備中…");
+      void ensureModelLoaded();
+    }
+    window.addEventListener(FOREGROUND_RESTORE_EVENT, onRestore);
+    return () => {
+      window.removeEventListener(FOREGROUND_RESTORE_EVENT, onRestore);
     };
   }, [ensureModelLoaded]);
 

@@ -7,6 +7,7 @@
 import { Channel, invoke } from "@tauri-apps/api/core";
 
 import type { KakeiboEntryV1 } from "./extractionReducer";
+import { hapticBiasDetected } from "./haptics";
 
 export type { KakeiboEntryV1 } from "./extractionReducer";
 
@@ -105,7 +106,17 @@ export function generate(
   onToken: (event: TokenEvent) => void,
   taskId: LlmTaskId | null = null,
 ): Promise<void> {
-  const channel = new Channel<TokenEvent>(onToken);
+  const channel = new Channel<TokenEvent>((event) => {
+    const report = event.validated_distortions;
+    if (
+      report &&
+      Array.isArray(report.detected_distortions) &&
+      report.detected_distortions.length > 0
+    ) {
+      hapticBiasDetected();
+    }
+    onToken(event);
+  });
   return invoke("llm_generate", {
     params,
     taskId: taskId ?? null,
@@ -147,9 +158,14 @@ export function decodeF32Le(bytes: ArrayBuffer | Uint8Array | number[]): Float32
   return new Float32Array(copy.buffer);
 }
 
-/** Request cancellation of the in-flight generation. */
+/** Cancel an in-flight generation. */
 export function cancelGeneration(): Promise<void> {
   return invoke("llm_cancel");
+}
+
+/** Phase 10: true when the worker still holds a loaded GGUF. */
+export function llmIsLoaded(): Promise<boolean> {
+  return invoke<boolean>("llm_is_loaded");
 }
 
 /**

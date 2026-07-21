@@ -28,6 +28,9 @@ mod db;
 #[cfg(feature = "secure-vault")]
 mod commands_db;
 
+/// Phase 10: Taptic Engine IPC (soft no-op off iOS).
+mod haptics;
+
 #[cfg(all(feature = "secure-vault", target_vendor = "apple"))]
 mod analytics;
 
@@ -118,11 +121,14 @@ pub fn run() {
             #[cfg(feature = "pocket-brain")]
             llm::commands_llm::llm_cancel,
             #[cfg(feature = "pocket-brain")]
+            llm::commands_llm::llm_is_loaded,
+            #[cfg(feature = "pocket-brain")]
             llm::commands_llm::llm_events,
             #[cfg(feature = "pocket-brain")]
             llm::commands_llm::memory_monitor_start,
             #[cfg(feature = "pocket-brain")]
             llm::commands_llm::memory_monitor_stop,
+            haptics::haptic_feedback,
             #[cfg(feature = "pocket-brain")]
             llm::commands_model_setup::check_model_exists,
             #[cfg(feature = "pocket-brain")]

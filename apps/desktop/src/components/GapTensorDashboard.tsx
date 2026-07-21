@@ -6,6 +6,9 @@ import {
   sufficiencyLabel,
 } from "../lib/gapPayloadView";
 import {
+  FOREGROUND_RESTORE_EVENT,
+} from "../lib/foregroundRestore";
+import {
   gapTensorDashboardReducer,
   initialGapTensorDashboardState,
 } from "../lib/gapTensorDashboardReducer";
@@ -77,6 +80,17 @@ export function GapTensorDashboard() {
 
   useEffect(() => {
     void loadLatest();
+  }, []);
+
+  // Phase 10: re-fetch Gap/Twin after ordered foreground restore.
+  useEffect(() => {
+    function onRestore(): void {
+      void loadLatest();
+    }
+    window.addEventListener(FOREGROUND_RESTORE_EVENT, onRestore);
+    return () => {
+      window.removeEventListener(FOREGROUND_RESTORE_EVENT, onRestore);
+    };
   }, []);
 
   async function onRecalculate() {
@@ -160,6 +174,12 @@ export function GapTensorDashboard() {
                   : "twin-identify-badge twin-identify-generic"
               }
               role="status"
+              aria-live="polite"
+              aria-label={
+                twinIdentify.is_personalized
+                  ? `Digital Twin Fitted to You. observations ${twinIdentify.n_obs}, confidence ${twinIdentify.confidence.toFixed(3)}`
+                  : `Digital Twin Generic Prior. observations ${twinIdentify.n_obs}`
+              }
               title={
                 twinIdentify.is_personalized
                   ? `RLS n=${twinIdentify.n_obs} conf=${twinIdentify.confidence.toFixed(3)}`
@@ -169,6 +189,11 @@ export function GapTensorDashboard() {
               {twinIdentify.is_personalized
                 ? "Fitted to You"
                 : "Generic Prior"}
+              <span className="sr-only">
+                {twinIdentify.is_personalized
+                  ? `個人適合モデル。観測数 ${twinIdentify.n_obs}、信頼度 ${twinIdentify.confidence.toFixed(3)}。`
+                  : `汎用事前分布。観測数 ${twinIdentify.n_obs}。`}
+              </span>
             </p>
           ) : null}
         </div>
