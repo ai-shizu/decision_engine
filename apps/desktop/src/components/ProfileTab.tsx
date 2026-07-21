@@ -224,12 +224,18 @@ export function ProfileTab() {
       <div className="profile-topline">
         <div>
           <h2>
-            <span className="desktop-only">プロファイル分析 (PROFILE)</span>
-            <span className="mobile-only">プロフィール</span>
+            <span className="desktop-only">
+              PROFILE <span className="term-tag term-tag--info">[ ANALYSIS ]</span>
+            </span>
+            <span className="mobile-only">
+              <span className="term-tag term-tag--info">[ プロフィール ]</span>
+            </span>
           </h2>
-          <p className="hint dev-noise">
+          <div className="ascii-sep ascii-sep--info" role="separator">
+            --- TELEMETRY ---
+          </div>
+          <p className="hint guide">
             Source Code / Echo メトリクスはマウント時に無菌データのみ読み込みます。
-            言語化レポート・Twin・Tensor は明示ボタンのみ。
           </p>
         </div>
         <button type="button" className="ghost" disabled={busy !== null} onClick={() => void loadSterile()}>

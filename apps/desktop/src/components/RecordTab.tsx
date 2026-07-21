@@ -266,7 +266,14 @@ export function RecordTab() {
         eventDates={eventDates}
         onSelect={(d) => void handleDateSelect(d)}
       />
-      <p className="date-banner">編集中: {formatDateLabel(date)}</p>
+      <p className="date-banner">
+        <span className="term-tag term-tag--info">[ RECORD ]</span>{" "}
+        編集中: {formatDateLabel(date)}
+      </p>
+
+      <div className="ascii-sep ascii-sep--info" role="separator">
+        --- SURFACE ---
+      </div>
 
       <div className="sub-tabs">
         {(
@@ -289,6 +296,9 @@ export function RecordTab() {
 
       {subTab === "events" && (
         <div className="sub-panel">
+          <div className="ascii-sep" role="separator">
+            --- EVENTS ---
+          </div>
           <ul className="item-list">
             {events.length === 0 ? (
               <li className="hint">(この日の予定はまだありません)</li>
@@ -325,6 +335,9 @@ export function RecordTab() {
 
       {subTab === "finance" && (
         <div className="sub-panel ledger">
+          <div className="ascii-sep ascii-sep--danger" role="separator">
+            --- LEDGER / RISK ---
+          </div>
           <div className="ledger-summary" role="group" aria-label="日次集計">
             <div className="ledger-summary-cell">
               <span className="ledger-summary-key">INC</span>
@@ -396,7 +409,19 @@ export function RecordTab() {
                       }
                       role="cell"
                     >
-                      {flag ?? "—"}
+                      {flag ? (
+                        <span
+                          className={
+                            risk === "danger"
+                              ? "term-tag term-tag--danger"
+                              : "term-tag term-tag--warn"
+                          }
+                        >
+                          {flag}
+                        </span>
+                      ) : (
+                        <span className="term-tag term-tag--muted">[ — ]</span>
+                      )}
                     </span>
                     <span className="ledger-col ledger-col-amt" role="cell">
                       {formatLedgerYen(tx.amount)}
@@ -479,6 +504,9 @@ export function RecordTab() {
 
       {subTab === "diary" && (
         <div className="sub-panel">
+          <div className="ascii-sep ascii-sep--info" role="separator">
+            --- DIARY ---
+          </div>
           <textarea
             ref={diaryRef}
             className="diary-editor"

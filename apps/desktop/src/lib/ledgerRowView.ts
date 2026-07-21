@@ -53,13 +53,13 @@ export function ledgerRiskLevel(category: string): LedgerRiskLevel {
 }
 
 export function ledgerRiskLabel(level: LedgerRiskLevel): string | null {
-  if (level === "danger") return "DISTORTION";
-  if (level === "warn") return "UNPLANNED";
+  if (level === "danger") return "[ DISTORTION ]";
+  if (level === "warn") return "[ UNPLANNED ]";
   return null;
 }
 
 export function ledgerRowClassName(level: LedgerRiskLevel): string {
-  if (level === "danger") return "ledger-row ledger-row--danger";
-  if (level === "warn") return "ledger-row ledger-row--warn";
+  if (level === "danger") return "ledger-row ledger-row--danger hatch-danger";
+  if (level === "warn") return "ledger-row ledger-row--warn hatch-warn";
   return "ledger-row";
 }

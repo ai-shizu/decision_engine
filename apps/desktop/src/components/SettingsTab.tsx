@@ -219,9 +219,16 @@ export function SettingsTab({
   return (
     <section className="panel settings-panel">
       <h2>
-        <span className="desktop-only">設定 (SETTINGS)</span>
-        <span className="mobile-only">設定</span>
+        <span className="desktop-only">
+          SETTINGS <span className="term-tag term-tag--info">[ CONFIG ]</span>
+        </span>
+        <span className="mobile-only">
+          <span className="term-tag term-tag--info">[ 設定 ]</span>
+        </span>
       </h2>
+      <div className="ascii-sep" role="separator">
+        --- CONTROLS ---
+      </div>
       <div className="action-row">
         <button type="button" className="ghost" onClick={() => void fetchSettings({ skipWait: true })}>
           再読込

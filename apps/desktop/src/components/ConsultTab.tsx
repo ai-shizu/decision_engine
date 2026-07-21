@@ -281,7 +281,9 @@ export function ConsultTab() {
   return (
     <section className="panel consult-panel">
       <div className="consult-header">
-        <h2>AI 相談 (CONSULT)</h2>
+        <h2>
+          CONSULT <span className="term-tag term-tag--info">[ OFFLINE ]</span>
+        </h2>
         <button
           type="button"
           className="ghost"
@@ -292,7 +294,10 @@ export function ConsultTab() {
           {confirmingClear ? "本当にクリア" : "履歴クリア"}
         </button>
       </div>
-      <p className="hint">記録・プロファイルに基づくオフライン相談。会話はこのセッション内のみ保持されます。</p>
+      <div className="ascii-sep ascii-sep--info" role="separator">
+        --- SESSION ---
+      </div>
+      <p className="hint guide">記録・プロファイルに基づくオフライン相談。会話はこのセッション内のみ保持されます。</p>
 
       <div className="consult-mode-row">
         <label htmlFor="consult-mode-select">モード</label>

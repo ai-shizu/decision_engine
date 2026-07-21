@@ -82,6 +82,8 @@ export function cellTelemetryClassName(
   const parts = ["cognitive-cal-cell", `cognitive-cal-cell--${band}`];
   if (opts.isToday) parts.push("is-today");
   if (dayHasRecord(day)) parts.push("has-record");
+  if (band === "danger") parts.push("hatch-danger");
+  if (band === "warn") parts.push("hatch-warn");
   return parts.join(" ");
 }
 

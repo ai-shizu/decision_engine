@@ -208,7 +208,7 @@ export function ColiseumLobby({
               : "coliseum-panel-tag coliseum-tag-cyan"
           }
         >
-          {gate.locked ? "PROTECTION ONLINE" : "ZPD CLEAR"}
+          {gate.locked ? "[ PROTECTION ONLINE ]" : "[ ZPD CLEAR ]"}
         </span>
       </header>
 

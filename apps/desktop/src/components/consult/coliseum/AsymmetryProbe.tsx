@@ -38,9 +38,9 @@ export function AsymmetryProbe({
       <header className="asym-probe-head">
         <span className="asym-probe-title">I-22 ASYMMETRY</span>
         <div className="asym-probe-flow" aria-hidden="true">
-          <span className="asym-badge asym-badge-sealed">[VAULT SEALED]</span>
+          <span className="term-tag term-tag--danger">[ VAULT SEALED ]</span>
           <span className="asym-flow-arrow">-&gt;</span>
-          <span className="asym-badge asym-badge-tactics">[TACTICS ONLY]</span>
+          <span className="term-tag term-tag--ok">[ TACTICS ONLY ]</span>
         </div>
       </header>
 
@@ -54,14 +54,16 @@ export function AsymmetryProbe({
       </div>
 
       <div className="asym-compile-grid">
-        <div className="asym-vault-pane" aria-label="Sealed vault raw data">
+        <div className="asym-vault-pane hatch-danger" aria-label="Sealed vault raw data">
           <div className="asym-pane-label asym-pane-label-sealed">
             VAULT RAW · SEALED · LLM-OPAQUE
           </div>
           <ul className="asym-fossil-list">
             {sealedFossils.map((f) => (
               <li key={`${f.kind}-${f.preview}`} className="asym-fossil-row">
-                <span className="asym-fossil-kind">{f.kind}</span>
+                <span className="asym-fossil-kind term-tag term-tag--danger">
+                  [ {f.kind.toUpperCase()} ]
+                </span>
                 <span className="asym-fossil-preview" aria-hidden="true">
                   {f.preview}
                 </span>
@@ -73,13 +75,11 @@ export function AsymmetryProbe({
           </ul>
         </div>
 
-        <div className="asym-compile-boundary" role="separator" aria-label="Non-invertible compile">
-          <span className="asym-compile-rule" />
-          <span className="asym-compile-label">-&gt; NON-INVERTIBLE COMPILE -&gt;</span>
-          <span className="asym-compile-rule" />
+        <div className="ascii-flow" role="separator" aria-label="Non-invertible compile">
+          -&gt; NON-INVERTIBLE COMPILE -&gt;
         </div>
 
-        <div className="asym-tactics-pane" aria-label="Abstract tactics only">
+        <div className="asym-tactics-pane hatch-ok" aria-label="Abstract tactics only">
           <div className="asym-pane-label asym-pane-label-tactics">
             ABSTRACT TACTICS · LLM-VISIBLE
           </div>
@@ -91,7 +91,7 @@ export function AsymmetryProbe({
             <ol className="asym-tactics-list">
               {activeTactics.map((t, i) => (
                 <li key={`${i}-${t}`} className="asym-tactic-item">
-                  <span className="asym-tactic-idx">#{i + 1}</span>
+                  <span className="asym-tactic-idx term-tag term-tag--ok">#{i + 1}</span>
                   <span className="asym-tactic-id">{t}</span>
                 </li>
               ))}

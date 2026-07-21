@@ -67,9 +67,17 @@ export function InterviewTab() {
     <section className="panel interview-panel">
       <div className="consult-header">
         <h2>
-          <span className="desktop-only">面接シミュレーター (INTERVIEW)</span>
-          <span className="mobile-only">面接</span>
+          <span className="desktop-only">
+            INTERVIEW <span className="term-tag term-tag--info">[ SIM ]</span>
+          </span>
+          <span className="mobile-only">
+            <span className="term-tag term-tag--info">[ 面接 ]</span>
+          </span>
         </h2>
+      </div>
+
+      <div className="ascii-sep" role="separator">
+        --- MODE ---
       </div>
 
       <div className="sub-tabs sub-tabs-pills" role="tablist" aria-label="面接モード">

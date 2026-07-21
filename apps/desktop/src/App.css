@@ -73,6 +73,135 @@ body::after {
   );
 }
 
+/* ═══════════════════════════════════════════════════════════════════════════
+   Coliseum / I-22 global terminal language (Phase 14 → app-wide)
+   Bracket tags · hatch fields · ASCII separators — no pill / no radius fill.
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+.term-tag {
+  display: inline;
+  font-family: var(--font-mono);
+  font-size: 0.62rem;
+  letter-spacing: 0.08em;
+  font-weight: 700;
+  padding: 0;
+  margin: 0;
+  border: none;
+  background: transparent;
+  border-radius: 0;
+  white-space: nowrap;
+  line-height: 1.3;
+}
+
+.term-tag--danger {
+  color: var(--err);
+}
+
+.term-tag--warn {
+  color: var(--err-soft);
+}
+
+.term-tag--ok {
+  color: var(--ok);
+}
+
+.term-tag--info {
+  color: var(--sys-cyan);
+}
+
+.term-tag--muted {
+  color: var(--text-dim);
+}
+
+/* Diagonal hatch — VAULT RAW pattern abstracted */
+.hatch-danger,
+.hatch-warn,
+.hatch-ok {
+  background-repeat: repeat;
+}
+
+.hatch-danger {
+  background-color: color-mix(in srgb, var(--err) 6%, var(--bg-deep));
+  background-image: repeating-linear-gradient(
+    -45deg,
+    transparent 0 4px,
+    color-mix(in srgb, var(--err) 14%, transparent) 4px 5px
+  );
+}
+
+.hatch-warn {
+  background-color: color-mix(in srgb, var(--err-soft) 5%, var(--bg-deep));
+  background-image: repeating-linear-gradient(
+    -45deg,
+    transparent 0 4px,
+    color-mix(in srgb, var(--err-soft) 12%, transparent) 4px 5px
+  );
+}
+
+.hatch-ok {
+  background-color: color-mix(in srgb, var(--ok) 5%, var(--bg-deep));
+  background-image: repeating-linear-gradient(
+    -45deg,
+    transparent 0 4px,
+    color-mix(in srgb, var(--ok) 12%, transparent) 4px 5px
+  );
+}
+
+/* ASCII section / flow separators */
+.ascii-sep {
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
+  margin: var(--s3) 0 var(--s2);
+  font-family: var(--font-mono);
+  font-size: 0.62rem;
+  letter-spacing: 0.1em;
+  font-weight: 700;
+  color: var(--text-dim);
+  text-transform: uppercase;
+}
+
+.ascii-sep::before,
+.ascii-sep::after {
+  content: "";
+  flex: 1 1 auto;
+  height: 1px;
+  background: var(--border);
+}
+
+.ascii-sep--danger {
+  color: var(--err);
+}
+
+.ascii-sep--ok {
+  color: var(--ok);
+}
+
+.ascii-sep--info {
+  color: var(--sys-cyan);
+}
+
+.ascii-flow {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--s2);
+  margin: var(--s2) 0;
+  font-family: var(--font-mono);
+  font-size: 0.62rem;
+  letter-spacing: 0.08em;
+  font-weight: 700;
+  color: var(--text-muted);
+}
+
+.ascii-flow::before,
+.ascii-flow::after {
+  content: "";
+  flex: 1 1 auto;
+  height: 1px;
+  background: var(--border);
+}
+
 .app.loading {
   max-width: 480px;
   margin: 0 auto;
@@ -726,7 +855,7 @@ body::after {
 
 .ledger-row {
   display: grid;
-  grid-template-columns: 3.2rem minmax(0, 1fr) 5.5rem 6.5rem;
+  grid-template-columns: 3.2rem minmax(0, 1fr) 7.5rem 6.5rem;
   align-items: center;
   min-height: 26px;
   border-bottom: 1px solid var(--border);
@@ -753,12 +882,10 @@ body::after {
 
 .ledger-row--warn {
   border-left: 2px solid var(--err-soft);
-  background: color-mix(in srgb, var(--err-soft) 6%, transparent);
 }
 
 .ledger-row--danger {
   border-left: 2px solid var(--err);
-  background: color-mix(in srgb, var(--err) 7%, transparent);
 }
 
 .ledger-col {
@@ -784,12 +911,9 @@ body::after {
   letter-spacing: 0.04em;
 }
 
-.ledger-flag--warn {
-  color: var(--err-soft);
-}
-
+.ledger-flag--warn,
 .ledger-flag--danger {
-  color: var(--err);
+  overflow: visible;
 }
 
 .ledger-col-amt {
@@ -1419,22 +1543,21 @@ button:disabled {
 }
 
 .provenance-chip {
-  display: inline-block;
+  display: inline;
   margin-top: 6px;
-  padding: 2px 8px;
-  border: 1px dotted var(--border);
+  padding: 0;
+  border: none;
   border-radius: 0;
   font-family: var(--font-mono);
-  font-size: 0.72rem;
-  color: var(--text-muted);
+  font-size: 0.62rem;
+  font-weight: 700;
+  color: var(--sys-cyan);
   background: transparent;
-  letter-spacing: 0.04em;
-  transition: border-color var(--t-fast), color var(--t-fast);
+  letter-spacing: 0.08em;
 }
 
 .provenance-chip:hover {
-  border-color: var(--text);
-  color: var(--text);
+  color: var(--accent);
 }
 
 .consult-mode-row {
@@ -2718,22 +2841,25 @@ button.secondary {
 }
 
 .twin-identify-badge {
-  display: inline-block;
+  display: inline;
   margin-top: 6px;
-  padding: 2px 0;
-  font-size: 0.75rem;
-  letter-spacing: 0.04em;
-  border-bottom: 1px solid var(--border);
-  color: var(--muted);
+  padding: 0;
+  font-size: 0.62rem;
+  letter-spacing: 0.08em;
+  font-weight: 700;
+  font-family: var(--font-mono);
+  border: none;
+  border-bottom: none;
+  color: var(--text-dim);
+  background: transparent;
 }
 
 .twin-identify-fitted {
-  color: var(--fg, inherit);
-  border-bottom-color: var(--fg, currentColor);
+  color: var(--ok);
 }
 
 .twin-identify-generic {
-  color: var(--muted);
+  color: var(--err-soft);
 }
 
 .gap-tensor-grid {
@@ -4073,6 +4199,7 @@ button.secondary {
   border-right: 1px solid var(--border);
   font-family: var(--font-mono);
   color: var(--text-dim);
+  background: transparent;
 }
 
 .cognitive-cal-legend-item:last-child {
@@ -4081,22 +4208,18 @@ button.secondary {
 
 .cognitive-cal-legend--stable {
   color: var(--ok);
-  border-left: 2px solid var(--ok);
 }
 
 .cognitive-cal-legend--nominal {
   color: var(--sys-cyan);
-  border-left: 2px solid var(--sys-cyan);
 }
 
 .cognitive-cal-legend--warn {
   color: var(--err-soft);
-  border-left: 2px solid var(--err-soft);
 }
 
 .cognitive-cal-legend--danger {
   color: var(--err);
-  border-left: 2px solid var(--err);
 }
 
 .cognitive-cal-grid {
@@ -4177,12 +4300,10 @@ button.secondary {
 
 .cognitive-cal-cell--warn {
   border-left-color: var(--err-soft);
-  background: color-mix(in srgb, var(--err-soft) 8%, var(--bg-deep));
 }
 
 .cognitive-cal-cell--danger {
   border-left-color: var(--err);
-  background: color-mix(in srgb, var(--err) 9%, var(--bg-deep));
 }
 
 .cognitive-cal-cell.is-today {
@@ -4407,14 +4528,17 @@ button.secondary {
 .coliseum-panel-tag {
   font-size: 0.65rem;
   letter-spacing: 0.08em;
-  padding: 2px 6px;
-  border: 1px solid var(--border);
+  padding: 0;
+  border: none;
+  background: transparent;
   border-radius: 0;
+  font-family: var(--font-mono);
+  font-weight: 700;
 }
 
-.coliseum-tag-ok { color: var(--ok); border-color: var(--ok); }
-.coliseum-tag-cyan { color: var(--sys-cyan); border-color: var(--sys-cyan); }
-.coliseum-tag-err { color: var(--err); border-color: var(--err); }
+.coliseum-tag-ok { color: var(--ok); }
+.coliseum-tag-cyan { color: var(--sys-cyan); }
+.coliseum-tag-err { color: var(--err); }
 
 .coliseum-grid-2 {
   display: grid;
@@ -4644,19 +4768,20 @@ button.secondary {
 .coliseum-lock-badge {
   font-size: 0.65rem;
   letter-spacing: 0.1em;
-  padding: 2px 6px;
-  border: 1px solid var(--border);
+  padding: 0;
+  border: none;
   border-radius: 0;
+  background: transparent;
+  font-family: var(--font-mono);
+  font-weight: 700;
 }
 
 .coliseum-lock-closed {
   color: var(--ok);
-  border-color: var(--ok);
 }
 
 .coliseum-lock-open {
-  color: var(--ok);
-  border-color: var(--ok);
+  color: var(--err);
 }
 
 .coliseum-btn-cyan,
@@ -4909,23 +5034,21 @@ button.secondary {
 
 .asym-badge {
   font-size: 0.62rem;
-  letter-spacing: 0.06em;
-  padding: 3px 6px;
-  border: 1px solid;
+  letter-spacing: 0.08em;
+  padding: 0;
+  border: none;
   border-radius: 0;
   font-weight: 700;
+  background: transparent;
+  font-family: var(--font-mono);
 }
 
 .asym-badge-sealed {
   color: var(--err);
-  border-color: var(--err);
-  background: color-mix(in srgb, var(--err) 10%, var(--bg-deep));
 }
 
 .asym-badge-tactics {
   color: var(--ok);
-  border-color: var(--ok);
-  background: color-mix(in srgb, var(--ok) 10%, var(--bg-deep));
 }
 
 .asym-flow-arrow {
@@ -4978,17 +5101,9 @@ button.secondary {
   overflow: hidden;
 }
 
+.asym-vault-pane.hatch-danger::after,
 .asym-vault-pane::after {
-  content: "";
-  position: absolute;
-  inset: 0;
-  pointer-events: none;
-  background: repeating-linear-gradient(
-    -45deg,
-    transparent 0 4px,
-    color-mix(in srgb, var(--err) 12%, transparent) 4px 5px
-  );
-  z-index: 1;
+  content: none;
 }
 
 .asym-tactics-pane {
@@ -5024,7 +5139,7 @@ button.secondary {
 
 .asym-fossil-row {
   display: grid;
-  grid-template-columns: 72px 1fr;
+  grid-template-columns: minmax(7rem, auto) 1fr;
   gap: var(--s2);
   font-size: 0.65rem;
   border-bottom: 1px solid color-mix(in srgb, var(--err) 25%, var(--border));
@@ -5417,21 +5532,21 @@ button.secondary {
 }
 
 .debrief-turn-badge {
-  border: 1px solid var(--border);
+  border: none;
   border-radius: 0;
-  background: var(--bg-deep);
-  color: var(--text-muted);
+  background: transparent;
+  color: var(--sys-cyan);
   font-family: var(--font-mono);
   font-size: 0.62rem;
-  letter-spacing: 0.04em;
-  padding: 3px 6px;
+  letter-spacing: 0.08em;
+  font-weight: 700;
+  padding: 0;
   cursor: pointer;
 }
 
 .debrief-turn-badge:hover,
 .debrief-turn-badge-open {
-  border-color: var(--sys-cyan);
-  color: var(--sys-cyan);
+  color: var(--accent);
 }
 
 .debrief-quote {

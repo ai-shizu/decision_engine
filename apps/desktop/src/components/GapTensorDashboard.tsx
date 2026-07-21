@@ -187,8 +187,8 @@ export function GapTensorDashboard() {
               }
             >
               {twinIdentify.is_personalized
-                ? "Fitted to You"
-                : "Generic Prior"}
+                ? "[ FITTED TO YOU ]"
+                : "[ GENERIC PRIOR ]"}
               <span className="sr-only">
                 {twinIdentify.is_personalized
                   ? `個人適合モデル。観測数 ${twinIdentify.n_obs}、信頼度 ${twinIdentify.confidence.toFixed(3)}。`

@@ -428,8 +428,13 @@ export function ImportTab() {
 
   return (
     <section className="panel import-panel">
-      <h2>データ取り込み</h2>
-      <p className="hint">
+      <h2>
+        IMPORT <span className="term-tag term-tag--info">[ INGEST ]</span>
+      </h2>
+      <div className="ascii-sep" role="separator">
+        --- PIPELINE ---
+      </div>
+      <p className="hint guide">
         LINE エクスポート (.txt) や ICS カレンダーを取り込みます。複数ファイルを一度に選択できます。
       </p>
 

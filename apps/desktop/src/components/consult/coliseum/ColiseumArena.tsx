@@ -85,7 +85,7 @@ export function ColiseumArena({
               : "coliseum-panel-tag coliseum-tag-ok"
           }
         >
-          {tripped ? "CIRCUIT TRIPPED" : "PRESSURE STREAM"}
+          {tripped ? "[ CIRCUIT TRIPPED ]" : "[ PRESSURE STREAM ]"}
         </span>
       </header>
 

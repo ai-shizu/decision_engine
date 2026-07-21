@@ -104,23 +104,26 @@ export function CognitiveCalendar() {
           </button>
         </div>
       </div>
+      <div className="ascii-flow" role="separator" aria-hidden="true">
+        -&gt; R(t) · DISTORTION · EXPENSE -&gt;
+      </div>
       <p className="hint cognitive-cal-hint">
-        R(t) · DISTORTION · EXPENSE — border = state · cyan = telemetry
+        border = state · hatch = hazard · cyan = telemetry
       </p>
       {error ? <p className="error-text">{error}</p> : null}
 
       <div className="cognitive-cal-legend" aria-hidden="true">
-        <span className="cognitive-cal-legend-item cognitive-cal-legend--stable">
-          STABLE
+        <span className="cognitive-cal-legend-item cognitive-cal-legend--stable term-tag term-tag--ok">
+          [ STABLE ]
         </span>
-        <span className="cognitive-cal-legend-item cognitive-cal-legend--nominal">
-          NOMINAL
+        <span className="cognitive-cal-legend-item cognitive-cal-legend--nominal term-tag term-tag--info">
+          [ NOMINAL ]
         </span>
-        <span className="cognitive-cal-legend-item cognitive-cal-legend--warn">
-          WARN
+        <span className="cognitive-cal-legend-item cognitive-cal-legend--warn term-tag term-tag--warn">
+          [ WARN ]
         </span>
-        <span className="cognitive-cal-legend-item cognitive-cal-legend--danger">
-          DANGER
+        <span className="cognitive-cal-legend-item cognitive-cal-legend--danger term-tag term-tag--danger">
+          [ DANGER ]
         </span>
       </div>
 
@@ -169,8 +172,14 @@ export function CognitiveCalendar() {
                       ) : null}
                     </div>
                     {biasN > 0 ? (
-                      <span className="cognitive-cal-bias">
-                        D×{biasN}
+                      <span
+                        className={
+                          biasN >= 2
+                            ? "cognitive-cal-bias term-tag term-tag--danger"
+                            : "cognitive-cal-bias term-tag term-tag--warn"
+                        }
+                      >
+                        [ D×{biasN} ]
                         <span className="cognitive-cal-bias-ticks">
                           {cell.day.distortions.slice(0, 3).map((c) => (
                             <span
@@ -182,8 +191,8 @@ export function CognitiveCalendar() {
                         </span>
                       </span>
                     ) : (
-                      <span className="cognitive-cal-bias cognitive-cal-bias--none">
-                        —
+                      <span className="cognitive-cal-bias cognitive-cal-bias--none term-tag term-tag--muted">
+                        [ — ]
                       </span>
                     )}
                     <span className="cognitive-cal-expense">

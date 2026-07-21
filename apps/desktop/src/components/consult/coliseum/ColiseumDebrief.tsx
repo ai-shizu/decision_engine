@@ -270,7 +270,7 @@ export function ColiseumDebrief({
               : "coliseum-panel-tag coliseum-tag-cyan"
           }
         >
-          {halted ? "SOVEREIGN HALT" : "TWO-LAYER EVAL"}
+          {halted ? "[ SOVEREIGN HALT ]" : "[ TWO-LAYER EVAL ]"}
         </span>
       </header>
 

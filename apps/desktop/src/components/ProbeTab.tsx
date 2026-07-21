@@ -16,8 +16,11 @@ export function ProbeTab() {
     return (
       <section className="panel probe-panel probe-panel-mobile">
         <h2>
-          <span className="mobile-only">PROBE</span>
+          <span className="term-tag term-tag--info">[ PROBE ]</span>
         </h2>
+        <div className="ascii-sep ascii-sep--info" role="separator">
+          --- FUNNEL ---
+        </div>
         <PocketProbePanel />
       </section>
     );
@@ -28,13 +31,21 @@ export function ProbeTab() {
       <div className="probe-topline">
         <div>
           <h2>
-            <span className="desktop-only">PROBE (自己探索)</span>
-            <span className="mobile-only">PROBE</span>
+            <span className="desktop-only">
+              PROBE <span className="term-tag term-tag--info">[ SELF-PROBE ]</span>
+            </span>
+            <span className="mobile-only">
+              <span className="term-tag term-tag--info">[ PROBE ]</span>
+            </span>
           </h2>
-          <p className="hint dev-noise">
-            M18-D/E: Coraxis の PROBE ファネルと Romance/Rasch パルス。
+          <p className="hint guide">
+            Coraxis PROBE ファネルと Romance/Rasch パルス。
           </p>
         </div>
+      </div>
+
+      <div className="ascii-sep" role="separator">
+        --- SURFACE ---
       </div>
 
       <div className="sub-tabs sub-tabs-pills" role="tablist" aria-label="PROBE面">
@@ -58,6 +69,10 @@ export function ProbeTab() {
           <span className="desktop-only">PULSE / RASCH</span>
           <span className="mobile-only">PULSE</span>
         </button>
+      </div>
+
+      <div className="ascii-flow" role="separator" aria-hidden="true">
+        -&gt; {surface === "pb_probe" ? "FUNNEL" : "PULSE"} -&gt;
       </div>
 
       {surface === "pb_probe" && <PocketProbePanel />}

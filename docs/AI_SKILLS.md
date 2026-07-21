@@ -1404,6 +1404,23 @@ Pocket Brain 経路は M14 tensor + M15 pulse/Rasch + gap sufficiency から loa
 
 **不変条件:** ES 本文は FE が明示注入するのみ（Vault 自動 RAG に戻すな）。ギャップ隔離は維持。角丸を復活させるな。
 
+### 4.74 Coliseum / I-22 端末美学の全域適用 (2026-07-22)
+
+**決定:** INTERVIEW 内 I-22 ASYMMETRY のハッカー・ターミナル言語をアプリ全域の正とする。
+
+**as-built (App.css ユーティリティ):**
+1. `.term-tag` / `--danger|--warn|--ok|--info|--muted` — 角丸・ベタ塗り禁止。状態は `[ STATE ]` ブラケット等幅のみ。
+2. `.hatch-danger` / `.hatch-warn` / `.hatch-ok` — VAULT RAW の `repeating-linear-gradient(-45deg)` を抽象化。
+3. `.ascii-sep` / `.ascii-flow` — `--- SECTION ---` / `-> FLOW ->` 区切り。
+
+**配線:**
+- RECORD ledger: 破局行 = `hatch-danger` + `[ DISTORTION ]`、非計画 = `hatch-warn` + `[ UNPLANNED ]`
+- CognitiveCalendar: warn/danger 日に hatch、凡例・D×N を bracket tag 化
+- PROBE / CONSULT / INTERVIEW / GapTwin: セクション sep + term-tag
+- AsymmetryProbe: グローバル hatch/term-tag/ascii-flow へ収束（ローカルベタ塗りバッジ廃止）
+
+**不変条件:** pill / rounded badge / 背景色ベタの状態チップを新設するな。危険データは hatch で際立たせよ。
+
 ---
 
 ## 6. 高度推論とプロファイリング戦略: 主観と客観の差分分析 (Gap Analysis)

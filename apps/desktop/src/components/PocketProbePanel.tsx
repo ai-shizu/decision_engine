@@ -107,10 +107,10 @@ export function PocketProbePanel() {
             <span className="desktop-only">PROBE_FUNNEL (Coraxis / M15)</span>
             <span className="mobile-only">自己探索</span>
           </p>
-          <p className="hint">
+          <p className="hint guide">
             進捗{" "}
-            <span className="term-metric">
-              {progress !== null ? `${progress}%` : "—"}
+            <span className="term-tag term-tag--info">
+              [ {progress !== null ? `${progress}%` : "—"} ]
             </span>
             {state.status && (
               <span className="dev-noise">
@@ -136,6 +136,10 @@ export function PocketProbePanel() {
           {PB_UI_BUSY.probeStatus}
         </p>
       )}
+
+      <div className="ascii-sep ascii-sep--info" role="separator">
+        --- STAGE PIPELINE ---
+      </div>
 
       <div
         className="probe-progress-track"
@@ -164,20 +168,33 @@ export function PocketProbePanel() {
               key={stage}
               className={`probe-step${active ? " active" : ""}${done ? " done" : ""}`}
             >
-              <span className="desktop-only">{stage}</span>
-              <span className="mobile-only">{STAGE_LABELS_JA[stage]}</span>
+              <span
+                className={
+                  active
+                    ? "term-tag term-tag--info"
+                    : done
+                      ? "term-tag term-tag--ok"
+                      : "term-tag term-tag--muted"
+                }
+              >
+                <span className="desktop-only">
+                  [ {stage} ]
+                </span>
+                <span className="mobile-only">
+                  [ {STAGE_LABELS_JA[stage]} ]
+                </span>
+              </span>
             </span>
           );
         })}
       </div>
 
       {state.phase === "complete" && (
-        <div className="term-panel probe-complete" role="status">
+        <div className="term-panel probe-complete hatch-ok" role="status">
           <p className="term-header">
-            <span className="desktop-only">SESSION_COMPLETE</span>
-            <span className="mobile-only">セッション完了</span>
+            <span className="term-tag term-tag--ok">[ SESSION_COMPLETE ]</span>
           </p>
-          <p className="hint">
+          <p className="hint guide">
             この軸の次質問はありません。ロビーから新しい質問を開始できます。
           </p>
           <button
