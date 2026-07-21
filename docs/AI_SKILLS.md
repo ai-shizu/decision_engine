@@ -1218,6 +1218,23 @@ Pocket Brain 経路は M14 tensor + M15 pulse/Rasch + gap sufficiency から loa
 
 **検証:** `npx tsc --noEmit` / `npm run test:boundary`。
 
+### 4.66 Coraxis ネイティブ端末美学 — グローバル基盤 (2026-07-21)
+
+**射程:** アプリ全域の CSS トークン / 角丸剥奪 / 等幅強制と、デスクトップ topbar+tabs・モバイル topbar+dock の共通クロームのみ。個別画面（台帳・カレンダー本文）の全面書き換えは後続。
+
+**不変条件:**
+1. 色は状態の関数。`--ok`=保護/正常、`--sys-cyan`=ライブ・数値、`--err-soft`=警告、`--err`=危険。`--accent`(#fff) は操作可能要素のみ。
+2. `*, *::before, *::after { border-radius: 0 !important; }` と `--font-ui: var(--font-mono)`。CDN フォント禁止。
+3. メイン `.tabs` は Coliseum nav と同型（共有罫線・番号カウンタ・白枠選択）。選択を白反転カードに戻すな。
+4. モバイル dock の active はシアン上枠 + `--accent` 文字。ハードコード `#484f58` 等を復活させるな。
+5. Zustand / 新 UI ライブラリ禁止。WAI-ARIA Tabs（manual activation）を壊すな。
+
+**as-built:** `App.css` `:root` 強化、`.topbar` / `.tabs` / `.mobile-*` 刷新、`App.tsx` / `TitleBar` / `MobileChrome` / `MobileBottomNav` ブランド行。
+
+**ハマりどころ:** 画面ごとに角丸を再導入するな。subtitle を装飾緑に戻すな（テレメトリは `--sys-cyan`）。
+
+**検証:** `npx tsc --noEmit`（apps/desktop）。
+
 ### 4.8 M3 Phase 0-A — SQLCipher / Security.framework iOS link gate (2026-07-18)
 
 **射程（Phase 0-A のみ）:** `secure-vault` feature、依存解決、in-memory SQLCipher identity（`PRAGMA key` + `cipher_version`）、Security.framework シンボル（`SecRandom` / `SecAccessControl`）、Tauri command 登録、iOS Simulator 最終リンク証明。スキーマ・repository・UI・本番 Keychain item 作成は対象外。

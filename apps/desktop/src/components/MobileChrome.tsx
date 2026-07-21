@@ -79,7 +79,8 @@ export function MobileChrome({
     <div className="mobile-chrome">
       <header className="mobile-topbar">
         <div className="mobile-topbar-row">
-          <h1>Coraxis</h1>
+          <h1>CORAXIS</h1>
+          <p className="mobile-topbar-meta">LOCAL · OFFLINE</p>
           {!showBanner && statusLine && !isAlarmStatus(statusLine) ? (
             <p className="subtitle">{statusLine}</p>
           ) : null}

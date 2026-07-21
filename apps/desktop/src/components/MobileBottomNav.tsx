@@ -186,7 +186,7 @@ export function MobileBottomNav({
             onClick={(e) => e.stopPropagation()}
           >
             <div className="mobile-menu-sheet-head">
-              <h2 id={titleId}>メニュー</h2>
+              <h2 id={titleId}>MENU</h2>
               <button
                 ref={closeRef}
                 type="button"
@@ -194,11 +194,11 @@ export function MobileBottomNav({
                 aria-label="メニューを閉じる"
                 onClick={() => onMenuOpenChange(false)}
               >
-                閉じる
+                CLOSE
               </button>
             </div>
             <p className="hint mobile-menu-hint">
-              PROFILE / IMPORT / SETTINGS（ドックと重複しない項目のみ）
+              PROFILE / IMPORT / SETTINGS
             </p>
             <ul className="mobile-menu-list">
               {MOBILE_MENU_DESTINATIONS.map(({ id, label, caption }) => {

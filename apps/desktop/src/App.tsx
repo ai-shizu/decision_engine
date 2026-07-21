@@ -231,7 +231,7 @@ export default function App() {
       >
         {!ready ? (
           <>
-            <h1>Coraxis</h1>
+            <h1>CORAXIS</h1>
             <p className="status-line">{status}</p>
             <p className="hint">
               初回起動はエンジン展開に 30 秒ほどかかることがあります。
@@ -244,9 +244,12 @@ export default function App() {
       {ready ? (
         <div className="desktop-chrome">
           <header className="topbar">
-            <div>
-              <h1>Coraxis</h1>
-              <p className="subtitle">{status}</p>
+            <div className="topbar-brand">
+              <div className="topbar-brand-row">
+                <h1>CORAXIS</h1>
+                <p className="topbar-meta">LOCAL · OFFLINE</p>
+              </div>
+              <p className="subtitle">{status || "READY"}</p>
             </div>
             <nav
               className="tabs"
