@@ -1,4 +1,4 @@
-//! Phase 11–12 — cognitive-snapshot purchases + month-view aggregation.
+//! Phase 11–13 — cognitive-snapshot purchases, month view, commitment fires.
 //!
 //! On insert we bake:
 //! - `r_at_decision` from latest Digital Twin `R(t)`
@@ -14,6 +14,11 @@ use serde::{Deserialize, Serialize};
 use tauri::State;
 
 use crate::analytics::digital_twin::TwinScenarioResult;
+use crate::analytics::self_regulation::{
+    commitment_row_from_proposal, evaluate_commitment_fires, proposals_from_report,
+    to_commitment_view, CognitiveCommitmentsResult, CommitmentFire,
+};
+use crate::analytics::spend_cognition::{analyze_spend_cognition, ANALYSIS_ROW_CAP};
 use crate::db::{PurchaseLineRow, PurchaseRow, VaultErrorCode, VaultHandle};
 
 const MAX_LINES: usize = 128;
@@ -101,6 +106,8 @@ pub struct RecordPurchaseResult {
     pub line_count: usize,
     pub r_at_decision: f64,
     pub active_distortion_count: usize,
+    /// Soft If-Then fires (never a hard block). Empty when no commitment matches.
+    pub commitment_fires: Vec<CommitmentFire>,
 }
 
 fn map_vault(err: VaultErrorCode) -> String {
@@ -237,6 +244,13 @@ pub async fn record_purchase_with_snapshot(
             });
         }
         let line_count = lines.len();
+        let commitments = vault.commitment_list_enabled().unwrap_or_default();
+        let commitment_fires = evaluate_commitment_fires(
+            &commitments,
+            r_at_decision,
+            &purchase.active_distortions_json,
+            occurred_at,
+        );
         vault
             .purchase_insert(purchase, lines)
             .map_err(map_vault)?;
@@ -246,6 +260,7 @@ pub async fn record_purchase_with_snapshot(
             line_count,
             r_at_decision,
             active_distortion_count,
+            commitment_fires,
         })
     })
     .await
@@ -442,6 +457,43 @@ pub async fn get_cognitive_month_view(
     })
     .await
     .map_err(|_| "get_cognitive_month_view join failed".to_string())?
+}
+
+
+/// FDR-robust spend↔cognition links → If-Then commitment proposals (+ vault sync).
+#[tauri::command]
+pub async fn get_cognitive_commitments(
+    vault: State<'_, VaultHandle>,
+) -> Result<CognitiveCommitmentsResult, String> {
+    let vault = vault.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let rows = vault
+            .purchase_list_recent(ANALYSIS_ROW_CAP as u32)
+            .map_err(map_vault)?;
+        let analysis = analyze_spend_cognition(&rows);
+        let proposals = proposals_from_report(&analysis);
+        let created = now_unix();
+        for proposal in &proposals {
+            let existing = vault
+                .commitment_find_by_source(proposal.source_relation_id.clone())
+                .unwrap_or(None);
+            let row = commitment_row_from_proposal(proposal, created, existing);
+            let _ = vault.commitment_upsert(row);
+        }
+        let commitments = vault
+            .commitment_list(256)
+            .unwrap_or_default()
+            .iter()
+            .map(to_commitment_view)
+            .collect();
+        Ok(CognitiveCommitmentsResult {
+            analysis,
+            proposals,
+            commitments,
+        })
+    })
+    .await
+    .map_err(|_| "get_cognitive_commitments join failed".to_string())?
 }
 
 #[cfg(test)]

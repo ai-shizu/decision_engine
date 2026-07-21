@@ -19,6 +19,8 @@ pub mod probe;
 pub mod prompt;
 pub mod rasch;
 pub mod romance_pulse;
+pub mod self_regulation;
+pub mod spend_cognition;
 pub mod taxonomy;
 pub mod tensor;
 pub mod twin_identify;

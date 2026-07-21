@@ -117,3 +117,40 @@ pub(crate) fn list_purchases_in_range(
     }
     Ok(out)
 }
+
+
+/// Newest-first purchase snapshots for cognition × spend analysis.
+pub(crate) fn list_purchases_recent(
+    connection: &Connection,
+    limit: u32,
+) -> Result<Vec<PurchaseRow>, RepositoryError> {
+    let lim = limit.clamp(1, 5_000) as i64;
+    let mut statement = connection
+        .prepare(
+            "SELECT id, occurred_at, merchant_norm, total_amount, tax, verified, \
+                    r_at_decision, active_distortions_json \
+             FROM purchases \
+             ORDER BY occurred_at DESC, id DESC \
+             LIMIT ?1",
+        )
+        .map_err(map_storage_error)?;
+    let rows = statement
+        .query_map(params![lim], |row| {
+            Ok(PurchaseRow {
+                id: row.get(0)?,
+                occurred_at: row.get(1)?,
+                merchant_norm: row.get(2)?,
+                total_amount: row.get(3)?,
+                tax: row.get(4)?,
+                verified: row.get(5)?,
+                r_at_decision: row.get(6)?,
+                active_distortions_json: row.get(7)?,
+            })
+        })
+        .map_err(map_storage_error)?;
+    let mut out = Vec::new();
+    for row in rows {
+        out.push(row.map_err(map_storage_error)?);
+    }
+    Ok(out)
+}

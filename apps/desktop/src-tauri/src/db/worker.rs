@@ -32,6 +32,7 @@ use super::{
     migrations::{run_migrations, MigrationError},
     distortion_repo::{self, DistortionTagRow},
     purchase_repo::{self, PurchaseLineRow, PurchaseRow},
+    commitment_repo::{self, CommitmentRow},
     oracle_repo::{self, InterviewSessionRow, OracleRunRow, TwinRunRow},
     psychometrics_repo::{self, PulseRunRow, ProbeStoreRow, RaschRunRow},
     repository::{
@@ -166,6 +167,11 @@ enum VaultReply {
     DistortionTagsList(Result<Vec<DistortionTagRow>, VaultErrorCode>),
     PurchaseInsert(Result<(), VaultErrorCode>),
     PurchaseListRange(Result<Vec<PurchaseRow>, VaultErrorCode>),
+    PurchaseListRecent(Result<Vec<PurchaseRow>, VaultErrorCode>),
+    CommitmentUpsert(Result<(), VaultErrorCode>),
+    CommitmentList(Result<Vec<CommitmentRow>, VaultErrorCode>),
+    CommitmentListEnabled(Result<Vec<CommitmentRow>, VaultErrorCode>),
+    CommitmentFindBySource(Result<Option<String>, VaultErrorCode>),
 }
 
 enum VaultRequest {
@@ -310,6 +316,30 @@ enum VaultRequest {
     PurchaseListRange {
         start_unix: i64,
         end_unix: i64,
+        control: RequestControl,
+        reply: SyncSender<VaultReply>,
+    },
+    PurchaseListRecent {
+        limit: u32,
+        control: RequestControl,
+        reply: SyncSender<VaultReply>,
+    },
+    CommitmentUpsert {
+        row: CommitmentRow,
+        control: RequestControl,
+        reply: SyncSender<VaultReply>,
+    },
+    CommitmentList {
+        limit: u32,
+        control: RequestControl,
+        reply: SyncSender<VaultReply>,
+    },
+    CommitmentListEnabled {
+        control: RequestControl,
+        reply: SyncSender<VaultReply>,
+    },
+    CommitmentFindBySource {
+        source_relation_id: String,
         control: RequestControl,
         reply: SyncSender<VaultReply>,
     },
@@ -972,6 +1002,104 @@ impl VaultHandle {
             _ => Err(VaultErrorCode::Unavailable),
         }
     }
+
+    pub(crate) fn purchase_list_recent(
+        &self,
+        limit: u32,
+    ) -> Result<Vec<PurchaseRow>, VaultErrorCode> {
+        let (reply_sender, receiver) = mpsc::sync_channel(1);
+        let cancelled = Arc::new(AtomicBool::new(false));
+        let request = VaultRequest::PurchaseListRecent {
+            limit,
+            control: RequestControl {
+                deadline: Instant::now() + SHORT_OPERATION_TIMEOUT,
+                cancelled: Arc::clone(&cancelled),
+            },
+            reply: reply_sender,
+        };
+        match self.submit(request, receiver, cancelled, SHORT_OPERATION_TIMEOUT)? {
+            VaultReply::PurchaseListRecent(result) => result,
+            _ => Err(VaultErrorCode::Unavailable),
+        }
+    }
+
+    pub(crate) fn commitment_upsert(
+        &self,
+        row: CommitmentRow,
+    ) -> Result<(), VaultErrorCode> {
+        let (reply_sender, receiver) = mpsc::sync_channel(1);
+        let cancelled = Arc::new(AtomicBool::new(false));
+        let request = VaultRequest::CommitmentUpsert {
+            row,
+            control: RequestControl {
+                deadline: Instant::now() + SHORT_OPERATION_TIMEOUT,
+                cancelled: Arc::clone(&cancelled),
+            },
+            reply: reply_sender,
+        };
+        match self.submit(request, receiver, cancelled, SHORT_OPERATION_TIMEOUT)? {
+            VaultReply::CommitmentUpsert(result) => result,
+            _ => Err(VaultErrorCode::Unavailable),
+        }
+    }
+
+    pub(crate) fn commitment_list(
+        &self,
+        limit: u32,
+    ) -> Result<Vec<CommitmentRow>, VaultErrorCode> {
+        let (reply_sender, receiver) = mpsc::sync_channel(1);
+        let cancelled = Arc::new(AtomicBool::new(false));
+        let request = VaultRequest::CommitmentList {
+            limit,
+            control: RequestControl {
+                deadline: Instant::now() + SHORT_OPERATION_TIMEOUT,
+                cancelled: Arc::clone(&cancelled),
+            },
+            reply: reply_sender,
+        };
+        match self.submit(request, receiver, cancelled, SHORT_OPERATION_TIMEOUT)? {
+            VaultReply::CommitmentList(result) => result,
+            _ => Err(VaultErrorCode::Unavailable),
+        }
+    }
+
+    pub(crate) fn commitment_list_enabled(
+        &self,
+    ) -> Result<Vec<CommitmentRow>, VaultErrorCode> {
+        let (reply_sender, receiver) = mpsc::sync_channel(1);
+        let cancelled = Arc::new(AtomicBool::new(false));
+        let request = VaultRequest::CommitmentListEnabled {
+            control: RequestControl {
+                deadline: Instant::now() + SHORT_OPERATION_TIMEOUT,
+                cancelled: Arc::clone(&cancelled),
+            },
+            reply: reply_sender,
+        };
+        match self.submit(request, receiver, cancelled, SHORT_OPERATION_TIMEOUT)? {
+            VaultReply::CommitmentListEnabled(result) => result,
+            _ => Err(VaultErrorCode::Unavailable),
+        }
+    }
+
+    pub(crate) fn commitment_find_by_source(
+        &self,
+        source_relation_id: String,
+    ) -> Result<Option<String>, VaultErrorCode> {
+        let (reply_sender, receiver) = mpsc::sync_channel(1);
+        let cancelled = Arc::new(AtomicBool::new(false));
+        let request = VaultRequest::CommitmentFindBySource {
+            source_relation_id,
+            control: RequestControl {
+                deadline: Instant::now() + SHORT_OPERATION_TIMEOUT,
+                cancelled: Arc::clone(&cancelled),
+            },
+            reply: reply_sender,
+        };
+        match self.submit(request, receiver, cancelled, SHORT_OPERATION_TIMEOUT)? {
+            VaultReply::CommitmentFindBySource(result) => result,
+            _ => Err(VaultErrorCode::Unavailable),
+        }
+    }
 }
 
 
@@ -1320,6 +1448,65 @@ impl VaultWorker {
                         self.list_purchases_in_range(start_unix, end_unix)
                     };
                     let _ = reply.send(VaultReply::PurchaseListRange(result));
+                }
+                VaultRequest::PurchaseListRecent {
+                    limit,
+                    control,
+                    reply,
+                } => {
+                    let result = if request_expired(&control) {
+                        Err(VaultErrorCode::Timeout)
+                    } else {
+                        self.list_purchases_recent(limit)
+                    };
+                    let _ = reply.send(VaultReply::PurchaseListRecent(result));
+                }
+                VaultRequest::CommitmentUpsert {
+                    row,
+                    control,
+                    reply,
+                } => {
+                    let result = if request_expired(&control) {
+                        Err(VaultErrorCode::Timeout)
+                    } else {
+                        self.upsert_commitment(row)
+                    };
+                    let _ = reply.send(VaultReply::CommitmentUpsert(result));
+                }
+                VaultRequest::CommitmentList {
+                    limit,
+                    control,
+                    reply,
+                } => {
+                    let result = if request_expired(&control) {
+                        Err(VaultErrorCode::Timeout)
+                    } else {
+                        self.list_commitments(limit)
+                    };
+                    let _ = reply.send(VaultReply::CommitmentList(result));
+                }
+                VaultRequest::CommitmentListEnabled {
+                    control,
+                    reply,
+                } => {
+                    let result = if request_expired(&control) {
+                        Err(VaultErrorCode::Timeout)
+                    } else {
+                        self.list_enabled_commitments()
+                    };
+                    let _ = reply.send(VaultReply::CommitmentListEnabled(result));
+                }
+                VaultRequest::CommitmentFindBySource {
+                    source_relation_id,
+                    control,
+                    reply,
+                } => {
+                    let result = if request_expired(&control) {
+                        Err(VaultErrorCode::Timeout)
+                    } else {
+                        self.find_commitment_by_source(source_relation_id)
+                    };
+                    let _ = reply.send(VaultReply::CommitmentFindBySource(result));
                 }
                 VaultRequest::RegisterEvents {
                     channel,
@@ -1743,6 +1930,71 @@ impl VaultWorker {
         }
         let outcome = self.read_repository(|connection| {
             purchase_repo::list_purchases_in_range(connection, start_unix, end_unix)
+        });
+        self.resolve_repository(outcome)
+    }
+
+    fn list_purchases_recent(
+        &mut self,
+        limit: u32,
+    ) -> Result<Vec<PurchaseRow>, VaultErrorCode> {
+        gate(snapshot_status(&self.status))?;
+        let outcome = self.read_repository(|connection| {
+            purchase_repo::list_purchases_recent(connection, limit)
+        });
+        self.resolve_repository(outcome)
+    }
+
+    fn upsert_commitment(
+        &mut self,
+        row: CommitmentRow,
+    ) -> Result<(), VaultErrorCode> {
+        gate(snapshot_status(&self.status))?;
+        if row.id.len() > 128
+            || row.condition_json.len() > MAX_TEXT_BYTES
+            || row.action_type.len() > 64
+            || row.custom_prompt.len() > MAX_TEXT_BYTES
+            || row.source_relation_id.len() > 256
+            || row.origin.len() > 64
+        {
+            return Err(VaultErrorCode::InvalidInput);
+        }
+        let outcome = self.read_repository(|connection| {
+            commitment_repo::upsert_commitment(connection, &row)
+        });
+        self.resolve_repository(outcome)
+    }
+
+    fn list_commitments(
+        &mut self,
+        limit: u32,
+    ) -> Result<Vec<CommitmentRow>, VaultErrorCode> {
+        gate(snapshot_status(&self.status))?;
+        let lim = limit.clamp(1, 1_000);
+        let outcome = self
+            .read_repository(|connection| commitment_repo::list_commitments(connection, lim));
+        self.resolve_repository(outcome)
+    }
+
+    fn list_enabled_commitments(
+        &mut self,
+    ) -> Result<Vec<CommitmentRow>, VaultErrorCode> {
+        gate(snapshot_status(&self.status))?;
+        let outcome = self
+            .read_repository(|connection| commitment_repo::list_enabled_commitments(connection));
+        self.resolve_repository(outcome)
+    }
+
+    fn find_commitment_by_source(
+        &mut self,
+        source_relation_id: String,
+    ) -> Result<Option<String>, VaultErrorCode> {
+        gate(snapshot_status(&self.status))?;
+        if source_relation_id.len() > 256 {
+            return Err(VaultErrorCode::InvalidInput);
+        }
+        let outcome = self.read_repository(|connection| {
+            commitment_repo::find_id_by_source_relation(connection, &source_relation_id)
         });
         self.resolve_repository(outcome)
     }

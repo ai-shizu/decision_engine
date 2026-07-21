@@ -203,6 +203,8 @@ pub fn run() {
             #[cfg(all(feature = "secure-vault", target_vendor = "apple"))]
             analytics::commands_finance::get_cognitive_month_view,
             #[cfg(all(feature = "secure-vault", target_vendor = "apple"))]
+            analytics::commands_finance::get_cognitive_commitments,
+            #[cfg(all(feature = "secure-vault", target_vendor = "apple"))]
             ocr::commands::ocr_recognize_layout,
             #[cfg(all(
                 feature = "pocket-brain",

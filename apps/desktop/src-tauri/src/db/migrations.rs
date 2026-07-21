@@ -8,7 +8,7 @@ use std::{error::Error, fmt};
 
 use rusqlite::{Connection, TransactionBehavior};
 
-pub(crate) const LATEST_SCHEMA_VERSION: i64 = 8;
+pub(crate) const LATEST_SCHEMA_VERSION: i64 = 9;
 
 /// Canonical embedding width for `knowledge_chunks.embedding` (M9 foundation).
 /// Matches the historical PKBVEC01 384-d space; a future 768-d migration would
@@ -191,6 +191,27 @@ CREATE INDEX IF NOT EXISTS idx_purchase_lines_purchase
     ON purchase_lines(purchase_id, id);
 "#;
 
+const MIGRATION_V9_SQL: &str = r#"
+CREATE TABLE IF NOT EXISTS commitments (
+    id TEXT PRIMARY KEY NOT NULL,
+    created_at INTEGER NOT NULL,
+    condition_json TEXT NOT NULL,
+    action_type TEXT NOT NULL,
+    custom_prompt TEXT NOT NULL,
+    delay_seconds INTEGER NOT NULL,
+    source_relation_id TEXT NOT NULL,
+    enabled INTEGER NOT NULL,
+    origin TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_commitments_enabled
+    ON commitments(enabled DESC, created_at DESC);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_commitments_source_relation
+    ON commitments(source_relation_id);
+"#;
+
+
 const READ_CHATS_COLUMNS_SQL: &str =
     "SELECT name, type, \"notnull\", pk FROM pragma_table_info('chats') ORDER BY cid;";
 const READ_MESSAGES_COLUMNS_SQL: &str =
@@ -252,6 +273,11 @@ const MIGRATIONS: &[Migration] = &[
         version: 8,
         sql: MIGRATION_V8_SQL,
         verify: verify_v8_schema,
+    },
+    Migration {
+        version: 9,
+        sql: MIGRATION_V9_SQL,
+        verify: verify_v9_schema,
     },
 ];
 
@@ -632,6 +658,34 @@ fn verify_v8_schema(connection: &Connection) -> Result<(), MigrationError> {
         ],
     ) {
         return Err(MigrationError::SchemaMismatch { version: 8 });
+    }
+    Ok(())
+}
+
+
+fn verify_v9_schema(connection: &Connection) -> Result<(), MigrationError> {
+    verify_v8_schema(connection).map_err(|_| MigrationError::SchemaMismatch { version: 9 })?;
+
+    let cols = read_columns(
+        connection,
+        "SELECT name, type, \"notnull\", pk FROM pragma_table_info('commitments') ORDER BY cid;",
+    )
+    .map_err(|_| MigrationError::SchemaMismatch { version: 9 })?;
+    if !columns_match(
+        &cols,
+        &[
+            ("id", "TEXT", true, 1),
+            ("created_at", "INTEGER", true, 0),
+            ("condition_json", "TEXT", true, 0),
+            ("action_type", "TEXT", true, 0),
+            ("custom_prompt", "TEXT", true, 0),
+            ("delay_seconds", "INTEGER", true, 0),
+            ("source_relation_id", "TEXT", true, 0),
+            ("enabled", "INTEGER", true, 0),
+            ("origin", "TEXT", true, 0),
+        ],
+    ) {
+        return Err(MigrationError::SchemaMismatch { version: 9 });
     }
     Ok(())
 }

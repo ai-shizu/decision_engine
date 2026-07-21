@@ -1082,6 +1082,22 @@ Pocket Brain 経路は M14 tensor + M15 pulse/Rasch + gap sufficiency から loa
 
 **検証:** `cargo check|test --features pocket-brain,secure-vault` + `npx tsc --noEmit`。
 
+### 4.56 Phase 13 — 行動経済学クロス分析 + If-Then 自己拘束 (2026-07-21)
+
+**射程:** 購買化石 × Twin $R(t)$ / CBT の個人内イベントスタディ + Benjamini–Hochberg FDR → 自己拘束コミットメント提案と購買時ソフト発火。RNG・外部 API 禁止。
+
+**学術根拠:** 個人内固定効果（曜日・月内位置の交絡除去）+ FDR 多重比較制御 + Ulysses / precommitment（強制ブロックしない遅延・一呼吸）。
+
+**as-built:**
+1. `spend_cognition.rs` — stratum 残差化 → Welch コントラスト → BH-FDR (`q=0.10`)。最小サポート: 14日・群各5件。
+2. V9 `commitments`（`condition_json` / `action_type` / `custom_prompt` / `delay_seconds` / `source_relation_id` UNIQUE）。
+3. `get_cognitive_commitments` — FDR 生存関係を提案へ昇華し Vault へ idempotent upsert（`enabled` は上書きしない）。
+4. `record_purchase_with_snapshot` — 有効コミットメントを認知状態で照合し `commitment_fires` を返す（ハードブロック禁止）。
+
+**ハマりどころ:** FDR なしの単一 p でルールを立てるな。発火はシグナルのみ — 購入 insert を拒否するな。交絡残差化を外して素の相関に戻すな。
+
+**検証:** `cargo check|test --features pocket-brain,secure-vault`。
+
 ### 4.8 M3 Phase 0-A — SQLCipher / Security.framework iOS link gate (2026-07-18)
 
 **射程（Phase 0-A のみ）:** `secure-vault` feature、依存解決、in-memory SQLCipher identity（`PRAGMA key` + `cipher_version`）、Security.framework シンボル（`SecRandom` / `SecAccessControl`）、Tauri command 登録、iOS Simulator 最終リンク証明。スキーマ・repository・UI・本番 Keychain item 作成は対象外。

@@ -25,6 +25,8 @@ mod psychometrics_repo;
 mod distortion_repo;
 mod purchase_repo;
 #[cfg(target_vendor = "apple")]
+mod commitment_repo;
+#[cfg(target_vendor = "apple")]
 mod migrations;
 #[cfg(target_vendor = "apple")]
 mod repository;
@@ -44,6 +46,8 @@ pub(crate) use knowledge_repo::{KnowledgeChunkRow, KnowledgeSearchHit};
 #[cfg(target_vendor = "apple")]
 pub(crate) use distortion_repo::DistortionTagRow;
 pub(crate) use purchase_repo::{PurchaseLineRow, PurchaseRow};
+#[cfg(target_vendor = "apple")]
+pub(crate) use commitment_repo::CommitmentRow;
 #[cfg(target_vendor = "apple")]
 pub(crate) use oracle_repo::{InterviewSessionRow, OracleRunRow, TwinRunRow};
 #[cfg(target_vendor = "apple")]
