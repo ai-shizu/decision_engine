@@ -1466,6 +1466,22 @@ Pocket Brain 経路は M14 tensor + M15 pulse/Rasch + gap sufficiency から loa
 
 **不変条件:** 装飾専用英語を UI に戻すな。I-22 の赤/緑セマンティクス（封印/許可）は維持せよ。
 
+### 4.78 GD 専用セットアップ・パイプライン + AGENT_PROFILES (2026-07-22)
+
+**欠陥:** `[ GD闘技 ]` が Inner Coliseum の 1on1 LOBBY/ARENA を直結しており、お題・人数・役割・対戦ペルソナを入力する導線が無かった。
+
+**as-built:**
+1. `lib/gdSetupState.ts` — 純関数状態（theme / participants 4–6 / timeLimit / userRole / agents）。`gdSetupReady` がゲート。
+2. `GdSetupPanel.tsx` — `[ GD_SETUP ]` ハードウェアフォーム + `[ AGENT_PROFILES ]` 動的行（人数−1）。アーキタイプ5種 + HOSTILITY/COMPETENCE 角形シアン range。
+3. `ColiseumRoot` — `phase: setup|armed`。未初期化時 LOBBY/ARENA/DEBRIEF タブは `[ LOCK ]`。`[ INITIALIZE GD_ENVIRONMENT ]` 後にのみ闘技場へ。
+4. `TranscriptStream` / `ColiseumArena` — `mode="gd"` で `[ PARTICIPANT_* ]` / `[ USER ]` マルチエージェント・モックストリーム分岐。
+5. 美学: `.magi-rack` / 1px border / 等幅 / ネイティブ丸サム抹殺（`.gd-range`）。
+
+**不変条件:**
+- GD 開始前にセットアップをスキップする導線を作るな。
+- 司会者専用ペルソナをエージェント行列に追加するな（AI_SKILLS §7.1.2 カオス維持）。
+- archetype → `PRESET_PERSONA_TRAITS` 写像は `archetypeToTrait()` 経由のみ（IPC 本結線時）。
+
 ---
 
 ## 6. 高度推論とプロファイリング戦略: 主観と客観の差分分析 (Gap Analysis)

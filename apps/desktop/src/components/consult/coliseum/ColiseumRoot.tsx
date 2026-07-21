@@ -1,13 +1,20 @@
 /**
- * Phase 14 — Inner Coliseum shell: view router + always-mounted SovereignBar.
+ * Phase 14 — Inner Coliseum shell: GD setup gate → LOBBY / ARENA / DEBRIEF.
  * Terminal aesthetics only (monospace / radius 0 / state-colored CSS vars).
  */
 
 import { useState } from "react";
 
+import {
+  gdSetupReady,
+  initialGdSetupConfig,
+  type GdPhase,
+  type GdSetupConfig,
+} from "../../../lib/gdSetupState";
 import { ColiseumArena } from "./ColiseumArena";
 import { ColiseumDebrief } from "./ColiseumDebrief";
 import { ColiseumLobby } from "./ColiseumLobby";
+import { GdSetupPanel } from "./GdSetupPanel";
 import { SovereignBar } from "./SovereignBar";
 
 export type ColiseumView = "lobby" | "arena" | "debrief";
@@ -24,8 +31,18 @@ export function ColiseumRoot({
   /** Fired after two-tap SURRENDER confirmation (hard stop). */
   onSurrender?: () => void;
 } = {}) {
+  const [phase, setPhase] = useState<GdPhase>("setup");
+  const [setup, setSetup] = useState<GdSetupConfig>(() => initialGdSetupConfig());
   const [view, setView] = useState<ColiseumView>("lobby");
   const [halted, setHalted] = useState(false);
+
+  const armed = phase === "armed";
+
+  function handleInitialize() {
+    if (!gdSetupReady(setup)) return;
+    setPhase("armed");
+    setView("lobby");
+  }
 
   function handleSurrender() {
     setHalted(true);
@@ -33,31 +50,55 @@ export function ColiseumRoot({
     onSurrender?.();
   }
 
+  function trySetView(next: ColiseumView) {
+    if (!armed) return;
+    setView(next);
+  }
+
   return (
-    <div className="coliseum-root" data-view={view} data-halted={halted ? "1" : "0"}>
-      <header className="coliseum-nav" role="navigation" aria-label="Coliseum view (debug)">
+    <div
+      className="coliseum-root"
+      data-view={armed ? view : "setup"}
+      data-phase={phase}
+      data-halted={halted ? "1" : "0"}
+    >
+      <header className="coliseum-nav" role="navigation" aria-label="Coliseum view">
         <div className="coliseum-nav-brand">
           <span className="coliseum-glyph-ok">▮</span>
-          <span className="coliseum-nav-title">INNER COLISEUM</span>
-          <span className="coliseum-nav-meta">I-22 · F-14 · PHASE14</span>
+          <span className="coliseum-nav-title">
+            {armed ? "INNER COLISEUM · GD" : "GD ENVIRONMENT"}
+          </span>
+          <span className="coliseum-nav-meta">
+            {armed
+              ? `${setup.participants}席 · ${setup.timeLimitMin}分`
+              : "SETUP REQUIRED"}
+          </span>
         </div>
         <div className="coliseum-nav-tabs" role="tablist" aria-label="Coliseum stages">
-          {VIEWS.map((v) => (
-            <button
-              key={v.id}
-              type="button"
-              role="tab"
-              aria-selected={view === v.id}
-              className={
-                view === v.id
-                  ? "coliseum-nav-tab coliseum-nav-tab-active"
-                  : "coliseum-nav-tab"
-              }
-              onClick={() => setView(v.id)}
-            >
-              {v.label}
-            </button>
-          ))}
+          {VIEWS.map((v) => {
+            const locked = !armed;
+            const active = armed && view === v.id;
+            return (
+              <button
+                key={v.id}
+                type="button"
+                role="tab"
+                aria-selected={active}
+                aria-disabled={locked}
+                disabled={locked}
+                className={
+                  locked
+                    ? "coliseum-nav-tab coliseum-nav-tab-locked"
+                    : active
+                      ? "coliseum-nav-tab coliseum-nav-tab-active"
+                      : "coliseum-nav-tab"
+                }
+                onClick={() => trySetView(v.id)}
+              >
+                {locked ? `[ LOCK ] ${v.label}` : v.label}
+              </button>
+            );
+          })}
         </div>
         {halted && (
           <div className="coliseum-halt-banner" role="status">
@@ -67,15 +108,44 @@ export function ColiseumRoot({
       </header>
 
       <main className="coliseum-stage" aria-live="polite">
-        {view === "lobby" && (
+        {!armed && (
+          <GdSetupPanel
+            config={setup}
+            onChange={setSetup}
+            onInitialize={handleInitialize}
+          />
+        )}
+
+        {armed && view === "lobby" && (
           <ColiseumLobby onEnterArena={() => setView("arena")} />
         )}
-        {view === "arena" && <ColiseumArena onRequestDebrief={() => setView("debrief")} />}
-        {view === "debrief" && <ColiseumDebrief halted={halted} />}
+        {armed && view === "arena" && (
+          <ColiseumArena
+            mode="gd"
+            gdConfig={setup}
+            onRequestDebrief={() => setView("debrief")}
+          />
+        )}
+        {armed && view === "debrief" && <ColiseumDebrief halted={halted} />}
       </main>
 
-      {/* Always mounted — fixed sovereign hard-stop (never unmounted by view). */}
-      <SovereignBar onConfirmHalt={handleSurrender} disabled={halted} />
+      {armed && (
+        <div className="gd-armed-strip" aria-label="GD context summary">
+          <span className="gd-armed-theme">{setup.theme.trim()}</span>
+          <button
+            type="button"
+            className="gd-reconfig-btn"
+            onClick={() => {
+              setPhase("setup");
+              setHalted(false);
+            }}
+          >
+            [ RECONFIGURE ]
+          </button>
+        </div>
+      )}
+
+      <SovereignBar onConfirmHalt={handleSurrender} disabled={halted || !armed} />
     </div>
   );
 }

@@ -13,5 +13,7 @@ export type {
 export { AsymmetryProbe } from "./AsymmetryProbe";
 export type { AsymmetryProbeProps } from "./AsymmetryProbe";
 export { TranscriptStream } from "./TranscriptStream";
-export type { TranscriptMessage } from "./TranscriptStream";
+export type { TranscriptMessage, TranscriptRole } from "./TranscriptStream";
 export { CircuitBreakerGauge } from "./CircuitBreakerGauge";
+export { GdSetupPanel } from "./GdSetupPanel";
+export type { GdSetupPanelProps } from "./GdSetupPanel";
