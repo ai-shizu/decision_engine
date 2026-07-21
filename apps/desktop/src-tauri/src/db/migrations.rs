@@ -8,7 +8,7 @@ use std::{error::Error, fmt};
 
 use rusqlite::{Connection, TransactionBehavior};
 
-pub(crate) const LATEST_SCHEMA_VERSION: i64 = 7;
+pub(crate) const LATEST_SCHEMA_VERSION: i64 = 8;
 
 /// Canonical embedding width for `knowledge_chunks.embedding` (M9 foundation).
 /// Matches the historical PKBVEC01 384-d space; a future 768-d migration would
@@ -162,6 +162,35 @@ CREATE INDEX IF NOT EXISTS idx_distortion_tags_category
     ON distortion_tags(category, created_at DESC);
 "#;
 
+const MIGRATION_V8_SQL: &str = r#"
+CREATE TABLE IF NOT EXISTS purchases (
+    id TEXT PRIMARY KEY NOT NULL,
+    occurred_at INTEGER NOT NULL,
+    merchant_norm TEXT NOT NULL,
+    total_amount INTEGER NOT NULL,
+    tax INTEGER NOT NULL,
+    verified INTEGER NOT NULL,
+    r_at_decision REAL NOT NULL,
+    active_distortions_json TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_purchases_occurred
+    ON purchases(occurred_at DESC, id DESC);
+
+CREATE TABLE IF NOT EXISTS purchase_lines (
+    id TEXT PRIMARY KEY NOT NULL,
+    purchase_id TEXT NOT NULL,
+    item_name TEXT NOT NULL,
+    unit_price INTEGER NOT NULL,
+    qty INTEGER NOT NULL,
+    amount INTEGER NOT NULL,
+    FOREIGN KEY (purchase_id) REFERENCES purchases(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_purchase_lines_purchase
+    ON purchase_lines(purchase_id, id);
+"#;
+
 const READ_CHATS_COLUMNS_SQL: &str =
     "SELECT name, type, \"notnull\", pk FROM pragma_table_info('chats') ORDER BY cid;";
 const READ_MESSAGES_COLUMNS_SQL: &str =
@@ -218,6 +247,11 @@ const MIGRATIONS: &[Migration] = &[
         version: 7,
         sql: MIGRATION_V7_SQL,
         verify: verify_v7_schema,
+    },
+    Migration {
+        version: 8,
+        sql: MIGRATION_V8_SQL,
+        verify: verify_v8_schema,
     },
 ];
 
@@ -553,6 +587,51 @@ fn verify_v7_schema(connection: &Connection) -> Result<(), MigrationError> {
         ],
     ) {
         return Err(MigrationError::SchemaMismatch { version: 7 });
+    }
+    Ok(())
+}
+
+fn verify_v8_schema(connection: &Connection) -> Result<(), MigrationError> {
+    verify_v7_schema(connection).map_err(|_| MigrationError::SchemaMismatch { version: 8 })?;
+
+    let purchase_cols = read_columns(
+        connection,
+        "SELECT name, type, \"notnull\", pk FROM pragma_table_info('purchases') ORDER BY cid;",
+    )
+    .map_err(|_| MigrationError::SchemaMismatch { version: 8 })?;
+    if !columns_match(
+        &purchase_cols,
+        &[
+            ("id", "TEXT", true, 1),
+            ("occurred_at", "INTEGER", true, 0),
+            ("merchant_norm", "TEXT", true, 0),
+            ("total_amount", "INTEGER", true, 0),
+            ("tax", "INTEGER", true, 0),
+            ("verified", "INTEGER", true, 0),
+            ("r_at_decision", "REAL", true, 0),
+            ("active_distortions_json", "TEXT", true, 0),
+        ],
+    ) {
+        return Err(MigrationError::SchemaMismatch { version: 8 });
+    }
+
+    let line_cols = read_columns(
+        connection,
+        "SELECT name, type, \"notnull\", pk FROM pragma_table_info('purchase_lines') ORDER BY cid;",
+    )
+    .map_err(|_| MigrationError::SchemaMismatch { version: 8 })?;
+    if !columns_match(
+        &line_cols,
+        &[
+            ("id", "TEXT", true, 1),
+            ("purchase_id", "TEXT", true, 0),
+            ("item_name", "TEXT", true, 0),
+            ("unit_price", "INTEGER", true, 0),
+            ("qty", "INTEGER", true, 0),
+            ("amount", "INTEGER", true, 0),
+        ],
+    ) {
+        return Err(MigrationError::SchemaMismatch { version: 8 });
     }
     Ok(())
 }

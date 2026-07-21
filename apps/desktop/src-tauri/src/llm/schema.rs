@@ -170,6 +170,10 @@ pub const KAKEIBO_V1_GBNF: &str = include_str!("assets/kakeibo_v1.gbnf");
 pub const COGNITIVE_DISTORTION_V1_GBNF: &str =
     include_str!("assets/cognitive_distortion_v1.gbnf");
 
+/// Static GBNF grammar for [`ReceiptOcrV1`].
+pub const RECEIPT_OCR_V1_GBNF: &str = include_str!("assets/receipt_ocr_v1.gbnf");
+
+
 // ─── Phase 8: Cognitive distortion extraction (Beck 1976 / Burns 1980) ───────
 
 /// Burns (1980) / Beck (1976) ten cognitive distortions.
@@ -304,6 +308,91 @@ fn truncate_snippet(s: &str) -> String {
     }
     format!("{}…", &s[..end])
 }
+
+
+// ─── Phase 11: Hierarchical receipt OCR extraction ───────────────────────────
+
+/// One receipt line item — all money fields are integers (yen).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ReceiptLineV1 {
+    pub item_name: String,
+    pub unit_price: i64,
+    pub qty: i64,
+    pub amount: i64,
+}
+
+/// Grammar-constrained hierarchical receipt extract.
+///
+/// Checksum gate (deterministic, no LLM retry):
+/// `sum(line.amount) + tax == total` → verified; else fail-closed verified=0.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ReceiptOcrV1 {
+    pub merchant: String,
+    /// ISO datetime / date string, unix integer as string, or `"unknown"`.
+    pub occurred_at: String,
+    pub tax: i64,
+    pub total: i64,
+    pub lines: Vec<ReceiptLineV1>,
+}
+
+impl ReceiptOcrV1 {
+    pub fn normalize(&mut self) {
+        self.merchant = truncate_snippet(self.merchant.trim());
+        if self.merchant.is_empty() {
+            self.merchant = UNKNOWN.to_string();
+        }
+        self.occurred_at = self.occurred_at.trim().to_string();
+        if self.occurred_at.is_empty() {
+            self.occurred_at = UNKNOWN.to_string();
+        }
+        if self.tax < 0 {
+            self.tax = 0;
+        }
+        if self.total < 0 {
+            self.total = 0;
+        }
+        for line in &mut self.lines {
+            line.item_name = truncate_snippet(line.item_name.trim());
+            if line.item_name.is_empty() {
+                line.item_name = UNKNOWN.to_string();
+            }
+            if line.qty <= 0 {
+                line.qty = 1;
+            }
+            if line.unit_price < 0 {
+                line.unit_price = 0;
+            }
+            if line.amount < 0 {
+                line.amount = 0;
+            }
+        }
+        self.lines.retain(|l| l.item_name != UNKNOWN || l.amount > 0);
+    }
+
+    pub fn from_json_str(raw: &str) -> Result<Self, serde_json::Error> {
+        let mut report: Self = serde_json::from_str(raw)?;
+        report.normalize();
+        Ok(report)
+    }
+
+    /// Deterministic checksum: Σ line.amount + tax == total (integer arithmetic).
+    pub fn checksum_ok(&self) -> bool {
+        let mut sum: i64 = 0;
+        for line in &self.lines {
+            match sum.checked_add(line.amount) {
+                Some(v) => sum = v,
+                None => return false,
+            }
+        }
+        match sum.checked_add(self.tax) {
+            Some(v) => v == self.total,
+            None => false,
+        }
+    }
+}
+
 
 #[cfg(test)]
 mod tests {
@@ -451,4 +540,36 @@ mod tests {
             assert_eq!(DistortionCategory::parse(cat.as_str()), Some(cat));
         }
     }
+
+    #[test]
+    fn receipt_checksum_gate() {
+        let ok = ReceiptOcrV1 {
+            merchant: "店".into(),
+            occurred_at: "unknown".into(),
+            tax: 100,
+            total: 1100,
+            lines: vec![ReceiptLineV1 {
+                item_name: "牛乳".into(),
+                unit_price: 500,
+                qty: 2,
+                amount: 1000,
+            }],
+        };
+        assert!(ok.checksum_ok());
+        let bad = ReceiptOcrV1 {
+            total: 999,
+            ..ok.clone()
+        };
+        assert!(!bad.checksum_ok());
+    }
+
+    #[test]
+    fn receipt_gbnf_mentions_hierarchy() {
+        assert!(RECEIPT_OCR_V1_GBNF.contains("merchant"));
+        assert!(RECEIPT_OCR_V1_GBNF.contains("lines"));
+        assert!(RECEIPT_OCR_V1_GBNF.contains("unit_price"));
+        assert!(RECEIPT_OCR_V1_GBNF.contains("tax"));
+        assert!(RECEIPT_OCR_V1_GBNF.contains("total"));
+    }
+
 }

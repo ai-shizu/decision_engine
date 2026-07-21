@@ -31,6 +31,7 @@ use super::{
     knowledge_repo::{self, KnowledgeChunkRow, KnowledgeSearchHit},
     migrations::{run_migrations, MigrationError},
     distortion_repo::{self, DistortionTagRow},
+    purchase_repo::{self, PurchaseLineRow, PurchaseRow},
     oracle_repo::{self, InterviewSessionRow, OracleRunRow, TwinRunRow},
     psychometrics_repo::{self, PulseRunRow, ProbeStoreRow, RaschRunRow},
     repository::{
@@ -163,6 +164,7 @@ enum VaultReply {
     InterviewSessionGet(Result<Option<InterviewSessionRow>, VaultErrorCode>),
     DistortionTagsInsert(Result<usize, VaultErrorCode>),
     DistortionTagsList(Result<Vec<DistortionTagRow>, VaultErrorCode>),
+    PurchaseInsert(Result<(), VaultErrorCode>),
 }
 
 enum VaultRequest {
@@ -295,6 +297,12 @@ enum VaultRequest {
     },
     DistortionTagsList {
         limit: u32,
+        control: RequestControl,
+        reply: SyncSender<VaultReply>,
+    },
+    PurchaseInsert {
+        purchase: PurchaseRow,
+        lines: Vec<PurchaseLineRow>,
         control: RequestControl,
         reply: SyncSender<VaultReply>,
     },
@@ -913,7 +921,30 @@ impl VaultHandle {
             _ => Err(VaultErrorCode::Unavailable),
         }
     }
+
+    pub(crate) fn purchase_insert(
+        &self,
+        purchase: PurchaseRow,
+        lines: Vec<PurchaseLineRow>,
+    ) -> Result<(), VaultErrorCode> {
+        let (reply_sender, receiver) = mpsc::sync_channel(1);
+        let cancelled = Arc::new(AtomicBool::new(false));
+        let request = VaultRequest::PurchaseInsert {
+            purchase,
+            lines,
+            control: RequestControl {
+                deadline: Instant::now() + SHORT_OPERATION_TIMEOUT,
+                cancelled: Arc::clone(&cancelled),
+            },
+            reply: reply_sender,
+        };
+        match self.submit(request, receiver, cancelled, SHORT_OPERATION_TIMEOUT)? {
+            VaultReply::PurchaseInsert(result) => result,
+            _ => Err(VaultErrorCode::Unavailable),
+        }
+    }
 }
+
 
 struct VaultWorker {
     database_path: PathBuf,
@@ -1234,6 +1265,19 @@ impl VaultWorker {
                         self.list_distortion_tags(limit)
                     };
                     let _ = reply.send(VaultReply::DistortionTagsList(result));
+                }
+                VaultRequest::PurchaseInsert {
+                    purchase,
+                    lines,
+                    control,
+                    reply,
+                } => {
+                    let result = if request_expired(&control) {
+                        Err(VaultErrorCode::Timeout)
+                    } else {
+                        self.insert_purchase(purchase, lines)
+                    };
+                    let _ = reply.send(VaultReply::PurchaseInsert(result));
                 }
                 VaultRequest::RegisterEvents {
                     channel,
@@ -1617,6 +1661,32 @@ impl VaultWorker {
         let lim = limit.clamp(1, 10_000);
         let outcome = self
             .read_repository(|connection| distortion_repo::list_distortion_tags(connection, lim));
+        self.resolve_repository(outcome)
+    }
+
+    fn insert_purchase(
+        &mut self,
+        purchase: PurchaseRow,
+        lines: Vec<PurchaseLineRow>,
+    ) -> Result<(), VaultErrorCode> {
+        gate(snapshot_status(&self.status))?;
+        if purchase.id.len() > 128
+            || purchase.merchant_norm.len() > 512
+            || purchase.active_distortions_json.len() > MAX_TEXT_BYTES
+        {
+            return Err(VaultErrorCode::InvalidInput);
+        }
+        for line in &lines {
+            if line.id.len() > 128
+                || line.purchase_id.len() > 128
+                || line.item_name.len() > 512
+            {
+                return Err(VaultErrorCode::InvalidInput);
+            }
+        }
+        let outcome = self.read_repository(|connection| {
+            purchase_repo::insert_purchase_with_lines(connection, &purchase, &lines)
+        });
         self.resolve_repository(outcome)
     }
 

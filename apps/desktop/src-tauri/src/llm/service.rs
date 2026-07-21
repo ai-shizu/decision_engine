@@ -35,9 +35,11 @@ use llama_cpp_2::sampling::LlamaSampler;
 use super::params::{GenerationParams, LoadParams};
 use super::prompt::{
     build_prompt, LlmTaskId, TASK_COGNITIVE_DISTORTION_V1, TASK_KAKEIBO_V1,
+    TASK_RECEIPT_OCR_V1,
 };
 use super::schema::{
-    CognitiveDistortionReportV1, KakeiboEntryV1, COGNITIVE_DISTORTION_V1_GBNF, KAKEIBO_V1_GBNF,
+    CognitiveDistortionReportV1, KakeiboEntryV1, ReceiptOcrV1, COGNITIVE_DISTORTION_V1_GBNF,
+    KAKEIBO_V1_GBNF, RECEIPT_OCR_V1_GBNF,
 };
 use super::token_batch::TokenStreamBatcher;
 use crate::monitor::{DegradationLevel, MemPhase, MemoryMonitor};
@@ -135,6 +137,10 @@ pub struct TokenEvent {
     pub validated: Option<KakeiboEntryV1>,
     /// Set only on the final success event of CBT distortion extraction.
     pub validated_distortions: Option<CognitiveDistortionReportV1>,
+    /// Set only on the final success event of receipt OCR extraction.
+    pub validated_receipt: Option<ReceiptOcrV1>,
+    /// Checksum gate result for receipt extract (`Σ amount + tax == total`).
+    pub receipt_verified: Option<bool>,
 }
 
 /// Resolved generation branch. Pure helper — unit-tested without a model.
@@ -143,6 +149,7 @@ pub enum GenerationMode {
     Chat,
     KakeiboV1,
     CognitiveDistortionV1,
+    ReceiptOcrV1,
 }
 
 /// Map `task_id` to a generation mode. Unknown ids fail closed (no chat fallback).
@@ -157,6 +164,7 @@ pub fn resolve_generation_mode(task_id: Option<&str>) -> Result<GenerationMode, 
             Ok(match id {
                 LlmTaskId::KakeiboV1 => GenerationMode::KakeiboV1,
                 LlmTaskId::CognitiveDistortionV1 => GenerationMode::CognitiveDistortionV1,
+                LlmTaskId::ReceiptOcrV1 => GenerationMode::ReceiptOcrV1,
             })
         }
     }
@@ -182,6 +190,16 @@ pub fn finalize_distortion_extraction(
         .map_err(|e| format!("distortion extraction parse: {e}"))
 }
 
+pub fn finalize_receipt_extraction(
+    buf: &str,
+    cancelled: bool,
+) -> Result<ReceiptOcrV1, String> {
+    if cancelled {
+        return Err("extraction cancelled".to_string());
+    }
+    ReceiptOcrV1::from_json_str(buf).map_err(|e| format!("receipt extraction parse: {e}"))
+}
+
 fn streaming_token(seq: u32, text: String) -> TokenEvent {
     TokenEvent {
         seq,
@@ -190,6 +208,8 @@ fn streaming_token(seq: u32, text: String) -> TokenEvent {
         error: None,
         validated: None,
         validated_distortions: None,
+        validated_receipt: None,
+        receipt_verified: None,
     }
 }
 
@@ -201,6 +221,8 @@ fn chat_done_event(seq: u32) -> TokenEvent {
         error: None,
         validated: None,
         validated_distortions: None,
+        validated_receipt: None,
+        receipt_verified: None,
     }
 }
 
@@ -212,6 +234,8 @@ fn extract_done_event(seq: u32, entry: KakeiboEntryV1) -> TokenEvent {
         error: None,
         validated: Some(entry),
         validated_distortions: None,
+        validated_receipt: None,
+        receipt_verified: None,
     }
 }
 
@@ -223,6 +247,22 @@ fn distortion_done_event(seq: u32, report: CognitiveDistortionReportV1) -> Token
         error: None,
         validated: None,
         validated_distortions: Some(report),
+        validated_receipt: None,
+        receipt_verified: None,
+    }
+}
+
+fn receipt_done_event(seq: u32, report: ReceiptOcrV1) -> TokenEvent {
+    let verified = report.checksum_ok();
+    TokenEvent {
+        seq,
+        text: String::new(),
+        done: true,
+        error: None,
+        validated: None,
+        validated_distortions: None,
+        validated_receipt: Some(report),
+        receipt_verified: Some(verified),
     }
 }
 
@@ -234,6 +274,8 @@ fn error_done_event(seq: u32, error: String) -> TokenEvent {
         error: Some(error),
         validated: None,
         validated_distortions: None,
+        validated_receipt: None,
+        receipt_verified: None,
     }
 }
 
@@ -577,6 +619,10 @@ fn generate(
             let (system, user) = build_prompt(TASK_COGNITIVE_DISTORTION_V1, &g.prompt)?;
             render_chat_prompt(model, &system, &user)?
         }
+        GenerationMode::ReceiptOcrV1 => {
+            let (system, user) = build_prompt(TASK_RECEIPT_OCR_V1, &g.prompt)?;
+            render_chat_prompt(model, &system, &user)?
+        }
     };
 
     let level = governor.degradation();
@@ -625,6 +671,11 @@ fn generate(
                 .map_err(|e| format!("grammar init: {e}"))?;
             LlamaSampler::chain_simple([grammar, LlamaSampler::greedy()])
         }
+        GenerationMode::ReceiptOcrV1 => {
+            let grammar = LlamaSampler::grammar(model, RECEIPT_OCR_V1_GBNF, "root")
+                .map_err(|e| format!("grammar init: {e}"))?;
+            LlamaSampler::chain_simple([grammar, LlamaSampler::greedy()])
+        }
     };
 
     let mut extract_buf = String::new();
@@ -656,7 +707,9 @@ fn generate(
             .map_err(|e| format!("channel send: {e}"))?;
         if matches!(
             mode,
-            GenerationMode::KakeiboV1 | GenerationMode::CognitiveDistortionV1
+            GenerationMode::KakeiboV1
+                | GenerationMode::CognitiveDistortionV1
+                | GenerationMode::ReceiptOcrV1
         ) {
             extract_buf.push_str(&piece);
         }
@@ -691,6 +744,13 @@ fn generate(
             let report = finalize_distortion_extraction(&extract_buf, cancelled)?;
             tokens
                 .send(distortion_done_event(g.max_tokens, report))
+                .map_err(|e| format!("channel send: {e}"))?;
+            Ok(())
+        }
+        GenerationMode::ReceiptOcrV1 => {
+            let report = finalize_receipt_extraction(&extract_buf, cancelled)?;
+            tokens
+                .send(receipt_done_event(g.max_tokens, report))
                 .map_err(|e| format!("channel send: {e}"))?;
             Ok(())
         }
@@ -743,6 +803,14 @@ mod tests {
             resolve_generation_mode(Some(TASK_COGNITIVE_DISTORTION_V1)),
             Ok(GenerationMode::CognitiveDistortionV1)
         ));
+    }
+
+    #[test]
+    fn mode_receipt_ocr_v1_is_extract() {
+        assert_eq!(
+            resolve_generation_mode(Some(TASK_RECEIPT_OCR_V1)),
+            Ok(GenerationMode::ReceiptOcrV1)
+        );
     }
 
     #[test]

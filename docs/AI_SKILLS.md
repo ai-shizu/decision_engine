@@ -1049,6 +1049,22 @@ Pocket Brain 経路は M14 tensor + M15 pulse/Rasch + gap sufficiency から loa
 
 **検証:** `cargo check|test --features pocket-brain,secure-vault` / `npx tsc --noEmit`。
 
+### 4.54 Phase 11 — Offline Vision OCR + cognitive-snapshot purchases (2026-07-21)
+
+**射程:** (1) V8 `purchases`/`purchase_lines` 認知スナップショット家計簿 (2) Apple Vision レイアウト保存 OCR (3) `ReceiptOcrV1` GBNF + 整数チェックサム・ゲート。RNG・外部 API 禁止。金額は INTEGER のみ。
+
+**学術根拠:** 意思決定時点の心的状態の不変記録（Twin $R(t)$ + CBT distortions）+ オフライン Vision OCR。
+
+**as-built:**
+1. マイグレーション V8 — `purchases(id, occurred_at, merchant_norm, total_amount, tax, verified, r_at_decision, active_distortions_json)` + `purchase_lines(...)`。
+2. `record_purchase_with_snapshot` — Twin 最新 `r_now` と直近 `distortion_tags` を焼き込み。`Σ line.amount + tax == total` なら `verified=1`、不一致はリトライせず `verified=0`。
+3. `ocr/layout.rs` — Y↓→X→ ソート、金額トークンは `品目\t金額`。`ocr/vision.rs` — `VNRecognizeTextRequest`（objc2-vision）。
+4. `LlmTaskId::ReceiptOcrV1` + `receipt_ocr_v1.gbnf` + `TokenEvent.validated_receipt`。
+
+**ハマりどころ:** チェックサム失敗で LLM を乱数リトライするな。OCR レイアウト結合は Vision 座標（原点左下）の Y 降順が正。
+
+**検証:** `cargo check|test --features pocket-brain,secure-vault`。
+
 ### 4.8 M3 Phase 0-A — SQLCipher / Security.framework iOS link gate (2026-07-18)
 
 **射程（Phase 0-A のみ）:** `secure-vault` feature、依存解決、in-memory SQLCipher identity（`PRAGMA key` + `cipher_version`）、Security.framework シンボル（`SecRandom` / `SecAccessControl`）、Tauri command 登録、iOS Simulator 最終リンク証明。スキーマ・repository・UI・本番 Keychain item 作成は対象外。

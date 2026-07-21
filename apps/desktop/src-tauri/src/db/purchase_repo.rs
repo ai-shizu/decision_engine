@@ -1,0 +1,77 @@
+//! Vault `purchases` / `purchase_lines` repository (Phase 11).
+//!
+//! Cognitive snapshot columns (`r_at_decision`, `active_distortions_json`) are
+//! baked at insert time — immutable fossils of decision-time mind state.
+
+use rusqlite::{params, Connection};
+
+use super::repository::{map_storage_error, RepositoryError};
+
+#[derive(Debug, Clone)]
+pub(crate) struct PurchaseRow {
+    pub id: String,
+    pub occurred_at: i64,
+    pub merchant_norm: String,
+    pub total_amount: i64,
+    pub tax: i64,
+    pub verified: i64,
+    pub r_at_decision: f64,
+    pub active_distortions_json: String,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct PurchaseLineRow {
+    pub id: String,
+    pub purchase_id: String,
+    pub item_name: String,
+    pub unit_price: i64,
+    pub qty: i64,
+    pub amount: i64,
+}
+
+/// Insert parent + lines. Caller must already have opened a writeable connection.
+pub(crate) fn insert_purchase_with_lines(
+    connection: &Connection,
+    purchase: &PurchaseRow,
+    lines: &[PurchaseLineRow],
+) -> Result<(), RepositoryError> {
+    connection
+        .execute(
+            "INSERT INTO purchases(\
+                id, occurred_at, merchant_norm, total_amount, tax, verified, \
+                r_at_decision, active_distortions_json\
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            params![
+                purchase.id,
+                purchase.occurred_at,
+                purchase.merchant_norm,
+                purchase.total_amount,
+                purchase.tax,
+                purchase.verified,
+                purchase.r_at_decision,
+                purchase.active_distortions_json,
+            ],
+        )
+        .map_err(map_storage_error)?;
+
+    let mut statement = connection
+        .prepare(
+            "INSERT INTO purchase_lines(\
+                id, purchase_id, item_name, unit_price, qty, amount\
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+        )
+        .map_err(map_storage_error)?;
+    for line in lines {
+        statement
+            .execute(params![
+                line.id,
+                line.purchase_id,
+                line.item_name,
+                line.unit_price,
+                line.qty,
+                line.amount,
+            ])
+            .map_err(map_storage_error)?;
+    }
+    Ok(())
+}

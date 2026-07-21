@@ -6,6 +6,7 @@
 pub mod bias_profile;
 pub mod commands;
 pub mod commands_bias;
+pub mod commands_finance;
 pub mod commands_oracle;
 pub mod commands_psychometrics;
 pub mod coupling;

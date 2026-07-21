@@ -34,6 +34,9 @@ mod haptics;
 #[cfg(all(feature = "secure-vault", target_vendor = "apple"))]
 mod analytics;
 
+#[cfg(all(feature = "secure-vault", target_vendor = "apple"))]
+mod ocr;
+
 // M10 local RAG (chunk → embed → sqlite-vec). Needs both LLM worker and vault.
 #[cfg(all(
     feature = "pocket-brain",
@@ -195,6 +198,10 @@ pub fn run() {
             analytics::commands_bias::record_cognitive_distortions,
             #[cfg(all(feature = "secure-vault", target_vendor = "apple"))]
             analytics::commands_bias::get_cognitive_bias_profile,
+            #[cfg(all(feature = "secure-vault", target_vendor = "apple"))]
+            analytics::commands_finance::record_purchase_with_snapshot,
+            #[cfg(all(feature = "secure-vault", target_vendor = "apple"))]
+            ocr::commands::ocr_recognize_layout,
             #[cfg(all(
                 feature = "pocket-brain",
                 feature = "secure-vault",
