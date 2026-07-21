@@ -3,13 +3,14 @@ import { emptyCompanyFacts } from "../lib/interviewStage";
 import type { CompanyFacts } from "../lib/pocketBrain/types";
 import { useCompanyFactsEnrichment } from "../lib/useCompanyFactsEnrichment";
 import { useIsNarrowViewport } from "../lib/useIsNarrowViewport";
+import { ColiseumRoot } from "./consult/coliseum";
 import { CompanyFactsForm } from "./interview/CompanyFactsForm";
 import { EsReviewPanel } from "./interview/EsReviewPanel";
 import { InterviewPocketPanel } from "./interview/InterviewPocketPanel";
 import { MultistageInterviewPanel } from "./interview/MultistageInterviewPanel";
 
 // M18-E: Interview tab is Coraxis-only (Python consult dual-stack removed).
-type InterviewSurface = "interview_pocket" | "multistage" | "es_pocket";
+type InterviewSurface = "interview_pocket" | "multistage" | "es_pocket" | "coliseum";
 
 const MODES: { id: InterviewSurface; label: string; shortLabel: string; hint: string }[] = [
   {
@@ -30,6 +31,12 @@ const MODES: { id: InterviewSurface; label: string; shortLabel: string; hint: st
     label: "ES添削",
     shortLabel: "ES",
     hint: "review_es_draft: オフライン企業ファクト注入 + RAG 経験 + 採用責任者ストリーム添削。",
+  },
+  {
+    id: "coliseum",
+    label: "コロシアム",
+    shortLabel: "闘技",
+    hint: "Phase 14 Inner Coliseum: Lobby → Arena → Debrief + SovereignBar (SURRENDER 二度押し)。",
   },
 ];
 
@@ -111,6 +118,7 @@ export function InterviewTab() {
           hideEmbeddedFactsForm={isNarrow}
         />
       )}
+      {surface === "coliseum" && <ColiseumRoot />}
     </section>
   );
 }

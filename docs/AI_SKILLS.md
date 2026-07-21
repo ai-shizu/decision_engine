@@ -1152,6 +1152,20 @@ Pocket Brain 経路は M14 tensor + M15 pulse/Rasch + gap sufficiency から loa
 
 **検証:** `cargo check|test --features pocket-brain,secure-vault`。
 
+### 4.61 Phase 14 UI — Coliseum シェル骨格 (2026-07-21)
+
+**射程:** Inner Coliseum の React 外殻（ルーター + SovereignBar）。バックエンド IPC 本結線は後続。オフライン・角丸全廃・等幅・状態色（`--ok` / `--sys-cyan` / `--err-soft` / `--err`）。
+
+**as-built:**
+1. `components/consult/coliseum/ColiseumRoot.tsx` — `view: lobby|arena|debrief` + デバッグ nav。`SovereignBar` 常設マウント。
+2. `SovereignBar.tsx` + `lib/sovereignBarLogic.ts` — SURRENDER 二度押し（3s arm）。クリムゾンのみ。
+3. スケルトン: `ColiseumLobby` (R(t)+Devil lock) / `ColiseumArena` (transcript+Asymmetry Probe) / `ColiseumDebrief` (Layer-1|Layer-2 分離)。
+4. `InterviewTab` に `coliseum` サーフェス追加。CSS は `App.css` `.coliseum-*`。
+
+**ハマりどころ:** 汎用チャット UI を流用するな。SovereignBar を view 切替で unmount するな。Zustand 禁止。
+
+**検証:** `npx tsc --noEmit`（apps/desktop）/ `npx tsx tests-runtime/sovereignBarLogic.test.ts`。
+
 ### 4.8 M3 Phase 0-A — SQLCipher / Security.framework iOS link gate (2026-07-18)
 
 **射程（Phase 0-A のみ）:** `secure-vault` feature、依存解決、in-memory SQLCipher identity（`PRAGMA key` + `cipher_version`）、Security.framework シンボル（`SecRandom` / `SecAccessControl`）、Tauri command 登録、iOS Simulator 最終リンク証明。スキーマ・repository・UI・本番 Keychain item 作成は対象外。

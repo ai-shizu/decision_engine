@@ -3457,3 +3457,426 @@ button.secondary {
   font-variant-numeric: tabular-nums;
   line-height: 1;
 }
+
+/* ─── Phase 14 Inner Coliseum (terminal shell) ───────────────────────────── */
+.coliseum-root {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  min-height: min(72vh, 720px);
+  padding-bottom: 72px; /* SovereignBar clearance */
+  border: 1px solid var(--border);
+  background: var(--bg-deep);
+  font-family: var(--font-mono);
+  border-radius: 0;
+}
+
+.coliseum-nav {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--s2);
+  padding: var(--s2) var(--s3);
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-raised);
+}
+
+.coliseum-nav-brand {
+  display: flex;
+  align-items: baseline;
+  gap: var(--s2);
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.coliseum-nav-title {
+  font-size: 0.85rem;
+  letter-spacing: 0.08em;
+  font-weight: 700;
+  color: var(--text);
+}
+
+.coliseum-nav-meta {
+  font-size: 0.65rem;
+  color: var(--text-muted);
+  letter-spacing: 0.04em;
+}
+
+.coliseum-glyph-ok {
+  color: var(--ok);
+}
+
+.coliseum-nav-tabs {
+  display: flex;
+  gap: 0;
+}
+
+.coliseum-nav-tab {
+  border: 1px solid var(--border);
+  border-radius: 0;
+  background: var(--bg);
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  letter-spacing: 0.06em;
+  padding: 6px 10px;
+  cursor: pointer;
+  margin-left: -1px;
+}
+
+.coliseum-nav-tab-active {
+  color: var(--sys-cyan);
+  border-color: var(--sys-cyan);
+  background: var(--bg-selected);
+  z-index: 1;
+}
+
+.coliseum-halt-banner {
+  flex: 1 1 100%;
+  margin-top: var(--s1);
+  padding: var(--s1) var(--s2);
+  border: 1px solid var(--err);
+  color: var(--err);
+  font-size: 0.7rem;
+  letter-spacing: 0.05em;
+  background: var(--err-bg);
+}
+
+.coliseum-stage {
+  flex: 1 1 auto;
+  padding: var(--s3);
+  overflow: auto;
+}
+
+.coliseum-panel {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s3);
+}
+
+.coliseum-panel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s2);
+}
+
+.coliseum-panel-id {
+  font-size: 0.75rem;
+  letter-spacing: 0.1em;
+  color: var(--text);
+}
+
+.coliseum-panel-tag {
+  font-size: 0.65rem;
+  letter-spacing: 0.08em;
+  padding: 2px 6px;
+  border: 1px solid var(--border);
+  border-radius: 0;
+}
+
+.coliseum-tag-ok { color: var(--ok); border-color: var(--ok); }
+.coliseum-tag-cyan { color: var(--sys-cyan); border-color: var(--sys-cyan); }
+.coliseum-tag-err { color: var(--err); border-color: var(--err); }
+
+.coliseum-grid-2 {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--s3);
+}
+
+@media (max-width: 720px) {
+  .coliseum-grid-2 {
+    grid-template-columns: 1fr;
+  }
+}
+
+.coliseum-frame {
+  border: 1px solid var(--border);
+  background: var(--bg-raised);
+  padding: var(--s3);
+  display: flex;
+  flex-direction: column;
+  gap: var(--s2);
+  border-radius: 0;
+  min-height: 140px;
+}
+
+.coliseum-frame-tall {
+  min-height: 220px;
+}
+
+.coliseum-frame-label {
+  font-size: 0.65rem;
+  letter-spacing: 0.08em;
+  color: var(--text-muted);
+  border-bottom: 1px solid var(--border);
+  padding-bottom: var(--s1);
+}
+
+.coliseum-frame-foot {
+  margin-top: auto;
+  font-size: 0.65rem;
+  letter-spacing: 0.04em;
+}
+
+.coliseum-rt-gauge {
+  height: 10px;
+  border: 1px solid var(--border);
+  background: var(--bg-deep);
+  border-radius: 0;
+  overflow: hidden;
+}
+
+.coliseum-rt-fill {
+  height: 100%;
+  border-radius: 0;
+  transition: width var(--t-fast) linear;
+}
+
+.coliseum-rt-fill-ok { background: var(--ok); }
+.coliseum-rt-fill-warn { background: var(--err-soft); }
+
+.coliseum-rt-readout {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--s2);
+  font-size: 0.7rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.coliseum-lock-row {
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
+  font-size: 0.75rem;
+}
+
+.coliseum-lock-badge {
+  font-size: 0.65rem;
+  letter-spacing: 0.1em;
+  padding: 2px 6px;
+  border: 1px solid var(--border);
+  border-radius: 0;
+}
+
+.coliseum-lock-closed {
+  color: var(--err-soft);
+  border-color: var(--err-soft);
+}
+
+.coliseum-lock-open {
+  color: var(--ok);
+  border-color: var(--ok);
+}
+
+.coliseum-btn-cyan,
+.coliseum-btn-ghost {
+  align-self: flex-start;
+  margin-top: var(--s1);
+  border-radius: 0;
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  letter-spacing: 0.06em;
+  padding: 8px 12px;
+  cursor: pointer;
+}
+
+.coliseum-btn-cyan {
+  border: 1px solid var(--sys-cyan);
+  background: transparent;
+  color: var(--sys-cyan);
+}
+
+.coliseum-btn-cyan:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.coliseum-btn-ghost {
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text-muted);
+}
+
+.coliseum-mock-block {
+  margin: 0;
+  padding: var(--s2);
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text-muted);
+  font-size: 0.65rem;
+  line-height: 1.35;
+  overflow-x: auto;
+  border-radius: 0;
+}
+
+.coliseum-transcript {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--s2);
+  font-size: 0.72rem;
+}
+
+.coliseum-turn {
+  display: grid;
+  grid-template-columns: 40px 88px 1fr;
+  gap: var(--s2);
+  border-bottom: 1px solid var(--border);
+  padding-bottom: var(--s1);
+}
+
+.coliseum-turn-id {
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.coliseum-turn-role {
+  letter-spacing: 0.04em;
+}
+
+.coliseum-probe-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--s2);
+  flex: 1;
+}
+
+.coliseum-probe-cell {
+  border: 1px solid var(--border);
+  padding: var(--s2);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 0.7rem;
+  border-radius: 0;
+}
+
+.coliseum-axis-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--s2);
+}
+
+.coliseum-axis-row {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  border-bottom: 1px solid var(--border);
+  padding-bottom: var(--s1);
+  font-size: 0.72rem;
+}
+
+.coliseum-optin-box {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s2);
+  flex: 1;
+  font-size: 0.75rem;
+}
+
+.coliseum-text-ok { color: var(--ok); }
+.coliseum-text-cyan { color: var(--sys-cyan); }
+.coliseum-text-amber { color: var(--err-soft); }
+.coliseum-text-muted { color: var(--text-muted); }
+
+/* SovereignBar — fixed hard-stop (crimson only) */
+.coliseum-sovereign {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 1200;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s3);
+  padding: var(--s2) var(--s4);
+  border-top: 2px solid var(--err);
+  background: var(--err-bg);
+  font-family: var(--font-mono);
+  border-radius: 0;
+}
+
+.coliseum-sovereign-armed {
+  background: #1a0505;
+  border-top-color: var(--err);
+  box-shadow: 0 -2px 0 var(--err);
+}
+
+.coliseum-sovereign-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.coliseum-sovereign-label {
+  color: var(--err);
+  font-size: 0.7rem;
+  letter-spacing: 0.1em;
+  font-weight: 700;
+}
+
+.coliseum-sovereign-hint {
+  color: var(--text-muted);
+  font-size: 0.65rem;
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.coliseum-sovereign-btn {
+  flex: 0 0 auto;
+  border: 1px solid var(--err);
+  border-radius: 0;
+  background: transparent;
+  color: var(--err);
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  letter-spacing: 0.08em;
+  font-weight: 700;
+  padding: 10px 14px;
+  cursor: pointer;
+}
+
+.coliseum-sovereign-btn-armed {
+  background: var(--err);
+  color: #0a0a0a;
+}
+
+.coliseum-sovereign-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+@media (max-width: 520px) {
+  .coliseum-sovereign {
+    flex-direction: column;
+    align-items: stretch;
+    padding-bottom: calc(var(--s2) + env(safe-area-inset-bottom, 0px));
+  }
+
+  .coliseum-sovereign-btn {
+    width: 100%;
+  }
+
+  .coliseum-turn {
+    grid-template-columns: 36px 1fr;
+  }
+
+  .coliseum-turn-role {
+    grid-column: 2;
+  }
+
+  .coliseum-turn-text {
+    grid-column: 1 / -1;
+  }
+}
