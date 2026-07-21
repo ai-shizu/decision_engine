@@ -1,6 +1,6 @@
 /**
  * Phase 12 — metacognitive calendar: Twin R(t) telemetry matrix + expense + CBT.
- * Lightweight CSS Grid (no third-party calendar). VoiceOver via role=grid.
+ * MAGI absolute instrument confinement (joined rail / no floating chrome).
  */
 
 import { useCallback, useEffect, useMemo, useState } from "react";
@@ -86,11 +86,11 @@ export function CognitiveCalendar() {
 
   return (
     <section
-      className="panel cognitive-calendar-panel"
+      className="panel cognitive-calendar-panel magi-rack"
       aria-labelledby="cognitive-cal-title"
     >
-      <div className="cognitive-cal-toolbar">
-        <h2 id="cognitive-cal-title">METACOG · MATRIX</h2>
+      <div className="magi-mod-head cognitive-cal-toolbar">
+        <h2 id="cognitive-cal-title">[ METACOG · MATRIX ]</h2>
         <div className="cognitive-cal-nav">
           <button type="button" className="ghost" onClick={() => go(-1)} aria-label="前月">
             ‹
@@ -104,27 +104,25 @@ export function CognitiveCalendar() {
           </button>
         </div>
       </div>
-      <div className="ascii-flow" role="separator" aria-hidden="true">
-        -&gt; R(t) · DISTORTION · EXPENSE -&gt;
-      </div>
-      <p className="hint cognitive-cal-hint">
-        border = state · hatch = hazard · cyan = telemetry
-      </p>
-      {error ? <p className="error-text">{error}</p> : null}
 
-      <div className="cognitive-cal-legend" aria-hidden="true">
-        <span className="cognitive-cal-legend-item cognitive-cal-legend--stable term-tag term-tag--ok">
-          [ STABLE ]
-        </span>
-        <span className="cognitive-cal-legend-item cognitive-cal-legend--nominal term-tag term-tag--info">
-          [ NOMINAL ]
-        </span>
-        <span className="cognitive-cal-legend-item cognitive-cal-legend--warn term-tag term-tag--warn">
-          [ WARN ]
-        </span>
-        <span className="cognitive-cal-legend-item cognitive-cal-legend--danger term-tag term-tag--danger">
-          [ DANGER ]
-        </span>
+      <div className="magi-mod-foot" style={{ borderTop: "none", borderBottom: "1px solid var(--border)" }}>
+        <span>-&gt; R(t) · DISTORTION · EXPENSE -&gt;</span>
+        <span className="micro-tel">SYS.NOMINAL · HATCH=HAZARD</span>
+      </div>
+
+      {error ? (
+        <div className="magi-mod-body">
+          <p className="sys-log sys-log--err" role="alert">
+            {`> SYS_ERR :: [CAL_FAIL] ${error}`}
+          </p>
+        </div>
+      ) : null}
+
+      <div className="tactical-array cognitive-cal-legend" aria-hidden="true">
+        <span className="tactical-cell term-tag term-tag--ok">STABLE</span>
+        <span className="tactical-cell term-tag term-tag--info">NOMINAL</span>
+        <span className="tactical-cell term-tag term-tag--warn">WARN</span>
+        <span className="tactical-cell term-tag term-tag--danger">DANGER</span>
       </div>
 
       <div
@@ -218,6 +216,11 @@ export function CognitiveCalendar() {
             })}
           </div>
         ))}
+      </div>
+
+      <div className="magi-mod-foot">
+        <span>MATRIX_ONLINE</span>
+        <span className="micro-tel">CELLS={days.length} · MAX_EXP={monthMax || 0}</span>
       </div>
     </section>
   );

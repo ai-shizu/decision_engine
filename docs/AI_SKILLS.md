@@ -1421,6 +1421,25 @@ Pocket Brain 経路は M14 tensor + M15 pulse/Rasch + gap sufficiency から loa
 
 **不変条件:** pill / rounded badge / 背景色ベタの状態チップを新設するな。危険データは hatch で際立たせよ。
 
+### 4.75 MAGI Absolute Instrument + Classified Redaction (2026-07-22)
+
+**決定:** 浮遊レイアウトを廃し、攻殻/MAGI 型の「密着多分割モニター」を全域正とする。加えて I-22 VAULT RAW のぼかし秘匿を汎用化する。
+
+**as-built (App.css):**
+1. `.magi-rack` / `.magi-mod` / `-head`/`-body`/`-foot` — 1px 罫線接合・余白最小化。
+2. `.tactical-array` — `gap:0` · `flex:1` · active=`bg cyan / fg black`（連装トグル）。
+3. `.sys-log` / `--err|--ok|--warn` — 左 2px レールのみ。`> SYS_ERR :: [CODE] …` 形式。
+4. `.micro-tel` — void 埋め込み用極小テレメトリ。
+5. `.text-redacted` / `.data-sealed` / `.data-sealed-host.is-revealed` — blur(4px)+opacity+user-select:none。
+
+**配線:**
+- PROBE: magi-rack + tactical stage/surface + vault sealed strip + sys-log errors。
+- CognitiveCalendar: magi-rack 接合・凡例を tactical-array・sys-log エラー。
+- RECORD diary: 既定 `[ VAULT SEALED ]` + redaction、DECRYPT で解除（日付変更で再封印）。
+- AsymmetryProbe fossils: `.text-redacted` へ収束。
+
+**不変条件:** パディング広告アラート枠を復活させるな。生例外を sys-log に出すな（sterile copy のみ）。赤action のクリアランスはオペレータ明示操作のみ。
+
 ---
 
 ## 6. 高度推論とプロファイリング戦略: 主観と客観の差分分析 (Gap Analysis)

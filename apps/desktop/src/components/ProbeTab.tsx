@@ -6,7 +6,7 @@ import { PulseRaschDashboard } from "./PulseRaschDashboard";
 type ProbeSurface = "pb_probe" | "pulse_rasch";
 
 /**
- * PROBE tab. Coraxis-only: PocketProbe + Pulse/Rasch (Python legacy removed).
+ * PROBE tab — MAGI multi-monitor rack + tactical surface array.
  */
 export function ProbeTab() {
   const isNarrow = useIsNarrowViewport();
@@ -14,12 +14,10 @@ export function ProbeTab() {
 
   if (isNarrow) {
     return (
-      <section className="panel probe-panel probe-panel-mobile">
-        <h2>
+      <section className="panel probe-panel probe-panel-mobile magi-rack">
+        <div className="magi-mod-head" style={{ borderBottom: "1px solid var(--border)" }}>
           <span className="term-tag term-tag--info">[ PROBE ]</span>
-        </h2>
-        <div className="ascii-sep ascii-sep--info" role="separator">
-          --- FUNNEL ---
+          <span className="micro-tel">MOBILE · FUNNEL</span>
         </div>
         <PocketProbePanel />
       </section>
@@ -27,28 +25,19 @@ export function ProbeTab() {
   }
 
   return (
-    <section className="panel probe-panel">
+    <section className="panel probe-panel magi-rack">
       <div className="probe-topline">
-        <div>
-          <h2>
-            <span className="desktop-only">
-              PROBE <span className="term-tag term-tag--info">[ SELF-PROBE ]</span>
-            </span>
-            <span className="mobile-only">
-              <span className="term-tag term-tag--info">[ PROBE ]</span>
-            </span>
-          </h2>
-          <p className="hint guide">
-            Coraxis PROBE ファネルと Romance/Rasch パルス。
-          </p>
-        </div>
+        <h2>
+          PROBE <span className="term-tag term-tag--info">[ SELF-PROBE ]</span>
+        </h2>
+        <span className="micro-tel">SYS.NOMINAL · MAGI-RACK</span>
       </div>
 
-      <div className="ascii-sep" role="separator">
-        --- SURFACE ---
-      </div>
-
-      <div className="sub-tabs sub-tabs-pills" role="tablist" aria-label="PROBE面">
+      <div
+        className="tactical-array"
+        role="tablist"
+        aria-label="PROBE面"
+      >
         <button
           type="button"
           role="tab"
@@ -56,8 +45,7 @@ export function ProbeTab() {
           className={surface === "pb_probe" ? "active" : ""}
           onClick={() => setSurface("pb_probe")}
         >
-          <span className="desktop-only">PROBE (PB)</span>
-          <span className="mobile-only">PROBE</span>
+          FUNNEL
         </button>
         <button
           type="button"
@@ -66,17 +54,29 @@ export function ProbeTab() {
           className={surface === "pulse_rasch" ? "active" : ""}
           onClick={() => setSurface("pulse_rasch")}
         >
-          <span className="desktop-only">PULSE / RASCH</span>
-          <span className="mobile-only">PULSE</span>
+          PULSE/RASCH
         </button>
       </div>
 
-      <div className="ascii-flow" role="separator" aria-hidden="true">
-        -&gt; {surface === "pb_probe" ? "FUNNEL" : "PULSE"} -&gt;
+      <div className="magi-mod">
+        <div className="magi-mod-foot" style={{ borderTop: "none" }}>
+          <span>-&gt; {surface === "pb_probe" ? "FUNNEL" : "PULSE"} -&gt;</span>
+          <span>SURFACE_LOCK</span>
+        </div>
       </div>
 
       {surface === "pb_probe" && <PocketProbePanel />}
-      {surface === "pulse_rasch" && <PulseRaschDashboard />}
+      {surface === "pulse_rasch" && (
+        <div className="magi-mod">
+          <div className="magi-mod-head">
+            <span>[ PULSE_RASCH ]</span>
+            <span className="micro-tel">TELEMETRY</span>
+          </div>
+          <div className="magi-mod-body">
+            <PulseRaschDashboard />
+          </div>
+        </div>
+      )}
     </section>
   );
 }

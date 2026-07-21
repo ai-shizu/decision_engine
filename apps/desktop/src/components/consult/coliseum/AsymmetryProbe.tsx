@@ -64,7 +64,7 @@ export function AsymmetryProbe({
                 <span className="asym-fossil-kind term-tag term-tag--danger">
                   [ {f.kind.toUpperCase()} ]
                 </span>
-                <span className="asym-fossil-preview" aria-hidden="true">
+                <span className="asym-fossil-preview text-redacted data-sealed" aria-hidden="true">
                   {f.preview}
                 </span>
                 <span className="sr-only">

@@ -202,6 +202,206 @@ body::after {
   background: var(--border);
 }
 
+/* ═══════════════════════════════════════════════════════════════════════════
+   MAGI Absolute Instrument Protocol + Classified Redaction
+   Dense multi-monitor rack · tactical arrays · CLI logs · sealed blur
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+.magi-rack {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  width: 100%;
+  border: 1px solid var(--border);
+  background: var(--bg-deep);
+}
+
+.magi-mod {
+  display: flex;
+  flex-direction: column;
+  margin: 0;
+  margin-top: -1px;
+  border: 1px solid var(--border);
+  background: var(--bg-deep);
+  min-width: 0;
+}
+
+.magi-rack > .magi-mod:first-child {
+  margin-top: 0;
+  border-top: none;
+}
+
+.magi-rack > .magi-mod:last-child {
+  border-bottom: none;
+}
+
+.magi-mod-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s2);
+  flex-wrap: wrap;
+  padding: 4px 8px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-raised);
+  font-family: var(--font-mono);
+  font-size: 0.62rem;
+  letter-spacing: 0.1em;
+  font-weight: 700;
+  color: var(--text);
+  text-transform: uppercase;
+}
+
+.magi-mod-body {
+  padding: 6px 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.magi-mod-foot {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: var(--s2);
+  flex-wrap: wrap;
+  padding: 2px 8px 4px;
+  border-top: 1px solid var(--border);
+  font-family: var(--font-mono);
+  font-size: 0.58rem;
+  letter-spacing: 0.08em;
+  color: var(--text-dim);
+}
+
+.micro-tel {
+  font-family: var(--font-mono);
+  font-size: 0.58rem;
+  letter-spacing: 0.08em;
+  color: var(--text-dim);
+  line-height: 1.3;
+}
+
+/* Tactical toggle array — contiguous hardware switches, gap:0 */
+.tactical-array {
+  display: flex;
+  flex-wrap: nowrap;
+  gap: 0;
+  width: 100%;
+  border: 1px solid var(--border);
+  background: var(--bg-deep);
+}
+
+.tactical-array > button,
+.tactical-array > .tactical-cell {
+  flex: 1 1 0;
+  min-width: 0;
+  margin: 0;
+  margin-left: -1px;
+  border: 1px solid var(--border);
+  border-radius: 0;
+  background: var(--bg-deep);
+  color: var(--text-dim);
+  font-family: var(--font-mono);
+  font-size: 0.65rem;
+  letter-spacing: 0.06em;
+  font-weight: 700;
+  text-transform: uppercase;
+  padding: 8px 4px;
+  text-align: center;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.tactical-array > button:first-child,
+.tactical-array > .tactical-cell:first-child {
+  margin-left: 0;
+}
+
+.tactical-array > button.active,
+.tactical-array > .tactical-cell.active,
+.tactical-array > button[aria-selected="true"] {
+  background: var(--sys-cyan);
+  color: var(--bg-deep);
+  border-color: var(--sys-cyan);
+  z-index: 1;
+}
+
+.tactical-array > button.done,
+.tactical-array > .tactical-cell.done {
+  color: var(--ok);
+  border-color: color-mix(in srgb, var(--ok) 45%, var(--border));
+}
+
+.tactical-array > button:disabled {
+  cursor: default;
+  opacity: 1;
+}
+
+.tactical-array > button:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: -2px;
+  z-index: 2;
+}
+
+/* CLI STDOUT / STDERR — left rail only, no alert box */
+.sys-log {
+  margin: 0;
+  padding: 2px 0 2px 8px;
+  border: none;
+  border-left: 2px solid var(--sys-cyan);
+  background: transparent;
+  color: var(--sys-cyan);
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  letter-spacing: 0.02em;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.sys-log--err {
+  border-left-color: var(--err);
+  color: var(--err);
+}
+
+.sys-log--ok {
+  border-left-color: var(--ok);
+  color: var(--ok);
+}
+
+.sys-log--warn {
+  border-left-color: var(--err-soft);
+  color: var(--err-soft);
+}
+
+/* Classified redaction — VAULT RAW digital frost */
+.text-redacted,
+.data-sealed {
+  filter: blur(4px) opacity(0.5);
+  user-select: none;
+  pointer-events: none;
+  transition: filter 0.2s ease, opacity 0.2s ease;
+}
+
+.data-sealed-host {
+  position: relative;
+  isolation: isolate;
+}
+
+.data-sealed-host.is-revealed .text-redacted,
+.data-sealed-host.is-revealed .data-sealed,
+.data-sealed-host:focus-within .text-redacted {
+  filter: none;
+  opacity: 1;
+  user-select: text;
+  pointer-events: auto;
+}
+
+.data-sealed-host:not(.is-revealed):hover .text-redacted {
+  filter: blur(2.5px) opacity(0.65);
+}
+
 .app.loading {
   max-width: 480px;
   margin: 0 auto;
@@ -2175,157 +2375,153 @@ button.secondary {
   }
 }
 
-/* PROBE (SPEC_PHASE_F6_PROBE_UI.md) */
+/* PROBE — MAGI rack (absolute confinement) */
 .probe-panel {
   display: flex;
   flex-direction: column;
-  gap: var(--s3);
+  gap: 0;
+  padding: 0;
+}
+
+.probe-panel > h2,
+.probe-panel .probe-topline {
+  margin: 0;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-bottom: none;
+  background: var(--bg-raised);
 }
 
 .probe-topline {
   display: flex;
   justify-content: space-between;
-  align-items: flex-start;
-  gap: var(--s3);
-  padding-bottom: var(--s2);
-  border-bottom: 1px solid var(--border);
-}
-
-.probe-topline h2 {
-  margin: 0 0 var(--s1);
-}
-
-.probe-grid {
-  display: grid;
-  grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr);
-  gap: var(--s4);
-}
-
-.probe-main {
-  display: flex;
-  flex-direction: column;
-  gap: var(--s3);
-}
-
-.probe-side {
-  display: flex;
-  flex-direction: column;
-  gap: var(--s3);
-}
-
-.probe-axis-list {
-  border: 1px solid var(--border);
-  border-radius: 0;
-  background: var(--bg-raised);
-  overflow: hidden;
-}
-
-.probe-axis-row {
-  display: flex;
-  flex-direction: column;
-  gap: var(--s1);
-  padding: var(--s2) var(--s3);
-  border-bottom: 1px solid var(--border);
-}
-
-.probe-axis-row:last-child {
-  border-bottom: none;
-}
-
-.probe-axis-row.active {
-  background: var(--bg-selected);
-  border-left: 2px solid var(--accent);
-}
-
-.probe-axis-label {
-  font-size: 0.9rem;
-  color: var(--text);
-}
-
-.probe-axis-metric {
-  font-family: var(--font-mono);
-  font-size: 0.8rem;
-  color: var(--text-muted);
-}
-
-.probe-stepper {
-  display: flex;
-  flex-wrap: wrap;
+  align-items: center;
   gap: var(--s2);
 }
 
-.probe-step {
-  font-family: var(--font-mono);
-  font-size: 0.75rem;
-  padding: var(--s1) var(--s2);
-  border: 1px solid var(--border);
-  border-radius: 0;
-  color: var(--text-muted);
-  background: var(--bg-deep);
+.probe-topline h2 {
+  margin: 0;
+  font-size: 0.78rem;
+  letter-spacing: 0.1em;
+  border: none;
+  padding: 0;
 }
 
-.probe-step.active {
-  color: var(--text);
-  border-color: var(--accent);
-  background: var(--bg-selected);
+.probe-topline h2::before {
+  content: none;
 }
 
-.probe-step.done {
-  color: var(--ok);
-  border-color: var(--ok);
+.pocket-probe-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+
+.probe-progress-track {
+  height: 3px;
+  margin: 0;
+  background: var(--bg);
+  border: none;
+}
+
+.probe-progress-fill {
+  height: 100%;
+  background: var(--sys-cyan);
 }
 
 .probe-question {
-  min-height: 4rem;
+  min-height: 0;
+}
+
+.probe-question p {
+  margin: 0;
+  font-size: 0.85rem;
+  line-height: 1.4;
 }
 
 .probe-answer {
   width: 100%;
-  min-height: 5rem;
-  padding: var(--s2) var(--s3);
-  border-radius: 0;
+  min-height: 4.5rem;
+  margin: 0;
+  padding: 6px 8px;
   border: 1px solid var(--border);
-  background: var(--bg-deep);
+  border-radius: 0;
+  background: rgba(255, 255, 255, 0.04);
   color: var(--text);
-  font-family: inherit;
+  font-family: var(--font-mono);
+  font-size: 0.85rem;
   resize: vertical;
 }
 
 .probe-char-counter {
   font-family: var(--font-mono);
-  font-size: 0.8rem;
-  color: var(--text-muted);
+  font-size: 0.58rem;
+  color: var(--text-dim);
   text-align: right;
+  letter-spacing: 0.06em;
 }
 
-.probe-insight-list {
-  list-style: none;
-  margin: 0;
-  padding: var(--s2) var(--s3);
-  border: 1px solid var(--border);
-  border-radius: 0;
-  background: var(--bg-raised);
-  font-size: 0.85rem;
-  color: var(--text-muted);
-}
-
-.probe-insight-list li {
-  padding: var(--s1) 0;
-  border-bottom: 1px solid var(--border);
-}
-
-.probe-insight-list li:last-child {
-  border-bottom: none;
+.probe-axis-metric {
+  font-family: var(--font-mono);
+  font-size: 0.58rem;
+  color: var(--text-dim);
 }
 
 .probe-error {
   margin: 0;
 }
 
-@media (max-width: 720px) {
-  .probe-grid {
-    grid-template-columns: 1fr;
-  }
+/* Cognitive calendar — join into MAGI rack */
+.cognitive-calendar-panel.magi-rack,
+.cognitive-calendar-panel {
+  margin-bottom: 0;
+  padding: 0;
+  gap: 0;
+}
+
+.cognitive-calendar-panel .cognitive-cal-toolbar {
+  margin: 0;
+  padding: 4px 8px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-raised);
+}
+
+.cognitive-calendar-panel .cognitive-cal-hint,
+.cognitive-calendar-panel .ascii-flow {
+  margin: 0;
+  padding: 2px 8px;
+  border-bottom: 1px solid var(--border);
+}
+
+.cognitive-calendar-panel .cognitive-cal-legend {
+  margin: 0;
+  border: none;
+  border-bottom: 1px solid var(--border);
+}
+
+.cognitive-calendar-panel .cognitive-cal-grid {
+  border: none;
+}
+
+.asym-fossil-preview {
+  color: var(--text-muted);
+  filter: blur(4px) opacity(0.5);
+  user-select: none;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: clip;
+  transition: filter 0.2s ease, opacity 0.2s ease;
+}
+
+.record-panel .magi-rack {
+  margin-top: 0;
+}
+
+.diary-vault .diary-editor {
+  width: 100%;
+  border: 1px solid var(--border);
+  background: rgba(255, 255, 255, 0.04);
+  font-family: var(--font-mono);
 }
 
 /* PROFILE (SPEC_UI_ORPHAN_INTEGRATION.md) */

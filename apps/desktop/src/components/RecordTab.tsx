@@ -52,6 +52,7 @@ export function RecordTab() {
   const [incCat, setIncCat] = useState("");
   const [incAmt, setIncAmt] = useState("");
   const [noticeVisible, setNoticeVisible] = useState(false);
+  const [diaryRevealed, setDiaryRevealed] = useState(false);
 
   const diaryRef = useRef<HTMLTextAreaElement>(null);
   const noticeTimerRef = useRef<number | null>(null);
@@ -64,6 +65,10 @@ export function RecordTab() {
   useEffect(() => {
     liveRef.current = { date, subTab, events, transactions, diary };
   });
+
+  useEffect(() => {
+    setDiaryRevealed(false);
+  }, [date]);
 
   const refreshMarks = useCallback(async () => {
     try {
@@ -503,41 +508,69 @@ export function RecordTab() {
       )}
 
       {subTab === "diary" && (
-        <div className="sub-panel">
-          <div className="ascii-sep ascii-sep--info" role="separator">
-            --- DIARY ---
+        <div className="sub-panel magi-rack diary-vault">
+          <div className="magi-mod hatch-danger">
+            <div className="magi-mod-head">
+              <span className="term-tag term-tag--danger">[ VAULT SEALED ]</span>
+              <button
+                type="button"
+                className="ghost"
+                onClick={() => setDiaryRevealed((v) => !v)}
+              >
+                {diaryRevealed ? "[ RE-SEAL ]" : "[ DECRYPT ]"}
+              </button>
+            </div>
+            <div
+              className={`magi-mod-body data-sealed-host${diaryRevealed ? " is-revealed" : ""}`}
+            >
+              <span className="term-tag term-tag--danger">[ ENCRYPTED ]</span>
+              <span className="micro-tel">LLM-OPAQUE · PERSONAL MEMO</span>
+              <textarea
+                ref={diaryRef}
+                className={`diary-editor${diaryRevealed ? "" : " text-redacted data-sealed"}`}
+                value={diary}
+                onChange={(e) => setDiary(e.target.value)}
+                rows={12}
+                readOnly={!diaryRevealed}
+                placeholder={
+                  diaryRevealed ? "今日の日記…" : "████ CLASSIFIED ████"
+                }
+                aria-label="日記（Vault）"
+              />
+            </div>
+            <div className="magi-mod-foot">
+              <span>DIARY_CONTAINER</span>
+              <span className="micro-tel">
+                {diaryRevealed ? "CLEARANCE=OPERATOR" : "CLEARANCE=DENIED"}
+              </span>
+            </div>
           </div>
-          <textarea
-            ref={diaryRef}
-            className="diary-editor"
-            value={diary}
-            onChange={(e) => setDiary(e.target.value)}
-            rows={12}
-            placeholder="今日の日記…"
-          />
         </div>
       )}
 
-      <div className="save-block">
-        <button type="button" className="primary" onClick={() => void handleSave()} disabled={busy}>
-          {busy ? "保存中…" : "保存 (Ctrl+S)"}
-        </button>
-        <p
-          className={`save-notice ${saveNotice?.kind ?? ""} ${noticeVisible ? "visible" : ""}${
-            saveNotice?.kind === "error" ? " error-text" : ""
-          }`}
-          role={saveNotice?.kind === "error" ? "alert" : undefined}
-        >
-          {saveNotice?.text ?? ""}
-        </p>
-        <span className="hint">選択中の日付を一括保存</span>
+      <div className="save-block magi-mod" style={{ marginTop: "-1px" }}>
+        <div className="magi-mod-body">
+          <button type="button" className="primary" onClick={() => void handleSave()} disabled={busy}>
+            {busy ? "TX…" : "保存 (Ctrl+S)"}
+          </button>
+          {saveNotice?.text && noticeVisible ? (
+            <p
+              className={`sys-log${saveNotice.kind === "error" ? " sys-log--err" : " sys-log--ok"}`}
+              role={saveNotice.kind === "error" ? "alert" : undefined}
+            >
+              {`> SYS_${saveNotice.kind === "error" ? "ERR" : "OK"} :: [RECORD] ${saveNotice.text}`}
+            </p>
+          ) : (
+            <span className="micro-tel">SELECT_DATE → COMMIT</span>
+          )}
+        </div>
       </div>
       {status && (
         <p
-          className={`status-line${statusKind === "error" ? " error-text" : ""}`}
+          className={`sys-log${statusKind === "error" ? " sys-log--err" : ""}`}
           role={statusKind === "error" ? "alert" : undefined}
         >
-          {status}
+          {`> SYS_${statusKind === "error" ? "ERR" : "INF"} :: [STATUS] ${status}`}
         </p>
       )}
     </section>

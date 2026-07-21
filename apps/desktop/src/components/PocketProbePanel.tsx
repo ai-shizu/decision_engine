@@ -1,4 +1,4 @@
-import { useEffect, useReducer, useRef } from "react";
+import { useEffect, useReducer, useRef, useState } from "react";
 
 import { todayIso } from "../lib/dateUtils";
 import {
@@ -31,7 +31,7 @@ const STAGE_LABELS_JA: Record<(typeof STAGE_ORDER)[number], string> = {
 };
 
 /**
- * M15 PROBE funnel via Coraxis on-device Tauri commands (useReducer state machine).
+ * M15 PROBE funnel — MAGI instrument rack + classified vault strip.
  */
 export function PocketProbePanel() {
   const [state, dispatch] = useReducer(
@@ -39,6 +39,7 @@ export function PocketProbePanel() {
     undefined,
     initialProbePanelState,
   );
+  const [vaultRevealed, setVaultRevealed] = useState(false);
   const answerRef = useRef<HTMLTextAreaElement>(null);
   const busy = probeBusy(state.phase);
 
@@ -98,124 +99,156 @@ export function PocketProbePanel() {
   const progress = state.status?.progress_percent ?? null;
   const activeStage = state.question?.stage ?? null;
   const charCount = state.answer.length;
+  const vaultDump = state.status
+    ? `completed=${state.status.completed_stages}/${state.status.total_stages} progress=${state.status.progress_percent}% bank=${state.bank.length} phase=${state.phase}`
+    : `phase=${state.phase} bank=${state.bank.length} · awaiting status frame`;
 
   return (
-    <div className="pocket-probe-panel">
-      <div className="probe-topline">
-        <div>
-          <p className="term-header">
-            <span className="desktop-only">PROBE_FUNNEL (Coraxis / M15)</span>
-            <span className="mobile-only">自己探索</span>
-          </p>
-          <p className="hint guide">
-            進捗{" "}
+    <div className="pocket-probe-panel magi-rack">
+      <div className="magi-mod">
+        <div className="magi-mod-head">
+          <span>[ PROBE_FUNNEL ]</span>
+          <span className="micro-tel">
+            SEQ_{activeStage ?? "IDLE"} · T-MINUS
+          </span>
+        </div>
+        <div className="magi-mod-body">
+          <div className="probe-topline" style={{ border: "none", padding: 0 }}>
             <span className="term-tag term-tag--info">
               [ {progress !== null ? `${progress}%` : "—"} ]
             </span>
-            {state.status && (
-              <span className="dev-noise">
-                {" "}
-                ({state.status.completed_stages}/{state.status.total_stages}{" "}
-                stages)
-              </span>
-            )}
-          </p>
+            <button
+              type="button"
+              className="ghost"
+              disabled={busy}
+              onClick={() => void refreshAll()}
+            >
+              {state.phase === "loading" ? "SYNC…" : "RESYNC"}
+            </button>
+          </div>
+          <div
+            className="probe-progress-track"
+            role="progressbar"
+            aria-valuemin={0}
+            aria-valuemax={100}
+            aria-valuenow={progress ?? 0}
+            aria-label="PROBE 進捗"
+          >
+            <div
+              className="probe-progress-fill"
+              style={{ width: `${Math.max(0, Math.min(100, progress ?? 0))}%` }}
+            />
+          </div>
         </div>
-        <button
-          type="button"
-          className="ghost"
-          disabled={busy}
-          onClick={() => void refreshAll()}
-        >
-          {state.phase === "loading" ? "確認中…" : "状態を更新"}
-        </button>
+        <div className="magi-mod-foot">
+          <span>SYS.NOMINAL</span>
+          <span>M15 · CORAXIS</span>
+        </div>
       </div>
 
       {state.phase === "loading" && (
-        <p className="hint ambient-spinner" role="status">
-          {PB_UI_BUSY.probeStatus}
-        </p>
+        <div className="magi-mod">
+          <div className="magi-mod-body">
+            <p className="sys-log" role="status">
+              {`> SYS_INF :: [BUSY] ${PB_UI_BUSY.probeStatus}`}
+            </p>
+          </div>
+        </div>
       )}
 
-      <div className="ascii-sep ascii-sep--info" role="separator">
-        --- STAGE PIPELINE ---
-      </div>
-
-      <div
-        className="probe-progress-track"
-        role="progressbar"
-        aria-valuemin={0}
-        aria-valuemax={100}
-        aria-valuenow={progress ?? 0}
-        aria-label="PROBE 進捗"
-      >
+      <div className="magi-mod">
+        <div className="magi-mod-head">
+          <span>[ STAGE_ARRAY ]</span>
+          <span className="micro-tel">HARDWARE TOGGLE · GAP 0</span>
+        </div>
         <div
-          className="probe-progress-fill"
-          style={{ width: `${Math.max(0, Math.min(100, progress ?? 0))}%` }}
-        />
+          className="tactical-array"
+          role="group"
+          aria-label="ファネル段階"
+        >
+          {STAGE_ORDER.map((stage) => {
+            const idx = STAGE_ORDER.indexOf(stage);
+            const activeIdx = activeStage
+              ? STAGE_ORDER.indexOf(activeStage as (typeof STAGE_ORDER)[number])
+              : -1;
+            const done = activeIdx > idx;
+            const active = stage === activeStage;
+            return (
+              <button
+                key={stage}
+                type="button"
+                className={`${active ? "active" : ""}${done ? " done" : ""}`}
+                disabled
+                aria-pressed={active}
+              >
+                <span className="desktop-only">{stage}</span>
+                <span className="mobile-only">{STAGE_LABELS_JA[stage]}</span>
+              </button>
+            );
+          })}
+        </div>
       </div>
 
-      <div className="probe-stepper" aria-label="ファネル段階">
-        {STAGE_ORDER.map((stage) => {
-          const idx = STAGE_ORDER.indexOf(stage);
-          const activeIdx = activeStage
-            ? STAGE_ORDER.indexOf(activeStage as (typeof STAGE_ORDER)[number])
-            : -1;
-          const done = activeIdx > idx;
-          const active = stage === activeStage;
-          return (
-            <span
-              key={stage}
-              className={`probe-step${active ? " active" : ""}${done ? " done" : ""}`}
-            >
-              <span
-                className={
-                  active
-                    ? "term-tag term-tag--info"
-                    : done
-                      ? "term-tag term-tag--ok"
-                      : "term-tag term-tag--muted"
-                }
-              >
-                <span className="desktop-only">
-                  [ {stage} ]
-                </span>
-                <span className="mobile-only">
-                  [ {STAGE_LABELS_JA[stage]} ]
-                </span>
-              </span>
-            </span>
-          );
-        })}
+      <div className="magi-mod hatch-danger">
+        <div className="magi-mod-head">
+          <span className="term-tag term-tag--danger">[ VAULT SEALED ]</span>
+          <button
+            type="button"
+            className="ghost"
+            onClick={() => setVaultRevealed((v) => !v)}
+          >
+            {vaultRevealed ? "[ RE-SEAL ]" : "[ DECRYPT ]"}
+          </button>
+        </div>
+        <div
+          className={`magi-mod-body data-sealed-host${vaultRevealed ? " is-revealed" : ""}`}
+        >
+          <span className="term-tag term-tag--danger">[ LLM-OPAQUE ]</span>
+          <p className="text-redacted data-sealed micro-tel">{vaultDump}</p>
+        </div>
+        <div className="magi-mod-foot">
+          <span>PRE-COMPILE FOSSIL</span>
+          <span>I-22 ASYMMETRY</span>
+        </div>
       </div>
 
       {state.phase === "complete" && (
-        <div className="term-panel probe-complete hatch-ok" role="status">
-          <p className="term-header">
+        <div className="magi-mod hatch-ok">
+          <div className="magi-mod-head">
             <span className="term-tag term-tag--ok">[ SESSION_COMPLETE ]</span>
-          </p>
-          <p className="hint guide">
-            この軸の次質問はありません。ロビーから新しい質問を開始できます。
-          </p>
-          <button
-            type="button"
-            className="primary"
-            onClick={() => dispatch({ type: "reset_to_lobby" })}
-          >
-            ロビーへ戻る
-          </button>
+            <span className="micro-tel">SYS.OK</span>
+          </div>
+          <div className="magi-mod-body">
+            <p className="sys-log sys-log--ok">
+              {"> SYS_OK :: [COMPLETE] この軸の次質問はありません。"}
+            </p>
+            <button
+              type="button"
+              className="primary"
+              onClick={() => dispatch({ type: "reset_to_lobby" })}
+            >
+              ロビーへ戻る
+            </button>
+          </div>
         </div>
       )}
 
       {state.phase !== "complete" && (
-        <>
-          <div className="term-panel probe-question" aria-live="polite">
+        <div className="magi-mod">
+          <div className="magi-mod-head">
+            <span>[ ACTIVE_QUERY ]</span>
+            <span className="micro-tel">
+              {state.question
+                ? `AXIS/${state.question.stage}`
+                : "AWAITING_DISPATCH"}
+            </span>
+          </div>
+          <div className="magi-mod-body probe-question" aria-live="polite">
             {state.question ? (
               <>
                 <p className="term-label">
-                  {AXIS_LABELS[state.question.axis] ?? state.question.axis} /{" "}
-                  {state.question.stage}
-                  <span className="probe-axis-metric dev-noise">
+                  {AXIS_LABELS[state.question.axis] ?? state.question.axis}
+                  <span className="probe-axis-metric">
                     {" "}
                     pri {state.question.priority.toFixed(3)}
                   </span>
@@ -223,77 +256,79 @@ export function PocketProbePanel() {
                 <p>{state.question.question}</p>
               </>
             ) : (
-              <p className="hint">
-                「次の質問」で次の自己探索の問いを表示します。
+              <p className="sys-log">
+                {"> SYS_INF :: [STANDBY] 「次の質問」で自己探索を開始。"}
               </p>
             )}
-          </div>
 
-          {state.question && (
-            <>
-              <textarea
-                ref={answerRef}
-                className="probe-answer"
-                rows={4}
-                maxLength={120}
-                value={state.answer}
-                disabled={busy}
-                placeholder="120字以内で回答"
-                onChange={(e) =>
-                  dispatch({ type: "set_answer", value: e.target.value })
-                }
-                onKeyDown={(e) => {
-                  if ((e.ctrlKey || e.metaKey) && e.key === "Enter") {
-                    e.preventDefault();
-                    void onSubmit();
+            {state.question && (
+              <>
+                <textarea
+                  ref={answerRef}
+                  className="probe-answer"
+                  rows={4}
+                  maxLength={120}
+                  value={state.answer}
+                  disabled={busy}
+                  placeholder="120字以内で回答"
+                  onChange={(e) =>
+                    dispatch({ type: "set_answer", value: e.target.value })
                   }
-                }}
-              />
-              <div
-                className={`probe-char-counter${charCount >= 120 ? " error-text" : ""}`}
-              >
-                {charCount}/120
-              </div>
+                  onKeyDown={(e) => {
+                    if ((e.ctrlKey || e.metaKey) && e.key === "Enter") {
+                      e.preventDefault();
+                      void onSubmit();
+                    }
+                  }}
+                />
+                <div
+                  className={`probe-char-counter${charCount >= 120 ? " sys-log--err" : ""}`}
+                >
+                  {charCount}/120 · BUF
+                </div>
+                <div className="action-row">
+                  <button
+                    type="button"
+                    className="primary"
+                    disabled={busy || !state.answer.trim()}
+                    onClick={() => void onSubmit()}
+                  >
+                    {state.phase === "submitting"
+                      ? "TX…"
+                      : "送信 (Ctrl+Enter)"}
+                  </button>
+                </div>
+              </>
+            )}
+
+            {!state.question && (
               <div className="action-row">
                 <button
                   type="button"
                   className="primary"
-                  disabled={busy || !state.answer.trim()}
-                  onClick={() => void onSubmit()}
+                  disabled={busy}
+                  onClick={() => void onNext()}
                 >
-                  {state.phase === "submitting"
-                    ? "送信中…"
-                    : "回答を送信 (Ctrl+Enter)"}
+                  {state.phase === "fetching_question" ? "RX…" : "次の質問"}
                 </button>
               </div>
-            </>
-          )}
-
-          {!state.question && (
-            <div className="action-row">
-              <button
-                type="button"
-                className="primary"
-                disabled={busy}
-                onClick={() => void onNext()}
-              >
-                {state.phase === "fetching_question"
-                  ? "取得中…"
-                  : "次の質問"}
-              </button>
-            </div>
-          )}
-        </>
-      )}
-
-      {state.bank.length > 0 && (
-        <p className="hint">質問リスト {state.bank.length} 件</p>
+            )}
+          </div>
+          <div className="magi-mod-foot">
+            <span>BANK={state.bank.length}</span>
+            <span>CH_MONO</span>
+          </div>
+        </div>
       )}
 
       {state.error && (
-        <p className="status-line error-text" role="alert">
-          {state.error}
-        </p>
+        <div className="magi-mod">
+          <div className="magi-mod-body">
+            <p className="sys-log sys-log--err" role="alert">
+              {`> SYS_ERR :: [PROBE_FAIL] ${state.error}`}
+            </p>
+          </div>
+        </div>
       )}
     </div>
   );
