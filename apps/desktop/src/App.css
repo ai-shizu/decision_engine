@@ -80,6 +80,86 @@ body::after {
   text-align: center;
 }
 
+/* Root Error Boundary — never black-silent fail */
+.fatal-crash {
+  min-height: 100vh;
+  min-height: 100dvh;
+  margin: 0;
+  padding: var(--s3);
+  background: var(--bg-deep);
+  color: var(--text);
+  font-family: var(--font-mono);
+  display: flex;
+  flex-direction: column;
+  gap: var(--s2);
+  border: 0;
+}
+
+.fatal-crash-head {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  border-bottom: 1px solid var(--err);
+  padding-bottom: var(--s2);
+}
+
+.fatal-crash-glyph {
+  color: var(--err);
+  font-size: 0.85rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+}
+
+.fatal-crash-meta {
+  color: var(--text-dim);
+  font-size: 0.65rem;
+  letter-spacing: 0.1em;
+}
+
+.fatal-crash-msg {
+  margin: 0;
+  color: var(--err-soft);
+  font-size: 0.78rem;
+  word-break: break-word;
+}
+
+.fatal-crash-stack {
+  margin: 0;
+  flex: 1;
+  overflow: auto;
+  padding: var(--s2);
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--sys-cyan);
+  font-size: 0.65rem;
+  line-height: 1.4;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: var(--font-mono);
+}
+
+.fatal-crash-reload {
+  align-self: flex-start;
+  border: 1px solid var(--err);
+  background: var(--bg);
+  color: var(--err);
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  letter-spacing: 0.08em;
+  padding: 8px 14px;
+  cursor: pointer;
+}
+
+.fatal-crash-reload:hover {
+  background: var(--err);
+  color: var(--bg-deep);
+}
+
+.fatal-crash-reload:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: -1px;
+}
+
 /* Offline model setup gate (local import only — no download UI) */
 .model-setup-gate {
   max-width: 560px;
@@ -3823,9 +3903,12 @@ button.secondary {
     min-height: 100dvh;
   }
 
-  /* Loading-screen max-width centering is desktop-only; mobile uses full width. */
-  .app.loading.desktop-chrome {
+  /* Loading / model-setup must stay visible on mobile (never pair with
+     .desktop-chrome — that class is display:none below). */
+  .app.loading {
     max-width: none;
+    padding: 24px 16px;
+    padding-top: calc(24px + env(safe-area-inset-top, 0px));
   }
 }
 

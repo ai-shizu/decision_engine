@@ -30,6 +30,7 @@ pub async fn haptic_feedback(app: AppHandle, kind: String) -> Result<(), String>
 #[cfg(all(feature = "secure-vault", target_os = "ios"))]
 mod ios {
     use objc2::MainThreadMarker;
+    use objc2::MainThreadOnly;
     use objc2_ui_kit::{
         UIImpactFeedbackGenerator, UIImpactFeedbackStyle, UINotificationFeedbackGenerator,
         UINotificationFeedbackType, UISelectionFeedbackGenerator,

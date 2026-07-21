@@ -141,7 +141,9 @@ fn production_navigation_is_exact_origin_only() {
 #[test]
 fn development_navigation_adds_one_exact_local_origin() {
     assert!(navigation_allowed("http://localhost:1420/", true));
-    assert!(!navigation_allowed("http://127.0.0.1:1420/", true));
+    assert!(navigation_allowed("http://127.0.0.1:1420/", true));
+    assert!(navigation_allowed("http://192.168.0.5:1420/", true));
+    assert!(!navigation_allowed("http://8.8.8.8:1420/", true));
     assert!(!navigation_allowed("http://localhost:1421/", true));
     assert!(!navigation_allowed("https://localhost:1420/", true));
 }

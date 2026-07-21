@@ -1,6 +1,7 @@
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 
+// Tauri mobile (`ios`/`android` dev) sets TAURI_DEV_HOST to the host LAN IP.
 const host = process.env.TAURI_DEV_HOST;
 
 export default defineConfig(async () => ({
@@ -18,14 +19,20 @@ export default defineConfig(async () => ({
   server: {
     port: 1420,
     strictPort: true,
-    host: host || false,
+    // Always bind 0.0.0.0 so iOS Simulator / device can reach the Mac Vite.
+    // (host:false → loopback-only → WKWebView black screen on mobile.)
+    host: true,
     hmr: host
       ? {
           protocol: "ws",
           host,
           port: 1421,
         }
-      : undefined,
+      : {
+          protocol: "ws",
+          host: "localhost",
+          port: 1421,
+        },
     watch: {
       ignored: ["**/src-tauri/**"],
     },

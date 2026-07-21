@@ -1040,7 +1040,7 @@ Pocket Brain 経路は M14 tensor + M15 pulse/Rasch + gap sufficiency から loa
 
 **as-built:**
 1. `foregroundRestore.ts` + `useForegroundRestore` — `visibilitychange` → **Vault probe → LLM is_loaded/warm → Twin/CBT freshness** の順。結果は `coraxis:foreground-restore` CustomEvent。`p_lapse≥0.5` または `critical_days>0` で Warning haptic。
-2. `haptics.rs` + `haptic_feedback` — UIKit `UISelectionFeedbackGenerator` / `UIImpactFeedbackGenerator` / `UINotificationFeedbackGenerator`（iOS+secure-vault）。他環境は soft no-op。FE: `lib/haptics.ts`。
+2. `haptics.rs` + `haptic_feedback` — UIKit `UISelectionFeedbackGenerator` / `UIImpactFeedbackGenerator` / `UINotificationFeedbackGenerator`（iOS+secure-vault）。`UIImpactFeedbackGenerator::alloc` には `use objc2::MainThreadOnly;` が必須（iOS sim ビルドで E0599）。他環境は soft no-op。FE: `lib/haptics.ts`。
 3. トリガ: Rasch Likert/確定 → Selection、CBT `validated_distortions` / `recordCognitiveDistortions` → Impact、Twin 危険域 → Warning+Heavy。
 4. `llm_is_loaded` — Jetsam 後のモデル在席プローブ。
 5. `TensorRadarChart` / `GapTensorDashboard` — `role="img"` + `aria-label` + `.sr-only` + `aria-live="polite"`。Fitted/Generic バッジも sr-only 要約。
@@ -1282,6 +1282,24 @@ Pocket Brain 経路は M14 tensor + M15 pulse/Rasch + gap sufficiency から loa
 **as-built:** `RagMessageList` / `RagIngestPanel` / `RagChatInput` / `PocketBrainPanel` / `SimpleMarkdown` クラス化。`App.css` から box-shadow 全廃・ハードコード色トークン化。
 
 **検証:** `npx tsc --noEmit` / `npm run test:boundary`。
+
+### 4.70 iOS ブラックスクリーン封鎖 (2026-07-22)
+
+**射程:** Vite バインド + `webview_policy` 開発オリジン + Root Error Boundary + ModelSetup 可視性。UI 美学トークンは既存。
+
+**不変条件:**
+1. Vite `server.host: true`（0.0.0.0）。`host: false` に戻すな（iOS WKWebView が到達不能 → 漆黒）。
+2. debug の `navigation_allowed` は `localhost` / `127.0.0.1` / RFC1918 / link-local の **http :1420 のみ**。公開 IP・別ポート・https は拒否。production は従来どおり `tauri://localhost` / `http://tauri.localhost`。モバイル本体の WebView は `on_navigation` 未配線（`#[cfg(not(mobile))]`）— policy はデスクトップ用。
+3. React ルートは必ず `GlobalErrorBoundary` でラップ。クラッシュ時は `[ FATAL SYSTEM CRASH ]`（`--err`）+ スタックを等幅表示。フェイル・サイレント黒画面を許すな。
+4. `tauri.ios.conf.json` の `devCsp` は `'self'` + localhost/127.0.0.1:1420/1421。production CSP へ混ぜるな。
+5. **`ModelSetupGate` / 起動ローディングに `desktop-chrome` クラスを付けるな。** `@media (max-width:768px){ .desktop-chrome{display:none!important} }` により、iOS ではゲート UI ごと消えて漆黒になる（ネットワーク到達後も黒の主因）。
+6. `Channel` / `startMemoryMonitor` / `subscribeLlmEvents` は `isTauri()` ガード必須。未ブリッジ時の `transformCallback` 同期 throw は `.catch` で捕捉できない。
+
+**as-built:** `vite.config.ts`、`webview_policy.rs`、`GlobalErrorBoundary.tsx`、`main.tsx`、`tauri.ios.conf.json`、`.fatal-crash-*` CSS、`ModelSetupGate.tsx`、`llm.ts`。
+
+**ハマりどころ:** `TAURI_DEV_HOST` LAN IP を policy で落とすとデスクトップ黒画面。iOS は `desktop-chrome` 誤用と Channel 未ガードが同症状。E2E は Simulator で「モデル配置を確認…」またはメインシェル文字が非黒ピクセルとして見えること。
+
+**検証:** `cargo test --lib webview_policy` / `npx tsc --noEmit` / Simulator スクリーンショット。
 
 ### 4.8 M3 Phase 0-A — SQLCipher / Security.framework iOS link gate (2026-07-18)
 

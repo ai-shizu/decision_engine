@@ -4,7 +4,7 @@
 // Command arg keys are camelCase: Tauri v2 converts snake_case Rust parameter
 // names to camelCase for the JS payload.
 
-import { Channel, invoke } from "@tauri-apps/api/core";
+import { Channel, invoke, isTauri } from "@tauri-apps/api/core";
 
 import type { KakeiboEntryV1 } from "./extractionReducer";
 import { hapticBiasDetected } from "./haptics";
@@ -285,6 +285,11 @@ export function parseLlmLifecycleEvent(value: unknown): LlmLifecycleEvent {
 export function subscribeLlmEvents(
   onEvent: (event: LlmLifecycleEvent) => void,
 ): Promise<void> {
+  // Channel reads window.__TAURI_INTERNALS__.transformCallback synchronously —
+  // without the bridge this throws before a Promise exists (.catch is useless).
+  if (!isTauri()) {
+    return Promise.resolve();
+  }
   const channel = new Channel<unknown>((raw) => {
     try {
       onEvent(parseLlmLifecycleEvent(raw));
@@ -301,6 +306,9 @@ export function startMemoryMonitor(
   intervalMs: number,
   thresholdBytes: number,
 ): Promise<void> {
+  if (!isTauri()) {
+    return Promise.resolve();
+  }
   const channel = new Channel<MemSample>(onSample);
   return invoke("memory_monitor_start", {
     onSample: channel,
@@ -311,5 +319,8 @@ export function startMemoryMonitor(
 
 /** Stop the Jetsam monitor sampler thread. */
 export function memoryMonitorStop(): Promise<void> {
+  if (!isTauri()) {
+    return Promise.resolve();
+  }
   return invoke("memory_monitor_stop");
 }

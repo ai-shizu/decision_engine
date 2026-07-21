@@ -101,11 +101,13 @@ export function ModelSetupGate({ onReady }: ModelSetupGateProps) {
     }
   }
 
+  // Never use `desktop-chrome` here: @media (max-width:768px) sets it to
+  // display:none — that paints an empty black WKWebView on iOS (fail-silent).
   if (state.phase === "checking") {
     return (
       <div className="shell">
         <TitleBar />
-        <main className="app loading desktop-chrome model-setup-gate">
+        <main className="app loading model-setup-gate">
           <h1>Coraxis</h1>
           <p className="status-line">モデル配置を確認しています…</p>
         </main>
@@ -122,7 +124,7 @@ export function ModelSetupGate({ onReady }: ModelSetupGateProps) {
   return (
     <div className="shell">
       <TitleBar />
-      <main className="app loading desktop-chrome model-setup-gate">
+      <main className="app loading model-setup-gate">
         <h1>Coraxis</h1>
         <p className="status-line">初回セットアップ — ローカル LLM モデル</p>
         <p className="hint model-setup-lead">
