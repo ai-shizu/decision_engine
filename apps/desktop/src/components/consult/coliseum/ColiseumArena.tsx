@@ -6,6 +6,7 @@
 import { useCallback, useMemo, useState } from "react";
 
 import type { GdSetupConfig } from "../../../lib/gdSetupState";
+import { RagChatInput } from "../../rag/RagChatInput";
 import { AsymmetryProbe } from "./AsymmetryProbe";
 import { CircuitBreakerGauge } from "./CircuitBreakerGauge";
 import {
@@ -13,6 +14,15 @@ import {
   type TranscriptMessage,
   type TranscriptRoleGd,
 } from "./TranscriptStream";
+
+/** GD live-session composer wiring (useGdSession). Omit to keep the static mock. */
+export type ColiseumArenaComposer = {
+  value: string;
+  onChange: (value: string) => void;
+  onSend: () => void;
+  streaming: boolean;
+  error?: string | null;
+};
 
 const MOCK_1ON1: TranscriptMessage[] = [
   {
@@ -120,6 +130,7 @@ export function ColiseumArena({
   messages,
   mode = "interview",
   gdConfig,
+  composer,
 }: {
   onRequestDebrief?: () => void;
   /** Override compiled tactics for live sessions later. */
@@ -127,6 +138,8 @@ export function ColiseumArena({
   messages?: TranscriptMessage[];
   mode?: "interview" | "gd";
   gdConfig?: GdSetupConfig;
+  /** GD live-session input box (useGdSession). Absent = read-only mock view. */
+  composer?: ColiseumArenaComposer;
 }) {
   const [tripped, setTripped] = useState(false);
   const multiAgent = mode === "gd";
@@ -167,6 +180,23 @@ export function ColiseumArena({
       <div className="coliseum-grid-2">
         <div className="coliseum-frame coliseum-frame-tall coliseum-frame-tx">
           <TranscriptStream messages={resolvedMessages} multiAgent={multiAgent} />
+          {composer && (
+            <>
+              <RagChatInput
+                value={composer.value}
+                onChange={composer.onChange}
+                onSend={composer.onSend}
+                streaming={composer.streaming}
+                modelReady={true}
+                placeholder={{ ready: "GDへ発言…", notReady: "モデル準備中…" }}
+              />
+              {composer.error && (
+                <p className="status-line error-text" role="alert">
+                  {composer.error}
+                </p>
+              )}
+            </>
+          )}
           <div className="coliseum-arena-actions">
             <button
               type="button"

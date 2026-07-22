@@ -7,6 +7,8 @@ interface RagChatInputProps {
   modelReady: boolean;
   /** M20-C: messenger sticky composer; desktop keeps default when omitted. */
   variant?: "default" | "messenger";
+  /** Override the default RAG-specific placeholder pair (ready / not-ready). */
+  placeholder?: { ready: string; notReady: string };
 }
 
 export function RagChatInput({
@@ -16,6 +18,7 @@ export function RagChatInput({
   streaming,
   modelReady,
   variant = "default",
+  placeholder,
 }: RagChatInputProps) {
   if (variant === "messenger") {
     return (
@@ -31,7 +34,9 @@ export function RagChatInput({
             }
           }}
           placeholder={
-            modelReady ? "メッセージ…" : "モデル準備中…すぐ送れます"
+            modelReady
+              ? (placeholder?.ready ?? "メッセージ…")
+              : (placeholder?.notReady ?? "モデル準備中…すぐ送れます")
           }
           rows={1}
           aria-label="チャット入力"
@@ -62,8 +67,8 @@ export function RagChatInput({
         }}
         placeholder={
           modelReady
-            ? "知識ベースに質問…"
-            : "モデル準備中…完了後すぐ送れます"
+            ? (placeholder?.ready ?? "知識ベースに質問…")
+            : (placeholder?.notReady ?? "モデル準備中…完了後すぐ送れます")
         }
         rows={2}
         aria-label="RAG chat input"

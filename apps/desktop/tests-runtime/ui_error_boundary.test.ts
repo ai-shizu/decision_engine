@@ -53,11 +53,12 @@ const VERIFY_FIRST: UiErrorCode[] = [
   "TENSOR_REBUILD",
   "SETTINGS_SAVE",
   "PROFILER_RUN",
+  "GD_ARENA",
 ];
 
-test("T-01 exact 23 keys", () => {
+test("T-01 exact 24 keys", () => {
   const keys = Object.keys(UI_ERROR_SPECS).sort();
-  assertEqual(keys.length, 23, "key count");
+  assertEqual(keys.length, 24, "key count");
   const expected = [...RETRY_SAFE, ...VERIFY_FIRST].sort();
   assertEqual(JSON.stringify(keys), JSON.stringify(expected), "key set");
 });

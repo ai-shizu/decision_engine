@@ -11,6 +11,7 @@ import {
   type GdPhase,
   type GdSetupConfig,
 } from "../../../lib/gdSetupState";
+import { useGdSession } from "../../../lib/useGdSession";
 import { ColiseumArena } from "./ColiseumArena";
 import { ColiseumDebrief } from "./ColiseumDebrief";
 import { ColiseumLobby } from "./ColiseumLobby";
@@ -35,6 +36,7 @@ export function ColiseumRoot({
   const [setup, setSetup] = useState<GdSetupConfig>(() => initialGdSetupConfig());
   const [view, setView] = useState<ColiseumView>("lobby");
   const [halted, setHalted] = useState(false);
+  const gdSession = useGdSession(setup);
 
   const armed = phase === "armed";
 
@@ -123,6 +125,14 @@ export function ColiseumRoot({
           <ColiseumArena
             mode="gd"
             gdConfig={setup}
+            messages={gdSession.state.messages.length > 0 ? gdSession.state.messages : undefined}
+            composer={{
+              value: gdSession.state.input,
+              onChange: gdSession.setInput,
+              onSend: gdSession.send,
+              streaming: gdSession.state.streaming,
+              error: gdSession.state.error,
+            }}
             onRequestDebrief={() => setView("debrief")}
           />
         )}
