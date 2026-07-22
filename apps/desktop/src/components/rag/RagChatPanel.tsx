@@ -30,6 +30,20 @@ function allocId(prefix: string): string {
 // N2: tab remount must restore history (ConsultTab / F-11 pattern).
 let ragSessionState: RagChatState = initialRagChatState();
 
+/** Controlled sys-log line for a locked vault (matches backend ERR_VAULT_LOCKED). */
+const SYS_ERR_VAULT_LOCKED =
+  "> SYS_ERR :: [VAULT_LOCKED] 保管庫へのアクセスが拒否されました。ロックを解除してください。";
+
+/**
+ * Map a controlled backend error code → sterile sys-log line. Finding 13: never
+ * render a raw IPC/embedding error body; only known codes get a specific message,
+ * everything else falls back to the operation-keyed sterile string.
+ */
+function mapRagChatError(code: string): string {
+  if (code === "VAULT_LOCKED") return SYS_ERR_VAULT_LOCKED;
+  return uiErrorMessage("RAG_CHAT");
+}
+
 /** Never persist a forever-streaming ghost across remount (W6 / N2). */
 function freezeRagSession(state: RagChatState): RagChatState {
   const messages = state.messages.flatMap((m) => {
@@ -110,16 +124,23 @@ export function RagChatPanel({
     assistantIdRef.current = assistantId;
     dispatch({ type: "send_begin", userId, assistantId, prompt });
 
-    const sterile = uiErrorMessage("RAG_CHAT");
+    let errored = false;
 
     try {
       const result = await sendRagChat(
         prompt,
         (event) => {
           if (event.error) {
-            // Ignore event.error body — operation-keyed sterile message only.
-            dispatch({ type: "token_error", message: sterile });
-            onError(sterile);
+            // Terminal error event: kill the spinner, print the sys-log line
+            // in-bubble. `event.error` is a controlled code (e.g. VAULT_LOCKED),
+            // mapped to a sterile message — never rendered raw (Finding 13).
+            errored = true;
+            flushAndStop();
+            dispatch({
+              type: "token_error",
+              assistantId,
+              message: mapRagChatError(event.error),
+            });
             return;
           }
           if (event.done) {
@@ -134,15 +155,20 @@ export function RagChatPanel({
       );
 
       flushAndStop();
-      dispatch({
-        type: "send_success",
-        assistantId,
-        contextCount: result.context_count,
-      });
+      if (!errored) {
+        dispatch({
+          type: "send_success",
+          assistantId,
+          contextCount: result.context_count,
+        });
+      }
     } catch {
       flushAndStop();
-      dispatch({ type: "send_failure", message: sterile });
-      onError(sterile);
+      dispatch({
+        type: "send_failure",
+        assistantId,
+        message: uiErrorMessage("RAG_CHAT"),
+      });
     } finally {
       assistantIdRef.current = null;
       dispatch({ type: "send_end" });

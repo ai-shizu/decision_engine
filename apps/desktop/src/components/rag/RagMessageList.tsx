@@ -53,7 +53,18 @@ export function RagMessageList({
                 : null}
             </div>
             <div className="rag-bubble-body">
-              {isUser ? m.text : <SimpleMarkdown text={m.text || "…"} />}
+              {isUser ? (
+                m.text
+              ) : m.error ? (
+                <div
+                  className="sys-log sys-log--err rag-bubble-syserr"
+                  role="alert"
+                >
+                  {m.error}
+                </div>
+              ) : (
+                <SimpleMarkdown text={m.text || "…"} />
+              )}
             </div>
           </li>
         );

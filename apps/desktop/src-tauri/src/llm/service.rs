@@ -343,7 +343,7 @@ fn metacognitive_debrief_done_event(seq: u32, report: MetacognitiveDebriefV1) ->
     }
 }
 
-fn error_done_event(seq: u32, error: String) -> TokenEvent {
+pub(crate) fn error_done_event(seq: u32, error: String) -> TokenEvent {
     TokenEvent {
         seq,
         text: String::new(),

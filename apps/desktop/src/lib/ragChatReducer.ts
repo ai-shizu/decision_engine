@@ -6,6 +6,8 @@ export interface RagChatMessage {
   text: string;
   contextCount?: number;
   streaming?: boolean;
+  /** Terminal sys-log error rendered in-bubble (monospace/red). Set ⇒ not streaming. */
+  error?: string;
 }
 
 export interface RagChatState {
@@ -20,9 +22,9 @@ export type RagChatAction =
   | { type: "clear_error" }
   | { type: "send_begin"; userId: string; assistantId: string; prompt: string }
   | { type: "token"; assistantId: string; text: string }
-  | { type: "token_error"; message: string }
+  | { type: "token_error"; assistantId: string; message: string }
   | { type: "send_success"; assistantId: string; contextCount: number }
-  | { type: "send_failure"; message: string }
+  | { type: "send_failure"; assistantId: string; message: string }
   | { type: "send_end" };
 
 export function initialRagChatState(): RagChatState {
@@ -69,7 +71,17 @@ export function ragChatReducer(
       return { ...state, messages };
     }
     case "token_error":
-      return { ...state, error: action.message };
+    case "send_failure": {
+      // Silent-Hang fix: an error MUST terminate the assistant bubble. Clear its
+      // `streaming` flag (the "…" spinner) and attach the sys-log error in-bubble.
+      // Previously only `state.error` was set, so the bubble spun forever.
+      const messages = state.messages.map((m) =>
+        m.id === action.assistantId && m.role === "assistant"
+          ? { ...m, streaming: false, error: action.message }
+          : m,
+      );
+      return { ...state, streaming: false, error: null, messages };
+    }
     case "send_success": {
       const messages = state.messages.map((m) =>
         m.id === action.assistantId
@@ -82,8 +94,6 @@ export function ragChatReducer(
       );
       return { ...state, messages };
     }
-    case "send_failure":
-      return { ...state, error: action.message };
     case "send_end":
       return { ...state, streaming: false };
     default: {

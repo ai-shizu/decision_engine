@@ -19,11 +19,18 @@ use super::associative_recall::{default_tau_days, fuse_and_rerank, RRF_K};
 use super::chunk::{chunk_markdown, MAX_CHUNKS};
 use super::embed_knowledge::{embed_for_knowledge, lexical_hash_embed, try_dense_passage_embed};
 use super::prompt::{build_rag_prompt, RagContextRef};
-use crate::db::{KnowledgeChunkRow, KnowledgeSearchHit as DbHit, VaultErrorCode, VaultHandle};
+use crate::db::{
+    KnowledgeChunkRow, KnowledgeSearchHit as DbHit, VaultErrorCode, VaultHandle, VaultStatus,
+};
 use crate::llm::hashed_embed::hashed_ngram_embed_384;
 use crate::llm::params::GenerationParams;
-use crate::llm::service::TokenEvent;
+use crate::llm::service::{error_done_event, TokenEvent};
 use crate::llm::LlmHandle;
+
+/// Structured error code emitted over `Channel<TokenEvent>` when the vault is not
+/// unlocked. The frontend maps this controlled code to a sterile sys-log message
+/// (Finding 13: never surface raw IPC/embedding text).
+const ERR_VAULT_LOCKED: &str = "VAULT_LOCKED";
 
 const MAX_SOURCE_ID_BYTES: usize = 512;
 const MAX_INGEST_TEXT_BYTES: usize = 512 * 1024;
@@ -331,6 +338,18 @@ pub async fn send_rag_chat(
     let context_limit = opts.context_limit.unwrap_or(DEFAULT_SEARCH_LIMIT);
     if !(1..=MAX_SEARCH_LIMIT).contains(&context_limit) {
         return Err("invalid context_limit".into());
+    }
+
+    // Fail-fast (Silent-Hang guard): a locked / unavailable vault cannot serve RAG
+    // retrieval. `status()` is a cached read (no worker round-trip), so this never
+    // blocks. Emit an explicit error event over the token channel and return at
+    // once — never a context-free silent answer, never a perpetual "…" spinner.
+    if !matches!(vault.status(), VaultStatus::Unlocked) {
+        let _ = on_token.send(error_done_event(0, ERR_VAULT_LOCKED.to_string()));
+        return Ok(SendRagChatResult {
+            context_count: 0,
+            context_ids: Vec::new(),
+        });
     }
 
     let vault = vault.inner().clone();
