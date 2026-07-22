@@ -400,7 +400,7 @@ pub async fn start_interview_session(
     .map_err(|_| "interview retrieve task join failed".to_string())??;
 
     gen.prompt = prompt;
-    llm.generate(gen, None, on_token)?;
+    llm.generate(gen, None, on_token).await?;
 
     Ok(SimSessionResult {
         context_count: context_ids.len(),
@@ -464,7 +464,7 @@ pub async fn review_es_draft(
     .map_err(|_| "es review retrieve task join failed".to_string())??;
 
     gen.prompt = prompt;
-    llm.generate(gen, None, on_token)?;
+    llm.generate(gen, None, on_token).await?;
 
     Ok(SimSessionResult {
         context_count: context_ids.len(),
@@ -825,7 +825,7 @@ pub async fn start_multistage_interview(
     persist_session(vault.inner(), &session)?;
 
     gen.prompt = prompt;
-    llm.generate(gen, None, on_token)?;
+    llm.generate(gen, None, on_token).await?;
 
     Ok(MultistageInterviewResult {
         session_id,
@@ -919,7 +919,7 @@ pub async fn advance_interview_stage(
 
     persist_session(&vault_h, &session)?;
     gen.prompt = prompt;
-    llm.generate(gen, None, on_token)?;
+    llm.generate(gen, None, on_token).await?;
 
     Ok(MultistageInterviewResult {
         session_id,

@@ -234,7 +234,7 @@ export function InterviewPocketPanel({
             return;
           }
           if (event.done) {
-            throttle.flushAndStop();
+            throttle.drainAndStop();
             return;
           }
           if (event.text) {
@@ -243,7 +243,7 @@ export function InterviewPocketPanel({
         },
       );
 
-      throttle.flushAndStop();
+      throttle.drainAndStop();
       dispatch({
         type: "send_success",
         assistantId,

@@ -403,7 +403,7 @@ pub async fn send_rag_chat(
     };
 
     // Streams on the LLM worker; cancel/purge still go through LlmMemoryGovernor.
-    llm.generate(gen, None, on_token)?;
+    llm.generate(gen, None, on_token).await?;
 
     Ok(SendRagChatResult {
         context_count: context_ids.len(),

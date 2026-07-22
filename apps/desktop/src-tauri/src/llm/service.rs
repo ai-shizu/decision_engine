@@ -9,12 +9,6 @@
 //! `GenerationParams`). Chat keeps the prior sampler chain; `kakeibo_v1` uses
 //! grammar + greedy and validates the full buffer before emitting `validated`.
 
-// `token_to_str` + `Special` are deprecated upstream in favour of `token_to_piece`,
-// but that replacement requires an `encoding_rs::Decoder` (a new dependency not in
-// the blueprint). The current path is functional; migrating it is deferred to a
-// later phase, so we explicitly allow the deprecation here rather than pull the dep.
-#![allow(deprecated)]
-
 use std::num::NonZeroU32;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
@@ -24,13 +18,16 @@ use std::time::Duration;
 
 use serde::Serialize;
 use tauri::ipc::Channel;
+use tokio::sync::oneshot;
 
 use llama_cpp_2::context::params::LlamaContextParams;
 use llama_cpp_2::llama_backend::LlamaBackend;
 use llama_cpp_2::llama_batch::LlamaBatch;
 use llama_cpp_2::model::params::LlamaModelParams;
-use llama_cpp_2::model::{AddBos, LlamaChatMessage, LlamaModel, Special};
+use llama_cpp_2::model::{AddBos, LlamaChatMessage, LlamaModel};
 use llama_cpp_2::sampling::LlamaSampler;
+use llama_cpp_2::token::LlamaToken;
+use llama_cpp_2::TokenToStringError;
 
 use super::params::{GenerationParams, LoadParams};
 use super::prompt::{
@@ -53,6 +50,86 @@ use crate::monitor::{DegradationLevel, MemPhase, MemoryMonitor};
 /// no command arrives to wake it. Short enough to be prompt, long enough to be
 /// a negligible idle cost.
 const PURGE_POLL_INTERVAL: Duration = Duration::from_millis(250);
+
+/// Stable role boundary for free-form generation. Callers assemble rich RAG /
+/// interview context inside the user message; this system message supplies the
+/// model-level role that an instruction-tuned GGUF expects.
+const CHAT_SYSTEM_PROMPT: &str = "あなたはCoraxisのオンデバイス推論エンジンです。ユーザーの指示に正確かつ簡潔に、日本語で回答してください。";
+
+/// Incrementally reconstruct UTF-8 from llama token-piece bytes.
+///
+/// Qwen's byte-level BPE may split one Japanese scalar across multiple tokens.
+/// `llama-cpp-2` 0.1.151's convenience `token_to_piece` can return an empty
+/// string when its fixed output buffer is too small (`OutputFull`, zero input
+/// consumed), so generation uses `token_to_piece_bytes` and owns the boundary
+/// buffer explicitly.
+#[derive(Default)]
+struct Utf8TokenDecoder {
+    pending: Vec<u8>,
+}
+
+impl Utf8TokenDecoder {
+    fn push(&mut self, bytes: &[u8]) -> String {
+        self.pending.extend_from_slice(bytes);
+        let mut output = String::new();
+
+        loop {
+            let (valid_up_to, error_len) = match std::str::from_utf8(&self.pending) {
+                Ok(valid) => {
+                    output.push_str(valid);
+                    self.pending.clear();
+                    break;
+                }
+                Err(error) => (error.valid_up_to(), error.error_len()),
+            };
+
+            if valid_up_to > 0 {
+                // `valid_up_to` is supplied by `from_utf8` for this exact slice.
+                let valid = std::str::from_utf8(&self.pending[..valid_up_to])
+                    .expect("validated UTF-8 prefix");
+                output.push_str(valid);
+                self.pending.drain(..valid_up_to);
+            }
+
+            match error_len {
+                Some(invalid_len) => {
+                    output.push('\u{FFFD}');
+                    self.pending.drain(..invalid_len);
+                }
+                // A valid scalar is split at the current token boundary. Keep
+                // the suffix until the next piece arrives.
+                None => break,
+            }
+        }
+
+        output
+    }
+
+    fn finish(&mut self) -> String {
+        String::from_utf8_lossy(&std::mem::take(&mut self.pending)).into_owned()
+    }
+}
+
+fn required_piece_capacity(reported: i32) -> Option<usize> {
+    reported
+        .checked_neg()
+        .and_then(|size| usize::try_from(size).ok())
+        .filter(|size| *size > 0)
+}
+
+/// Decode the raw vocabulary bytes, retrying with llama.cpp's reported exact
+/// size when the common eight-byte fast-path is insufficient.
+fn token_piece_bytes(model: &LlamaModel, token: LlamaToken) -> Result<Vec<u8>, TokenToStringError> {
+    match model.token_to_piece_bytes(token, 8, false, None) {
+        Err(TokenToStringError::InsufficientBufferSpace(reported)) => {
+            let Some(required) = required_piece_capacity(reported) else {
+                return Err(TokenToStringError::InsufficientBufferSpace(reported));
+            };
+            model.token_to_piece_bytes(token, required, false, None)
+        }
+        result => result,
+    }
+}
 
 /// Lock-free memory governor shared between the Tauri `State` handle, the LLM
 /// worker thread, and the iOS lifecycle observer.
@@ -202,10 +279,7 @@ pub fn finalize_distortion_extraction(
         .map_err(|e| format!("distortion extraction parse: {e}"))
 }
 
-pub fn finalize_receipt_extraction(
-    buf: &str,
-    cancelled: bool,
-) -> Result<ReceiptOcrV1, String> {
+pub fn finalize_receipt_extraction(buf: &str, cancelled: bool) -> Result<ReceiptOcrV1, String> {
     if cancelled {
         return Err("extraction cancelled".to_string());
     }
@@ -358,6 +432,24 @@ pub(crate) fn error_done_event(seq: u32, error: String) -> TokenEvent {
     }
 }
 
+/// Report a failed generation over the authoritative token channel, then
+/// release the async caller. The completion stays `Ok` whenever a terminal
+/// event reached the channel; only a broken terminal channel rejects invoke.
+/// Successful generation already emitted its terminal event inside [`generate`].
+fn complete_generation(
+    result: Result<(), String>,
+    tokens: &Channel<TokenEvent>,
+    completion: oneshot::Sender<Result<(), String>>,
+) {
+    let result = match result {
+        Ok(()) => Ok(()),
+        Err(error) => tokens
+            .send(error_done_event(0, error))
+            .map_err(|send_error| format!("token channel send: {send_error}")),
+    };
+    let _ = completion.send(result);
+}
+
 /// Command sent to the worker thread. `mpsc::Sender` is `!Sync`, so `LlmHandle`
 /// wraps it in a `Mutex` to satisfy Tauri `State: Send + Sync`.
 enum LlmCommand {
@@ -370,6 +462,7 @@ enum LlmCommand {
         params: GenerationParams,
         task_id: Option<String>,
         tokens: Channel<TokenEvent>,
+        completion: oneshot::Sender<Result<(), String>>,
     },
     /// One-shot embedding on the worker (separate short-lived context).
     Embed {
@@ -384,7 +477,6 @@ enum LlmCommand {
     RegisterEvents {
         channel: Channel<LlmLifecycleEvent>,
     },
-    Shutdown,
 }
 
 /// Send + Sync handle placed in Tauri `State`.
@@ -443,24 +535,29 @@ impl LlmHandle {
             .map_err(|_| "llm worker dropped reply".to_string())?
     }
 
-    /// Fire-and-forget: start a generation, streaming tokens over `tokens`.
+    /// Start a generation, streaming tokens over `tokens`, and asynchronously
+    /// wait until the worker has sent its terminal event.
     /// `task_id` is the sole authority for extraction routing (not copied into params).
-    pub fn generate(
+    pub async fn generate(
         &self,
         params: GenerationParams,
         task_id: Option<String>,
         tokens: Channel<TokenEvent>,
     ) -> Result<(), String> {
         self.governor.reset_cancel();
-        self.tx
-            .lock()
-            .map_err(|_| "llm tx poisoned".to_string())?
-            .send(LlmCommand::Generate {
+        let (completion, ack) = oneshot::channel();
+        {
+            let tx = self.tx.lock().map_err(|_| "llm tx poisoned".to_string())?;
+            tx.send(LlmCommand::Generate {
                 params,
                 task_id,
                 tokens,
+                completion,
             })
-            .map_err(|_| "llm worker gone".to_string())
+            .map_err(|_| "llm worker gone".to_string())?;
+        }
+        ack.await
+            .map_err(|_| "llm worker dropped generation completion".to_string())?
     }
 
     /// Phase 10: whether the worker still holds a loaded GGUF (Jetsam may have purged).
@@ -500,22 +597,10 @@ impl LlmHandle {
         self.tx
             .lock()
             .map_err(|_| "llm tx poisoned".to_string())?
-            .send(LlmCommand::Embed {
-                text,
-                n_ctx,
-                reply,
-            })
+            .send(LlmCommand::Embed { text, n_ctx, reply })
             .map_err(|_| "llm worker gone".to_string())?;
         ack.recv()
             .map_err(|_| "llm worker dropped reply".to_string())?
-    }
-}
-
-impl Drop for LlmHandle {
-    fn drop(&mut self) {
-        if let Ok(tx) = self.tx.lock() {
-            let _ = tx.send(LlmCommand::Shutdown);
-        }
     }
 }
 
@@ -553,8 +638,7 @@ fn worker_loop(
             // Idle wake: re-check purge + emit Serious+ degradation once.
             Err(mpsc::RecvTimeoutError::Timeout) => {
                 let level = governor.degradation();
-                if level.throttle_generation()
-                    && last_degradation_emit < DegradationLevel::Serious
+                if level.throttle_generation() && last_degradation_emit < DegradationLevel::Serious
                 {
                     if let Some(sink) = events.as_ref() {
                         let _ = sink.send(LlmLifecycleEvent::Degradation { level });
@@ -586,35 +670,27 @@ fn worker_loop(
                 params,
                 task_id,
                 tokens,
+                completion,
             } => {
-                let model = match model.as_ref() {
-                    Some(m) => Arc::clone(m),
-                    None => {
-                        let _ = tokens.send(error_done_event(0, "model not loaded".into()));
-                        continue;
-                    }
+                let result = match model.as_ref() {
+                    Some(model) => generate(
+                        &backend,
+                        model,
+                        &params,
+                        task_id.as_deref(),
+                        &tokens,
+                        &governor,
+                        &monitor,
+                    ),
+                    None => Err("model not loaded".into()),
                 };
-                if let Err(e) = generate(
-                    &backend,
-                    &model,
-                    &params,
-                    task_id.as_deref(),
-                    &tokens,
-                    &governor,
-                    &monitor,
-                ) {
-                    let _ = tokens.send(error_done_event(0, e));
-                }
                 monitor.set_phase(MemPhase::Idle);
+                complete_generation(result, &tokens, completion);
             }
             LlmCommand::IsLoaded { reply } => {
                 let _ = reply.send(model.is_some());
             }
-            LlmCommand::Embed {
-                text,
-                n_ctx,
-                reply,
-            } => {
+            LlmCommand::Embed { text, n_ctx, reply } => {
                 // Fair+: suppress expensive LLM embed re-warm; callers fall back
                 // to hashed-ngram (embed_knowledge).
                 if governor.degradation().suppress_background() {
@@ -641,7 +717,6 @@ fn worker_loop(
             LlmCommand::RegisterEvents { channel } => {
                 events = Some(channel);
             }
-            LlmCommand::Shutdown => break,
         }
     }
 }
@@ -666,12 +741,60 @@ pub fn render_chat_prompt(model: &LlamaModel, system: &str, user: &str) -> Resul
         .map_err(|e| format!("apply_chat_template: {e}"))
 }
 
+/// Resolve the tokenizer's baked-in BOS policy. `llama-cpp-2` exposes BOS as
+/// an explicit enum rather than a model-default option, so mirror the GGUF
+/// metadata and retain the historical `Always` fallback for legacy files.
+fn add_bos_from_metadata(raw: Option<&str>) -> AddBos {
+    match raw.map(str::trim).map(str::to_ascii_lowercase).as_deref() {
+        Some("false" | "0") => AddBos::Never,
+        _ => AddBos::Always,
+    }
+}
+
+fn model_add_bos(model: &LlamaModel) -> AddBos {
+    let raw = model.meta_val_str("tokenizer.ggml.add_bos_token").ok();
+    add_bos_from_metadata(raw.as_deref())
+}
+
+/// The Simulator exposes a synthetic Metal device without the unified/shared
+/// memory capabilities llama.cpp expects for reliable quantized inference.
+/// Keep full Metal offload on physical iOS devices, but force Simulator builds
+/// onto the host CPU so corrupted logits cannot reach the stream.
+fn effective_n_gpu_layers(requested: u32, ios_simulator: bool) -> u32 {
+    if ios_simulator {
+        0
+    } else {
+        requested
+    }
+}
+
+fn apply_context_device_policy(
+    params: LlamaContextParams,
+    ios_simulator: bool,
+) -> LlamaContextParams {
+    if ios_simulator {
+        params.with_offload_kqv(false).with_op_offload(false)
+    } else {
+        params
+    }
+}
+
 fn load_model(backend: &LlamaBackend, path: &Path, p: &LoadParams) -> Result<LlamaModel, String> {
     if !path.exists() {
         return Err(format!("GGUF not found at {}", path.display()));
     }
+    let n_gpu_layers = effective_n_gpu_layers(
+        p.n_gpu_layers,
+        cfg!(all(target_os = "ios", target_abi = "sim")),
+    );
+    if n_gpu_layers != p.n_gpu_layers {
+        eprintln!(
+            "Coraxis LLM: iOS Simulator detected; forcing CPU inference (requested Metal layers: {})",
+            p.n_gpu_layers
+        );
+    }
     let params = LlamaModelParams::default()
-        .with_n_gpu_layers(p.n_gpu_layers)
+        .with_n_gpu_layers(n_gpu_layers)
         .with_use_mmap(p.use_mmap);
     LlamaModel::load_from_file(backend, path, &params).map_err(|e| format!("model load: {e}"))
 }
@@ -689,7 +812,10 @@ fn generate(
     let mode = resolve_generation_mode(task_id)?;
 
     let prompt = match mode {
-        GenerationMode::Chat => g.prompt.clone(),
+        // Free-form RAG / consult / interview prompts are message content, not
+        // pre-rendered model input. Always cross the model's baked-in role
+        // boundary before tokenization (Qwen2.5-Instruct uses ChatML).
+        GenerationMode::Chat => render_chat_prompt(model, CHAT_SYSTEM_PROMPT, &g.prompt)?,
         GenerationMode::KakeiboV1 => {
             let (system, user) = build_prompt(TASK_KAKEIBO_V1, &g.prompt)?;
             render_chat_prompt(model, &system, &user)?
@@ -716,14 +842,17 @@ fn generate(
     let scaled_ctx = ((g.n_ctx as f32) * level.context_factor())
         .round()
         .clamp(512.0, g.n_ctx as f32) as u32;
-    let ctx_params = LlamaContextParams::default().with_n_ctx(NonZeroU32::new(scaled_ctx));
+    let ctx_params = apply_context_device_policy(
+        LlamaContextParams::default().with_n_ctx(NonZeroU32::new(scaled_ctx)),
+        cfg!(all(target_os = "ios", target_abi = "sim")),
+    );
     let mut ctx = model
         .new_context(backend, ctx_params)
         .map_err(|e| format!("context create: {e}"))?;
     monitor.set_phase(MemPhase::CtxCreated);
 
     let prompt_tokens = model
-        .str_to_token(&prompt, AddBos::Always)
+        .str_to_token(&prompt, model_add_bos(model))
         .map_err(|e| format!("tokenize: {e}"))?;
     let mut batch = LlamaBatch::new(prompt_tokens.len().max(1), 1);
     let last = prompt_tokens.len().saturating_sub(1);
@@ -778,6 +907,10 @@ fn generate(
     let mut extract_buf = String::new();
     let mut cancelled = false;
     let mut n_cur = batch.n_tokens();
+    // A token piece can end halfway through a UTF-8 scalar. The decoder must
+    // survive across the entire generation; decoding each token independently
+    // discards Japanese byte fragments and corrupts streamed text.
+    let mut text_decoder = Utf8TokenDecoder::default();
     let mut batcher = TokenStreamBatcher::new(|seq, text| {
         tokens
             .send(streaming_token(seq, text))
@@ -796,9 +929,9 @@ fn generate(
         if model.is_eog_token(token) {
             break;
         }
-        let piece = model
-            .token_to_str(token, Special::Plaintext)
-            .map_err(|e| format!("token decode: {e}"))?;
+        let piece_bytes =
+            token_piece_bytes(model, token).map_err(|e| format!("token decode: {e}"))?;
+        let piece = text_decoder.push(&piece_bytes);
         batcher
             .push(seq, &piece)
             .map_err(|e| format!("channel send: {e}"))?;
@@ -812,7 +945,8 @@ fn generate(
         ) {
             extract_buf.push_str(&piece);
         }
-        sampler.accept(token);
+        // `LlamaSampler::sample` is sample-and-accept. Calling `accept` again
+        // double-advances stateful grammar / repetition samplers.
 
         batch.clear();
         batch
@@ -820,6 +954,16 @@ fn generate(
             .map_err(|e| format!("batch add: {e}"))?;
         n_cur += 1;
         ctx.decode(&mut batch).map_err(|e| format!("decode: {e}"))?;
+    }
+
+    // Finalize a possible trailing partial scalar (for example when max_tokens
+    // cuts between byte-fallback tokens) before the terminal event.
+    let trailing = text_decoder.finish();
+    if !trailing.is_empty() {
+        batcher.push(g.max_tokens, &trailing)?;
+        if !matches!(mode, GenerationMode::Chat) {
+            extract_buf.push_str(&trailing);
+        }
     }
 
     batcher.flush()?;
@@ -873,6 +1017,108 @@ fn generate(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn disconnected_test_handle() -> (LlmHandle, mpsc::Receiver<LlmCommand>) {
+        let (tx, rx) = mpsc::channel();
+        (
+            LlmHandle {
+                tx: Arc::new(Mutex::new(tx)),
+                governor: Arc::new(LlmMemoryGovernor::new()),
+            },
+            rx,
+        )
+    }
+
+    fn test_generation_params() -> GenerationParams {
+        GenerationParams {
+            prompt: "test".into(),
+            n_ctx: 512,
+            max_tokens: 1,
+            temp: 0.0,
+            top_k: 1,
+            top_p: 1.0,
+            seed: 0,
+        }
+    }
+
+    #[test]
+    fn dropping_clone_does_not_stop_shared_worker_channel() {
+        let (handle, rx) = disconnected_test_handle();
+        drop(handle.clone());
+
+        assert!(matches!(rx.try_recv(), Err(mpsc::TryRecvError::Empty)));
+
+        drop(handle);
+        assert!(matches!(
+            rx.try_recv(),
+            Err(mpsc::TryRecvError::Disconnected)
+        ));
+    }
+
+    #[tokio::test]
+    async fn generate_waits_for_worker_completion_ack() {
+        let (handle, rx) = disconnected_test_handle();
+        let tokens = Channel::new(|_| Ok(()));
+        let generation = handle.generate(test_generation_params(), None, tokens);
+        tokio::pin!(generation);
+
+        tokio::select! {
+            result = &mut generation => panic!("generation resolved before worker ack: {result:?}"),
+            _ = tokio::task::yield_now() => {}
+        }
+
+        let completion = match rx.try_recv() {
+            Ok(LlmCommand::Generate { completion, .. }) => completion,
+            Ok(_) => panic!("unexpected worker command"),
+            Err(error) => panic!("generation command not queued: {error}"),
+        };
+
+        assert!(completion.send(Ok(())).is_ok());
+        assert_eq!(generation.await, Ok(()));
+    }
+
+    #[test]
+    fn error_terminal_is_sent_before_completion_ack() {
+        let (completion, ack) = oneshot::channel();
+        let ack = Arc::new(Mutex::new(ack));
+        let ack_during_terminal = Arc::clone(&ack);
+        let terminal_seen = Arc::new(AtomicBool::new(false));
+        let terminal_seen_by_channel = Arc::clone(&terminal_seen);
+        let tokens = Channel::new(move |body| {
+            assert!(matches!(
+                ack_during_terminal.lock().expect("ack lock").try_recv(),
+                Err(oneshot::error::TryRecvError::Empty)
+            ));
+            match body {
+                tauri::ipc::InvokeResponseBody::Json(json) => {
+                    assert!(json.contains("\"done\":true"));
+                    assert!(json.contains("\"error\":\"boom\""));
+                }
+                tauri::ipc::InvokeResponseBody::Raw(_) => panic!("unexpected raw token event"),
+            }
+            terminal_seen_by_channel.store(true, Ordering::SeqCst);
+            Ok(())
+        });
+
+        complete_generation(Err("boom".into()), &tokens, completion);
+
+        assert!(terminal_seen.load(Ordering::SeqCst));
+        assert_eq!(ack.lock().expect("ack lock").try_recv(), Ok(Ok(())));
+    }
+
+    #[test]
+    fn failed_terminal_delivery_rejects_completion_ack() {
+        let (completion, mut ack) = oneshot::channel();
+        let tokens = Channel::new(|_| Err(tauri::Error::FailedToReceiveMessage));
+
+        complete_generation(Err("boom".into()), &tokens, completion);
+
+        let error = ack
+            .try_recv()
+            .expect("completion ack")
+            .expect_err("broken terminal channel must reject invoke");
+        assert!(error.starts_with("token channel send:"));
+    }
 
     #[test]
     fn governor_request_purge_sets_cancel_and_purge() {
@@ -945,6 +1191,54 @@ mod tests {
     #[test]
     fn mode_unknown_is_err() {
         assert!(resolve_generation_mode(Some("nope")).is_err());
+    }
+
+    #[test]
+    fn bos_policy_tracks_gguf_metadata() {
+        assert_eq!(add_bos_from_metadata(Some("false")), AddBos::Never);
+        assert_eq!(add_bos_from_metadata(Some(" 0 ")), AddBos::Never);
+        assert_eq!(add_bos_from_metadata(Some("true")), AddBos::Always);
+        assert_eq!(add_bos_from_metadata(None), AddBos::Always);
+    }
+
+    #[test]
+    fn simulator_forces_cpu_without_changing_device_offload() {
+        assert_eq!(effective_n_gpu_layers(999, true), 0);
+        assert_eq!(effective_n_gpu_layers(999, false), 999);
+        assert_eq!(effective_n_gpu_layers(0, false), 0);
+
+        let simulator = apply_context_device_policy(LlamaContextParams::default(), true);
+        assert!(!simulator.offload_kqv());
+        assert!(!simulator.op_offload());
+
+        let device = apply_context_device_policy(LlamaContextParams::default(), false);
+        assert!(device.offload_kqv());
+        assert!(device.op_offload());
+    }
+
+    #[test]
+    fn utf8_decoder_preserves_scalar_split_across_token_pieces() {
+        let mut decoder = Utf8TokenDecoder::default();
+        let bytes = "思".as_bytes();
+
+        assert!(decoder.push(&bytes[..1]).is_empty());
+        assert_eq!(decoder.push(&bytes[1..]), "思");
+        assert!(decoder.finish().is_empty());
+    }
+
+    #[test]
+    fn utf8_decoder_replaces_only_irrecoverably_invalid_bytes() {
+        let mut decoder = Utf8TokenDecoder::default();
+        assert_eq!(decoder.push(b"A\xFFB"), "A\u{FFFD}B");
+        assert!(decoder.finish().is_empty());
+    }
+
+    #[test]
+    fn token_piece_retry_uses_llama_reported_capacity() {
+        assert_eq!(required_piece_capacity(-9), Some(9));
+        assert_eq!(required_piece_capacity(0), None);
+        assert_eq!(required_piece_capacity(9), None);
+        assert_eq!(required_piece_capacity(i32::MIN), None);
     }
 
     #[test]

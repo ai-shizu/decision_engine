@@ -105,16 +105,18 @@ export function ConsultTab() {
     stickRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 24;
   }
 
-  const { push: pushChunk, flushAndStop: flushChunkQueue } = useThrottledStream(
-    (piece) => {
-      setMessages((prev) => {
-        const last = prev[prev.length - 1];
-        if (!last || last.role !== "assistant" || !last.streaming) return prev;
-        return [...prev.slice(0, -1), { ...last, text: last.text + piece }];
-      });
-      if (stickRef.current) scrollToBottom(false);
-    },
-  );
+  const {
+    push: pushChunk,
+    drainAndStop: drainChunkQueue,
+    flushAndStop: flushChunkQueue,
+  } = useThrottledStream((piece) => {
+    setMessages((prev) => {
+      const last = prev[prev.length - 1];
+      if (!last || last.role !== "assistant" || !last.streaming) return prev;
+      return [...prev.slice(0, -1), { ...last, text: last.text + piece }];
+    });
+    if (stickRef.current) scrollToBottom(false);
+  });
 
   // W4/W6: cancel in-flight LLM on unmount; freeze singleton streaming ghosts.
   useEffect(() => {
@@ -215,7 +217,7 @@ export function ConsultTab() {
             return;
           }
           if (event.done) {
-            flushChunkQueue();
+            drainChunkQueue();
             return;
           }
           if (event.text) {
@@ -223,7 +225,7 @@ export function ConsultTab() {
           }
         },
       );
-      flushChunkQueue();
+      drainChunkQueue();
       setMessages((prev) => {
         const last = prev[prev.length - 1];
         if (last?.role === "assistant" && last.streaming) {

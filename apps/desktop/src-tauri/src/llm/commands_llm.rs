@@ -34,7 +34,7 @@ pub async fn llm_generate(
     task_id: Option<String>,
     on_token: Channel<TokenEvent>,
 ) -> Result<(), String> {
-    handle.generate(params, task_id, on_token)
+    handle.generate(params, task_id, on_token).await
 }
 
 /// Embed `text` and return little-endian `f32` bytes (Phase 9 binary IPC).

@@ -143,7 +143,7 @@ pub async fn consult_with_oracle_context(
         top_p: opts.top_p.unwrap_or(0.95),
         seed: opts.seed.unwrap_or(0),
     };
-    llm.generate(gen, None, on_token)?;
+    llm.generate(gen, None, on_token).await?;
 
     Ok(ConsultWithOracleResult {
         context_count: context_ids.len(),

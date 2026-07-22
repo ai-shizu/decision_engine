@@ -114,7 +114,7 @@ export function EsReviewPanel({
             return;
           }
           if (event.done) {
-            throttle.flushAndStop();
+            throttle.drainAndStop();
             return;
           }
           if (event.text) {
@@ -123,7 +123,7 @@ export function EsReviewPanel({
         },
       );
 
-      throttle.flushAndStop();
+      throttle.drainAndStop();
       dispatch({ type: "review_success", reviewerId, result });
     } catch (err) {
       throttle.flushAndStop();

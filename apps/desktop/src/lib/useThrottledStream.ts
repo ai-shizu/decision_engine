@@ -52,6 +52,21 @@ export function useThrottledStream(onEmit: (chunk: string) => void) {
   );
 
   /**
+   * Normal terminal path: synchronously emit the queued tail before stopping.
+   * Channel delivery can outpace the 30 ms display cadence, so `done` commonly
+   * arrives while characters remain queued. Dropping that tail truncates an
+   * otherwise successful model response.
+   */
+  const drainAndStop = useCallback(() => {
+    const tail = queueRef.current;
+    queueRef.current = "";
+    stopTimer();
+    if (tail) {
+      onEmitRef.current(tail);
+    }
+  }, [stopTimer]);
+
+  /**
    * W-35: 確定置換の直前に必ず呼ぶこと。キュー破棄 → (呼び出し側の)
    * 置換 setState、の原子的な順序を保証する。破棄せずに置換すると、
    * 置換後のメッセージへ古いキューの残りが追記され続ける。
@@ -64,5 +79,5 @@ export function useThrottledStream(onEmit: (chunk: string) => void) {
   // W-36: unmount 時にタイマーを確実に破棄する (StrictMode 二重実行対策込み)。
   useEffect(() => stopTimer, [stopTimer]);
 
-  return { push, flushAndStop };
+  return { push, drainAndStop, flushAndStop };
 }

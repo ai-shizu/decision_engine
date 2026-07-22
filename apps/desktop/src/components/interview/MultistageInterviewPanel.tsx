@@ -27,7 +27,11 @@ function allocId(prefix: string): string {
 
 function handleTokenStream(
   event: { text: string; done: boolean; error: string | null },
-  throttle: { push: (t: string) => void; flushAndStop: () => void },
+  throttle: {
+    push: (t: string) => void;
+    drainAndStop: () => void;
+    flushAndStop: () => void;
+  },
   onError: (message: string) => void,
 ): void {
   if (event.error) {
@@ -35,7 +39,7 @@ function handleTokenStream(
     return;
   }
   if (event.done) {
-    throttle.flushAndStop();
+    throttle.drainAndStop();
     return;
   }
   if (event.text) {
@@ -153,7 +157,7 @@ export function MultistageInterviewPanel({
         },
       );
 
-      throttle.flushAndStop();
+      throttle.drainAndStop();
       dispatch({ type: "start_success", assistantId, result });
       await hydrateAfter(result);
     } catch {
@@ -195,7 +199,7 @@ export function MultistageInterviewPanel({
         },
       );
 
-      throttle.flushAndStop();
+      throttle.drainAndStop();
 
       if (result.outcome === "closed" || result.stage === "closed") {
         dispatch({ type: "session_closed", result });

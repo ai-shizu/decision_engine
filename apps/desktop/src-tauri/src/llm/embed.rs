@@ -45,10 +45,16 @@ pub fn embed_text(
     }
 
     let ctx_tokens = NonZeroU32::new(n_ctx.max(1)).ok_or("embed_text: n_ctx invalid")?;
-    let ctx_params = LlamaContextParams::default()
+    let mut ctx_params = LlamaContextParams::default()
         .with_n_ctx(Some(ctx_tokens))
         .with_embeddings(true)
         .with_pooling_type(LlamaPoolingType::Mean);
+    // The synthetic iOS Simulator Metal device lacks the unified/shared-memory
+    // capabilities required for reliable quantized inference. Model layers are
+    // forced to CPU at load time; keep K/Q/V and operation offload there too.
+    if cfg!(all(target_os = "ios", target_abi = "sim")) {
+        ctx_params = ctx_params.with_offload_kqv(false).with_op_offload(false);
+    }
 
     let mut ctx = model
         .new_context(backend, ctx_params)

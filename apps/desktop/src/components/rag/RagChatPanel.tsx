@@ -9,6 +9,7 @@ import {
 } from "../../lib/ragChatReducer";
 import { uiErrorMessage } from "../../lib/uiErrorMessages";
 import { useThrottledStream } from "../../lib/useThrottledStream";
+import { createStreamTerminalGate } from "../../lib/streamTerminalGate";
 import { RagChatInput } from "./RagChatInput";
 import { RagIngestPanel } from "./RagIngestPanel";
 import { RagMessageList } from "./RagMessageList";
@@ -33,6 +34,7 @@ let ragSessionState: RagChatState = initialRagChatState();
 /** Controlled sys-log line for a locked vault (matches backend ERR_VAULT_LOCKED). */
 const SYS_ERR_VAULT_LOCKED =
   "> SYS_ERR :: [VAULT_LOCKED] 保管庫へのアクセスが拒否されました。ロックを解除してください。";
+const STREAM_TERMINAL_TIMEOUT_MS = 180_000;
 
 /**
  * Map a controlled backend error code → sterile sys-log line. Finding 13: never
@@ -83,11 +85,12 @@ export function RagChatPanel({
   const streamingRef = useRef(false);
   const messenger = variant === "messenger";
 
-  const { push: pushChunk, flushAndStop } = useThrottledStream((chunk) => {
-    const id = assistantIdRef.current;
-    if (!id) return;
-    dispatch({ type: "token", assistantId: id, text: chunk });
-  });
+  const { push: pushChunk, drainAndStop, flushAndStop } =
+    useThrottledStream((chunk) => {
+      const id = assistantIdRef.current;
+      if (!id) return;
+      dispatch({ type: "token", assistantId: id, text: chunk });
+    });
 
   useEffect(() => {
     stateRef.current = state;
@@ -125,11 +128,13 @@ export function RagChatPanel({
     dispatch({ type: "send_begin", userId, assistantId, prompt });
 
     let errored = false;
+    const terminal = createStreamTerminalGate(STREAM_TERMINAL_TIMEOUT_MS);
 
     try {
       const result = await sendRagChat(
         prompt,
         (event) => {
+          if (!terminal.isPending()) return;
           if (event.error) {
             // Terminal error event: kill the spinner, print the sys-log line
             // in-bubble. `event.error` is a controlled code (e.g. VAULT_LOCKED),
@@ -141,10 +146,12 @@ export function RagChatPanel({
               assistantId,
               message: mapRagChatError(event.error),
             });
+            terminal.settle();
             return;
           }
           if (event.done) {
-            flushAndStop();
+            drainAndStop();
+            terminal.settle();
             return;
           }
           if (event.text) {
@@ -153,8 +160,9 @@ export function RagChatPanel({
         },
         { contextLimit: 5 },
       );
+      await terminal.promise;
 
-      flushAndStop();
+      drainAndStop();
       if (!errored) {
         dispatch({
           type: "send_success",
@@ -170,6 +178,7 @@ export function RagChatPanel({
         message: uiErrorMessage("RAG_CHAT"),
       });
     } finally {
+      terminal.abort();
       assistantIdRef.current = null;
       dispatch({ type: "send_end" });
       onBusyChange(false);
