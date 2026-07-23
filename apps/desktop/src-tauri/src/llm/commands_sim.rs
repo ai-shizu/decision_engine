@@ -9,7 +9,7 @@ use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 use tauri::ipc::Channel;
-use tauri::State;
+use tauri::{AppHandle, State};
 
 use crate::db::{VaultErrorCode, VaultHandle};
 use crate::knowledge::edinet_client::{
@@ -18,6 +18,7 @@ use crate::knowledge::edinet_client::{
 use crate::knowledge::{
     refuse_if_egress_unavailable, refuse_if_policy_off, NetworkPolicyStore,
 };
+use crate::llm::commands_consult::ensure_model_loaded;
 use crate::llm::params::GenerationParams;
 use crate::llm::prompt_sim::{build_es_review_prompt, build_interview_prompt, ExperienceRef};
 use crate::llm::service::TokenEvent;
@@ -353,6 +354,7 @@ pub async fn fetch_edinet_company_facts(
 /// Interview turn: RAG experience + company facts → streaming interviewer.
 #[tauri::command]
 pub async fn start_interview_session(
+    app: AppHandle,
     vault: State<'_, VaultHandle>,
     llm: State<'_, LlmHandle>,
     store: State<'_, NetworkPolicyStore>,
@@ -363,6 +365,10 @@ pub async fn start_interview_session(
     if message.is_empty() || message.len() > MAX_TEXT_BYTES {
         return Err("invalid message".into());
     }
+    // Previously called generate() completely blind (no load check at all —
+    // the same class of bug consult_with_oracle_context had before its own
+    // fix). Reuses the shared guard rather than duplicating load logic.
+    ensure_model_loaded(&app, &llm).await?;
 
     let facts = resolve_company_facts(
         store.inner(),
@@ -397,10 +403,26 @@ pub async fn start_interview_session(
         Ok::<_, String>((prompt, Vec::<String>::new()))
     })
     .await
-    .map_err(|_| "interview retrieve task join failed".to_string())??;
+    .map_err(|e| {
+        log::error!("interview(single): prompt-build task join failed: {e}");
+        "interview retrieve task join failed".to_string()
+    })?
+    .map_err(|e| {
+        log::error!("interview(single): prompt-build task returned error: {e}");
+        e
+    })?;
 
     gen.prompt = prompt;
-    llm.generate(gen, None, on_token).await?;
+    log::info!(
+        "interview(single): calling llm.generate (prompt_len={}, max_tokens={})",
+        gen.prompt.len(),
+        gen.max_tokens
+    );
+    llm.generate(gen, None, on_token).await.map_err(|e| {
+        log::error!("interview(single): llm.generate failed: {e}");
+        e
+    })?;
+    log::info!("interview(single): llm.generate completed successfully");
 
     Ok(SimSessionResult {
         context_count: context_ids.len(),
@@ -413,6 +435,7 @@ pub async fn start_interview_session(
 /// ES draft review: RAG experience + company facts → streaming reviewer.
 #[tauri::command]
 pub async fn review_es_draft(
+    app: AppHandle,
     vault: State<'_, VaultHandle>,
     llm: State<'_, LlmHandle>,
     store: State<'_, NetworkPolicyStore>,
@@ -423,6 +446,7 @@ pub async fn review_es_draft(
     if draft.is_empty() || draft.len() > MAX_TEXT_BYTES {
         return Err("invalid es_draft".into());
     }
+    ensure_model_loaded(&app, &llm).await?;
 
     let facts = resolve_company_facts(
         store.inner(),
@@ -461,10 +485,26 @@ pub async fn review_es_draft(
         Ok::<_, String>((prompt, ids))
     })
     .await
-    .map_err(|_| "es review retrieve task join failed".to_string())??;
+    .map_err(|e| {
+        log::error!("es_review: prompt-build task join failed: {e}");
+        "es review retrieve task join failed".to_string()
+    })?
+    .map_err(|e| {
+        log::error!("es_review: prompt-build task returned error: {e}");
+        e
+    })?;
 
     gen.prompt = prompt;
-    llm.generate(gen, None, on_token).await?;
+    log::info!(
+        "es_review: calling llm.generate (prompt_len={}, max_tokens={})",
+        gen.prompt.len(),
+        gen.max_tokens
+    );
+    llm.generate(gen, None, on_token).await.map_err(|e| {
+        log::error!("es_review: llm.generate failed: {e}");
+        e
+    })?;
+    log::info!("es_review: llm.generate completed successfully");
 
     Ok(SimSessionResult {
         context_count: context_ids.len(),
@@ -750,12 +790,14 @@ pub struct MultistageInterviewResult {
 /// Start Foundation stage; streams first interviewer question.
 #[tauri::command]
 pub async fn start_multistage_interview(
+    app: AppHandle,
     vault: State<'_, VaultHandle>,
     llm: State<'_, LlmHandle>,
     store: State<'_, NetworkPolicyStore>,
     params: StartMultistageInterviewParams,
     on_token: Channel<TokenEvent>,
 ) -> Result<MultistageInterviewResult, String> {
+    ensure_model_loaded(&app, &llm).await?;
     let facts = resolve_company_facts(
         store.inner(),
         params.company_facts,
@@ -819,13 +861,29 @@ pub async fn start_multistage_interview(
         )
     })
     .await
-    .map_err(|_| "multistage start join failed".to_string())??;
+    .map_err(|e| {
+        log::error!("interview(multistage-start): prompt-build task join failed: {e}");
+        "multistage start join failed".to_string()
+    })?
+    .map_err(|e| {
+        log::error!("interview(multistage-start): prompt-build task returned error: {e}");
+        e
+    })?;
 
     record_interviewer_utterance(&mut session, &opening);
     persist_session(vault.inner(), &session)?;
 
     gen.prompt = prompt;
-    llm.generate(gen, None, on_token).await?;
+    log::info!(
+        "interview(multistage-start): calling llm.generate (prompt_len={}, max_tokens={})",
+        gen.prompt.len(),
+        gen.max_tokens
+    );
+    llm.generate(gen, None, on_token).await.map_err(|e| {
+        log::error!("interview(multistage-start): llm.generate failed: {e}");
+        e
+    })?;
+    log::info!("interview(multistage-start): llm.generate completed successfully");
 
     Ok(MultistageInterviewResult {
         session_id,
@@ -851,6 +909,7 @@ pub struct AdvanceInterviewParams {
 /// Apply candidate answer, advance FSM, stream next interviewer turn (or debrief).
 #[tauri::command]
 pub async fn advance_interview_stage(
+    app: AppHandle,
     vault: State<'_, VaultHandle>,
     llm: State<'_, LlmHandle>,
     params: AdvanceInterviewParams,
@@ -894,6 +953,11 @@ pub async fn advance_interview_stage(
         });
     }
 
+    // Only reached when the session actually continues (not Closed above),
+    // i.e. only when generate() will really be called — placed after the
+    // early-return branch so a Closed session never pays for a load check.
+    ensure_model_loaded(&app, &llm).await?;
+
     let facts: CompanyFacts = serde_json::from_str(&session.facts_json)
         .map_err(|_| "stored facts parse failed".to_string())?;
     let (context_limit, mut gen) =
@@ -915,11 +979,27 @@ pub async fn advance_interview_stage(
         )
     })
     .await
-    .map_err(|_| "multistage advance join failed".to_string())??;
+    .map_err(|e| {
+        log::error!("interview(multistage-advance): prompt-build task join failed: {e}");
+        "multistage advance join failed".to_string()
+    })?
+    .map_err(|e| {
+        log::error!("interview(multistage-advance): prompt-build task returned error: {e}");
+        e
+    })?;
 
     persist_session(&vault_h, &session)?;
     gen.prompt = prompt;
-    llm.generate(gen, None, on_token).await?;
+    log::info!(
+        "interview(multistage-advance): calling llm.generate (prompt_len={}, max_tokens={})",
+        gen.prompt.len(),
+        gen.max_tokens
+    );
+    llm.generate(gen, None, on_token).await.map_err(|e| {
+        log::error!("interview(multistage-advance): llm.generate failed: {e}");
+        e
+    })?;
+    log::info!("interview(multistage-advance): llm.generate completed successfully");
 
     Ok(MultistageInterviewResult {
         session_id,

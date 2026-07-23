@@ -1,5 +1,6 @@
 //! Tauri commands for Gap Analysis + Tensor Profile (M14).
 
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::Serialize;
@@ -43,8 +44,20 @@ fn now_unix() -> i64 {
         .unwrap_or(0)
 }
 
+/// Process-wide sequence appended to every id — `now_unix()` is second-
+/// precision, so two ids minted within the same second (e.g.
+/// `calculate_gap_analysis`'s internal tensor snapshot insert immediately
+/// followed by `commands::ensure_authoritative_tensor_profile`'s own insert,
+/// both from the on-device profile-rebuild fallback) previously collided on
+/// `tensor_profiles.id TEXT PRIMARY KEY`, surfacing as a `StorageFailed`
+/// device-log error. This counter makes every id unique regardless of timing,
+/// with no change to `created_at` (still plain unix seconds, relied on
+/// elsewhere for JST date bucketing).
+static ID_SEQ: AtomicU64 = AtomicU64::new(0);
+
 fn new_id(prefix: &str) -> String {
-    format!("{prefix}-{}", now_unix())
+    let seq = ID_SEQ.fetch_add(1, Ordering::Relaxed);
+    format!("{prefix}-{}-{seq}", now_unix())
 }
 
 /// Deterministic gap analysis → vault persist. Does not call the LLM.

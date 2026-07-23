@@ -59,7 +59,12 @@ pub struct ConsultWithOracleResult {
 /// caller can `generate()` safely. Same load policy as `send_rag_chat`'s inline
 /// guard (full GPU offload + mmap). Returns `Err` only when no loadable model
 /// exists or the load itself fails — the caller surfaces that to the UI.
-async fn ensure_model_loaded(app: &AppHandle, llm: &LlmHandle) -> Result<(), String> {
+///
+/// `pub(crate)`: also used by `llm::commands_sim` (面接/ES review) — those
+/// commands called `llm.generate()` completely blind (no load check at all,
+/// not even the guard-less version consult used to have), the same class of
+/// bug this module's own guard was added to fix.
+pub(crate) async fn ensure_model_loaded(app: &AppHandle, llm: &LlmHandle) -> Result<(), String> {
     let llm_probe = llm.clone();
     let probe_result = tauri::async_runtime::spawn_blocking(move || llm_probe.is_loaded())
         .await
@@ -106,8 +111,14 @@ pub async fn consult_with_oracle_context(
 ) -> Result<ConsultWithOracleResult, String> {
     let message = params.message.trim().to_string();
     if message.is_empty() || message.len() > MAX_MESSAGE_BYTES {
+        log::error!(
+            "consult: rejected message (len={}, empty={})",
+            message.len(),
+            message.is_empty()
+        );
         return Err("invalid message".into());
     }
+    log::info!("consult: request received (message_len={})", message.len());
 
     // Ensure the GGUF is resident before generate. A cold CONSULT navigation or
     // a Jetsam eviction leaves the worker unloaded; unlike `send_rag_chat`, this
@@ -115,6 +126,7 @@ pub async fn consult_with_oracle_context(
     // a sterile "応答を生成できませんでした". Mirror the RAG-chat auto-load so
     // CONSULT recovers on its own instead of failing.
     ensure_model_loaded(&app, &llm).await?;
+    log::info!("consult: model confirmed loaded, proceeding to prompt build");
 
     let include_rag = params.include_rag.unwrap_or(true);
     let opts = params.gen.unwrap_or(RagChatParams {
@@ -135,13 +147,22 @@ pub async fn consult_with_oracle_context(
 
     let (prompt, meta) = tauri::async_runtime::spawn_blocking(move || {
         // Fail-safe mentor load: soft sections on missing data; hard error only on vault IPC.
-        let mentor = load_mentor_context(&vault).unwrap_or_default();
+        let mentor = load_mentor_context(&vault).unwrap_or_else(|e| {
+            log::error!("consult: load_mentor_context failed, using empty sections: {e}");
+            Default::default()
+        });
         // Twin missing ⇒ Neutral soft-default; vault transport error ⇒ same (never hard-fail consult).
-        let zpd = load_mentor_zpd_signal(&vault).unwrap_or_else(|_| MentorZpdSignal::neutral_default());
+        let zpd = load_mentor_zpd_signal(&vault).unwrap_or_else(|e| {
+            log::error!("consult: load_mentor_zpd_signal failed, using neutral default: {e}");
+            MentorZpdSignal::neutral_default()
+        });
         let mut context_ids = Vec::new();
         let prompt = if include_rag {
             let hits = search_sync(&vault, &llm_search, &message_for_search, context_limit)
-                .unwrap_or_default();
+                .unwrap_or_else(|e| {
+                    log::error!("consult: search_sync failed, proceeding without RAG context: {e}");
+                    Vec::new()
+                });
             let refs: Vec<RagContextRef<'_>> = hits
                 .iter()
                 .map(|hit| {
@@ -195,9 +216,21 @@ pub async fn consult_with_oracle_context(
         ))
     })
     .await
-    .map_err(|_| "consult retrieve task join failed".to_string())??;
+    .map_err(|e| {
+        log::error!("consult: prompt-build task panicked/join failed: {e}");
+        "consult retrieve task join failed".to_string()
+    })?
+    .map_err(|e| {
+        log::error!("consult: prompt-build task returned error: {e}");
+        e
+    })?;
 
     let (context_ids, gap_available, oracle_available, gap_run_id, oracle_run_id, zpd) = meta;
+    log::info!(
+        "consult: prompt built (len={}, context_count={}, gap_available={gap_available}, oracle_available={oracle_available})",
+        prompt.len(),
+        context_ids.len()
+    );
 
     // ZPD temperature is the deterministic default; explicit FE `temp` overrides (debug/tests).
     let gen = GenerationParams {
@@ -209,7 +242,17 @@ pub async fn consult_with_oracle_context(
         top_p: opts.top_p.unwrap_or(0.95),
         seed: opts.seed.unwrap_or(0),
     };
-    llm.generate(gen, None, on_token).await?;
+    log::info!(
+        "consult: calling llm.generate (n_ctx={}, max_tokens={}, temp={})",
+        gen.n_ctx,
+        gen.max_tokens,
+        gen.temp
+    );
+    llm.generate(gen, None, on_token).await.map_err(|e| {
+        log::error!("consult: llm.generate failed: {e}");
+        e
+    })?;
+    log::info!("consult: llm.generate completed successfully");
 
     Ok(ConsultWithOracleResult {
         context_count: context_ids.len(),
