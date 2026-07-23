@@ -1020,14 +1020,23 @@ button:disabled {
   padding: 4px;
 }
 
+/* RECORD calendar — 視認性向上: 純黒セル+透明ボーダー(=罫線が見えない)を、
+   持ち上げたタイル + 明示的なグリッド線へ。ダークだが予定が見やすい上品な
+   コントラスト。スコープは .cal-* のみ(グローバル変数/HUD には非干渉)。 */
 .cal-day {
   aspect-ratio: 1;
-  border: 1px solid transparent;
+  border: 1px solid var(--border);
   border-radius: 0;
-  background: var(--bg-deep);
+  background: var(--bg-hover);
   color: var(--text);
   cursor: pointer;
   font-size: 0.85rem;
+  transition: background var(--t-fast);
+}
+
+.cal-day:hover {
+  background: var(--bg-selected);
+  border-color: var(--text-dim);
 }
 
 .cal-day.today {
@@ -2148,43 +2157,50 @@ button:disabled {
   margin-top: -1px;
 }
 
+/* INTERVIEW — "絶対計器盤" 緊張サーフェス: LINE 風バブルを廃し、GD 闘技場
+   (.tx-msg) と同じ冷徹なターミナル・ログ行へ。角丸なし・等幅・極細シアン
+   ボーダー。CONSULT (.rag-bubble) の緩和バブルとの空気感ギャップを作る。 */
 .line-row {
   display: flex;
   align-items: flex-start;
   gap: 8px;
-  margin-bottom: 10px;
+  margin-bottom: 4px;
 }
 
-.line-row.user {
-  justify-content: flex-end;
-}
-
+.line-row.user,
 .line-row.feedback {
-  justify-content: center;
+  justify-content: flex-start;
 }
 
 .line-bubble {
-  max-width: 78%;
-  padding: 8px 12px;
+  max-width: 100%;
+  flex: 1;
+  min-width: 0;
+  padding: 5px 10px;
+  border: none;
+  border-left: 2px solid var(--border);
   border-radius: 0;
+  background: var(--bg);
+  font-family: var(--font-mono);
   position: relative;
 }
 
 .line-bubble.user {
-  background: var(--ok-strong);
-  color: var(--bg);
-  border-bottom-right-radius: 4px;
+  background: var(--bg);
+  color: var(--text);
+  border-left-color: var(--text-muted);
 }
 
 .line-bubble.ai {
-  background: var(--bg-selected);
-  border-bottom-left-radius: 4px;
+  background: var(--bg-raised);
+  border-left-color: var(--sys-cyan);
 }
 
 .line-bubble.feedback {
-  max-width: 92%;
-  background: var(--err-bg);
-  border: 2px solid var(--err);
+  max-width: 100%;
+  background: var(--err-bg-raised);
+  border: none;
+  border-left: 2px solid var(--err);
   border-radius: 0;
 }
 
@@ -2213,9 +2229,18 @@ button:disabled {
 
 .speaker-name {
   display: block;
-  font-size: 0.72rem;
+  font-family: var(--font-mono);
+  font-size: 0.62rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
   color: var(--text-muted);
-  margin-bottom: 2px;
+  margin-bottom: 3px;
+}
+
+/* Interview HUD text density (scoped — never touches ConsultTab .chat-bubble). */
+.line-bubble .chat-text {
+  font-size: 0.82rem;
+  line-height: 1.5;
 }
 
 .persona-avatar {
@@ -3834,9 +3859,9 @@ button.secondary {
 }
 
 .rag-chat-input-send {
-  border: 1px solid var(--accent);
-  background: var(--bg);
-  color: var(--accent);
+  border: 1px solid var(--sys-cyan);
+  background: transparent;
+  color: var(--sys-cyan);
   font-family: var(--font-mono);
   font-size: 0.7rem;
   letter-spacing: 0.08em;
@@ -3847,8 +3872,10 @@ button.secondary {
 }
 
 .rag-chat-input-send:disabled {
-  opacity: 0.45;
+  opacity: 0.4;
   cursor: default;
+  border-color: var(--border);
+  color: var(--text-muted);
 }
 
 .rag-ingest-panel {
@@ -4020,7 +4047,9 @@ button.secondary {
 .rag-message-empty {
   align-self: center;
   color: var(--text-muted);
-  font-size: 0.8rem;
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  letter-spacing: 0.02em;
   padding: 24px 12px;
   text-align: center;
 }
@@ -4032,10 +4061,15 @@ button.secondary {
   overflow: hidden;
 }
 
+/* CONSULT — "Life OS" 緩和サーフェス: 親しみやすい LINE 風バブル。
+   ユーザー右（ニュートラル）/ AI 左（淡いシアン）、角丸で柔らかく。
+   HUD の緊張感を持つ INTERVIEW（.line-bubble）とは意図的に対照。 */
 .rag-bubble {
   max-width: 82%;
-  padding: 8px 12px;
+  padding: 9px 13px;
   border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--bg-raised);
   white-space: pre-wrap;
   word-break: break-word;
 }
@@ -4044,23 +4078,27 @@ button.secondary {
   align-self: flex-end;
   background: var(--bg-selected);
   border-color: var(--text-muted);
+  border-bottom-right-radius: 4px;
 }
 
 .rag-bubble-assistant {
   align-self: flex-start;
-  background: var(--bg-raised);
+  background: color-mix(in srgb, var(--sys-cyan) 11%, var(--bg-raised));
+  border-color: color-mix(in srgb, var(--sys-cyan) 38%, var(--border));
+  border-bottom-left-radius: 4px;
 }
 
 .rag-bubble-meta {
-  font-size: 0.62rem;
+  font-size: 0.64rem;
+  letter-spacing: 0.02em;
   color: var(--text-muted);
   margin-bottom: 4px;
-  letter-spacing: 0.04em;
 }
 
 .rag-bubble-body {
   font-size: 0.9rem;
-  line-height: 1.45;
+  line-height: 1.5;
+  color: var(--text);
 }
 
 .rag-composer {
@@ -4221,9 +4259,9 @@ button.secondary {
 
 .rag-composer-send {
   flex-shrink: 0;
-  border: 1px solid var(--text);
-  background: var(--text);
-  color: var(--bg);
+  border: 1px solid var(--sys-cyan);
+  background: transparent;
+  color: var(--sys-cyan);
   font-family: var(--font-ui);
   font-size: 0.75rem;
   letter-spacing: 0.06em;
@@ -4236,6 +4274,8 @@ button.secondary {
 .rag-composer-send:disabled {
   opacity: 0.4;
   cursor: default;
+  border-color: var(--border);
+  color: var(--text-muted);
 }
 
 .rag-action-backdrop {
@@ -4946,6 +4986,67 @@ button.secondary {
   flex: 1 1 auto;
   padding: var(--s3);
   overflow: auto;
+}
+
+/* GD frozen (凍結 + 近日公開): blur the whole GD surface, disable interaction,
+   and float a COMING SOON badge on top. Flat / no shadow (house aesthetic). */
+.gd-frozen {
+  position: relative;
+  overflow: hidden;
+  /* Clip the tall GD tree so the COMING SOON badge centers within the viewport,
+     not far below the fold. */
+  max-height: 72vh;
+}
+
+.gd-frozen-content {
+  filter: blur(7px) saturate(0.75) brightness(0.72);
+  pointer-events: none;
+  user-select: none;
+}
+
+.gd-frozen-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 5;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--s4);
+  background: color-mix(in srgb, var(--bg-deep) 62%, transparent);
+}
+
+.gd-frozen-badge {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--s2);
+  padding: var(--s4) var(--s5);
+  border: 1px solid var(--sys-cyan);
+  background: color-mix(in srgb, var(--sys-cyan) 6%, var(--bg-deep));
+  font-family: var(--font-mono);
+  text-align: center;
+}
+
+.gd-frozen-kicker {
+  font-size: 0.6rem;
+  letter-spacing: 0.24em;
+  text-indent: 0.24em;
+  color: var(--text-muted);
+  text-transform: uppercase;
+}
+
+.gd-frozen-title {
+  font-size: 1.3rem;
+  font-weight: 700;
+  letter-spacing: 0.3em;
+  text-indent: 0.3em;
+  color: var(--sys-cyan);
+}
+
+.gd-frozen-sub {
+  font-size: 0.66rem;
+  letter-spacing: 0.04em;
+  color: var(--text-muted);
 }
 
 .coliseum-panel {

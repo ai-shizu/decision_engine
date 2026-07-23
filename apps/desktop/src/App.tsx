@@ -18,6 +18,7 @@ import { VaultPanel } from "./components/VaultPanel";
 import { engineHealth, engineReady, warmConsultRuntime } from "./lib/engine";
 import type { MainTab } from "./lib/types";
 import { useForegroundRestore } from "./lib/useForegroundRestore";
+import { useVaultAutoUnlock } from "./lib/useVaultAutoUnlock";
 import { useIsNarrowViewport } from "./lib/useIsNarrowViewport";
 import "./App.css";
 
@@ -104,6 +105,10 @@ export default function App() {
 
   // Phase 10: Jetsam / vault-lock → ordered vault→LLM→analytics resync.
   useForegroundRestore(modelGateDone);
+  // Friction removal: auto-invoke OS biometric on launch / foreground so the
+  // vault unlocks seamlessly without a manual button press (mobile-safe: runs
+  // here at App level, not in the Settings-only VaultPanel).
+  useVaultAutoUnlock(modelGateDone);
 
   useEffect(() => {
     if (!modelGateDone) return;

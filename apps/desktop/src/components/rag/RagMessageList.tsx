@@ -46,7 +46,7 @@ export function RagMessageList({
             }
           >
             <div className="rag-bubble-meta">
-              {isUser ? "You" : "RAG"}
+              {isUser ? "あなた" : "AI"}
               {m.streaming ? " · …" : null}
               {m.contextCount != null && m.contextCount > 0
                 ? ` · ctx ${m.contextCount}`
