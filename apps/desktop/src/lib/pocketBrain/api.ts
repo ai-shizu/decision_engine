@@ -335,6 +335,8 @@ export function consultWithOracleContext(
     message: string;
     includeRag?: boolean;
     gen?: RagChatParams;
+    /** SETTINGS fixed attributes (birthday/gender/height/…) for prompt injection. */
+    profile?: Record<string, string>;
   },
   onToken: (event: TokenEvent) => void,
 ): Promise<ConsultWithOracleResult> {
@@ -343,6 +345,7 @@ export function consultWithOracleContext(
       message: args.message,
       includeRag: args.includeRag ?? true,
       gen: args.gen ? ragParamsPayload(args.gen) : null,
+      profile: args.profile ?? null,
     },
     onToken: tokenChannel(onToken),
   });

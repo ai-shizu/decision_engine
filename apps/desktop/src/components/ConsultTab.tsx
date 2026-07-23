@@ -16,6 +16,7 @@ import {
   provenanceChipText,
   reduceResearchUi,
 } from "../lib/researchUiReducer";
+import { readLocalFixedAttributes } from "../lib/settingsLocalCache";
 import type { ChatMessage } from "../lib/types";
 import { uiErrorMessage } from "../lib/uiErrorMessages";
 import { useThrottledStream } from "../lib/useThrottledStream";
@@ -228,8 +229,9 @@ export function ConsultTab() {
     setStatus("考え中…");
     const sterile = uiErrorMessage("CONSULT_RESPONSE");
     try {
+      const profile = readLocalFixedAttributes() ?? undefined;
       await consultWithOracleContext(
-        { message: q, includeRag: true },
+        { message: q, includeRag: true, profile },
         (event) => {
           if (event.error) {
             flushChunkQueue();

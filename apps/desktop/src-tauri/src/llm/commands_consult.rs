@@ -3,12 +3,16 @@
 //! Phase 6: Twin `R(t)` / `p_lapse` → deterministic ZPD mentor intensity
 //! (Vygotsky 1978 / Yerkes–Dodson 1908 / Bjork 1994) before prompt + temp apply.
 
+use std::collections::BTreeMap;
+
 use serde::{Deserialize, Serialize};
 use tauri::ipc::Channel;
 use tauri::State;
 
 use crate::db::VaultHandle;
-use crate::llm::consult_context::{build_consult_with_oracle_prompt, load_mentor_context};
+use crate::llm::consult_context::{
+    build_consult_with_oracle_prompt, format_profile_block, load_mentor_context,
+};
 use crate::llm::mentor_zpd::{load_mentor_zpd_signal, MentorZpdSignal};
 use crate::llm::params::GenerationParams;
 use crate::llm::service::TokenEvent;
@@ -28,6 +32,11 @@ pub struct ConsultWithOracleParams {
     pub gen: Option<RagChatParams>,
     /// When true (default), retrieve RAG chunks before mentor sections.
     pub include_rag: Option<bool>,
+    /// SETTINGS fixed-attributes (birthday/gender/height/weight/address/occupation/…)
+    /// as currently held by the frontend (localStorage on mobile / engine cache on
+    /// desktop — FE is the single source since this Vault has no settings table).
+    /// Optional/empty ⇒ profile section omitted from the prompt.
+    pub profile: Option<BTreeMap<String, String>>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -68,6 +77,7 @@ pub async fn consult_with_oracle_context(
         context_limit: None,
     });
     let context_limit = opts.context_limit.unwrap_or(DEFAULT_CONTEXT_LIMIT).clamp(1, 50);
+    let profile_block = format_profile_block(&params.profile.unwrap_or_default());
 
     let vault = vault.inner().clone();
     let llm_search = llm.inner().clone();
@@ -112,9 +122,15 @@ pub async fn consult_with_oracle_context(
                 }
             };
             context_ids = hits.into_iter().map(|h| h.id).collect();
-            build_consult_with_oracle_prompt(&message_for_search, &mentor, &rag_only, &zpd)
+            build_consult_with_oracle_prompt(
+                &message_for_search,
+                &mentor,
+                &rag_only,
+                &zpd,
+                &profile_block,
+            )
         } else {
-            build_consult_with_oracle_prompt(&message_for_search, &mentor, "", &zpd)
+            build_consult_with_oracle_prompt(&message_for_search, &mentor, "", &zpd, &profile_block)
         };
         Ok::<_, String>((
             prompt,

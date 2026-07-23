@@ -14,6 +14,8 @@
 //!
 //! Mapping is deterministic (F-14): Twin `R(t)` / `p_lapse` only; no RNG / egress.
 
+use std::collections::BTreeMap;
+
 use serde_json::Value;
 
 use crate::analytics::oracle::render_oracle_consult;
@@ -26,6 +28,19 @@ use crate::llm::context_budget::truncate_to_token_budget;
 const GAP_SECTION_TOKEN_BUDGET: usize = 625;
 const ORACLE_SECTION_TOKEN_BUDGET: usize = 375;
 const TENSOR_SECTION_TOKEN_BUDGET: usize = 300;
+const PROFILE_SECTION_TOKEN_BUDGET: usize = 220;
+
+/// Known SETTINGS fixed-profile keys in canonical display order (mirrors the
+/// frontend `fixed_fields` in `settingsLocalCache.ts`). Unknown keys the FE
+/// sends still render, appended after these in key order.
+const PROFILE_FIELD_LABELS: &[(&str, &str)] = &[
+    ("birthday", "誕生日"),
+    ("gender", "性別"),
+    ("height", "身長(cm)"),
+    ("weight", "体重(kg)"),
+    ("address", "住所"),
+    ("occupation", "勤務先/学校"),
+];
 
 #[derive(Debug, Clone, Default)]
 pub struct MentorContextSections {
@@ -182,17 +197,63 @@ pub fn load_mentor_context(vault: &VaultHandle) -> Result<MentorContextSections,
     Ok(sections)
 }
 
-/// Mentor consult prompt: ZPD preamble + gap + tensor + oracle + optional RAG + user message.
+/// Render the user's self-reported SETTINGS basics into a compact prompt section.
+///
+/// Returns `""` when nothing is set, so the caller omits the section entirely
+/// rather than emitting an empty header. Empty / whitespace-only values are
+/// skipped. These are **declared** facts (settings), NOT measured Tensor/Gap
+/// values — the trailing note keeps the model from laundering self-report into
+/// authoritative scores (F-19 / LLM-authority boundary).
+pub fn format_profile_block(profile: &BTreeMap<String, String>) -> String {
+    let mut lines: Vec<String> = Vec::new();
+    let mut seen: Vec<&str> = Vec::new();
+    for (key, label) in PROFILE_FIELD_LABELS {
+        if let Some(v) = profile.get(*key) {
+            let v = v.trim();
+            if !v.is_empty() {
+                lines.push(format!("- {label}: {v}"));
+                seen.push(*key);
+            }
+        }
+    }
+    // Any extra non-empty keys the FE sent that are outside the known set
+    // (BTreeMap iteration is key-sorted → deterministic order).
+    for (key, value) in profile {
+        if seen.contains(&key.as_str()) {
+            continue;
+        }
+        let v = value.trim();
+        if !v.is_empty() {
+            lines.push(format!("- {key}: {v}"));
+        }
+    }
+    if lines.is_empty() {
+        return String::new();
+    }
+    let mut out = String::from("## ユーザー基本情報（自己申告・参考）\n");
+    out.push_str(&lines.join("\n"));
+    out.push('\n');
+    out.push_str("※自己申告データ。測定済みTensor/Gapと混同せず、事実確認の手がかりとして扱え。\n");
+    truncate(&out, PROFILE_SECTION_TOKEN_BUDGET)
+}
+
+/// Mentor consult prompt: ZPD preamble + profile + gap + tensor + oracle + optional RAG + user message.
 ///
 /// `zpd` selects the Vygotsky / Yerkes–Dodson / Bjork preamble (see `mentor_zpd`).
+/// `profile_block` is the pre-formatted [`format_profile_block`] output (or `""`).
 pub fn build_consult_with_oracle_prompt(
     message: &str,
     mentor: &MentorContextSections,
     rag_block: &str,
     zpd: &MentorZpdSignal,
+    profile_block: &str,
 ) -> String {
     let mut out = String::with_capacity(message.len() + 2048);
     out.push_str(zpd.level.preamble());
+    if !profile_block.is_empty() {
+        out.push_str("\n\n");
+        out.push_str(profile_block.trim_end());
+    }
     out.push_str("\n\n## 主観×客観ギャップ（決定論・Vault）\n");
     out.push_str(&mentor.gap_block);
     out.push_str("\n## Tensorプロファイル（決定論・Vault）\n");
@@ -255,5 +316,74 @@ mod tests {
         assert!(g < t && t < u);
         assert!(p.contains("gap-line"));
         assert!(p.contains("tensor-line"));
+    }
+
+    fn profile(pairs: &[(&str, &str)]) -> BTreeMap<String, String> {
+        pairs
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect()
+    }
+
+    #[test]
+    fn profile_block_empty_when_all_blank_or_missing() {
+        assert_eq!(format_profile_block(&BTreeMap::new()), "");
+        // present keys but only whitespace → still omitted
+        let p = profile(&[("birthday", "  "), ("gender", "")]);
+        assert_eq!(format_profile_block(&p), "");
+    }
+
+    #[test]
+    fn profile_block_labels_and_skips_empty() {
+        let p = profile(&[
+            ("birthday", "1995-04-01"),
+            ("gender", ""),
+            ("occupation", " Acme Inc. "),
+        ]);
+        let block = format_profile_block(&p);
+        assert!(block.contains("## ユーザー基本情報"));
+        assert!(block.contains("- 誕生日: 1995-04-01"));
+        assert!(block.contains("- 勤務先/学校: Acme Inc.")); // trimmed
+        assert!(!block.contains("性別")); // empty value skipped
+        assert!(block.contains("自己申告")); // authority-boundary note present
+    }
+
+    #[test]
+    fn profile_block_renders_unknown_keys_after_known() {
+        let p = profile(&[("nickname", "テスト"), ("birthday", "2000-01-01")]);
+        let block = format_profile_block(&p);
+        let known = block.find("誕生日").unwrap();
+        let unknown = block.find("nickname").unwrap();
+        assert!(known < unknown, "known fields precede extra keys");
+    }
+
+    #[test]
+    fn consult_prompt_injects_profile_after_preamble_before_gap() {
+        let mentor = MentorContextSections {
+            gap_block: "gap-line\n".into(),
+            ..Default::default()
+        };
+        let zpd = MentorZpdSignal::neutral_default();
+        let block = format_profile_block(&profile(&[("birthday", "1990-12-31")]));
+        let prompt =
+            build_consult_with_oracle_prompt("相談内容", &mentor, "", &zpd, &block);
+        // NOTE: the ZPD preamble prose itself mentions 「主観×客観ギャップ」 in
+        // quotes, so match on the "## " section header (unique to the actual
+        // block), not the bare phrase.
+        let prof = prompt.find("ユーザー基本情報").expect("profile present");
+        let gap = prompt
+            .find("## 主観×客観ギャップ")
+            .expect("gap section present");
+        let msg = prompt.rfind("相談内容").expect("message present");
+        assert!(prof < gap && gap < msg);
+        assert!(prompt.contains("1990-12-31"));
+    }
+
+    #[test]
+    fn consult_prompt_omits_profile_section_when_empty() {
+        let mentor = MentorContextSections::default();
+        let zpd = MentorZpdSignal::neutral_default();
+        let prompt = build_consult_with_oracle_prompt("q", &mentor, "", &zpd, "");
+        assert!(!prompt.contains("ユーザー基本情報"));
     }
 }

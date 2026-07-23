@@ -131,6 +131,10 @@ export function SettingsTab({
     try {
       const s = await withTimeout(loadSettings(), SETTINGS_LOAD_TIMEOUT_MS);
       applySettings(s);
+      // Keep the local cache in sync with the engine (mirrors the mobile
+      // branch above) so on-device CONSULT sees current Vault-saved basics
+      // even when the user hasn't re-hit Save this session.
+      writeLocalFixedAttributes({ ...s.fixed_attributes });
       try {
         const policy = await withTimeout(getKnowledgeResearchPolicy(), 1500);
         setKnowledgeResearchEnabled(policy.enabled);
