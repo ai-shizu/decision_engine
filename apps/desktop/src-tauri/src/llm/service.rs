@@ -601,6 +601,7 @@ impl LlmHandle {
     /// Blocking: mmap-load the GGUF on the worker thread and await the result.
     /// Bounded by [`LLM_LOAD_TIMEOUT`] — see its doc comment.
     pub fn load(&self, model_path: PathBuf, params: LoadParams) -> Result<(), String> {
+        let model_path_display = model_path.display().to_string();
         let (reply, ack) = mpsc::sync_channel(1);
         let purge_epoch = self.governor.purge_epoch();
         self.enqueue(LlmCommand::Load {
@@ -610,11 +611,19 @@ impl LlmHandle {
             reply,
         })?;
         match ack.recv_timeout(LLM_LOAD_TIMEOUT) {
-            Ok(result) => result,
+            Ok(Ok(())) => Ok(()),
+            Ok(Err(e)) => {
+                log::error!("llm load failed at {model_path_display}: {e}");
+                Err(e)
+            }
             Err(mpsc::RecvTimeoutError::Timeout) => {
+                log::error!(
+                    "llm load timed out after {LLM_LOAD_TIMEOUT:?} at {model_path_display} (worker unresponsive)"
+                );
                 Err("llm load timed out (worker unresponsive)".to_string())
             }
             Err(mpsc::RecvTimeoutError::Disconnected) => {
+                log::error!("llm worker dropped reply during load");
                 Err("llm worker dropped reply".to_string())
             }
         }
@@ -631,6 +640,8 @@ impl LlmHandle {
         tokens: Channel<TokenEvent>,
     ) -> Result<(), String> {
         params.validate()?;
+        let task_id_for_log = task_id.clone();
+        let max_tokens_for_log = params.max_tokens;
         let (completion, ack) = oneshot::channel();
         self.enqueue(LlmCommand::Generate {
             params,
@@ -639,9 +650,25 @@ impl LlmHandle {
             completion,
         })?;
         match tokio::time::timeout(LLM_GENERATE_TIMEOUT, ack).await {
-            Ok(Ok(result)) => result,
-            Ok(Err(_)) => Err("llm worker dropped generation completion".to_string()),
-            Err(_) => Err("llm generation timed out (worker unresponsive)".to_string()),
+            Ok(Ok(Ok(()))) => Ok(()),
+            Ok(Ok(Err(e))) => {
+                log::error!(
+                    "llm generate failed (task_id={task_id_for_log:?}, max_tokens={max_tokens_for_log}): {e}"
+                );
+                Err(e)
+            }
+            Ok(Err(_)) => {
+                log::error!(
+                    "llm worker dropped generation completion (task_id={task_id_for_log:?})"
+                );
+                Err("llm worker dropped generation completion".to_string())
+            }
+            Err(_) => {
+                log::error!(
+                    "llm generation timed out after {LLM_GENERATE_TIMEOUT:?} (task_id={task_id_for_log:?}, max_tokens={max_tokens_for_log}, worker unresponsive)"
+                );
+                Err("llm generation timed out (worker unresponsive)".to_string())
+            }
         }
     }
 
@@ -653,9 +680,13 @@ impl LlmHandle {
         match ack.recv_timeout(LLM_READY_PROBE_TIMEOUT) {
             Ok(result) => Ok(result),
             Err(mpsc::RecvTimeoutError::Timeout) => {
+                log::error!(
+                    "llm ready probe timed out after {LLM_READY_PROBE_TIMEOUT:?} (worker unresponsive)"
+                );
                 Err("llm ready probe timed out (worker unresponsive)".to_string())
             }
             Err(mpsc::RecvTimeoutError::Disconnected) => {
+                log::error!("llm worker dropped reply during ready probe");
                 Err("llm worker dropped reply".to_string())
             }
         }

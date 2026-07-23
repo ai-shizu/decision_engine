@@ -65,8 +65,55 @@ use tauri::Manager;
 #[cfg(not(mobile))]
 use tauri::WebviewWindowBuilder;
 
+/// Minimal `log::Log` backend writing to stderr.
+///
+/// 2026-07-24 iOS-device investigation: every `log::error!`/`log::info!` call
+/// already scattered through this codebase (`llm/model_path.rs`,
+/// `llm/service.rs`, `commands.rs`, …) was a silent no-op — the `log` facade
+/// crate does nothing at all until a concrete `Log` implementation is
+/// registered via `log::set_logger`, and none ever was. Every earlier device
+/// log capture in this investigation only ever showed llama.cpp's own C++
+/// stderr output; not one Rust-level `log::` line was ever visible, on this
+/// build or any prior one.
+///
+/// `idevicesyslog -p Coraxis` already proven (this investigation) to capture
+/// this process's raw stdout/stderr as `[stderr]`-tagged lines, so routing
+/// through `eprintln!` makes every existing and future `log::` call visible
+/// via the exact same capture method with no new dependency.
+struct StderrLogger;
+
+impl log::Log for StderrLogger {
+    fn enabled(&self, _metadata: &log::Metadata) -> bool {
+        true
+    }
+
+    fn log(&self, record: &log::Record) {
+        eprintln!(
+            "[{}] {}: {}",
+            record.level(),
+            record.target(),
+            record.args()
+        );
+    }
+
+    fn flush(&self) {}
+}
+
+static STDERR_LOGGER: StderrLogger = StderrLogger;
+
+fn install_stderr_logger() {
+    // `set_logger` errors only if a logger was already installed (e.g. a
+    // second `run()` call in a test) — never fatal, so ignore and proceed;
+    // `set_max_level` still runs for the already-installed case too, if this
+    // is ever reached from a fresh process it always succeeds first.
+    if log::set_logger(&STDERR_LOGGER).is_ok() {
+        log::set_max_level(log::LevelFilter::Debug);
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    install_stderr_logger();
     let engine = EngineManager::new();
     let engine_for_exit = Arc::clone(&engine);
 

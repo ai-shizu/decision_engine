@@ -293,7 +293,11 @@ fn on_device_gap_days(vault: &VaultHandle) -> Result<Vec<AnalyticsDailyDay>, Str
 
     let rows = vault
         .purchase_list_range(now - LOOKBACK_SECS, now)
-        .map_err(|e| format!("{e:?}").to_ascii_lowercase())?;
+        .map_err(|e| {
+            let msg = format!("{e:?}").to_ascii_lowercase();
+            log::error!("on_device_gap_days: purchase_list_range failed: {msg}");
+            msg
+        })?;
 
     let mut by_date: BTreeMap<String, Vec<TransactionIn>> = BTreeMap::new();
     for row in rows {
@@ -330,8 +334,18 @@ fn on_device_gap_days(vault: &VaultHandle) -> Result<Vec<AnalyticsDailyDay>, Str
 async fn on_device_profile_rebuild(vault: State<'_, VaultHandle>) -> Result<(bool, usize), String> {
     let days = on_device_gap_days(&vault)?;
     let day_count = days.len();
-    calculate_gap_analysis(vault.clone(), CalculateGapRequest { days }).await?;
-    ensure_authoritative_tensor_profile(vault).await?;
+    calculate_gap_analysis(vault.clone(), CalculateGapRequest { days })
+        .await
+        .map_err(|e| {
+            log::error!("on_device_profile_rebuild: calculate_gap_analysis failed: {e}");
+            e
+        })?;
+    ensure_authoritative_tensor_profile(vault)
+        .await
+        .map_err(|e| {
+            log::error!("on_device_profile_rebuild: ensure_authoritative_tensor_profile failed: {e}");
+            e
+        })?;
     Ok((true, day_count))
 }
 

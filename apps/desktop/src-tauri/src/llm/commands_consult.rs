@@ -61,14 +61,27 @@ pub struct ConsultWithOracleResult {
 /// exists or the load itself fails — the caller surfaces that to the UI.
 async fn ensure_model_loaded(app: &AppHandle, llm: &LlmHandle) -> Result<(), String> {
     let llm_probe = llm.clone();
-    let loaded = tauri::async_runtime::spawn_blocking(move || llm_probe.is_loaded())
+    let probe_result = tauri::async_runtime::spawn_blocking(move || llm_probe.is_loaded())
         .await
-        .map_err(|_| "llm ready probe join failed".to_string())?
-        .unwrap_or(false);
+        .map_err(|e| {
+            log::error!("consult: llm ready probe task panicked/join failed: {e}");
+            "llm ready probe join failed".to_string()
+        })?;
+    // A probe error (e.g. timeout — service.rs already logs the specifics)
+    // is treated as "not confirmed loaded" rather than aborting, so consult
+    // still attempts a fresh load; log it so the timeout is visible here too,
+    // not just as an unexplained extra load attempt.
+    let loaded = probe_result.unwrap_or_else(|e| {
+        log::error!("consult: llm ready probe returned error, assuming not loaded: {e}");
+        false
+    });
     if loaded {
         return Ok(());
     }
-    let path = resolve_loadable_model_path(app)?;
+    let path = resolve_loadable_model_path(app).map_err(|e| {
+        log::error!("consult: resolve_loadable_model_path failed: {e}");
+        e
+    })?;
     let load_params = LoadParams {
         n_gpu_layers: 999,
         use_mmap: true,
@@ -76,7 +89,10 @@ async fn ensure_model_loaded(app: &AppHandle, llm: &LlmHandle) -> Result<(), Str
     let llm_load = llm.clone();
     tauri::async_runtime::spawn_blocking(move || llm_load.load(path, load_params))
         .await
-        .map_err(|_| "llm load join failed".to_string())?
+        .map_err(|e| {
+            log::error!("consult: llm load task panicked/join failed: {e}");
+            "llm load join failed".to_string()
+        })?
 }
 
 /// Mentor consult: vault Gap+Oracle (fail-safe) + optional RAG → streaming LLM.
