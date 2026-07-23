@@ -4,6 +4,9 @@
 <dict>
 	<key>NSFaceIDUsageDescription</key>
 	<string>Vaultの自動解錠および、機密性の高いプロンプトデータの保護にFace IDを使用します。</string>
+	<!-- M20 データ連携 Part 2: EventKit 予定読み取り (read-only)。 -->
+	<key>NSCalendarsFullAccessUsageDescription</key>
+	<string>Coraxisのコンテキストに予定を取り込むため、カレンダーへのフルアクセスを使用します。</string>
 	<!-- Physical-device `tauri ios dev` only: WKWebView must reach Mac Vite on LAN.
 	     Release loads bundled frontendDist (no LAN). Not an egress / cloud path. -->
 	<key>NSAppTransportSecurity</key>

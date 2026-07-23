@@ -41,6 +41,10 @@ mod analytics;
 #[cfg(all(feature = "secure-vault", target_vendor = "apple"))]
 mod ocr;
 
+/// M20 データ連携 Part 2: EventKit calendar read bridge.
+#[cfg(all(feature = "secure-vault", target_vendor = "apple"))]
+mod calendar;
+
 // M10 local RAG (chunk → embed → sqlite-vec). Needs both LLM worker and vault.
 #[cfg(all(
     feature = "pocket-brain",
@@ -245,6 +249,8 @@ pub fn run() {
             analytics::commands_finance::get_cognitive_commitments,
             #[cfg(all(feature = "secure-vault", target_vendor = "apple"))]
             ocr::commands::ocr_recognize_layout,
+            #[cfg(all(feature = "secure-vault", target_vendor = "apple"))]
+            calendar::commands::fetch_apple_calendar_events,
             #[cfg(all(
                 feature = "pocket-brain",
                 feature = "secure-vault",

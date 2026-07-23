@@ -42,6 +42,8 @@
 	</array>
 	<key>NSFaceIDUsageDescription</key>
 	<string>Vaultの自動解錠および、機密性の高いプロンプトデータの保護にFace IDを使用します。</string>
+	<key>NSCalendarsFullAccessUsageDescription</key>
+	<string>Coraxisのコンテキストに予定を取り込むため、カレンダーへのフルアクセスを使用します。</string>
 	<key>ITSAppUsesNonExemptEncryption</key>
 	<false/>
 	<key>NSAppTransportSecurity</key>

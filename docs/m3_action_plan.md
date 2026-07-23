@@ -280,9 +280,10 @@ integration, final-app link, or runtime behavior for LocalAuthentication.
 |---|---|
 | `NSFaceIDUsageDescription` | `Vaultの自動解錠および、機密性の高いプロンプトデータの保護にFace IDを使用します。` |
 | `LAContext.localizedReason` | `暗号化されたデータのロックを解除します。` |
+| `NSCalendarsFullAccessUsageDescription` (added 2026-07-23, M20 Part 2 EventKit bridge) | `Coraxisのコンテキストに予定を取り込むため、カレンダーへのフルアクセスを使用します。` |
 
-Changing either string requires a new user ruling. Do not append the app name
-or other suffixes to `localizedReason`.
+Changing any of these strings requires a new user ruling. Do not append the
+app name or other suffixes to `localizedReason`.
 
 ##### Explicit-action harness contract (`KeychainProbePanel`)
 

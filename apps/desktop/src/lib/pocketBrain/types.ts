@@ -466,6 +466,27 @@ export interface CognitiveMonthView {
   days: CognitiveDayView[];
 }
 
+// ─── Calendar (M20 データ連携 Part 2 — EventKit) ────────────────────────────
+
+/** One event read from `EKEventStore` (read-only, no network). */
+export interface CalendarEventOut {
+  id: string | null;
+  title: string;
+  /** Unix seconds (UTC). */
+  start: number;
+  /** Unix seconds (UTC). */
+  end: number;
+  all_day: boolean;
+  calendar_title: string | null;
+  notes: string | null;
+}
+
+export interface FetchAppleCalendarEventsResult {
+  authorized: boolean;
+  status: "not_determined" | "restricted" | "denied" | "full_access" | "write_only" | "unknown";
+  events: CalendarEventOut[];
+}
+
 /** Canonical list of M11–M17 Coraxis on-device Tauri commands (invoke names). */
 export const POCKET_BRAIN_COMMANDS = [
   "ingest_knowledge",
@@ -499,6 +520,7 @@ export const POCKET_BRAIN_COMMANDS = [
   "get_cognitive_bias_profile",
   "record_purchase_with_snapshot",
   "get_cognitive_month_view",
+  "fetch_apple_calendar_events",
 ] as const;
 
 export type PocketBrainCommand = (typeof POCKET_BRAIN_COMMANDS)[number];

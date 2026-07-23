@@ -20,6 +20,7 @@ import type {
   EvaluateRaschRequest,
   EvaluateRaschResult,
   EvaluateTwinResult,
+  FetchAppleCalendarEventsResult,
   GenerateOracleResult,
   IngestKnowledgeResult,
   InterviewSession,
@@ -450,4 +451,23 @@ export function getCognitiveMonthView(
   month: number,
 ): Promise<CognitiveMonthView> {
   return pocketInvoke("get_cognitive_month_view", { year, month });
+}
+
+// ─── Calendar (M20 データ連携 Part 2 — EventKit) ────────────────────────────
+
+/**
+ * Read iOS/macOS Calendar events in `[startUnix, endUnix)` (Unix seconds,
+ * UTC) via the on-device EventKit bridge. Prompts for calendar access at most
+ * once (iOS caches the decision); when access is anything other than
+ * `full_access`, `events` is empty and `authorized` is `false` rather than
+ * throwing — callers should branch on `status`, not treat a rejection as an
+ * invoke failure. Read-only: never creates, edits, or deletes events.
+ */
+export function fetchAppleCalendarEvents(
+  startUnix: number,
+  endUnix: number,
+): Promise<FetchAppleCalendarEventsResult> {
+  return pocketInvoke("fetch_apple_calendar_events", {
+    params: { startUnix, endUnix },
+  });
 }

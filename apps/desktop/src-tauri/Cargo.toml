@@ -85,6 +85,8 @@ secure-vault = [
     "dep:objc2-core-foundation",
     "dep:objc2-ui-kit",
     "dep:objc2-vision",
+    "dep:block2",
+    "dep:objc2-event-kit",
 ]
 
 [target.'cfg(windows)'.dependencies]
@@ -122,6 +124,21 @@ objc2-vision = { version = "=0.3.2", default-features = false, features = [
     "VNRequestHandler",
     "block2",
     "objc2-core-foundation",
+], optional = true }
+# M20 データ連携 Part 2: EventKit calendar read bridge (docs blueprint §3.x).
+# Permission request (`requestFullAccessToEventsWithCompletion:`) is
+# completion-block based — `block2` bridges it to a blocking Rust call
+# (mirrors the objc2-vision `block2` feature already enabled above).
+block2 = { version = "=0.6.2", optional = true }
+objc2-event-kit = { version = "=0.3.2", default-features = false, features = [
+    "std",
+    "EKTypes",
+    "EKObject",
+    "EKCalendarItem",
+    "EKCalendar",
+    "EKEvent",
+    "EKEventStore",
+    "block2",
 ], optional = true }
 
 # M3 Phase 4-A background auto-lock: UIKit lifecycle notification constants.
