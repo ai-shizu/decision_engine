@@ -58,6 +58,7 @@ rusqlite = { version = "=0.40.1", default-features = false, features = ["bundled
 sqlite-vec = { version = "=0.1.9", optional = true }
 tauri-plugin-fs = "2"
 tauri-plugin-dialog = "2"
+log = "0.4"
 
 [features]
 # NOTE: the blueprint prose says "reqwest/rustls-tls"; reqwest 0.13.4's actual

@@ -15,12 +15,12 @@
 use tauri::ipc::Channel;
 use tauri::{AppHandle, State};
 
-use super::model_path::{internal_model_present, resolve_model_path};
+use super::model_path::{internal_model_present, resolve_loadable_model_path};
 use super::params::{GenerationParams, LoadParams};
 use super::service::{LlmHandle, TokenEvent};
 
-/// Load `<app_data_dir>/models/pocket-brain.gguf` into the in-process llama worker.
-/// Never accepts an external / picker path — FE must copy into AppData first.
+/// Load the on-device GGUF (bundled `$RESOURCE` on iOS, else AppData import).
+/// Never accepts an external / picker path.
 #[tauri::command]
 pub async fn brain_load_gguf(
     app: AppHandle,
@@ -30,7 +30,7 @@ pub async fn brain_load_gguf(
     if !internal_model_present(&app)? {
         return Err("内部モデルが未配置です。先にローカル GGUF を取り込んでください。".into());
     }
-    let path = resolve_model_path(&app)?;
+    let path = resolve_loadable_model_path(&app)?;
     let handle = handle.inner().clone();
     tauri::async_runtime::spawn_blocking(move || handle.load(path, params))
         .await

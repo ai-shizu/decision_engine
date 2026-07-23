@@ -658,7 +658,7 @@ Pocket Brain 経路は M14 tensor + M15 pulse/Rasch + gap sufficiency から loa
 **検証結果 (base 不変):**
 1. `tauri.conf.json` — `identifier=com.ai-shizu.pkb` / `version=0.1.0` は Xcode 生成物と一致。base は Windows NSIS + sidecar 前提のまま（触らない）。
 2. `tauri.ios.conf.json` — bash ビルドコマンド、`create:true`、`externalBin:[]`、`minimumSystemVersion=17.0`、`Accelerate`+`LocalAuthentication`。M19-A で `infoPlist: Info.ios.plist` を追加。
-3. `Info.ios.plist` — M3 承認文言の `NSFaceIDUsageDescription` + `ITSAppUsesNonExemptEncryption=false`。`gen/apple` 手編集はしない。
+3. `Info.ios.plist` — `NSFaceIDUsageDescription`（Vault 自動解錠 / 機密プロンプト保護）+ `ITSAppUsesNonExemptEncryption=false`。正本はここだけ。`gen/apple` 手編集はしない。未使用の「将来用」権限キー（例: `NSMicrophoneUsageDescription`）を置くな。
 4. iOS entitlements 空 dict はコンテナ内 I/O のみなら正当。network entitlement 追加禁止。
 5. Cargo: `bundled-sqlcipher` / 静的 `sqlite-vec` / `pocket-brain` Metal は sim/device ターゲット向けに設計済み。`build.rs` は ios TARGET で sidecar placeholder を作らない。
 6. 検証実測: `cargo check --target aarch64-apple-ios-sim --features secure-vault --lib` → **Finished** (exit 0)。`tauri ios dev` は未実行（M19-A 禁止）。
@@ -1296,16 +1296,17 @@ Pocket Brain 経路は M14 tensor + M15 pulse/Rasch + gap sufficiency から loa
 **射程:** Vite バインド + `webview_policy` 開発オリジン + Root Error Boundary + ModelSetup 可視性。UI 美学トークンは既存。
 
 **不変条件:**
-1. Vite `server.host: true`（0.0.0.0）。`host: false` に戻すな（iOS WKWebView が到達不能 → 漆黒）。
+1. Vite `server.host: true`（または `TAURI_DEV_HOST`）。`host: false` に戻すな（iOS WKWebView が到達不能 → 漆黒）。`allowedHosts: true` を維持（Vite 7 host-check）。物理実機では HMR を **同一ポート 1420** に載せ `'self'` で WS を通す（`:1421` 分離は CSP で死ぬ）。
 2. debug の `navigation_allowed` は `localhost` / `127.0.0.1` / RFC1918 / link-local の **http :1420 のみ**。公開 IP・別ポート・https は拒否。production は従来どおり `tauri://localhost` / `http://tauri.localhost`。モバイル本体の WebView は `on_navigation` 未配線（`#[cfg(not(mobile))]`）— policy はデスクトップ用。
 3. React ルートは必ず `GlobalErrorBoundary` でラップ。クラッシュ時は `[ FATAL SYSTEM CRASH ]`（`--err`）+ スタックを等幅表示。フェイル・サイレント黒画面を許すな。
-4. `tauri.ios.conf.json` の `devCsp` は `'self'` + localhost/127.0.0.1:1420/1421。production CSP へ混ぜるな。
+4. `tauri.ios.conf.json` の `devCsp` は `'self'` + localhost/127.0.0.1:1420/1421 + **DEV 専用** `http:` / `ws:`（動的 LAN IP）。production CSP へ混ぜるな。
 5. **`ModelSetupGate` / 起動ローディングに `desktop-chrome` クラスを付けるな。** `@media (max-width:768px){ .desktop-chrome{display:none!important} }` により、iOS ではゲート UI ごと消えて漆黒になる（ネットワーク到達後も黒の主因）。
 6. `Channel` / `startMemoryMonitor` / `subscribeLlmEvents` は `isTauri()` ガード必須。未ブリッジ時の `transformCallback` 同期 throw は `.catch` で捕捉できない。
+7. **物理実機 Vite DEV:** `Info.ios.plist` に `NSAppTransportSecurity.NSAllowsLocalNetworking=true` と `NSLocalNetworkUsageDescription`（開発サーバー到達専用文言）が必要。クラウド egress / Bonjour sync とは別物。初回は OS の「ローカルネットワーク」許可ダイアログを Allow。release の UI は `frontendDist` バンドルで LAN を叩かない。
 
-**as-built:** `vite.config.ts`、`webview_policy.rs`、`GlobalErrorBoundary.tsx`、`main.tsx`、`tauri.ios.conf.json`、`.fatal-crash-*` CSS、`ModelSetupGate.tsx`、`llm.ts`。
+**as-built:** `vite.config.ts`、`webview_policy.rs`、`GlobalErrorBoundary.tsx`、`main.tsx`、`tauri.ios.conf.json`、`Info.ios.plist`、`.fatal-crash-*` CSS、`ModelSetupGate.tsx`、`llm.ts`。
 
-**ハマりどころ:** `TAURI_DEV_HOST` LAN IP を policy で落とすとデスクトップ黒画面。iOS は `desktop-chrome` 誤用と Channel 未ガードが同症状。E2E は Simulator で「モデル配置を確認…」またはメインシェル文字が非黒ピクセルとして見えること。
+**ハマりどころ:** `TAURI_DEV_HOST` LAN IP を policy で落とすとデスクトップ黒画面。iOS は `desktop-chrome` 誤用と Channel 未ガードが同症状。実機で Local Network を拒否すると Vite に届かず漆黒（CSP 以前）。E2E は Simulator で「モデル配置を確認…」またはメインシェル文字が非黒ピクセルとして見えること。
 
 **検証:** `cargo test --lib webview_policy` / `npx tsc --noEmit` / Simulator スクリーンショット。
 
@@ -1373,25 +1374,25 @@ Pocket Brain 経路は M14 tensor + M15 pulse/Rasch + gap sufficiency から loa
 5. 生成パラメータ（temperature / max_tokens）は `generation_params()` 経由で取れ。`0.6` や `900` を直書きするな。
 6. モデルは `models/` に手動配置（gitignore 済み）。**ダウンロードを自動化するコードを書くな** — オフライン原則違反である。
    - **許可されるのは「案内」と「ローカル import」だけ。** FE `plugin-dialog` + `plugin-fs` copy → AppData、`confirm_model_imported` / `open_recommended_model_page` は §5 準拠。アプリ内 HTTP で GGUF を取得する経路は永久禁止。
-   - 配置先の正本は `app.path().app_data_dir()/models/pocket-brain.gguf`（iOS Application Support / デスクトップ AppData）。`resolve_model_path` とセットアップゲートが同一パスを見る。
+   - 配置先の正本は (a) iOS 同梱 `$RESOURCE/models/pocket-brain.gguf`（`bundle.resources`）優先、(b) `app.path().app_data_dir()/models/pocket-brain.gguf`（FE import / Simulator inject）。`resolve_loadable_model_path` とセットアップゲートが同一優先順位を見る。
    - `pocket-brain` feature 非ビルド時は `check_model_exists` が欠けるため、フロントは soft-skip（メイン UI をブロックしない）。
 7. **LLM transportの唯一所有者は`core/llm_backend.py`、prompt channelの唯一所有者は`core/llm_transport.py`。** prompt本文をargv・環境・通常ファイルへ置くな。Windows Named Pipeは`PIPE_REJECT_REMOTE_CLIENTS` + first-instance + owner/SYSTEM/AppContainer SID DACL、POSIXは`/dev/stdin`以外を認めない。子はengineのOS sandboxを継承する。TCP/HTTP、listener、port、cloud fallbackを再導入するな。
 8. **model / generation / stdio commandの正本は`llm_config.py`。** `llama_stdio_cmd()`は`completion` + `--offline` +固定local modelのみ。`--rpc` / remote model option / remote環境変数は禁止。クライアントへtemperature・max_tokens・ctxを複製するな。
 9. **レガシーCLI（`app.py` → `cli.py`）を「古い」という理由だけで削除するな。** 固有retrieval / prompt / `--show-prompt` / `--top-k` / interactive loopは維持し、shared `LlamaStdioBackend`だけを使う。相談modelは`find_gguf(role="consult")`。通常契約テストはnetworkless fake、transport検収時だけ公開promptのローカルGGUFを使う。
 10. **LLM出力を権威状態へ入力するな。** strict schema、temperature `0`、seed、model hash、再試行は、候補集合の一意性も観測事実性も証明しない。LLMのscore/evidence/metrics/要約を6D tensor、profile、growth差分、次回system prompt、その他の決定論的state更新へ渡すことを永久禁止する。権威更新に使えるのは、同じ観測証拠からコードだけで完全かつ一意に導出される値だけである。決定論的観測器が無い場合は`0`やLLM fallbackを捏造せずN/Aを返せ。LLM提案を残す場合は非測定の表示専用候補と明示し、将来セッションへ再注入するな。回帰境界は`tests/test_fsa_2026_07_13_05_llm_authority_boundary.py`であり、旧F4c/F-19の成長注入記述と競合する場合は本規則が勝つ。
 
-### 5.1 Offline model setup gate — as-built (2026-07-21 / rev 2026-07-22)
+### 5.1 Offline model setup gate — as-built (2026-07-21 / rev 2026-07-23)
 
 **射程:** `pocket-brain` の存在確認 + ローカル GGUF import + 起動時セットアップ画面。ネットワーク経由のモデル取得は含まない。
 
-**as-built (rev):**
-1. **FE がコピーの唯一の経路。** `@tauri-apps/plugin-dialog` で選択 → `startAccessingSecurityScopedResource` → `plugin-fs` `copyFile` で `BaseDirectory.AppData` / `models/pocket-brain.gguf` へ。巨大 GGUF を JS heap に `readFile` するな。
+**as-built (rev 2026-07-23 — iOS 同梱):**
+1. **FE がコピーの唯一の経路（デスクトップ / 追加取込）。** `@tauri-apps/plugin-dialog` で選択 → `startAccessingSecurityScopedResource` → `plugin-fs` `copyFile` で `BaseDirectory.AppData` / `models/pocket-brain.gguf` へ。巨大 GGUF を JS heap に `readFile` するな。
 2. Rust: `prepare_model_import_dest` / `confirm_model_imported` / `check_model_exists` / `open_recommended_model_page`。**外部ピッカーパスを `std::fs` で読むな**（iOS Security-Scoped で失敗する）。旧 `pick_local_gguf` / `import_local_model`（rfd）は削除。
-3. パス正本: `model_path::resolve_model_path` → `app.path().app_data_dir()/models/pocket-brain.gguf`（`brain_load_gguf` / `llm_load_model` も同じ。内部ファイル存在確認後のみロード）。
+3. **ロード優先順位:** `resolve_loadable_model_path` = (1) `path().resolve("models/pocket-brain.gguf", BaseDirectory::Resource)`（iOS では `$BUNDLE/assets/...`・`bundle.resources` 同梱の 1.5B）→ (2) `app_data_dir()/models/pocket-brain.gguf`。書込先は従来どおり `resolve_model_path`（AppData のみ）。
 4. Capabilities: `dialog:default` + `fs:default` + `fs:allow-appdata-write-recursive` + security-scoped start/stop。
-5. 回帰: `tests-runtime/modelSetupReducer.test.ts`。
+5. 回帰: `tests-runtime/modelSetupReducer.test.ts`。`cargo test --lib` の `model_path` 単体。
 
-**不変条件:** アプリ内 HTTP/ストリームで GGUF を取得するコードを追加するな。エラー文言にパス・例外原文を出すな。
+**不変条件:** アプリ内 HTTP/ストリームで GGUF を取得するコードを追加するな。エラー文言にパス・例外原文を出すな。欠落時は `log::error!` / stderr に存在チェックを残し、UI へは固定文言のみ。
 
 ### 4.72 iOS GGUF AppData 取り込み (2026-07-22)
 

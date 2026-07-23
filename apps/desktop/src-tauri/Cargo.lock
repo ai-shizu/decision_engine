@@ -2687,6 +2687,7 @@ dependencies = [
  "hyper-rustls",
  "libc",
  "llama-cpp-2",
+ "log",
  "objc2",
  "objc2-core-foundation",
  "objc2-foundation",

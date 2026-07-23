@@ -278,7 +278,7 @@ integration, final-app link, or runtime behavior for LocalAuthentication.
 
 | Key | Exact approved string (byte-for-byte; do not paraphrase) |
 |---|---|
-| `NSFaceIDUsageDescription` | `暗号化されたデータのロックを解除するためにFace IDを使用します。` |
+| `NSFaceIDUsageDescription` | `Vaultの自動解錠および、機密性の高いプロンプトデータの保護にFace IDを使用します。` |
 | `LAContext.localizedReason` | `暗号化されたデータのロックを解除します。` |
 
 Changing either string requires a new user ruling. Do not append the app name
