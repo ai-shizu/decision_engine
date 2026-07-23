@@ -1,6 +1,6 @@
 // Lightweight Markdown subset without external deps (bold / code / newlines).
 
-import type { ReactNode } from "react";
+import { memo, type ReactNode } from "react";
 
 function renderInline(text: string, keyPrefix: string): ReactNode[] {
   const nodes: ReactNode[] = [];
@@ -34,7 +34,11 @@ function renderInline(text: string, keyPrefix: string): ReactNode[] {
   return nodes;
 }
 
-export function SimpleMarkdown({ text }: { text: string }) {
+export const SimpleMarkdown = memo(function SimpleMarkdown({
+  text,
+}: {
+  text: string;
+}) {
   const lines = text.split("\n");
   return (
     <div className="rag-md">
@@ -45,4 +49,4 @@ export function SimpleMarkdown({ text }: { text: string }) {
       ))}
     </div>
   );
-}
+});

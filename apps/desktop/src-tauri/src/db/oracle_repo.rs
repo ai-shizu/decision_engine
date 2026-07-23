@@ -10,7 +10,8 @@ pub(crate) struct TwinRunRow {
     pub created_at: i64,
     pub schema_version: String,
     pub gate_passed: i64,
-    pub bss: f64,
+    /// Stored in the legacy SQL column named `bss`; value is observer coverage.
+    pub coverage_score: f64,
     pub payload_json: String,
 }
 
@@ -38,7 +39,7 @@ pub(crate) fn insert_twin_run(
                 row.created_at,
                 row.schema_version,
                 row.gate_passed,
-                row.bss,
+                row.coverage_score,
                 row.payload_json,
             ],
         )

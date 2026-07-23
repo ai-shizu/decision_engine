@@ -117,9 +117,12 @@ fn parse_posterior(raw: Option<Vec<f64>>) -> Result<[f64; GRID_LEN], String> {
             }
             let mut arr = [0.0_f64; GRID_LEN];
             arr.copy_from_slice(&v);
+            if arr.iter().any(|p| !p.is_finite() || *p < 0.0) {
+                return Err("posterior entries must be finite and non-negative".into());
+            }
             let sum: f64 = arr.iter().sum();
             if !(sum.is_finite() && sum > 0.0) {
-                return Err("posterior must be positive finite".into());
+                return Err("posterior mass must be positive finite".into());
             }
             Ok(arr)
         }
@@ -329,4 +332,27 @@ pub async fn get_latest_rasch_state(
     })
     .await
     .map_err(|_| "get_latest_rasch_state join failed".to_string())?
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn posterior_rejects_negative_entry_even_when_total_is_positive() {
+        let mut posterior = vec![1.0 / GRID_LEN as f64; GRID_LEN];
+        posterior[0] = -0.25;
+        posterior[1] += 0.25;
+        assert_eq!(
+            parse_posterior(Some(posterior)),
+            Err("posterior entries must be finite and non-negative".into())
+        );
+    }
+
+    #[test]
+    fn posterior_rejects_non_finite_entry() {
+        let mut posterior = vec![1.0 / GRID_LEN as f64; GRID_LEN];
+        posterior[0] = f64::INFINITY;
+        assert!(parse_posterior(Some(posterior)).is_err());
+    }
 }

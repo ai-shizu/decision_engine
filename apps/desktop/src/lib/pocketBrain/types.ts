@@ -281,8 +281,9 @@ export interface TwinParams {
   gamma: number;
   kappa: number;
   theta_r: number | null;
-  bss: number;
-  n_lapse_test: number;
+  /** Observer coverage heuristic; not a Brier Skill Score. */
+  coverage_score: number;
+  evidence_source_count: number;
   gate_passed: boolean;
   fitted_window: string;
   is_personalized?: boolean;
@@ -317,9 +318,9 @@ export interface TwinStateVector {
 
 export interface TwinForecast {
   horizon_days: number;
-  r_q10: number[];
-  r_q50: number[];
-  r_q90: number[];
+  heuristic_lower: number[];
+  heuristic_center: number[];
+  heuristic_upper: number[];
   p_lapse: number[];
   critical_days: string[];
 }

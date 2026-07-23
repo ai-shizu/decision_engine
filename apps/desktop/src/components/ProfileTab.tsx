@@ -85,7 +85,7 @@ function parseOracleView(payload: Record<string, unknown>): OracleView {
 interface TwinView {
   gate_passed: boolean;
   critical_days: string[];
-  r_q50: number[];
+  heuristic_center: number[];
   max_p_lapse: number | null;
   reason?: string;
 }
@@ -157,8 +157,10 @@ export function ProfileTab() {
       setForecast({
         gate_passed: Boolean(twin.params?.gate_passed),
         critical_days,
-        r_q50: Array.isArray(twin.forecast?.r_q50)
-          ? twin.forecast.r_q50.filter((v): v is number => typeof v === "number")
+        heuristic_center: Array.isArray(twin.forecast?.heuristic_center)
+          ? twin.forecast.heuristic_center.filter(
+              (v): v is number => typeof v === "number",
+            )
           : [],
         max_p_lapse,
       });
@@ -202,7 +204,10 @@ export function ProfileTab() {
 
   const daysObserved = readNum(oracle?.sufficiency ?? null, "days_observed");
   const coverage = readNum(oracle?.sufficiency ?? null, "coverage");
-  const twinBss = readNum(oracle?.sufficiency ?? null, "twin_bss");
+  const twinCoverageScore = readNum(
+    oracle?.sufficiency ?? null,
+    "twin_coverage_score",
+  );
   const gatePassed = readBool(oracle?.sufficiency ?? null, "gate_passed");
   const rNow = readNum(oracle?.state ?? null, "r_now");
   const rTrend = readNum(oracle?.state ?? null, "r_trend_7d");
@@ -290,8 +295,10 @@ export function ProfileTab() {
                 <span className="term-value">{fmtNum(coverage)}</span>
               </div>
               <div className="profile-metric-row">
-                <span className="term-source-name">sufficiency.twin_bss</span>
-                <span className="term-value">{fmtNum(twinBss)}</span>
+                <span className="term-source-name">
+                  sufficiency.twin_coverage_score
+                </span>
+                <span className="term-value">{fmtNum(twinCoverageScore)}</span>
               </div>
               <div className="profile-metric-row">
                 <span className="term-source-name">sufficiency.gate_passed</span>
@@ -434,11 +441,14 @@ export function ProfileTab() {
                 <span className="term-value">{forecast.critical_days.join(", ")}</span>
               </div>
             )}
-            {forecast.r_q50.length > 0 && (
+            {forecast.heuristic_center.length > 0 && (
               <div className="profile-metric-row">
-                <span className="term-source-name">r_q50 (head)</span>
+                <span className="term-source-name">heuristic_center (head)</span>
                 <span className="term-value">
-                  {forecast.r_q50.slice(0, 5).map((v) => fmtNum(v)).join(", ")}
+                  {forecast.heuristic_center
+                    .slice(0, 5)
+                    .map((v) => fmtNum(v))
+                    .join(", ")}
                 </span>
               </div>
             )}

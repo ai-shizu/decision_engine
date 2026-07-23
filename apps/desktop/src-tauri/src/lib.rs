@@ -67,6 +67,8 @@ pub fn run() {
     let engine_for_exit = Arc::clone(&engine);
 
     let builder = tauri::Builder::default()
+        .plugin(tauri_plugin_fs::init())
+        .plugin(tauri_plugin_dialog::init())
         .manage(Arc::clone(&engine))
         .manage(NetworkPolicyStore::new());
 
@@ -79,7 +81,10 @@ pub fn run() {
     #[allow(unused_variables)]
     let (builder, llm_governor) = {
         let monitor = Arc::new(monitor::MemoryMonitor::new());
-        let handle = llm::LlmHandle::spawn(Arc::clone(&monitor));
+        let handle = llm::LlmHandle::spawn(Arc::clone(&monitor)).unwrap_or_else(|error| {
+            eprintln!("Coraxis LLM worker unavailable: {error}");
+            llm::LlmHandle::unavailable(error)
+        });
         let governor = handle.governor();
         (builder.manage(Arc::clone(&monitor)).manage(handle), governor)
     };
@@ -124,6 +129,12 @@ pub fn run() {
             #[cfg(feature = "pocket-brain")]
             llm::commands_llm::llm_generate,
             #[cfg(feature = "pocket-brain")]
+            llm::brain::brain_load_gguf,
+            #[cfg(feature = "pocket-brain")]
+            llm::brain::brain_generate_stream,
+            #[cfg(feature = "pocket-brain")]
+            llm::brain::brain_is_ready,
+            #[cfg(feature = "pocket-brain")]
             llm::commands_llm::llm_embed_binary,
             #[cfg(feature = "pocket-brain")]
             llm::commands_llm::llm_cancel,
@@ -139,9 +150,9 @@ pub fn run() {
             #[cfg(feature = "pocket-brain")]
             llm::commands_model_setup::check_model_exists,
             #[cfg(feature = "pocket-brain")]
-            llm::commands_model_setup::pick_local_gguf,
+            llm::commands_model_setup::prepare_model_import_dest,
             #[cfg(feature = "pocket-brain")]
-            llm::commands_model_setup::import_local_model,
+            llm::commands_model_setup::confirm_model_imported,
             #[cfg(feature = "pocket-brain")]
             llm::commands_model_setup::open_recommended_model_page,
             #[cfg(feature = "pocket-brain")]

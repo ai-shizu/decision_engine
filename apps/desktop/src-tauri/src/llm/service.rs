@@ -50,6 +50,10 @@ use crate::monitor::{DegradationLevel, MemPhase, MemoryMonitor};
 /// no command arrives to wake it. Short enough to be prompt, long enough to be
 /// a negligible idle cost.
 const PURGE_POLL_INTERVAL: Duration = Duration::from_millis(250);
+/// Bounded ingress prevents a renderer or buggy caller from queueing an
+/// unbounded number of multi-GB model operations. Cancellation bypasses this
+/// queue through the lock-free governor.
+const LLM_COMMAND_QUEUE_CAPACITY: usize = 8;
 
 /// Stable role boundary for free-form generation. Callers assemble rich RAG /
 /// interview context inside the user message; this system message supplies the
@@ -470,14 +474,14 @@ fn complete_generation(
     let _ = completion.send(result);
 }
 
-/// Command sent to the worker thread. `mpsc::Sender` is `!Sync`, so `LlmHandle`
-/// wraps it in a `Mutex` to satisfy Tauri `State: Send + Sync`.
+/// Command sent to the worker thread. Every reply lane is also bounded to one
+/// value, so a vanished caller cannot accumulate unbounded acknowledgements.
 enum LlmCommand {
     Load {
         model_path: PathBuf,
         params: LoadParams,
         purge_epoch: u64,
-        reply: mpsc::Sender<Result<(), String>>,
+        reply: mpsc::SyncSender<Result<(), String>>,
     },
     Generate {
         params: GenerationParams,
@@ -489,11 +493,11 @@ enum LlmCommand {
     Embed {
         text: String,
         n_ctx: u32,
-        reply: mpsc::Sender<Result<Vec<f32>, String>>,
+        reply: mpsc::SyncSender<Result<Vec<f32>, String>>,
     },
     /// Phase 10: Jetsam / foreground restore — is the GGUF still resident?
     IsLoaded {
-        reply: mpsc::Sender<bool>,
+        reply: mpsc::SyncSender<bool>,
     },
     RegisterEvents {
         channel: Channel<LlmLifecycleEvent>,
@@ -503,25 +507,59 @@ enum LlmCommand {
 /// Send + Sync handle placed in Tauri `State`.
 #[derive(Clone)]
 pub struct LlmHandle {
-    tx: Arc<Mutex<mpsc::Sender<LlmCommand>>>,
+    tx: Arc<Mutex<mpsc::SyncSender<LlmCommand>>>,
     governor: Arc<LlmMemoryGovernor>,
+    startup_error: Option<Arc<str>>,
 }
 
 impl LlmHandle {
     /// Spawn the worker thread (initializes `LlamaBackend`, enters command loop).
     /// `monitor` is shared so the worker can mark memory phases (ModelLoaded /
     /// CtxCreated / Inference / Idle) as it progresses.
-    pub fn spawn(monitor: Arc<MemoryMonitor>) -> Self {
-        let (tx, rx) = mpsc::channel::<LlmCommand>();
+    pub fn spawn(monitor: Arc<MemoryMonitor>) -> Result<Self, String> {
+        let (tx, rx) = mpsc::sync_channel::<LlmCommand>(LLM_COMMAND_QUEUE_CAPACITY);
+        let (startup_tx, startup_rx) = mpsc::sync_channel(1);
         let governor = Arc::new(LlmMemoryGovernor::new());
         let governor_worker = Arc::clone(&governor);
         thread::Builder::new()
             .name("pocket-brain-llm".into())
-            .spawn(move || worker_loop(rx, governor_worker, monitor))
-            .expect("spawn pocket-brain llm worker");
-        Self {
+            .spawn(move || worker_loop(rx, governor_worker, monitor, startup_tx))
+            .map_err(|error| format!("llm worker spawn failed: {error}"))?;
+        startup_rx
+            .recv()
+            .map_err(|_| "llm worker gone during startup".to_string())??;
+        Ok(Self {
             tx: Arc::new(Mutex::new(tx)),
             governor,
+            startup_error: None,
+        })
+    }
+
+    /// Preserve a managed Tauri state even when startup failed, so every IPC
+    /// command receives a deterministic Worker Gone error instead of a missing
+    /// state/panic. Used only by application bootstrap after `spawn` returned Err.
+    pub fn unavailable(error: String) -> Self {
+        let (tx, rx) = mpsc::sync_channel(1);
+        drop(rx);
+        Self {
+            tx: Arc::new(Mutex::new(tx)),
+            governor: Arc::new(LlmMemoryGovernor::new()),
+            startup_error: Some(Arc::<str>::from(error)),
+        }
+    }
+
+    fn enqueue(&self, command: LlmCommand) -> Result<(), String> {
+        if let Some(error) = self.startup_error.as_deref() {
+            return Err(format!("llm worker unavailable: {error}"));
+        }
+        let tx = self
+            .tx
+            .lock()
+            .map_err(|_| "llm tx poisoned".to_string())?;
+        match tx.try_send(command) {
+            Ok(()) => Ok(()),
+            Err(mpsc::TrySendError::Full(_)) => Err("llm worker queue full".into()),
+            Err(mpsc::TrySendError::Disconnected(_)) => Err("llm worker gone".into()),
         }
     }
 
@@ -533,27 +571,19 @@ impl LlmHandle {
     /// Register the frontend lifecycle event sink (single sink; a later call
     /// replaces the earlier one). Mirrors M6's `vault_events`.
     pub fn register_events(&self, channel: Channel<LlmLifecycleEvent>) -> Result<(), String> {
-        self.tx
-            .lock()
-            .map_err(|_| "llm tx poisoned".to_string())?
-            .send(LlmCommand::RegisterEvents { channel })
-            .map_err(|_| "llm worker gone".to_string())
+        self.enqueue(LlmCommand::RegisterEvents { channel })
     }
 
     /// Blocking: mmap-load the GGUF on the worker thread and await the result.
     pub fn load(&self, model_path: PathBuf, params: LoadParams) -> Result<(), String> {
-        let (reply, ack) = mpsc::channel();
+        let (reply, ack) = mpsc::sync_channel(1);
         let purge_epoch = self.governor.purge_epoch();
-        self.tx
-            .lock()
-            .map_err(|_| "llm tx poisoned".to_string())?
-            .send(LlmCommand::Load {
-                model_path,
-                params,
-                purge_epoch,
-                reply,
-            })
-            .map_err(|_| "llm worker gone".to_string())?;
+        self.enqueue(LlmCommand::Load {
+            model_path,
+            params,
+            purge_epoch,
+            reply,
+        })?;
         ack.recv()
             .map_err(|_| "llm worker dropped reply".to_string())?
     }
@@ -569,28 +599,20 @@ impl LlmHandle {
     ) -> Result<(), String> {
         params.validate()?;
         let (completion, ack) = oneshot::channel();
-        {
-            let tx = self.tx.lock().map_err(|_| "llm tx poisoned".to_string())?;
-            tx.send(LlmCommand::Generate {
-                params,
-                task_id,
-                tokens,
-                completion,
-            })
-            .map_err(|_| "llm worker gone".to_string())?;
-        }
+        self.enqueue(LlmCommand::Generate {
+            params,
+            task_id,
+            tokens,
+            completion,
+        })?;
         ack.await
             .map_err(|_| "llm worker dropped generation completion".to_string())?
     }
 
     /// Phase 10: whether the worker still holds a loaded GGUF (Jetsam may have purged).
     pub fn is_loaded(&self) -> Result<bool, String> {
-        let (reply, ack) = mpsc::channel();
-        self.tx
-            .lock()
-            .map_err(|_| "llm tx poisoned".to_string())?
-            .send(LlmCommand::IsLoaded { reply })
-            .map_err(|_| "llm worker gone".to_string())?;
+        let (reply, ack) = mpsc::sync_channel(1);
+        self.enqueue(LlmCommand::IsLoaded { reply })?;
         ack.recv()
             .map_err(|_| "llm worker dropped reply".to_string())
     }
@@ -620,12 +642,8 @@ impl LlmHandle {
                 "embedding n_ctx must be in {MIN_N_CTX}..={MAX_N_CTX}"
             ));
         }
-        let (reply, ack) = mpsc::channel();
-        self.tx
-            .lock()
-            .map_err(|_| "llm tx poisoned".to_string())?
-            .send(LlmCommand::Embed { text, n_ctx, reply })
-            .map_err(|_| "llm worker gone".to_string())?;
+        let (reply, ack) = mpsc::sync_channel(1);
+        self.enqueue(LlmCommand::Embed { text, n_ctx, reply })?;
         ack.recv()
             .map_err(|_| "llm worker dropped reply".to_string())?
     }
@@ -635,11 +653,16 @@ fn worker_loop(
     rx: mpsc::Receiver<LlmCommand>,
     governor: Arc<LlmMemoryGovernor>,
     monitor: Arc<MemoryMonitor>,
+    startup: mpsc::SyncSender<Result<(), String>>,
 ) {
     let backend = match LlamaBackend::init() {
-        Ok(b) => b,
+        Ok(backend) => {
+            let _ = startup.send(Ok(()));
+            backend
+        }
         Err(e) => {
-            eprintln!("[pocket-brain] backend init failed: {e}");
+            let error = format!("llm backend init failed: {e}");
+            let _ = startup.send(Err(error));
             return;
         }
     };
@@ -844,9 +867,7 @@ fn apply_context_device_policy(
 }
 
 fn load_model(backend: &LlamaBackend, path: &Path, p: &LoadParams) -> Result<LlamaModel, String> {
-    if !path.exists() {
-        return Err(format!("GGUF not found at {}", path.display()));
-    }
+    super::model_path::validate_gguf_file(path)?;
     let n_gpu_layers = effective_n_gpu_layers(
         p.n_gpu_layers,
         cfg!(all(target_os = "ios", target_abi = "sim")),
@@ -1117,11 +1138,12 @@ mod tests {
     use super::*;
 
     fn disconnected_test_handle() -> (LlmHandle, mpsc::Receiver<LlmCommand>) {
-        let (tx, rx) = mpsc::channel();
+        let (tx, rx) = mpsc::sync_channel(LLM_COMMAND_QUEUE_CAPACITY);
         (
             LlmHandle {
                 tx: Arc::new(Mutex::new(tx)),
                 governor: Arc::new(LlmMemoryGovernor::new()),
+                startup_error: None,
             },
             rx,
         )
@@ -1151,6 +1173,33 @@ mod tests {
             rx.try_recv(),
             Err(mpsc::TryRecvError::Disconnected)
         ));
+    }
+
+    #[test]
+    fn bounded_queue_rejects_excess_work_without_blocking() {
+        let (tx, _rx) = mpsc::sync_channel(1);
+        let handle = LlmHandle {
+            tx: Arc::new(Mutex::new(tx)),
+            governor: Arc::new(LlmMemoryGovernor::new()),
+            startup_error: None,
+        };
+        let first = Channel::new(|_| Ok(()));
+        assert!(handle.register_events(first).is_ok());
+        let second = Channel::new(|_| Ok(()));
+        assert_eq!(
+            handle.register_events(second),
+            Err("llm worker queue full".into())
+        );
+    }
+
+    #[test]
+    fn unavailable_worker_propagates_startup_error() {
+        let handle = LlmHandle::unavailable("backend unavailable".into());
+        let channel = Channel::new(|_| Ok(()));
+        assert_eq!(
+            handle.register_events(channel),
+            Err("llm worker unavailable: backend unavailable".into())
+        );
     }
 
     #[tokio::test]

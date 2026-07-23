@@ -184,7 +184,7 @@ pub async fn evaluate_digital_twin_scenario(
                 created_at: now_unix(),
                 schema_version: twin.schema.clone(),
                 gate_passed: i64::from(twin.params.gate_passed),
-                bss: twin.params.bss,
+                coverage_score: twin.params.coverage_score,
                 payload_json,
             })
             .map_err(map_vault)?;
@@ -273,7 +273,7 @@ pub async fn generate_oracle_payload(
                 created_at: now_unix(),
                 schema_version: twin.schema.clone(),
                 gate_passed: i64::from(twin.params.gate_passed),
-                bss: twin.params.bss,
+                coverage_score: twin.params.coverage_score,
                 payload_json: twin_json,
             })
             .map_err(map_vault)?;

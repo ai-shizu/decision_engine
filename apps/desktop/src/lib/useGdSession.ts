@@ -16,7 +16,11 @@ import {
   type GdArenaState,
 } from "./gdArenaReducer";
 import type { GdSetupConfig } from "./gdSetupState";
-import { parseGdStream, type GdTranscriptMessage, type GdTranscriptStage } from "./gdStreamParser";
+import {
+  GdIncrementalStreamParser,
+  type GdTranscriptMessage,
+  type GdTranscriptStage,
+} from "./gdStreamParser";
 import { cancelGeneration, generate } from "./llm";
 import { createStreamTerminalGate } from "./streamTerminalGate";
 import { uiErrorMessage } from "./uiErrorMessages";
@@ -50,17 +54,11 @@ export function useGdSession(config: GdSetupConfig): UseGdSessionResult {
   const configRef = useRef(config);
   configRef.current = config;
   const roundRef = useRef(0);
-  const bufferRef = useRef("");
-  const lettersRef = useRef<string[]>([]);
+  const parserRef = useRef<GdIncrementalStreamParser | null>(null);
 
   const { push: pushChunk, drainAndStop, flushAndStop } = useThrottledStream(
     (piece) => {
-      bufferRef.current += piece;
-      const parsed = parseGdStream(bufferRef.current, {
-        validLetters: lettersRef.current,
-        stage: GD_STAGE,
-        idPrefix: `r${roundRef.current}`,
-      });
+      const parsed = parserRef.current?.push(piece) ?? [];
       dispatch({ type: "round_tokens", parsed });
     },
   );
@@ -86,7 +84,7 @@ export function useGdSession(config: GdSetupConfig): UseGdSessionResult {
     if (!text || stateRef.current.streaming) return;
 
     const cfg = configRef.current;
-    lettersRef.current = gdValidLetters(cfg);
+    const validLetters = gdValidLetters(cfg);
     const userMessage: GdTranscriptMessage = {
       turnId: allocTurnId("u"),
       role: "USER",
@@ -95,7 +93,11 @@ export function useGdSession(config: GdSetupConfig): UseGdSessionResult {
     };
     dispatch({ type: "send_begin", userMessage });
     roundRef.current += 1;
-    bufferRef.current = "";
+    parserRef.current = new GdIncrementalStreamParser({
+      validLetters,
+      stage: GD_STAGE,
+      idPrefix: `r${roundRef.current}`,
+    });
 
     const history = [...stateRef.current.messages, userMessage];
     const prompt = [

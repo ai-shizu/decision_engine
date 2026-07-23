@@ -1,4 +1,7 @@
-import { parseGdStream } from "../src/lib/gdStreamParser";
+import {
+  GdIncrementalStreamParser,
+  parseGdStream,
+} from "../src/lib/gdStreamParser";
 
 type TestFn = () => void;
 const tests: { name: string; fn: TestFn }[] = [];
@@ -55,6 +58,37 @@ test("GD-P06 bubble ids stay stable as the buffer grows mid-stream", () => {
   const a = parseGdStream("@A> 途中", { ...L, idPrefix: "r0" });
   const b = parseGdStream("@A> 途中まで完成\n@B> 次", { ...L, idPrefix: "r0" });
   assertEq(a[0].turnId, b[0].turnId, "first bubble id stable across frames");
+});
+
+test("GD-P07 incremental parser matches one-shot parsing across split headers", () => {
+  const raw = "@A> 分割しよう。\n@B> 数字は？\n@A> では試算する。";
+  const parser = new GdIncrementalStreamParser({
+    ...L,
+    idPrefix: "r2",
+  });
+  let incremental = parser.push("@");
+  incremental = parser.push("A> 分割し");
+  incremental = parser.push("よう。\n@B");
+  incremental = parser.push("> 数字は？\n@A> では試算する。");
+  const oneShot = parseGdStream(raw, { ...L, idPrefix: "r2" });
+  assertEq(
+    JSON.stringify(incremental),
+    JSON.stringify(oneShot),
+    "same final parse",
+  );
+});
+
+test("GD-P08 strict header upgrades an earlier lenient stream", () => {
+  const raw = "A: lenient\n@B> strict\nA: remains body";
+  const parser = new GdIncrementalStreamParser(L);
+  parser.push("A: lenient\n");
+  const incremental = parser.push("@B> strict\nA: remains body");
+  const oneShot = parseGdStream(raw, L);
+  assertEq(
+    JSON.stringify(incremental),
+    JSON.stringify(oneShot),
+    "strict tier wins",
+  );
 });
 
 let failed = 0;

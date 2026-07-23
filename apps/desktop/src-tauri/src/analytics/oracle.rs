@@ -11,7 +11,7 @@ use serde_json::{json, Value};
 use crate::analytics::coupling::{CouplingMatrix, FEATURE_LANES};
 use crate::analytics::digital_twin::{TwinParams, TwinScenarioResult};
 
-pub const ORACLE_SCHEMA: &str = "oracle_payload.v1";
+pub const ORACLE_SCHEMA: &str = "oracle_payload.v2";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -242,6 +242,7 @@ fn is_sterile_token(s: &str) -> bool {
         "global",
         "dyad",
         "oracle_payload.v1",
+        "oracle_payload.v2",
         "null_insufficient",
         "schema",
         "generated",
@@ -252,8 +253,8 @@ fn is_sterile_token(s: &str) -> bool {
         "days_observed",
         "coverage",
         "dead_lanes",
-        "twin_bss",
-        "n_lapse_test",
+        "twin_coverage_score",
+        "twin_evidence_source_count",
         "gate_passed",
         "state",
         "r_now",
@@ -270,9 +271,9 @@ fn is_sterile_token(s: &str) -> bool {
         "sig",
         "forecast",
         "horizon_days",
-        "r_q10",
-        "r_q50",
-        "r_q90",
+        "heuristic_lower",
+        "heuristic_center",
+        "heuristic_upper",
         "p_lapse",
         "critical_days",
         "findings",
@@ -361,8 +362,8 @@ pub fn empty_oracle_payload(generated: &str, scope_kind: &str) -> Value {
             "days_observed": 0,
             "coverage": 0.0,
             "dead_lanes": Value::Array(vec![]),
-            "twin_bss": 0.0,
-            "n_lapse_test": 0,
+            "twin_coverage_score": 0.0,
+            "twin_evidence_source_count": 0,
             "gate_passed": false
         },
         "state": {
@@ -374,9 +375,9 @@ pub fn empty_oracle_payload(generated: &str, scope_kind: &str) -> Value {
         "couplings": [],
         "forecast": {
             "horizon_days": 0,
-            "r_q10": [],
-            "r_q50": [],
-            "r_q90": [],
+            "heuristic_lower": [],
+            "heuristic_center": [],
+            "heuristic_upper": [],
             "p_lapse": [],
             "critical_days": []
         },
@@ -385,7 +386,7 @@ pub fn empty_oracle_payload(generated: &str, scope_kind: &str) -> Value {
     })
 }
 
-/// Assemble sterile `oracle_payload.v1` from twin + optional coupling.
+/// Assemble sterile `oracle_payload.v2` from twin + optional coupling.
 pub fn generate_oracle_payload(
     generated: &str,
     twin: &TwinScenarioResult,
@@ -410,8 +411,8 @@ pub fn generate_oracle_payload(
                     "days_observed": days_observed,
                     "coverage": round4(coverage),
                     "dead_lanes": Value::Array(vec![]),
-                    "twin_bss": twin.params.bss,
-                    "n_lapse_test": twin.params.n_lapse_test,
+                    "twin_coverage_score": twin.params.coverage_score,
+                    "twin_evidence_source_count": twin.params.evidence_source_count,
                     "gate_passed": false
                 }),
             );
@@ -429,9 +430,11 @@ pub fn generate_oracle_payload(
         return Ok(payload);
     }
 
-    let r0 = twin.forecast.r_q50.first().copied();
-    let r_trend = if twin.forecast.r_q50.len() > 6 {
-        Some(round4(twin.forecast.r_q50[6] - twin.forecast.r_q50[0]))
+    let r0 = twin.forecast.heuristic_center.first().copied();
+    let r_trend = if twin.forecast.heuristic_center.len() > 6 {
+        Some(round4(
+            twin.forecast.heuristic_center[6] - twin.forecast.heuristic_center[0],
+        ))
     } else {
         None
     };
@@ -485,8 +488,8 @@ pub fn generate_oracle_payload(
             "days_observed": days_observed,
             "coverage": round4(coverage),
             "dead_lanes": Value::Array(vec![]),
-            "twin_bss": twin.params.bss,
-            "n_lapse_test": twin.params.n_lapse_test,
+            "twin_coverage_score": twin.params.coverage_score,
+            "twin_evidence_source_count": twin.params.evidence_source_count,
             "gate_passed": true
         },
         "state": {
@@ -498,9 +501,9 @@ pub fn generate_oracle_payload(
         "couplings": couplings_out,
         "forecast": {
             "horizon_days": twin.forecast.horizon_days,
-            "r_q10": twin.forecast.r_q10,
-            "r_q50": twin.forecast.r_q50,
-            "r_q90": twin.forecast.r_q90,
+            "heuristic_lower": twin.forecast.heuristic_lower,
+            "heuristic_center": twin.forecast.heuristic_center,
+            "heuristic_upper": twin.forecast.heuristic_upper,
             "p_lapse": twin.forecast.p_lapse,
             "critical_days": twin.forecast.critical_days
         },
@@ -522,12 +525,12 @@ pub fn render_oracle_consult(payload: &Value) -> String {
     }
     let mut lines = Vec::new();
     if let Some(r) = payload.pointer("/state/r_now").and_then(|v| v.as_f64()) {
-        let bss = payload
-            .pointer("/sufficiency/twin_bss")
+        let coverage_score = payload
+            .pointer("/sufficiency/twin_coverage_score")
             .and_then(|v| v.as_f64())
             .unwrap_or(0.0);
         lines.push(format!(
-            "- 現在の認知リソース推定 R={r:.2} (snapshot BSS={bss:.3})"
+            "- 現在の認知リソース推定 R={r:.2} (observer coverage={coverage_score:.3})"
         ));
     }
     if let Some(arr) = payload.get("couplings").and_then(|v| v.as_array()) {

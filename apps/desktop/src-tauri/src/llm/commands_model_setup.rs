@@ -1,228 +1,107 @@
-//! Offline model setup gate (AI_SKILLS §5): existence check + local GGUF import.
+//! Offline model setup gate (AI_SKILLS §5): existence check + FE-driven import.
 //!
-//! Network download of models is permanently forbidden. The only write path is a
-//! user-picked local file, chunk-copied into `resolve_model_path`. Opening the
-//! recommended Hugging Face page uses the OS browser (user-initiated navigation);
-//! the app never fetches model bytes.
-
-use std::fs::{self, File};
-use std::io::{Read, Write};
-use std::path::{Path, PathBuf};
+//! Network download of models is permanently forbidden. Bytes reach the app only
+//! via frontend `@tauri-apps/plugin-fs` copy into `app_data_dir()/models/`.
+//! Rust never opens Security-Scoped picker paths (`std::fs` on those URLs fails
+//! on iOS). Opening the recommended Hugging Face page uses the OS browser
+//! (user-initiated); the app never fetches model bytes.
 
 use serde::Serialize;
-use tauri::{AppHandle, Emitter};
+use tauri::AppHandle;
 
-use super::model_path::{resolve_model_path, MODEL_FILENAME};
-
-/// Event name for chunk-copy progress (frontend `listen`).
-pub const MODEL_IMPORT_PROGRESS_EVENT: &str = "model-import-progress";
+use super::model_path::{
+    internal_model_present, resolve_model_path, validate_gguf_file, MODEL_RELATIVE_PATH,
+};
 
 /// Official recommended GGUF listing (guidance only — never fetched by the app).
 pub const RECOMMENDED_MODEL_PAGE_URL: &str =
     "https://huggingface.co/Qwen/Qwen2.5-7B-Instruct-GGUF";
 
-const COPY_CHUNK_BYTES: usize = 1024 * 1024;
-
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ModelExistsStatus {
     pub exists: bool,
-    /// Stable relative hint under the A+1 data root (`models/pocket-brain.gguf`).
+    /// Stable relative hint under AppData (`models/pocket-brain.gguf`).
     pub relative_path: String,
     /// Browser guidance URL (open via `open_recommended_model_page`, not fetch).
     pub recommended_page_url: String,
 }
 
+/// Absolute + relative destinations for the FE fs copy (AppData only).
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct ModelImportProgress {
-    pub percent: u8,
-    pub bytes_copied: u64,
-    pub total_bytes: u64,
+pub struct ModelImportDest {
+    pub absolute_path: String,
+    pub relative_path: String,
 }
 
-/// True when `<user_data_root>/models/pocket-brain.gguf` is a non-empty file.
+/// True when `<app_data_dir>/models/pocket-brain.gguf` is a non-empty file.
 #[tauri::command]
 pub fn check_model_exists(app: AppHandle) -> Result<ModelExistsStatus, String> {
-    let path = resolve_model_path(&app)?;
-    let exists = path.is_file()
-        && fs::metadata(&path)
-            .map(|m| m.len() > 0)
-            .unwrap_or(false);
+    let _ = resolve_model_path(&app)?;
     Ok(ModelExistsStatus {
-        exists,
-        relative_path: format!("models/{MODEL_FILENAME}"),
+        exists: internal_model_present(&app)?,
+        relative_path: MODEL_RELATIVE_PATH.to_string(),
         recommended_page_url: RECOMMENDED_MODEL_PAGE_URL.to_string(),
     })
 }
 
-/// Native file picker for a local `.gguf`. Returns `None` if the user cancels.
-/// Unavailable on iOS (use Files / inject script); never downloads.
+/// Ensure AppData `models/` exists and return the canonical dest paths for FE copy.
 #[tauri::command]
-pub async fn pick_local_gguf() -> Result<Option<String>, String> {
-    #[cfg(target_os = "ios")]
-    {
-        return Err(
-            "この端末ではファイル選択ダイアログを使えません。Files または inject スクリプトで models へ配置してください。"
-                .into(),
-        );
-    }
-    #[cfg(not(target_os = "ios"))]
-    {
-        let picked = tauri::async_runtime::spawn_blocking(|| {
-            rfd::FileDialog::new()
-                .add_filter("GGUF model", &["gguf"])
-                .set_title("Coraxis — ローカル GGUF を選択")
-                .pick_file()
-        })
-        .await
-        .map_err(|_| "ファイル選択を開始できませんでした。".to_string())?;
+pub fn prepare_model_import_dest(app: AppHandle) -> Result<ModelImportDest, String> {
+    let path = resolve_model_path(&app)?;
+    Ok(ModelImportDest {
+        absolute_path: path.to_string_lossy().into_owned(),
+        relative_path: MODEL_RELATIVE_PATH.to_string(),
+    })
+}
 
-        Ok(picked.map(|p| p.to_string_lossy().into_owned()))
-    }
+/// After FE copy: verify the internal GGUF is present (never accepts an external path).
+#[tauri::command]
+pub fn confirm_model_imported(app: AppHandle) -> Result<(), String> {
+    let path = resolve_model_path(&app)?;
+    validate_gguf_file(&path)
 }
 
 /// Open the recommended model page in the system browser (no in-app fetch).
 #[tauri::command]
-pub fn open_recommended_model_page() -> Result<(), String> {
-    open_https_url(RECOMMENDED_MODEL_PAGE_URL)
+pub fn open_recommended_model_page(app: AppHandle) -> Result<(), String> {
+    open_https_url(&app, RECOMMENDED_MODEL_PAGE_URL)
 }
 
-/// Chunk-copy a user-selected local GGUF into the A+1 model path with progress events.
-#[tauri::command]
-pub async fn import_local_model(app: AppHandle, source_path: String) -> Result<(), String> {
-    let dest = resolve_model_path(&app)?;
-    let source = validate_gguf_source(&source_path)?;
-
-    let app_progress = app.clone();
-    tauri::async_runtime::spawn_blocking(move || {
-        copy_gguf_with_progress(&source, &dest, &app_progress)
-    })
-    .await
-    .map_err(|_| "モデルの取り込みを開始できませんでした。".to_string())?
-}
-
-fn validate_gguf_source(raw: &str) -> Result<PathBuf, String> {
-    let path = PathBuf::from(raw);
-    if !path.is_absolute() {
-        return Err("モデルファイルのパスが不正です。".into());
-    }
-    let ext = path
-        .extension()
-        .and_then(|e| e.to_str())
-        .map(|e| e.to_ascii_lowercase());
-    if ext.as_deref() != Some("gguf") {
-        return Err("GGUF ファイル（.gguf）を選択してください。".into());
-    }
-    let meta = fs::metadata(&path).map_err(|_| "選択したファイルを読み取れません。".to_string())?;
-    if !meta.is_file() || meta.len() == 0 {
-        return Err("選択したファイルが空か、通常のファイルではありません。".into());
-    }
-    // Reject obvious directory traversal / non-canonical oddities softly.
-    let canonical = path
-        .canonicalize()
-        .map_err(|_| "選択したファイルを解決できません。".to_string())?;
-    if !canonical.is_file() {
-        return Err("選択したファイルを読み取れません。".into());
-    }
-    Ok(canonical)
-}
-
-fn copy_gguf_with_progress(source: &Path, dest: &Path, app: &AppHandle) -> Result<(), String> {
-    let total = fs::metadata(source)
-        .map_err(|_| "選択したファイルを読み取れません。".to_string())?
-        .len();
-    if total == 0 {
-        return Err("選択したファイルが空です。".into());
-    }
-
-    if let Some(parent) = dest.parent() {
-        fs::create_dir_all(parent).map_err(|_| "モデル保存先を作成できません。".to_string())?;
-    }
-
-    let partial = dest.with_extension("gguf.partial");
-    let _ = fs::remove_file(&partial);
-
-    let result = (|| {
-        let mut reader =
-            File::open(source).map_err(|_| "選択したファイルを開けません。".to_string())?;
-        let mut writer =
-            File::create(&partial).map_err(|_| "モデルの一時ファイルを作成できません。".to_string())?;
-
-        let mut buf = vec![0u8; COPY_CHUNK_BYTES];
-        let mut copied: u64 = 0;
-        let mut last_emitted: u8 = 255;
-
-        emit_progress(app, 0, 0, total);
-
-        loop {
-            let n = reader
-                .read(&mut buf)
-                .map_err(|_| "モデルの読み込み中に失敗しました。".to_string())?;
-            if n == 0 {
-                break;
-            }
-            writer
-                .write_all(&buf[..n])
-                .map_err(|_| "モデルの書き込み中に失敗しました。".to_string())?;
-            copied = copied.saturating_add(n as u64);
-            let percent = ((copied as u128 * 100) / total as u128).min(99) as u8;
-            if percent != last_emitted {
-                emit_progress(app, percent, copied, total);
-                last_emitted = percent;
-            }
-        }
-
-        writer
-            .flush()
-            .map_err(|_| "モデルの書き込み完了に失敗しました。".to_string())?;
-        drop(writer);
-
-        fs::rename(&partial, dest).map_err(|_| "モデルの確定に失敗しました。".to_string())?;
-        emit_progress(app, 100, total, total);
-        Ok(())
-    })();
-
-    if result.is_err() {
-        let _ = fs::remove_file(&partial);
-        let _ = fs::remove_file(dest);
-    }
-    result
-}
-
-fn emit_progress(app: &AppHandle, percent: u8, bytes_copied: u64, total_bytes: u64) {
-    let _ = app.emit(
-        MODEL_IMPORT_PROGRESS_EVENT,
-        ModelImportProgress {
-            percent,
-            bytes_copied,
-            total_bytes,
-        },
-    );
-}
-
-fn open_https_url(url: &str) -> Result<(), String> {
+fn require_https_guidance_url(url: &str) -> Result<(), String> {
     if !url.starts_with("https://") {
         return Err("案内先 URL が不正です。".into());
     }
+    Ok(())
+}
+
+fn open_https_url(app: &AppHandle, url: &str) -> Result<(), String> {
+    require_https_guidance_url(url)?;
     #[cfg(target_os = "macos")]
     {
+        let _ = app;
         std::process::Command::new("open")
             .arg(url)
             .spawn()
             .map_err(|_| "ブラウザを開けませんでした。".to_string())?;
         return Ok(());
     }
-    #[cfg(target_os = "ios")]
+    #[cfg(all(feature = "secure-vault", target_os = "ios"))]
     {
-        // iOS: `open` CLI unavailable; surface the URL via Err so UI can show copy text.
-        let _ = url;
+        return ios_open_https(app, url);
+    }
+    #[cfg(all(target_os = "ios", not(feature = "secure-vault")))]
+    {
+        let _ = (app, url);
         return Err(
-            "ブラウザ自動起動はこの端末では未対応です。案内 URL を手動で開いてください。".into(),
+            "ブラウザ自動起動には secure-vault ビルドが必要です。案内 URL を手動で開いてください。"
+                .into(),
         );
     }
     #[cfg(target_os = "windows")]
     {
+        let _ = app;
         std::process::Command::new("cmd")
             .args(["/C", "start", "", url])
             .spawn()
@@ -231,6 +110,7 @@ fn open_https_url(url: &str) -> Result<(), String> {
     }
     #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios")))]
     {
+        let _ = app;
         std::process::Command::new("xdg-open")
             .arg(url)
             .spawn()
@@ -244,45 +124,51 @@ fn open_https_url(url: &str) -> Result<(), String> {
         all(unix, not(target_os = "macos"), not(target_os = "ios"))
     )))]
     {
-        let _ = url;
+        let _ = (app, url);
         Err("この OS では案内ページを開けません。".into())
     }
+}
+
+#[cfg(all(feature = "secure-vault", target_os = "ios"))]
+fn ios_open_https(app: &AppHandle, url: &str) -> Result<(), String> {
+    let url = url.to_string();
+    let (tx, rx) = std::sync::mpsc::channel();
+    app.run_on_main_thread(move || {
+        let _ = tx.send(ios_open_https_on_main(&url));
+    })
+    .map_err(|_| "ブラウザ起動をメインスレッドへ渡せませんでした。".to_string())?;
+    rx.recv()
+        .map_err(|_| "ブラウザ起動の応答が失われました。".to_string())?
+}
+
+#[cfg(all(feature = "secure-vault", target_os = "ios"))]
+fn ios_open_https_on_main(url: &str) -> Result<(), String> {
+    use objc2::MainThreadMarker;
+    use objc2_foundation::{NSString, NSURL};
+    use objc2_ui_kit::UIApplication;
+
+    let Some(mtm) = MainThreadMarker::new() else {
+        return Err("ブラウザ起動はメインスレッド必須です。".into());
+    };
+    let ns = NSString::from_str(url);
+    let Some(ns_url) = NSURL::URLWithString(&ns) else {
+        return Err("案内先 URL が不正です。".into());
+    };
+    let shared = UIApplication::sharedApplication(mtm);
+    if !shared.openURL(&ns_url) {
+        return Err("Safari を開けませんでした。案内 URL を手動で開いてください。".into());
+    }
+    Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io::Write;
-
-    #[test]
-    fn validate_rejects_non_gguf_and_relative() {
-        assert!(validate_gguf_source("model.bin").is_err());
-        assert!(validate_gguf_source("relative.gguf").is_err());
-    }
-
-    #[test]
-    fn validate_accepts_absolute_gguf() {
-        let dir = std::env::temp_dir().join(format!(
-            "pkb-model-setup-{}",
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_nanos())
-                .unwrap_or(0)
-        ));
-        fs::create_dir_all(&dir).expect("tmpdir");
-        let path = dir.join("sample.gguf");
-        {
-            let mut f = File::create(&path).expect("create");
-            f.write_all(b"GGUF-test").expect("write");
-        }
-        let ok = validate_gguf_source(&path.to_string_lossy());
-        let _ = fs::remove_dir_all(&dir);
-        assert!(ok.is_ok());
-    }
 
     #[test]
     fn recommended_url_is_https_only() {
         assert!(RECOMMENDED_MODEL_PAGE_URL.starts_with("https://"));
-        assert!(open_https_url("http://example.com").is_err());
+        assert!(require_https_guidance_url("http://example.com").is_err());
+        assert!(require_https_guidance_url(RECOMMENDED_MODEL_PAGE_URL).is_ok());
     }
 }

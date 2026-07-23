@@ -11,6 +11,7 @@
 
 pub mod commands_llm;
 pub mod commands_model_setup;
+pub mod brain;
 pub mod context_budget;
 pub mod embed;
 pub mod hashed_embed;

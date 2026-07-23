@@ -1,8 +1,8 @@
 //! GD SPEAK-DSL stream parser (Inner Coliseum multi-agent GD). Pure & TOTAL:
 //! never throws, always returns >=0 transcript bubbles, even when the 1.5B
-//! model ignores the output format entirely. Re-parses the whole accumulated
-//! buffer per token (bounded by max_tokens, so this stays cheap) rather than
-//! tracking split-token parser state across calls.
+//! model ignores the output format entirely. `parseGdStream` is the one-shot
+//! parser; live generation uses `GdIncrementalStreamParser`, which scans each
+//! received character once and preserves split-header state across batches.
 //!
 //! Tiered recovery (strict prompt, lenient parser — never symmetric):
 //!   1. STRICT   `@A>` (fullwidth ＠Ａ＞ tolerated)   — model behaving.
@@ -55,6 +55,8 @@ const ROLE_BY_LETTER: Record<string, GdTranscriptRole> = {
 // back to the previous speaker; header *detection* must not miss it.
 const STRICT_RE = /(?:^|\n)[ \t　]*[@＠][ \t　]*([A-Za-z])[ \t　]*[>＞]/g;
 const LENIENT_RE = /(?:^|\n)[ \t　]*\[?[ \t　]*([A-Za-z])[ \t　]*[>＞\]:：]/g;
+const STRICT_LINE_RE = /^[ \t　]*[@＠][ \t　]*([A-Za-z])[ \t　]*[>＞]/;
+const LENIENT_LINE_RE = /^[ \t　]*\[?[ \t　]*([A-Za-z])[ \t　]*[>＞\]:：]/;
 
 export interface ParseGdOptions {
   /** Letters currently in play (see `gdValidLetters`); others fall back. */
@@ -135,5 +137,187 @@ export function parseGdStream(
     return body
       ? [{ turnId: `${prefix}-0`, role: fallbackRole, stage, text: body }]
       : [];
+  }
+}
+
+type IncrementalMode = "fallback" | "lenient" | "strict";
+
+interface IncrementalMessage {
+  role: GdTranscriptRole;
+  parts: string[];
+  hasNonWhitespace: boolean;
+}
+
+/**
+ * Stateful SPEAK-DSL parser for live output.
+ *
+ * Complete lines are consumed once. The unfinished line is retained as carry
+ * so `@A>` may be split across IPC batches. A late strict header upgrades a
+ * lenient stream by rebuilding exactly once; historical text is not repeatedly
+ * reparsed for every display update.
+ */
+export class GdIncrementalStreamParser {
+  private readonly validLetters: Set<string>;
+  private readonly stage: GdTranscriptStage;
+  private readonly idPrefix: string;
+  private readonly fallbackRole: GdTranscriptRole;
+  private mode: IncrementalMode = "fallback";
+  private rawUntilStrict: string[] = [];
+  private pendingLine = "";
+  private fallbackParts: string[] = [];
+  private messages: IncrementalMessage[] = [];
+  private previousRole: GdTranscriptRole;
+
+  constructor(options: ParseGdOptions) {
+    this.validLetters = new Set(
+      options.validLetters.map((letter) => letter.toUpperCase()),
+    );
+    this.stage = options.stage ?? "DISCUSSION";
+    this.idPrefix = options.idPrefix ?? "gd";
+    this.fallbackRole = resolveFallbackRole(options);
+    this.previousRole = this.fallbackRole;
+  }
+
+  push(chunk: string): GdTranscriptMessage[] {
+    if (!chunk) return this.snapshot();
+    if (this.mode !== "strict") {
+      this.rawUntilStrict.push(chunk);
+    }
+
+    const combined = this.pendingLine + chunk;
+    const lines = combined.split("\n");
+    const pending = lines.pop() ?? "";
+    const candidates = [...lines, pending];
+
+    if (
+      this.mode !== "strict" &&
+      candidates.some((line) => STRICT_LINE_RE.test(line))
+    ) {
+      this.mode = "strict";
+      this.rebuild(this.rawUntilStrict.join(""));
+      this.rawUntilStrict = [];
+      return this.snapshot();
+    }
+    if (
+      this.mode === "fallback" &&
+      candidates.some((line) => LENIENT_LINE_RE.test(line))
+    ) {
+      this.mode = "lenient";
+      this.rebuild(this.rawUntilStrict.join(""));
+      return this.snapshot();
+    }
+
+    this.pendingLine = pending;
+    for (const line of lines) {
+      this.consumeCompleteLine(line);
+    }
+    return this.snapshot();
+  }
+
+  private rebuild(raw: string): void {
+    this.pendingLine = "";
+    this.fallbackParts = [];
+    this.messages = [];
+    this.previousRole = this.fallbackRole;
+    const lines = raw.split("\n");
+    this.pendingLine = lines.pop() ?? "";
+    for (const line of lines) {
+      this.consumeCompleteLine(line);
+    }
+  }
+
+  private lineHeader(line: string): RegExpExecArray | null {
+    if (this.mode === "strict") return STRICT_LINE_RE.exec(line);
+    if (this.mode === "lenient") return LENIENT_LINE_RE.exec(line);
+    return null;
+  }
+
+  private appendToMessage(message: IncrementalMessage, text: string): void {
+    if (!text) return;
+    message.parts.push(text);
+    if (text.trim()) {
+      message.hasNonWhitespace = true;
+    }
+  }
+
+  private consumeCompleteLine(line: string): void {
+    if (this.mode === "fallback") {
+      this.fallbackParts.push(line, "\n");
+      return;
+    }
+
+    const header = this.lineHeader(line);
+    if (header) {
+      if (
+        this.messages.length > 0 &&
+        !this.messages[this.messages.length - 1].hasNonWhitespace
+      ) {
+        this.messages.pop();
+      }
+      const letter = header[1].toUpperCase();
+      const role = this.validLetters.has(letter)
+        ? ROLE_BY_LETTER[letter]
+        : this.previousRole;
+      this.previousRole = role;
+      const message: IncrementalMessage = {
+        role,
+        parts: [],
+        hasNonWhitespace: false,
+      };
+      this.appendToMessage(message, line.slice(header[0].length));
+      this.appendToMessage(message, "\n");
+      this.messages.push(message);
+      return;
+    }
+
+    const current = this.messages[this.messages.length - 1];
+    if (current) {
+      this.appendToMessage(current, line);
+      this.appendToMessage(current, "\n");
+    }
+  }
+
+  private snapshot(): GdTranscriptMessage[] {
+    if (this.mode === "fallback") {
+      const text = `${this.fallbackParts.join("")}${this.pendingLine}`.trim();
+      return text
+        ? [
+            {
+              turnId: `${this.idPrefix}-0`,
+              role: this.fallbackRole,
+              stage: this.stage,
+              text,
+            },
+          ]
+        : [];
+    }
+
+    const snapshots = this.messages.map((message) => ({
+      role: message.role,
+      text: message.parts.join("").trim(),
+    }));
+    const pendingHeader = this.lineHeader(this.pendingLine);
+    if (pendingHeader) {
+      if (snapshots.length > 0 && !snapshots[snapshots.length - 1].text) {
+        snapshots.pop();
+      }
+      const letter = pendingHeader[1].toUpperCase();
+      snapshots.push({
+        role: this.validLetters.has(letter)
+          ? ROLE_BY_LETTER[letter]
+          : this.previousRole,
+        text: this.pendingLine.slice(pendingHeader[0].length).trim(),
+      });
+    } else if (snapshots.length > 0 && this.pendingLine) {
+      const last = snapshots[snapshots.length - 1];
+      last.text = `${last.text}\n${this.pendingLine}`.trim();
+    }
+
+    return snapshots.map((message, index) => ({
+      turnId: `${this.idPrefix}-${index}`,
+      role: message.role,
+      stage: this.stage,
+      text: message.text,
+    }));
   }
 }

@@ -13,7 +13,7 @@
 use serde::Serialize;
 
 use crate::analytics::digital_twin::{
-    TwinScenarioResult, BSS_GATE, PRIOR_BETA1, PRIOR_BETA2, PRIOR_GAMMA, PRIOR_RHO,
+    TwinScenarioResult, PRIOR_BETA1, PRIOR_BETA2, PRIOR_GAMMA, PRIOR_RHO,
 };
 
 pub const THETA_DIM: usize = 4;
@@ -23,6 +23,8 @@ pub const LAMBDA: f64 = 0.98;
 pub const P0_SCALE: f64 = 100.0;
 /// Minimum consecutive twin-run pairs before personalization may unlock.
 pub const MIN_IDENTIFY_OBS: u32 = 10;
+/// Coefficient-of-determination gate for RLS personalization.
+pub const IDENTIFY_CONFIDENCE_GATE: f64 = 0.05;
 
 pub type Vec4 = [f64; THETA_DIM];
 pub type Mat4 = [[f64; THETA_DIM]; THETA_DIM];
@@ -136,7 +138,7 @@ impl RlsFilter {
         e.abs()
     }
 
-    /// Coefficient of determination on accumulated residuals (BSS-comparable).
+    /// Coefficient of determination on accumulated residuals.
     pub fn confidence(&self) -> f64 {
         if self.n_obs < 2 {
             return 0.0;
@@ -152,7 +154,8 @@ impl RlsFilter {
 
     pub fn status(&self) -> TwinIdentifyStatus {
         let confidence = round4(self.confidence());
-        let is_personalized = confidence >= BSS_GATE && self.n_obs >= MIN_IDENTIFY_OBS;
+        let is_personalized =
+            confidence >= IDENTIFY_CONFIDENCE_GATE && self.n_obs >= MIN_IDENTIFY_OBS;
         TwinIdentifyStatus {
             is_personalized,
             confidence,
@@ -301,7 +304,7 @@ mod tests {
         assert!((t[2] - 0.2).abs() < 0.08, "beta2 {:?}", t);
         assert!((t[3] - 0.05).abs() < 0.08, "gamma {:?}", t);
         assert!(filter.n_obs() >= MIN_IDENTIFY_OBS);
-        assert!(filter.confidence() >= BSS_GATE);
+        assert!(filter.confidence() >= IDENTIFY_CONFIDENCE_GATE);
     }
 
     #[test]

@@ -15,11 +15,11 @@ use serde::{Deserialize, Serialize};
 use crate::analytics::rasch::{ABILITY_GRID, GRID_LEN};
 use crate::analytics::tensor::TensorProfile;
 
-pub const TWIN_SCHEMA: &str = "digital_twin.scenario.v1";
+pub const TWIN_SCHEMA: &str = "digital_twin.scenario.v2";
 pub const R_FLOOR: f64 = 0.05;
 pub const R_INIT: f64 = 0.7;
 pub const Z_CLIP: f64 = 35.0;
-pub const BSS_GATE: f64 = 0.05;
+pub const COVERAGE_SCORE_GATE: f64 = 0.05;
 pub const MIN_PROVENANCE_SOURCES: usize = 2;
 pub const MC_HORIZON_DEFAULT: u32 = 14;
 pub const MC_HORIZON_MAX: u32 = 30;
@@ -39,8 +39,12 @@ pub struct TwinParams {
     pub gamma: f64,
     pub kappa: f64,
     pub theta_r: Option<f64>,
-    pub bss: f64,
-    pub n_lapse_test: i32,
+    /// Observer coverage heuristic. This is not a Brier Skill Score.
+    #[serde(alias = "bss")]
+    pub coverage_score: f64,
+    /// Number of distinct observer sources present in this snapshot.
+    #[serde(alias = "n_lapse_test")]
+    pub evidence_source_count: usize,
     pub gate_passed: bool,
     pub fitted_window: String,
     /// Phase 5: RLS personalization unlocked.
@@ -101,9 +105,13 @@ pub struct TwinStateVector {
 #[serde(rename_all = "snake_case")]
 pub struct TwinForecast {
     pub horizon_days: u32,
-    pub r_q10: Vec<f64>,
-    pub r_q50: Vec<f64>,
-    pub r_q90: Vec<f64>,
+    /// Deterministic heuristic band, not calibrated forecast quantiles.
+    #[serde(alias = "r_q10")]
+    pub heuristic_lower: Vec<f64>,
+    #[serde(alias = "r_q50")]
+    pub heuristic_center: Vec<f64>,
+    #[serde(alias = "r_q90")]
+    pub heuristic_upper: Vec<f64>,
     pub p_lapse: Vec<f64>,
     pub critical_days: Vec<String>,
 }
@@ -136,6 +144,9 @@ fn round4(x: f64) -> f64 {
 
 pub fn rasch_expected_ability(posterior: &[f64]) -> Option<f64> {
     if posterior.len() != GRID_LEN {
+        return None;
+    }
+    if posterior.iter().any(|p| !p.is_finite() || *p < 0.0) {
         return None;
     }
     let sum: f64 = posterior.iter().sum();
@@ -280,7 +291,7 @@ fn add_days(iso: &str, days: i64) -> String {
     format!("{y:04}-{m:02}-{d:02}")
 }
 
-fn snapshot_confidence(input: &TwinSnapshotInput, state: &TwinStateVector) -> (f64, i32, usize) {
+fn snapshot_coverage(input: &TwinSnapshotInput, state: &TwinStateVector) -> (f64, usize) {
     let mut sources = 0usize;
     if input.pulse_affinity.is_some() {
         sources += 1;
@@ -294,14 +305,13 @@ fn snapshot_confidence(input: &TwinSnapshotInput, state: &TwinStateVector) -> (f
     if input.tensor.is_some() {
         sources += 1;
     }
-    // Deterministic BSS proxy from coverage of observers (not walk-forward skill).
-    let bss = round4(
+    // Deterministic observer coverage; never represent this as forecast skill.
+    let coverage_score = round4(
         0.35 * state.tensor_coverage
             + 0.35 * (1.0 - state.gap_pressure)
             + 0.30 * state.pulse_norm.unwrap_or(0.0),
     );
-    let n_lapse_test = (sources * 5) as i32;
-    (bss, n_lapse_test, sources)
+    (coverage_score, sources)
 }
 
 /// Deterministic scenario roll-forward from vault multimodal snapshot.
@@ -313,8 +323,9 @@ pub fn evaluate_digital_twin_scenario_with_identify(
 ) -> TwinScenarioResult {
     let horizon = input.horizon_days.clamp(1, MC_HORIZON_MAX);
     let state = derive_state_vector(&input);
-    let (bss, n_lapse_test, sources) = snapshot_confidence(&input, &state);
-    let gate_passed = bss >= BSS_GATE && sources >= MIN_PROVENANCE_SOURCES && n_lapse_test >= 10;
+    let (coverage_score, sources) = snapshot_coverage(&input, &state);
+    let gate_passed = coverage_score >= COVERAGE_SCORE_GATE
+        && sources >= MIN_PROVENANCE_SOURCES;
 
     let window = format!("{}..{}", input.today, input.today);
     let params = if let Some(id) = identify.filter(|s| s.is_personalized) {
@@ -325,8 +336,8 @@ pub fn evaluate_digital_twin_scenario_with_identify(
             gamma: id.gamma,
             kappa: 0.8,
             theta_r: Some(0.45),
-            bss,
-            n_lapse_test,
+            coverage_score,
+            evidence_source_count: sources,
             gate_passed,
             fitted_window: window,
             is_personalized: true,
@@ -344,8 +355,8 @@ pub fn evaluate_digital_twin_scenario_with_identify(
             gamma: PRIOR_GAMMA,
             kappa: 0.8,
             theta_r: Some(0.45),
-            bss,
-            n_lapse_test,
+            coverage_score,
+            evidence_source_count: sources,
             gate_passed,
             fitted_window: window,
             is_personalized: false,
@@ -357,18 +368,18 @@ pub fn evaluate_digital_twin_scenario_with_identify(
 
     let (rec, lsw, lvol, fr) = apply_scenario_loads(&state, &input.scenario);
     let mut r = state.r_now;
-    let mut r_q50 = Vec::with_capacity(horizon as usize);
-    let mut r_q10 = Vec::with_capacity(horizon as usize);
-    let mut r_q90 = Vec::with_capacity(horizon as usize);
+    let mut heuristic_center = Vec::with_capacity(horizon as usize);
+    let mut heuristic_lower = Vec::with_capacity(horizon as usize);
+    let mut heuristic_upper = Vec::with_capacity(horizon as usize);
     let mut p_lapse = Vec::with_capacity(horizon as usize);
     let mut critical_days = Vec::new();
 
     for h in 0..horizon {
-        r_q50.push(round4(r));
+        heuristic_center.push(round4(r));
         // Deterministic band from fixed process noise proxy (no RNG): ±0.05·(1−R)
         let band = 0.05 * (1.0 - r);
-        r_q10.push(round4(clip_r(r - band)));
-        r_q90.push(round4(clip_r(r + band)));
+        heuristic_lower.push(round4(clip_r(r - band)));
+        heuristic_upper.push(round4(clip_r(r + band)));
         let p = if let Some(th) = params.theta_r {
             let z = params.kappa * (th - r);
             round4(sigmoid(z))
@@ -400,18 +411,18 @@ pub fn evaluate_digital_twin_scenario_with_identify(
     let forecast = if gate_passed {
         TwinForecast {
             horizon_days: horizon,
-            r_q10,
-            r_q50,
-            r_q90,
+            heuristic_lower,
+            heuristic_center,
+            heuristic_upper,
             p_lapse,
             critical_days,
         }
     } else {
         TwinForecast {
             horizon_days: 0,
-            r_q10: vec![],
-            r_q50: vec![],
-            r_q90: vec![],
+            heuristic_lower: vec![],
+            heuristic_center: vec![],
+            heuristic_upper: vec![],
             p_lapse: vec![],
             critical_days: vec![],
         }
@@ -452,6 +463,17 @@ mod tests {
             None,
         );
         assert!(!out.params.gate_passed);
-        assert!(out.forecast.r_q50.is_empty());
+        assert!(out.forecast.heuristic_center.is_empty());
+    }
+
+    #[test]
+    fn rasch_expected_ability_rejects_each_invalid_probability() {
+        let mut posterior = vec![1.0 / GRID_LEN as f64; GRID_LEN];
+        posterior[0] = -0.1;
+        posterior[1] += 0.1;
+        assert_eq!(rasch_expected_ability(&posterior), None);
+
+        posterior[0] = f64::NAN;
+        assert_eq!(rasch_expected_ability(&posterior), None);
     }
 }

@@ -1,4 +1,4 @@
-import { useEffect, useReducer, useRef, useState } from "react";
+import { memo, useEffect, useReducer, useRef, useState } from "react";
 import {
   getKnowledgeResearchPolicy,
   knowledgeResearch,
@@ -62,6 +62,27 @@ function freezeStreamingMessages(messages: ChatMessage[]): ChatMessage[] {
 function persistConsultSession(messages: ChatMessage[]): void {
   consultSessionMessages = freezeStreamingMessages(messages);
 }
+
+const ConsultMessageBubble = memo(function ConsultMessageBubble({
+  message,
+}: {
+  message: ChatMessage;
+}) {
+  return (
+    <div className={`chat-bubble ${message.role}`}>
+      <span className="chat-role">
+        {message.role === "user" ? "あなた" : "Coraxis"}
+      </span>
+      <pre className={`chat-text${message.streaming ? " streaming" : ""}`}>
+        {message.text}
+        {message.streaming && <span className="chat-cursor">▌</span>}
+      </pre>
+      {message.provenanceLabel && (
+        <span className="provenance-chip">{message.provenanceLabel}</span>
+      )}
+    </div>
+  );
+});
 
 export function ConsultTab() {
   const [messages, setMessages] = useState<ChatMessage[]>(consultSessionMessages);
@@ -322,16 +343,7 @@ export function ConsultTab() {
           <p className="hint chat-empty">質問を入力して送信してください。</p>
         ) : (
           messages.map((m, i) => (
-            <div key={i} className={`chat-bubble ${m.role}`}>
-              <span className="chat-role">{m.role === "user" ? "あなた" : "Coraxis"}</span>
-              <pre className={`chat-text${m.streaming ? " streaming" : ""}`}>
-                {m.text}
-                {m.streaming && <span className="chat-cursor">▌</span>}
-              </pre>
-              {m.provenanceLabel && (
-                <span className="provenance-chip">{m.provenanceLabel}</span>
-              )}
-            </div>
+            <ConsultMessageBubble key={i} message={m} />
           ))
         )}
       </div>

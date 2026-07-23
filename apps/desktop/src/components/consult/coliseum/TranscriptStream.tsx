@@ -3,6 +3,8 @@
  * 1:1 interview roles or GD multi-agent roles.
  */
 
+import { memo } from "react";
+
 export type TranscriptRole1on1 = "INTERVIEWER" | "CANDIDATE";
 
 export type TranscriptRoleGd =
@@ -51,7 +53,33 @@ function roleClass(role: TranscriptRole): string {
   return "tx-msg tx-msg-participant";
 }
 
-export function TranscriptStream({
+function TranscriptRow({ message }: { message: TranscriptMessage }) {
+  return (
+    <li
+      className={roleClass(message.role)}
+      data-role={message.role}
+    >
+      <div className="tx-msg-meta">
+        <span className="tx-msg-role">
+          [{message.role}] [{message.stage}]
+        </span>
+        <span className="tx-msg-turn">{formatTurnId(message.turnId)}</span>
+      </div>
+      <pre className="tx-msg-body">{message.text}</pre>
+    </li>
+  );
+}
+
+const MemoTranscriptRow = memo(
+  TranscriptRow,
+  (previous, next) =>
+    previous.message.turnId === next.message.turnId &&
+    previous.message.role === next.message.role &&
+    previous.message.stage === next.message.stage &&
+    previous.message.text === next.message.text,
+);
+
+export const TranscriptStream = memo(function TranscriptStream({
   messages,
   multiAgent = false,
 }: TranscriptStreamProps) {
@@ -64,18 +92,10 @@ export function TranscriptStream({
         {multiAgent ? "MULTI-AGENT STREAM" : "TRANSCRIPT STREAM"}
       </div>
       <ul className="tx-stream-list">
-        {messages.map((msg) => (
-          <li key={msg.turnId} className={roleClass(msg.role)} data-role={msg.role}>
-            <div className="tx-msg-meta">
-              <span className="tx-msg-role">
-                [{msg.role}] [{msg.stage}]
-              </span>
-              <span className="tx-msg-turn">{formatTurnId(msg.turnId)}</span>
-            </div>
-            <pre className="tx-msg-body">{msg.text}</pre>
-          </li>
+        {messages.map((message) => (
+          <MemoTranscriptRow key={message.turnId} message={message} />
         ))}
       </ul>
     </div>
   );
-}
+});

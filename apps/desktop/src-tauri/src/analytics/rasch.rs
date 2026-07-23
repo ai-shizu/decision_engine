@@ -181,6 +181,13 @@ pub fn evaluate_rasch_scale(
     item_id: &str,
     response: u8,
 ) -> Result<[f64; GRID_LEN], String> {
+    if posterior.iter().any(|p| !p.is_finite() || *p < 0.0) {
+        return Err("posterior entries must be finite and non-negative".into());
+    }
+    let posterior_mass: f64 = posterior.iter().sum();
+    if !(posterior_mass.is_finite() && posterior_mass > 0.0) {
+        return Err("posterior mass must be positive finite".into());
+    }
     if response > 4 {
         return Err("invalid response".into());
     }
@@ -311,5 +318,13 @@ mod tests {
         let p1 = evaluate_rasch_scale(&p0, "pq-decision_threshold-FACT-01", 4).unwrap();
         let s: f64 = p1.iter().sum();
         assert!((s - 1.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn update_rejects_negative_prior_probability() {
+        let mut p = initial_posterior();
+        p[0] = -0.25;
+        p[1] += 0.25;
+        assert!(evaluate_rasch_scale(&p, "pq-decision_threshold-FACT-01", 4).is_err());
     }
 }
