@@ -98,7 +98,7 @@ export async function runForegroundRestore(
     if (!llmWasLoaded) {
       await deps.warmLlm();
       llmWarmed = true;
-      llmWasLoaded = await deps.probeLlmLoaded().catch(() => true);
+      llmWasLoaded = await deps.probeLlmLoaded().catch(() => false);
     }
     if (deps.warmConsultRuntime) {
       await deps.warmConsultRuntime().catch(() => {

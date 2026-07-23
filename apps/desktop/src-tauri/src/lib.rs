@@ -150,9 +150,17 @@ pub fn run() {
             coliseum::commands::seal_interview_evaluation,
             #[cfg(feature = "pocket-brain")]
             coliseum::commands::seal_metacognitive_debrief,
-            #[cfg(feature = "pocket-brain")]
+            #[cfg(all(
+                feature = "pocket-brain",
+                feature = "secure-vault",
+                target_vendor = "apple"
+            ))]
             coliseum::commands::seal_interview_evaluation_from_session,
-            #[cfg(feature = "pocket-brain")]
+            #[cfg(all(
+                feature = "pocket-brain",
+                feature = "secure-vault",
+                target_vendor = "apple"
+            ))]
             coliseum::commands::seal_metacognitive_debrief_from_session,
             #[cfg(all(
                 feature = "pocket-brain",

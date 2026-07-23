@@ -11,7 +11,7 @@
 
 use std::num::NonZeroU32;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicU8, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
 use std::thread;
 use std::time::Duration;
@@ -29,7 +29,7 @@ use llama_cpp_2::sampling::LlamaSampler;
 use llama_cpp_2::token::LlamaToken;
 use llama_cpp_2::TokenToStringError;
 
-use super::params::{GenerationParams, LoadParams};
+use super::params::{GenerationParams, LoadParams, MAX_N_CTX, MIN_N_CTX};
 use super::prompt::{
     build_prompt, LlmTaskId, TASK_COGNITIVE_DISTORTION_V1, TASK_INTERVIEW_EVALUATION_V1,
     TASK_KAKEIBO_V1, TASK_METACOGNITIVE_DEBRIEF_V1, TASK_RECEIPT_OCR_V1,
@@ -135,12 +135,17 @@ fn token_piece_bytes(model: &LlamaModel, token: LlamaToken) -> Result<Vec<u8>, T
 /// worker thread, and the iOS lifecycle observer.
 ///
 /// The iOS memory-warning / background callback runs on the main thread and may
-/// ONLY touch this via [`request_purge`](Self::request_purge): two atomic
+/// ONLY touch this via [`request_purge`](Self::request_purge): three atomic
 /// stores, no lock, no blocking. The heavy work — dropping the multi-GB model —
 /// happens later on the worker thread, never in the callback.
 pub struct LlmMemoryGovernor {
-    /// Breaks the in-flight decode loop within one token (checked per token).
-    cancel: AtomicBool,
+    /// Monotonic generation boundary. A cancellation advances the epoch so the
+    /// currently running job stops without poisoning a later queued job.
+    cancel_epoch: AtomicU64,
+    /// Advances only for a purge. Load commands capture this value so work
+    /// queued before a Jetsam/background transition cannot rehydrate the model
+    /// after the purge has been consumed.
+    purge_epoch: AtomicU64,
     /// Instructs the worker to drop the model/context and return memory to iOS.
     purge_requested: AtomicBool,
     /// Progressive degradation ladder (Nominal→Critical). Updated lock-free.
@@ -150,7 +155,8 @@ pub struct LlmMemoryGovernor {
 impl LlmMemoryGovernor {
     fn new() -> Self {
         Self {
-            cancel: AtomicBool::new(false),
+            cancel_epoch: AtomicU64::new(0),
+            purge_epoch: AtomicU64::new(0),
             purge_requested: AtomicBool::new(false),
             degradation: AtomicU8::new(DegradationLevel::Nominal.as_u8()),
         }
@@ -158,16 +164,17 @@ impl LlmMemoryGovernor {
 
     /// Cancel the in-flight generation only (user "stop"). Lock-free.
     pub fn request_cancel(&self) {
-        self.cancel.store(true, Ordering::SeqCst);
+        self.cancel_epoch.fetch_add(1, Ordering::SeqCst);
     }
 
     /// Request a full memory purge: cancel the in-flight generation AND drop the
     /// model. Safe to call from the iOS main-thread callback or the Jetsam
-    /// sampler's `over_threshold` rising edge — two atomic stores, no lock, no
+    /// sampler's `over_threshold` rising edge — three atomic updates, no lock, no
     /// blocking (satisfies the no-heavy-work-in-callback rule). The heavy model
     /// `Drop` happens later on the worker via [`take_purge`](Self::take_purge).
     pub fn request_purge(&self) {
-        self.cancel.store(true, Ordering::SeqCst);
+        self.cancel_epoch.fetch_add(1, Ordering::SeqCst);
+        self.purge_epoch.fetch_add(1, Ordering::SeqCst);
         self.purge_requested.store(true, Ordering::SeqCst);
     }
 
@@ -180,12 +187,25 @@ impl LlmMemoryGovernor {
         DegradationLevel::from_u8(self.degradation.load(Ordering::SeqCst))
     }
 
-    fn is_cancelled(&self) -> bool {
-        self.cancel.load(Ordering::SeqCst)
+    fn cancel_epoch(&self) -> u64 {
+        self.cancel_epoch.load(Ordering::SeqCst)
     }
 
-    fn reset_cancel(&self) {
-        self.cancel.store(false, Ordering::SeqCst);
+    fn purge_epoch(&self) -> u64 {
+        self.purge_epoch.load(Ordering::SeqCst)
+    }
+
+    fn purge_pending(&self) -> bool {
+        self.purge_requested.load(Ordering::SeqCst)
+    }
+
+    fn load_is_stale(&self, submitted_purge_epoch: u64) -> bool {
+        self.purge_pending() || self.purge_epoch() != submitted_purge_epoch
+    }
+
+    fn is_cancelled_since(&self, start_epoch: u64) -> bool {
+        self.purge_requested.load(Ordering::SeqCst)
+            || self.cancel_epoch.load(Ordering::SeqCst) != start_epoch
     }
 
     /// Consume a pending purge request (true at most once per request).
@@ -456,6 +476,7 @@ enum LlmCommand {
     Load {
         model_path: PathBuf,
         params: LoadParams,
+        purge_epoch: u64,
         reply: mpsc::Sender<Result<(), String>>,
     },
     Generate {
@@ -522,12 +543,14 @@ impl LlmHandle {
     /// Blocking: mmap-load the GGUF on the worker thread and await the result.
     pub fn load(&self, model_path: PathBuf, params: LoadParams) -> Result<(), String> {
         let (reply, ack) = mpsc::channel();
+        let purge_epoch = self.governor.purge_epoch();
         self.tx
             .lock()
             .map_err(|_| "llm tx poisoned".to_string())?
             .send(LlmCommand::Load {
                 model_path,
                 params,
+                purge_epoch,
                 reply,
             })
             .map_err(|_| "llm worker gone".to_string())?;
@@ -544,7 +567,7 @@ impl LlmHandle {
         task_id: Option<String>,
         tokens: Channel<TokenEvent>,
     ) -> Result<(), String> {
-        self.governor.reset_cancel();
+        params.validate()?;
         let (completion, ack) = oneshot::channel();
         {
             let tx = self.tx.lock().map_err(|_| "llm tx poisoned".to_string())?;
@@ -592,7 +615,11 @@ impl LlmHandle {
     /// Blocking: embed `text` on the worker with a short-lived embeddings context.
     /// Does not share the generation context; respects cancel/purge via governor.
     pub fn embed(&self, text: String, n_ctx: u32) -> Result<Vec<f32>, String> {
-        self.governor.reset_cancel();
+        if !(MIN_N_CTX..=MAX_N_CTX).contains(&n_ctx) {
+            return Err(format!(
+                "embedding n_ctx must be in {MIN_N_CTX}..={MAX_N_CTX}"
+            ));
+        }
         let (reply, ack) = mpsc::channel();
         self.tx
             .lock()
@@ -626,12 +653,7 @@ fn worker_loop(
         // heavy `Drop` of the multi-GB model happens here, on the worker thread,
         // never in the OS callback. Any in-flight `ctx`/`Arc` clone was already
         // dropped when `generate` returned, so `take()` releases the last ref.
-        if governor.take_purge() && model.take().is_some() {
-            monitor.set_phase(MemPhase::Baseline);
-            if let Some(sink) = events.as_ref() {
-                let _ = sink.send(LlmLifecycleEvent::MemoryPurged);
-            }
-        }
+        commit_pending_purge(&governor, &mut model, &monitor, events.as_ref());
 
         let cmd = match rx.recv_timeout(PURGE_POLL_INTERVAL) {
             Ok(cmd) => cmd,
@@ -654,16 +676,33 @@ fn worker_loop(
             Err(mpsc::RecvTimeoutError::Disconnected) => break,
         };
 
+        // A purge can race between the loop-head check and a command waking
+        // `recv_timeout`. Commit it before dispatch so a queued generation
+        // cannot observe a model that the OS already ordered us to release.
+        commit_pending_purge(&governor, &mut model, &monitor, events.as_ref());
+
         match cmd {
             LlmCommand::Load {
                 model_path,
                 params,
+                purge_epoch,
                 reply,
             } => {
-                let result = load_model(&backend, &model_path, &params).map(|m| {
-                    model = Some(Arc::new(m));
-                    monitor.set_phase(MemPhase::ModelLoaded);
-                });
+                let result = if governor.load_is_stale(purge_epoch) {
+                    Err("model load cancelled by memory purge".into())
+                } else {
+                    load_model(&backend, &model_path, &params).and_then(|loaded| {
+                        if governor.load_is_stale(purge_epoch) {
+                            // A purge arrived during the blocking mmap/load.
+                            // Drop the temporary model instead of publishing it.
+                            Err("model load cancelled by memory purge".into())
+                        } else {
+                            model = Some(Arc::new(loaded));
+                            monitor.set_phase(MemPhase::ModelLoaded);
+                            Ok(())
+                        }
+                    })
+                };
                 let _ = reply.send(result);
             }
             LlmCommand::Generate {
@@ -672,6 +711,7 @@ fn worker_loop(
                 tokens,
                 completion,
             } => {
+                let cancel_epoch = governor.cancel_epoch();
                 let result = match model.as_ref() {
                     Some(model) => generate(
                         &backend,
@@ -680,6 +720,7 @@ fn worker_loop(
                         task_id.as_deref(),
                         &tokens,
                         &governor,
+                        cancel_epoch,
                         &monitor,
                     ),
                     None => Err("model not loaded".into()),
@@ -700,13 +741,14 @@ fn worker_loop(
                 let result = match model.as_ref() {
                     None => Err("model not loaded".into()),
                     Some(model) => {
+                        let cancel_epoch = governor.cancel_epoch();
                         monitor.set_phase(MemPhase::CtxCreated);
                         let out = super::embed::embed_text(
                             &backend,
                             model.as_ref(),
                             &text,
                             n_ctx,
-                            || governor.is_cancelled(),
+                            || governor.is_cancelled_since(cancel_epoch),
                         );
                         monitor.set_phase(MemPhase::Idle);
                         out
@@ -719,6 +761,28 @@ fn worker_loop(
             }
         }
     }
+}
+
+/// Consume an OS/Jetsam purge request on the worker thread. Returns whether a
+/// request was consumed, independently of whether a model happened to be
+/// resident.
+fn commit_pending_purge(
+    governor: &LlmMemoryGovernor,
+    model: &mut Option<Arc<LlamaModel>>,
+    monitor: &MemoryMonitor,
+    events: Option<&Channel<LlmLifecycleEvent>>,
+) -> bool {
+    if !governor.take_purge() {
+        return false;
+    }
+    let _ = model.take();
+    monitor.set_phase(MemPhase::Baseline);
+    // Emit even when no model is currently resident: a queued/in-flight load
+    // may still need its frontend retry state invalidated by this boundary.
+    if let Some(sink) = events {
+        let _ = sink.send(LlmLifecycleEvent::MemoryPurged);
+    }
+    true
 }
 
 /// Apply the model's baked-in chat template to a `(system, user)` pair.
@@ -806,8 +870,14 @@ fn generate(
     task_id: Option<&str>,
     tokens: &Channel<TokenEvent>,
     governor: &LlmMemoryGovernor,
+    cancel_epoch: u64,
     monitor: &MemoryMonitor,
 ) -> Result<(), String> {
+    g.validate()?;
+    if governor.is_cancelled_since(cancel_epoch) {
+        return Err("generation cancelled".into());
+    }
+
     // Fail closed before allocating context / sampling for unknown tasks.
     let mode = resolve_generation_mode(task_id)?;
 
@@ -838,10 +908,38 @@ fn generate(
         }
     };
 
+    if governor.is_cancelled_since(cancel_epoch) {
+        return Err("generation cancelled".into());
+    }
+
+    let requested_ctx = g.resolved_n_ctx();
+    let trained_ctx = model.n_ctx_train();
+    if trained_ctx > 0 && requested_ctx > trained_ctx {
+        return Err(format!(
+            "requested context {requested_ctx} exceeds model context {trained_ctx}"
+        ));
+    }
     let level = governor.degradation();
-    let scaled_ctx = ((g.n_ctx as f32) * level.context_factor())
-        .round()
-        .clamp(512.0, g.n_ctx as f32) as u32;
+    let scaled_ctx = (((requested_ctx as f64) * f64::from(level.context_factor())).round() as u32)
+        .clamp(MIN_N_CTX, requested_ctx);
+    let input_token_budget = scaled_ctx
+        .checked_sub(g.max_tokens)
+        .ok_or_else(|| "output token budget exceeds degraded context".to_string())?
+        as usize;
+
+    let prompt_tokens = model
+        .str_to_token(&prompt, model_add_bos(model))
+        .map_err(|e| format!("tokenize: {e}"))?;
+    if prompt_tokens.len() > input_token_budget {
+        return Err(format!(
+            "prompt exceeds context budget: {} > {input_token_budget}",
+            prompt_tokens.len()
+        ));
+    }
+    if governor.is_cancelled_since(cancel_epoch) {
+        return Err("generation cancelled".into());
+    }
+
     let ctx_params = apply_context_device_policy(
         LlamaContextParams::default().with_n_ctx(NonZeroU32::new(scaled_ctx)),
         cfg!(all(target_os = "ios", target_abi = "sim")),
@@ -851,15 +949,15 @@ fn generate(
         .map_err(|e| format!("context create: {e}"))?;
     monitor.set_phase(MemPhase::CtxCreated);
 
-    let prompt_tokens = model
-        .str_to_token(&prompt, model_add_bos(model))
-        .map_err(|e| format!("tokenize: {e}"))?;
     let mut batch = LlamaBatch::new(prompt_tokens.len().max(1), 1);
     let last = prompt_tokens.len().saturating_sub(1);
     for (i, token) in prompt_tokens.iter().enumerate() {
         batch
             .add(*token, i as i32, &[0], i == last)
             .map_err(|e| format!("batch add: {e}"))?;
+    }
+    if governor.is_cancelled_since(cancel_epoch) {
+        return Err("generation cancelled".into());
     }
     ctx.decode(&mut batch).map_err(|e| format!("decode: {e}"))?;
     monitor.set_phase(MemPhase::Inference);
@@ -917,7 +1015,7 @@ fn generate(
             .map_err(|e| format!("channel send: {e}"))
     });
     for seq in 0..g.max_tokens {
-        if governor.is_cancelled() {
+        if governor.is_cancelled_since(cancel_epoch) {
             cancelled = true;
             break;
         }
@@ -1121,23 +1219,49 @@ mod tests {
     }
 
     #[test]
-    fn governor_request_purge_sets_cancel_and_purge() {
+    fn governor_request_purge_advances_epoch_and_stays_sticky_until_consumed() {
         let g = LlmMemoryGovernor::new();
-        assert!(!g.is_cancelled());
+        let before = g.cancel_epoch();
+        let purge_before = g.purge_epoch();
+        assert!(!g.is_cancelled_since(before));
         assert!(!g.take_purge());
+
         g.request_purge();
-        assert!(g.is_cancelled());
+        assert!(g.is_cancelled_since(before));
+        assert_ne!(g.purge_epoch(), purge_before);
+        let after = g.cancel_epoch();
+        // Even a snapshot taken after the epoch advance must observe the
+        // unconsumed purge request.
+        assert!(g.is_cancelled_since(after));
         assert!(g.take_purge());
-        // Consumed once.
+        assert!(!g.is_cancelled_since(after));
         assert!(!g.take_purge());
     }
 
     #[test]
-    fn governor_request_cancel_does_not_purge() {
+    fn governor_cancel_only_invalidates_the_running_epoch() {
         let g = LlmMemoryGovernor::new();
+        let running = g.cancel_epoch();
+        let submitted_load = g.purge_epoch();
         g.request_cancel();
-        assert!(g.is_cancelled());
+        assert!(g.is_cancelled_since(running));
         assert!(!g.take_purge());
+        assert!(!g.load_is_stale(submitted_load));
+        let next_job = g.cancel_epoch();
+        assert!(!g.is_cancelled_since(next_job));
+    }
+
+    #[test]
+    fn queued_load_from_before_purge_stays_stale_after_purge_is_consumed() {
+        let g = LlmMemoryGovernor::new();
+        let stale_load = g.purge_epoch();
+        g.request_purge();
+        assert!(g.load_is_stale(stale_load));
+        assert!(g.take_purge());
+        assert!(g.load_is_stale(stale_load));
+
+        let foreground_load = g.purge_epoch();
+        assert!(!g.load_is_stale(foreground_load));
     }
 
     #[test]

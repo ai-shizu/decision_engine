@@ -9,7 +9,9 @@ use super::evaluation::{
     EvaluationError, InterviewEvaluationV1, MetacognitiveDebriefV1, TranscriptTurnRef,
     VaultMirrorAbstract,
 };
+#[cfg(all(feature = "secure-vault", target_vendor = "apple"))]
 use super::session_artifact::InterviewSessionArtifact;
+#[cfg(all(feature = "secure-vault", target_vendor = "apple"))]
 use crate::llm::interview_machine::{
     prepare_interview_evaluation_binding, require_session_artifact,
     seal_evaluation_against_artifact, vault_mirror_from_artifact, InterviewSession,
@@ -90,6 +92,7 @@ pub fn seal_metacognitive_debrief(
 /// Seal Layer-1 evaluation against a session's **frozen** artifact + transcript only.
 ///
 /// Rejects sessions without a verified `InterviewSessionArtifact` (no live-vault fallback).
+#[cfg(all(feature = "secure-vault", target_vendor = "apple"))]
 #[tauri::command]
 pub fn seal_interview_evaluation_from_session(
     session: InterviewSession,
@@ -103,6 +106,7 @@ pub fn seal_interview_evaluation_from_session(
 }
 
 /// Seal Layer-2 debrief using mirror derived from the frozen artifact evidence bodies.
+#[cfg(all(feature = "secure-vault", target_vendor = "apple"))]
 #[tauri::command]
 pub fn seal_metacognitive_debrief_from_session(
     session: InterviewSession,

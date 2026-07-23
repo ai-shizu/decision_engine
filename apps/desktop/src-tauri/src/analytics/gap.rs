@@ -144,7 +144,11 @@ fn objective_theme_scores(daily: &[AnalyticsDailyDay]) -> Vec<(String, Value)> {
         }
     }
 
-    let total_spend: i64 = spend.iter().map(|(_, a)| *a).sum::<i64>().max(1);
+    let total_spend = spend
+        .iter()
+        .map(|(_, amount)| *amount)
+        .fold(0_i64, i64::saturating_add)
+        .max(1);
     let total_events = events.len().max(1);
 
     let mut line_hits = vec![0usize; THEMES.len()];
@@ -173,7 +177,7 @@ fn objective_theme_scores(daily: &[AnalyticsDailyDay]) -> Vec<(String, Value)> {
                 .iter()
                 .filter(|(cat, _)| theme.spend_categories.iter().any(|kw| cat.contains(kw)))
                 .map(|(_, a)| *a)
-                .sum();
+                .fold(0_i64, i64::saturating_add);
             let theme_event_count = events
                 .iter()
                 .filter(|(_, title)| {
@@ -346,7 +350,9 @@ pub fn analyze_gaps(daily: &[AnalyticsDailyDay]) -> GapAnalysisResult {
     let coverage = json!({
         "subjective_docs": subj_docs.len(),
         "total_expense_yen": daily.iter().flat_map(|d| d.transactions.iter())
-            .filter(|t| t.tx_type == "expense").map(|t| t.amount).sum::<i64>(),
+            .filter(|t| t.tx_type == "expense")
+            .map(|t| t.amount)
+            .fold(0_i64, i64::saturating_add),
         "calendar_events": daily.iter().map(|d| d.calendar_events.len()).sum::<usize>(),
         "line_docs": daily.iter().filter(|d| !d.line_self_text.trim().is_empty()).count(),
     });
@@ -434,5 +440,35 @@ mod tests {
         let result = analyze_gaps(&days);
         let coverage = result.payload.get("coverage").unwrap();
         assert_eq!(coverage.get("total_expense_yen").and_then(|v| v.as_i64()), Some(5_000));
+    }
+
+    #[test]
+    fn expense_aggregation_saturates_instead_of_overflowing() {
+        let days = vec![AnalyticsDailyDay {
+            date: "2026-01-10".into(),
+            diary_text: String::new(),
+            consultations: vec![],
+            transactions: vec![
+                TransactionIn {
+                    tx_type: "expense".into(),
+                    category: "食費".into(),
+                    amount: i64::MAX,
+                },
+                TransactionIn {
+                    tx_type: "expense".into(),
+                    category: "食費".into(),
+                    amount: 1,
+                },
+            ],
+            calendar_events: vec![],
+            line_self_text: String::new(),
+        }];
+
+        let result = analyze_gaps(&days);
+        let coverage = result.payload.get("coverage").expect("coverage");
+        assert_eq!(
+            coverage.get("total_expense_yen").and_then(Value::as_i64),
+            Some(i64::MAX)
+        );
     }
 }

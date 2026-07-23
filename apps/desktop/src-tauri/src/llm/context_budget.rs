@@ -49,7 +49,7 @@ pub struct CompressedStub {
 }
 
 /// Result of fitting chunks into a token budget.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct BudgetedContext {
     pub kept: Vec<BudgetChunk>,
     pub compressed: Vec<CompressedStub>,
@@ -155,14 +155,7 @@ pub fn fit_context_budget(
     now_unix: i64,
 ) -> BudgetedContext {
     if token_budget == 0 {
-        let compressed: Vec<CompressedStub> = chunks.iter().map(|c| stub_for(c, now_unix)).collect();
-        let tokens_compressed_stubs = compressed.iter().map(|s| estimate_tokens(&s.stub_text)).sum();
-        return BudgetedContext {
-            kept: Vec::new(),
-            compressed,
-            tokens_kept: 0,
-            tokens_compressed_stubs,
-        };
+        return BudgetedContext::default();
     }
 
     let mut ranked: Vec<(f64, usize)> = chunks
@@ -176,16 +169,16 @@ pub fn fit_context_budget(
             .then_with(|| chunks[a.1].id.cmp(&chunks[b.1].id))
     });
 
-    let mut kept = Vec::new();
+    let mut kept: Vec<(usize, BudgetChunk)> = Vec::new();
     let mut overflow_idx = Vec::new();
     let mut used = 0usize;
 
     for &(_, i) in &ranked {
         let c = &chunks[i];
         let need = chunk_tokens(c);
-        if used + need <= token_budget {
+        if need <= token_budget.saturating_sub(used) {
             used += need;
-            kept.push(c.clone());
+            kept.push((i, c.clone()));
         } else {
             overflow_idx.push(i);
         }
@@ -194,47 +187,51 @@ pub fn fit_context_budget(
     // If nothing fits whole, keep a truncated copy of the top-salience chunk
     // so the window is never empty when candidates exist (MemGPT: compress, don't blank).
     if kept.is_empty() && !ranked.is_empty() {
-        let top = &chunks[ranked[0].1];
+        let top_index = ranked[0].1;
+        let top = &chunks[top_index];
         let truncated = truncate_to_token_budget(&top.text, token_budget);
         if !truncated.is_empty() {
             let mut c = top.clone();
             c.text = truncated;
             c.token_estimate = Some(estimate_tokens(&c.text));
             used = chunk_tokens(&c);
-            kept.push(c);
-            overflow_idx.retain(|&i| chunks[i].id != top.id);
+            kept.push((top_index, c));
+            overflow_idx.retain(|&i| i != top_index);
         }
     }
 
-    // Preserve original retrieval order among kept items for prompt readability.
-    let mut kept_order: Vec<BudgetChunk> = Vec::with_capacity(kept.len());
-    for c in chunks {
-        if kept.iter().any(|k| k.id == c.id) {
-            kept_order.push(c.clone());
-        }
-    }
+    // Preserve original retrieval order without reconstructing from IDs. The
+    // stored clone may be a truncated top chunk and must not be replaced by
+    // its original full text; indexes also keep duplicate IDs unambiguous.
+    kept.sort_by_key(|(index, _)| *index);
+    let kept_order: Vec<BudgetChunk> = kept.into_iter().map(|(_, chunk)| chunk).collect();
 
     let mut compressed = Vec::new();
     let mut stub_used = 0usize;
     let residual = token_budget.saturating_sub(used);
     for i in overflow_idx {
         let mut stub = stub_for(&chunks[i], now_unix);
-        let st = estimate_tokens(&stub.stub_text);
-        if residual > 0 && stub_used + st > residual {
+        let remaining = residual.saturating_sub(stub_used);
+        if remaining == 0 {
+            break;
+        }
+        if estimate_tokens(&stub.stub_text) > remaining {
             // Shrink stub text to metadata id only so the tier still fits.
             stub.stub_text = format!("[compressed id={}]", stub.id);
         }
-        stub_used += estimate_tokens(&stub.stub_text);
+        let need = estimate_tokens(&stub.stub_text);
+        if need > remaining {
+            continue;
+        }
+        stub_used += need;
         compressed.push(stub);
     }
-
-    let tokens_compressed_stubs = compressed.iter().map(|s| estimate_tokens(&s.stub_text)).sum();
 
     BudgetedContext {
         kept: kept_order,
         compressed,
         tokens_kept: used,
-        tokens_compressed_stubs,
+        tokens_compressed_stubs: stub_used,
     }
 }
 
@@ -246,19 +243,39 @@ pub fn truncate_to_token_budget(text: &str, token_budget: usize) -> String {
     if estimate_tokens(text) <= token_budget {
         return text.to_string();
     }
+
     let mut acc = String::new();
+    let mut cjk = 0usize;
+    let mut other = 0usize;
     for ch in text.chars() {
-        acc.push(ch);
-        if estimate_tokens(&acc) > token_budget {
-            acc.pop();
+        let (next_cjk, next_other) = if ch.is_whitespace() {
+            (cjk, other)
+        } else if is_cjk(ch) {
+            (cjk.saturating_add(1), other)
+        } else {
+            (cjk, other.saturating_add(1))
+        };
+        // U+2026 is counted as one non-CJK code point by `estimate_tokens`.
+        // Reserve it before accepting the next body character, so the final
+        // string — not merely its body — stays within the caller's budget.
+        let with_ellipsis =
+            next_cjk.saturating_add(next_other.saturating_add(1).div_ceil(4));
+        if with_ellipsis > token_budget {
             break;
         }
+        cjk = next_cjk;
+        other = next_other;
+        acc.push(ch);
     }
     while acc.ends_with(char::is_whitespace) {
         acc.pop();
     }
     if acc.is_empty() {
-        return String::new();
+        return if estimate_tokens("…") <= token_budget {
+            "…".to_string()
+        } else {
+            String::new()
+        };
     }
     format!("{acc}…")
 }
@@ -299,7 +316,7 @@ mod tests {
     }
 
     #[test]
-    fn overflow_becomes_stub_not_silent_drop() {
+    fn overflow_never_exceeds_the_hard_budget() {
         let now = 1_700_000_000_i64;
         let a = "alpha ".repeat(80);
         let b = "bravo ".repeat(80);
@@ -308,16 +325,70 @@ mod tests {
             chunk("b", &b, 0.9, now),
         ];
         let fitted = fit_context_budget(&chunks, 30, now);
-        // At least one full chunk or all accounted for via stubs.
-        assert_eq!(fitted.kept.len() + fitted.compressed.len(), 2);
-        assert!(!fitted.compressed.is_empty() || fitted.kept.len() == 2);
+        assert!(fitted.tokens_kept + fitted.tokens_compressed_stubs <= 30);
+        assert!(!fitted.kept.is_empty());
+    }
+
+    #[test]
+    fn zero_budget_returns_no_content_or_stubs() {
+        let now = 1_700_000_000_i64;
+        let fitted = fit_context_budget(&[chunk("a", "alpha", 1.0, now)], 0, now);
+        assert!(fitted.kept.is_empty());
+        assert!(fitted.compressed.is_empty());
+        assert_eq!(fitted.tokens_kept + fitted.tokens_compressed_stubs, 0);
+    }
+
+    #[test]
+    fn truncated_top_chunk_is_not_reexpanded_during_ordering() {
+        let now = 1_700_000_000_i64;
+        let original = "あいうえおかきくけこ".repeat(10);
+        let fitted = fit_context_budget(&[chunk("same", &original, 1.0, now)], 5, now);
+
+        assert_eq!(fitted.kept.len(), 1);
+        assert_ne!(fitted.kept[0].text, original);
+        assert!(estimate_tokens(&fitted.kept[0].text) <= 5);
+        assert_eq!(
+            fitted.tokens_kept,
+            estimate_tokens(&fitted.kept[0].text)
+        );
+    }
+
+    #[test]
+    fn residual_can_hold_a_shortened_stub_without_overrun() {
+        let now = 1_700_000_000_i64;
+        let mut a = chunk("a", "alpha", 1.0, now);
+        let mut b = chunk("b", "bravo", 0.9, now);
+        a.token_estimate = Some(20);
+        b.token_estimate = Some(20);
+
+        let fitted = fit_context_budget(&[a, b], 30, now);
+        assert_eq!(fitted.kept.len(), 1);
+        assert_eq!(fitted.compressed.len(), 1);
+        assert!(fitted.tokens_kept + fitted.tokens_compressed_stubs <= 30);
+    }
+
+    #[test]
+    fn invariant_holds_across_small_budgets() {
+        let now = 1_700_000_000_i64;
+        let chunks = vec![
+            chunk("a", &"alpha ".repeat(20), 1.0, now),
+            chunk("b", &"転職".repeat(20), 0.9, now),
+            chunk("c", &"charlie ".repeat(20), 0.8, now),
+        ];
+        for budget in 0..=80 {
+            let fitted = fit_context_budget(&chunks, budget, now);
+            assert!(
+                fitted.tokens_kept + fitted.tokens_compressed_stubs <= budget,
+                "budget={budget}"
+            );
+        }
     }
 
     #[test]
     fn truncate_respects_budget() {
         let s = "あいうえおかきくけこ".repeat(10);
         let out = truncate_to_token_budget(&s, 5);
-        assert!(estimate_tokens(&out) <= 6); // ellipsis slack
+        assert!(estimate_tokens(&out) <= 5);
         assert!(out.ends_with('…') || estimate_tokens(&s) <= 5);
     }
 

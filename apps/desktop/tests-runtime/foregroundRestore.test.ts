@@ -110,6 +110,28 @@ test("P10-05 restore continues after vault failure", async () => {
   assertOk(report.twinWarning, "twin warning from analytics");
 });
 
+test("P10-06 failed post-warm probe never reports LLM ready", async () => {
+  let probes = 0;
+  const report = await runForegroundRestore({
+    probeVault: async () => "locked",
+    probeLlmLoaded: async () => {
+      probes += 1;
+      if (probes === 1) return false;
+      throw new Error("probe unavailable");
+    },
+    warmLlm: async () => {},
+    refreshAnalytics: async () => ({
+      twinIdentify: null,
+      biasProfile: null,
+      maxPLapse: null,
+      criticalDayCount: 0,
+    }),
+  });
+
+  assertOk(report.llmWarmed, "warm was attempted");
+  assertOk(!report.llmWasLoaded, "failed verification is fail-closed");
+});
+
 void (async () => {
   let failed = 0;
   for (const { name, fn } of tests) {
