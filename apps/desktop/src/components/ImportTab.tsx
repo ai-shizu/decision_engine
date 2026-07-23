@@ -14,6 +14,7 @@ import {
   type DocumentImportResult,
 } from "../lib/engine";
 import { parseEngineEvent } from "../lib/parseEngineResponse";
+import { ingestLineHistory } from "../lib/pocketBrain";
 import type { ClassifyResult, EngineEvent, EsListItem, SourceStat } from "../lib/types";
 import { uiErrorMessage } from "../lib/uiErrorMessages";
 import { useCorrelationId } from "../lib/useCorrelationId";
@@ -179,7 +180,25 @@ export function ImportTab() {
         typeof res.message === "string" ? res.message : "LINE を取り込みました",
       );
     } catch {
-      pushImportLog(uiErrorMessage("LINE_IMPORT"));
+      // Desktop Python サイドカーが起動できない環境 (iOS 実機など — engine.rs
+      // の start() は #[cfg(not(mobile))]) では上の経路が必ず失敗する。
+      // オンデバイス Rust 経路 (BOM/UTF-16/Shift-JIS 堅牢デコード → chunk →
+      // embed → Vault) にファイル単位でフォールバックする。
+      let ok = 0;
+      for (const file of Array.from(files)) {
+        try {
+          await ingestLineHistory(file);
+          ok += 1;
+        } catch {
+          /* counted via ok below; per-file detail not user-actionable */
+        }
+      }
+      if (ok > 0) {
+        const suffix = ok < files.length ? `（${files.length - ok}件失敗）` : "";
+        pushImportLog(`${ok}件のLINEトーク履歴をオンデバイスで取り込みました${suffix}`);
+      } else {
+        pushImportLog(uiErrorMessage("LINE_IMPORT"));
+      }
     } finally {
       cid.end(myCid);
       if (mountedRef.current) {
@@ -342,8 +361,18 @@ export function ImportTab() {
             continue;
           }
           if (result.type === "line") {
-            const res = await importLineContent(content, file.name, myCid);
-            pushImportLog(res.message ?? `${file.name} を LINE として取り込みました`);
+            try {
+              const res = await importLineContent(content, file.name, myCid);
+              pushImportLog(res.message ?? `${file.name} を LINE として取り込みました`);
+            } catch {
+              // iOS 実機など Python サイドカー不在環境向けフォールバック。
+              try {
+                await ingestLineHistory(file);
+                pushImportLog(`${file.name} をオンデバイスでLINEとして取り込みました`);
+              } catch {
+                pushImportLog(`${file.name}: ${uiErrorMessage("LINE_IMPORT")}`);
+              }
+            }
             continue;
           }
           if (result.type === "ics") {

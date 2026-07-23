@@ -10,4 +10,5 @@ pub mod chunk;
 pub mod commands_daily;
 pub mod commands_rag;
 pub mod embed_knowledge;
+pub mod line_import;
 pub mod prompt;

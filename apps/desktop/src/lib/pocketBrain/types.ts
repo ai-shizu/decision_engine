@@ -469,6 +469,7 @@ export interface CognitiveMonthView {
 /** Canonical list of M11–M17 Coraxis on-device Tauri commands (invoke names). */
 export const POCKET_BRAIN_COMMANDS = [
   "ingest_knowledge",
+  "ingest_line_history",
   "search_knowledge",
   "send_rag_chat",
   "sync_daily_context",

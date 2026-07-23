@@ -91,6 +91,19 @@ export function ingestKnowledge(
   return pocketInvoke("ingest_knowledge", { text, sourceId });
 }
 
+/**
+ * On-device LINE トーク履歴 (.txt) import (M20 データ連携 Part 1). Sends raw file
+ * bytes so the Rust side owns encoding detection (BOM-aware UTF-8/UTF-16/
+ * Shift-JIS) rather than trusting a frontend-side decode — this is the only
+ * working LINE import path on iOS, which has no Python sidecar to run the
+ * desktop `import_line_batch` command against.
+ */
+export async function ingestLineHistory(file: File): Promise<IngestKnowledgeResult> {
+  const buf = await file.arrayBuffer();
+  const bytes = Array.from(new Uint8Array(buf));
+  return pocketInvoke("ingest_line_history", { bytes, filename: file.name });
+}
+
 export function searchKnowledge(
   query: string,
   limit?: number,

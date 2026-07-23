@@ -2681,6 +2681,7 @@ dependencies = [
  "base64 0.22.1",
  "caseless",
  "ed25519-dalek",
+ "encoding_rs",
  "hex",
  "hickory-resolver",
  "hmac",

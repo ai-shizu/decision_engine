@@ -59,6 +59,9 @@ sqlite-vec = { version = "=0.1.9", optional = true }
 tauri-plugin-fs = "2"
 tauri-plugin-dialog = "2"
 log = "0.4"
+# LINE export decode fallback (BOM-aware UTF-8/UTF-16/Shift-JIS). Pure Rust,
+# no C toolchain — safe on the default build and on iOS cross-compiles.
+encoding_rs = "=0.8.35"
 
 [features]
 # NOTE: the blueprint prose says "reqwest/rustls-tls"; reqwest 0.13.4's actual

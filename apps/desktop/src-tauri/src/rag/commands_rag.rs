@@ -18,6 +18,7 @@ use tauri::State;
 use super::associative_recall::{default_tau_days, fuse_and_rerank, RRF_K};
 use super::chunk::{chunk_markdown, MAX_CHUNKS};
 use super::embed_knowledge::{embed_for_knowledge, lexical_hash_embed, try_dense_passage_embed};
+use super::line_import::{decode_line_export_bytes, format_line_import};
 use super::prompt::{build_rag_prompt, RagContextRef};
 use crate::db::{
     KnowledgeChunkRow, KnowledgeSearchHit as DbHit, VaultErrorCode, VaultHandle, VaultStatus,
@@ -105,6 +106,38 @@ fn validate_source_id(source_id: &str) -> Result<(), String> {
         return Err("invalid source_id".into());
     }
     Ok(())
+}
+
+/// Derive a `validate_source_id`-safe id from a LINE export filename so
+/// re-importing the same file replaces its prior chunks (`knowledge_replace`
+/// is keyed by source_id) instead of accumulating duplicates. `%`, `_`, `:`
+/// are disallowed in source_ids (wildcard / internal-separator collision) so
+/// they are folded to `-`; an empty/degenerate result falls back to a fixed
+/// default rather than failing the import outright.
+fn line_source_id(filename: &str) -> String {
+    let stem = std::path::Path::new(filename)
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("");
+    let sanitized: String = stem
+        .chars()
+        .map(|c| if matches!(c, '%' | '_' | ':') { '-' } else { c })
+        .collect();
+    let sanitized = sanitized.trim_matches('-');
+    let id = if sanitized.is_empty() {
+        "line-import".to_string()
+    } else {
+        format!("line-{sanitized}")
+    };
+    if id.len() <= MAX_SOURCE_ID_BYTES {
+        return id;
+    }
+    // Truncate to a UTF-8 char boundary at/under the byte cap.
+    let mut end = MAX_SOURCE_ID_BYTES;
+    while end > 0 && !id.is_char_boundary(end) {
+        end -= 1;
+    }
+    id[..end].to_string()
 }
 
 fn candidate_pool(limit: u32) -> u32 {
@@ -224,6 +257,51 @@ fn to_ipc_hits(hits: Vec<DbHit>) -> Vec<SearchKnowledgeHit> {
         .collect()
 }
 
+/// Chunk → embed each → transactional vault replace. Shared blocking core for
+/// [`ingest_knowledge`] and [`ingest_line_history`] (must run off the async
+/// runtime — embedding is CPU-bound).
+fn ingest_text_blocking(
+    vault: &VaultHandle,
+    llm: &LlmHandle,
+    text: &str,
+    source_id: &str,
+) -> Result<IngestKnowledgeResult, String> {
+    let chunks = chunk_markdown(text, source_id);
+    if chunks.is_empty() {
+        return Err("no chunks produced".into());
+    }
+    if chunks.len() > MAX_CHUNKS {
+        return Err("too many chunks".into());
+    }
+
+    let created_at = now_unix_secs();
+    let mut rows = Vec::with_capacity(chunks.len());
+    for chunk in &chunks {
+        let embed_input = if chunk.title == source_id {
+            chunk.text.clone()
+        } else {
+            format!("{}\n\n{}", chunk.title, chunk.text)
+        };
+        let embedding = embed_for_knowledge(llm, &embed_input)?;
+        rows.push(KnowledgeChunkRow {
+            id: chunk.id.clone(),
+            text_content: chunk.text.clone(),
+            embedding,
+            created_at,
+        });
+    }
+
+    let inserted = vault
+        .knowledge_replace(source_id.to_string(), rows)
+        .map_err(map_vault_err)?;
+
+    Ok(IngestKnowledgeResult {
+        source_id: source_id.to_string(),
+        chunk_count: chunks.len(),
+        inserted,
+    })
+}
+
 /// Ingest markdown/plain text: chunk → embed each → transactional vault replace.
 #[tauri::command]
 pub async fn ingest_knowledge(
@@ -242,43 +320,48 @@ pub async fn ingest_knowledge(
     let source_id = source_id.trim().to_string();
 
     tauri::async_runtime::spawn_blocking(move || {
-        let chunks = chunk_markdown(&text, &source_id);
-        if chunks.is_empty() {
-            return Err("no chunks produced".into());
-        }
-        if chunks.len() > MAX_CHUNKS {
-            return Err("too many chunks".into());
-        }
-
-        let created_at = now_unix_secs();
-        let mut rows = Vec::with_capacity(chunks.len());
-        for chunk in &chunks {
-            let embed_input = if chunk.title == source_id {
-                chunk.text.clone()
-            } else {
-                format!("{}\n\n{}", chunk.title, chunk.text)
-            };
-            let embedding = embed_for_knowledge(&llm, &embed_input)?;
-            rows.push(KnowledgeChunkRow {
-                id: chunk.id.clone(),
-                text_content: chunk.text.clone(),
-                embedding,
-                created_at,
-            });
-        }
-
-        let inserted = vault
-            .knowledge_replace(source_id.clone(), rows)
-            .map_err(map_vault_err)?;
-
-        Ok(IngestKnowledgeResult {
-            source_id,
-            chunk_count: chunks.len(),
-            inserted,
-        })
+        ingest_text_blocking(&vault, &llm, &text, &source_id)
     })
     .await
     .map_err(|_| "ingest task join failed".to_string())?
+}
+
+/// On-device LINE トーク履歴 (.txt) import (M20 データ連携 Part 1).
+///
+/// iOS has no Python sidecar (`engine.rs` boot is `#[cfg(not(mobile))]`), so
+/// the desktop-only `import_line_batch` path never runs there. This command
+/// decodes the raw file bytes itself (BOM-aware UTF-8/UTF-16/Shift-JIS —
+/// never trusts the frontend to have decoded correctly, and never panics on
+/// malformed input), then reuses the same chunk → embed → vault pipeline as
+/// [`ingest_knowledge`] so the content becomes searchable by on-device
+/// CONSULT/RAG immediately. `source_id` is derived from the filename so
+/// re-importing the same export replaces rather than duplicates.
+#[tauri::command]
+pub async fn ingest_line_history(
+    vault: State<'_, VaultHandle>,
+    llm: State<'_, LlmHandle>,
+    bytes: Vec<u8>,
+    filename: String,
+) -> Result<IngestKnowledgeResult, String> {
+    if bytes.is_empty() || bytes.len() > MAX_INGEST_TEXT_BYTES {
+        return Err("invalid file".into());
+    }
+    let source_id = line_source_id(&filename);
+    validate_source_id(&source_id)?;
+
+    let vault = vault.inner().clone();
+    let llm = llm.inner().clone();
+
+    tauri::async_runtime::spawn_blocking(move || {
+        let decoded = decode_line_export_bytes(&bytes);
+        let formatted = format_line_import(&decoded, &filename);
+        if formatted.is_empty() {
+            return Err("invalid text".into());
+        }
+        ingest_text_blocking(&vault, &llm, &formatted, &source_id)
+    })
+    .await
+    .map_err(|_| "line import task join failed".to_string())?
 }
 
 /// Hybrid recall over `knowledge_chunks` (RRF + Ebbinghaus).
@@ -409,4 +492,43 @@ pub async fn send_rag_chat(
         context_count: context_ids.len(),
         context_ids,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn line_source_id_sanitizes_disallowed_chars() {
+        let id = line_source_id("2024_01_15%talk::export.txt");
+        assert!(validate_source_id(&id).is_ok());
+        assert!(!id.contains('_'));
+        assert!(!id.contains('%'));
+        assert!(!id.contains("::"));
+        assert!(id.starts_with("line-"));
+    }
+
+    #[test]
+    fn line_source_id_falls_back_when_stem_empty_after_sanitizing() {
+        // A stem made entirely of disallowed chars sanitizes to "" (after
+        // trim_matches('-')) — must fall back rather than validate-fail.
+        let id = line_source_id("___.txt");
+        assert_eq!(id, "line-import");
+        assert!(validate_source_id(&id).is_ok());
+    }
+
+    #[test]
+    fn line_source_id_is_stable_for_reimport_of_same_file() {
+        assert_eq!(line_source_id("family_chat.txt"), line_source_id("family_chat.txt"));
+    }
+
+    #[test]
+    fn line_source_id_respects_byte_cap_at_char_boundary() {
+        let long_stem = "あ".repeat(MAX_SOURCE_ID_BYTES); // 3 bytes/char in utf-8
+        let id = line_source_id(&format!("{long_stem}.txt"));
+        assert!(id.len() <= MAX_SOURCE_ID_BYTES);
+        assert!(validate_source_id(&id).is_ok());
+        // Must not have been truncated mid-codepoint (would panic on slice).
+        assert!(id.chars().all(|c| c == 'あ' || c == '-' || c == 'l' || c == 'i' || c == 'n' || c == 'e'));
+    }
 }
