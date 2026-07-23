@@ -42,7 +42,26 @@ pub fn resolve_model_path(app: &AppHandle) -> Result<PathBuf, String> {
 
 /// Prefer the App Bundle resource (iOS offline ship), else AppData import path.
 pub fn resolve_loadable_model_path(app: &AppHandle) -> Result<PathBuf, String> {
-    if let Some(bundled) = try_bundled_model_path(app) {
+    // `resolve_model_path` is passed as a thunk so the AppData `models/` dir is
+    // only created when the bundled resource is absent or fails validation.
+    select_loadable_path(try_bundled_model_path(app), || resolve_model_path(app))
+}
+
+/// Pure load-priority selector shared by [`resolve_loadable_model_path`], kept
+/// `AppHandle`-free so the resource-first / AppData-fallback contract is
+/// unit-testable without a Tauri app.
+///
+/// `bundled` is the resolved `$RESOURCE/...` candidate (`None` on desktop, where
+/// the resource is absent). Returns the first path that passes GGUF validation:
+/// bundled first, then whatever `appdata` yields. `appdata` is a thunk so its
+/// side effects (directory creation) run only on fallback. When neither path
+/// validates, the AppData error is surfaced — that is the writable location the
+/// user is instructed to import into.
+fn select_loadable_path(
+    bundled: Option<PathBuf>,
+    appdata: impl FnOnce() -> Result<PathBuf, String>,
+) -> Result<PathBuf, String> {
+    if let Some(bundled) = bundled {
         match validate_gguf_file(&bundled) {
             Ok(()) => {
                 log::info!("using bundled GGUF at {}", bundled.display());
@@ -57,7 +76,7 @@ pub fn resolve_loadable_model_path(app: &AppHandle) -> Result<PathBuf, String> {
         }
     }
 
-    let path = resolve_model_path(app)?;
+    let path = appdata()?;
     match validate_gguf_file(&path) {
         Ok(()) => {
             log::info!("using AppData GGUF at {}", path.display());
@@ -154,11 +173,98 @@ pub fn internal_model_present(app: &AppHandle) -> Result<bool, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::cell::Cell;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    static TEST_DIR_SEQ: AtomicUsize = AtomicUsize::new(0);
+
+    /// Fresh, empty temp dir following the project convention (no `tempfile`
+    /// dev-dep); mirrors `knowledge::policy_store` test isolation.
+    fn isolated_root() -> PathBuf {
+        let seq = TEST_DIR_SEQ.fetch_add(1, Ordering::SeqCst);
+        let dir = std::env::temp_dir().join(format!("pkb_model_path_test_{seq}"));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("mkdir");
+        dir
+    }
+
+    /// Write `contents` to `<root>/<name>` and return the path.
+    fn write_file(root: &Path, name: &str, contents: &[u8]) -> PathBuf {
+        let path = root.join(name);
+        std::fs::write(&path, contents).expect("write");
+        path
+    }
 
     #[test]
     fn relative_path_matches_filename() {
         assert!(MODEL_RELATIVE_PATH.ends_with(MODEL_FILENAME));
         assert!(MODEL_RELATIVE_PATH.starts_with("models/"));
+    }
+
+    #[test]
+    fn bundled_valid_is_preferred_and_appdata_thunk_not_run() {
+        let root = isolated_root();
+        let bundled = write_file(&root, "bundled.gguf", b"GGUFpayload");
+        // If the bundled resource validates, the AppData fallback thunk must not
+        // run (no directory creation side effect on the resource-hit path).
+        let appdata_ran = Cell::new(false);
+        let chosen = select_loadable_path(Some(bundled.clone()), || {
+            appdata_ran.set(true);
+            Ok(write_file(&root, "appdata.gguf", b"GGUFpayload"))
+        })
+        .expect("bundled path should be chosen");
+        assert_eq!(chosen, bundled);
+        assert!(!appdata_ran.get(), "AppData thunk must be skipped on bundled hit");
+    }
+
+    #[test]
+    fn falls_back_to_appdata_when_no_bundled() {
+        let root = isolated_root();
+        let appdata = write_file(&root, "appdata.gguf", b"GGUFpayload");
+        let chosen = select_loadable_path(None, || Ok(appdata.clone()))
+            .expect("AppData path should be chosen");
+        assert_eq!(chosen, appdata);
+    }
+
+    #[test]
+    fn falls_back_to_appdata_when_bundled_invalid() {
+        let root = isolated_root();
+        // Bundled file exists but is not GGUF (fails magic) -> must fall through.
+        let bundled = write_file(&root, "bundled.gguf", b"ZIP!payload");
+        let appdata = write_file(&root, "appdata.gguf", b"GGUFpayload");
+        let chosen = select_loadable_path(Some(bundled), || Ok(appdata.clone()))
+            .expect("should fall back to valid AppData model");
+        assert_eq!(chosen, appdata);
+    }
+
+    #[test]
+    fn falls_back_to_appdata_when_bundled_missing_on_disk() {
+        let root = isolated_root();
+        // Candidate path was resolved but the file is absent (metadata fails).
+        let bundled = root.join("does-not-exist.gguf");
+        let appdata = write_file(&root, "appdata.gguf", b"GGUFpayload");
+        let chosen = select_loadable_path(Some(bundled), || Ok(appdata.clone()))
+            .expect("missing bundled file must not shadow a valid AppData model");
+        assert_eq!(chosen, appdata);
+    }
+
+    #[test]
+    fn errors_when_neither_bundled_nor_appdata_valid() {
+        let root = isolated_root();
+        let missing_appdata = root.join("absent.gguf");
+        let err = select_loadable_path(None, || Ok(missing_appdata.clone()))
+            .expect_err("no loadable model should surface the AppData error");
+        // Surfaces the fixed user-facing wording, never a raw path/exception.
+        assert_eq!(err, "モデルファイルを確認できません。");
+    }
+
+    #[test]
+    fn errors_when_appdata_thunk_itself_fails() {
+        // e.g. app_data_dir unresolved / models dir uncreatable — the thunk's
+        // own error must propagate unchanged.
+        let err = select_loadable_path(None, || Err("アプリデータ領域を解決できません。".into()))
+            .expect_err("thunk failure must propagate");
+        assert_eq!(err, "アプリデータ領域を解決できません。");
     }
 
     #[test]
