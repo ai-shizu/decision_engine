@@ -3,10 +3,12 @@
 //! Streaming commands accept an `onToken` callback and open one `Channel`
 //! (same M6 contract as `llm_generate`). No `any`.
 
-import { Channel } from "@tauri-apps/api/core";
+import { Channel, isTauri } from "@tauri-apps/api/core";
+import { BaseDirectory } from "@tauri-apps/api/path";
+import { mkdir, remove, writeFile } from "@tauri-apps/plugin-fs";
 
 import { hapticBiasDetected } from "../haptics";
-import { pocketInvoke } from "./invoke";
+import { PocketBrainInvokeError, pocketInvoke } from "./invoke";
 import type {
   AnalyticsDailyDay,
   AxisScoreHint,
@@ -38,6 +40,7 @@ import type {
   SendRagChatResult,
   SimGenParams,
   SimSessionResult,
+  SyncDailyContextResult,
   TensorProfile,
   TokenEvent,
   TwinIdentifyStatus,
@@ -93,16 +96,56 @@ export function ingestKnowledge(
 }
 
 /**
- * On-device LINE トーク履歴 (.txt) import (M20 データ連携 Part 1). Sends raw file
- * bytes so the Rust side owns encoding detection (BOM-aware UTF-8/UTF-16/
- * Shift-JIS) rather than trusting a frontend-side decode — this is the only
- * working LINE import path on iOS, which has no Python sidecar to run the
- * desktop `import_line_batch` command against.
+ * On-device LINE トーク履歴 (.txt) import (M20 データ連携 Part 1).
+ *
+ * Stages bytes under `$APPDATA/imports/` via plugin-fs and invokes
+ * `ingest_line_history_path` so multi-MB exports never cross IPC as a JSON
+ * `number[]` (that path Jetsams / fails on iPhone). Tiny files may still use
+ * the legacy `bytes` command as a fallback if staging is unavailable.
  */
 export async function ingestLineHistory(file: File): Promise<IngestKnowledgeResult> {
-  const buf = await file.arrayBuffer();
-  const bytes = Array.from(new Uint8Array(buf));
-  return pocketInvoke("ingest_line_history", { bytes, filename: file.name });
+  const buf = new Uint8Array(await file.arrayBuffer());
+  if (buf.byteLength === 0) {
+    throw new PocketBrainInvokeError("ingest_line_history", "LINE_IMPORT:EMPTY");
+  }
+
+  if (isTauri()) {
+    const safe =
+      file.name.replace(/[^a-zA-Z0-9._-]+/g, "_").slice(0, 80) || "line.txt";
+    const relativePath = `imports/line-${Date.now()}-${safe}`;
+    try {
+      await mkdir("imports", { baseDir: BaseDirectory.AppData, recursive: true });
+      await writeFile(relativePath, buf, { baseDir: BaseDirectory.AppData });
+      return await pocketInvoke<IngestKnowledgeResult>("ingest_line_history_path", {
+        relativePath,
+        filename: file.name,
+      });
+    } catch (err) {
+      // If the path command is missing (older binary), fall through to bytes IPC
+      // only for small payloads — large Array.from is the known device killer.
+      const msg = err instanceof Error ? err.message : String(err);
+      const missing =
+        msg.includes("not found") ||
+        msg.includes("Command") ||
+        msg.includes("ingest_line_history_path");
+      if (!missing || buf.byteLength > 96 * 1024) {
+        throw err instanceof PocketBrainInvokeError
+          ? err
+          : new PocketBrainInvokeError("ingest_line_history_path", err);
+      }
+    } finally {
+      try {
+        await remove(relativePath, { baseDir: BaseDirectory.AppData });
+      } catch {
+        /* best-effort cleanup */
+      }
+    }
+  }
+
+  return pocketInvoke("ingest_line_history", {
+    bytes: Array.from(buf),
+    filename: file.name,
+  });
 }
 
 export function searchKnowledge(
@@ -469,5 +512,22 @@ export function fetchAppleCalendarEvents(
 ): Promise<FetchAppleCalendarEventsResult> {
   return pocketInvoke("fetch_apple_calendar_events", {
     params: { startUnix, endUnix },
+  });
+}
+
+/**
+ * Merge one day's calendar events JSON + optional daily log into vault
+ * knowledge under `daily-{YYYY-MM-DD}` (M13). Used after EventKit fetch to
+ * make schedules searchable by on-device CONSULT/RAG.
+ */
+export function syncDailyContext(
+  dateStr: string,
+  eventsJson: string,
+  dailyLog: string = "",
+): Promise<SyncDailyContextResult> {
+  return pocketInvoke("sync_daily_context", {
+    dateStr,
+    eventsJson,
+    dailyLog,
   });
 }

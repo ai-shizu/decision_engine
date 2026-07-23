@@ -20,10 +20,11 @@ export default defineConfig(async () => ({
   server: {
     port: 1420,
     strictPort: true,
-    // Physical iOS: bind the TAURI_DEV_HOST interface. Otherwise always
-    // 0.0.0.0 so Simulator / LAN clients can reach the Mac Vite.
-    // (host:false → loopback-only → WKWebView black screen on mobile.)
-    host: host || true,
+    // Always listen on 0.0.0.0. Binding only to TAURI_DEV_HOST breaks when
+    // DHCP rotates the Mac LAN IP (app still points at the old address) or
+    // when the CLI picks an interface Vite cannot bind. host:false →
+    // loopback-only → WKWebView black screen on physical iOS.
+    host: true,
     // Vite 7 host-check: allow the injected LAN/TUN host explicitly.
     allowedHosts: true,
     hmr: host

@@ -194,6 +194,12 @@ pub fn run() {
                 feature = "secure-vault",
                 target_vendor = "apple"
             ))]
+            rag::commands_rag::ingest_line_history_path,
+            #[cfg(all(
+                feature = "pocket-brain",
+                feature = "secure-vault",
+                target_vendor = "apple"
+            ))]
             rag::commands_rag::search_knowledge,
             #[cfg(all(
                 feature = "pocket-brain",

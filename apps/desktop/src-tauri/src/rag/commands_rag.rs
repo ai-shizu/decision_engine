@@ -13,7 +13,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 use tauri::ipc::Channel;
-use tauri::State;
+use tauri::{AppHandle, Manager, State};
 
 use super::associative_recall::{default_tau_days, fuse_and_rerank, RRF_K};
 use super::chunk::{chunk_markdown, MAX_CHUNKS};
@@ -35,10 +35,20 @@ const ERR_VAULT_LOCKED: &str = "VAULT_LOCKED";
 
 const MAX_SOURCE_ID_BYTES: usize = 512;
 const MAX_INGEST_TEXT_BYTES: usize = 512 * 1024;
+/// LINE exports routinely exceed the generic knowledge ingest cap. Bound is
+/// still Jetsam-aware; oversized files fail with a controlled code rather than
+/// silently truncating mid-IPC.
+const MAX_LINE_INGEST_BYTES: usize = 4 * 1024 * 1024;
 const DEFAULT_SEARCH_LIMIT: u32 = 5;
 const MAX_SEARCH_LIMIT: u32 = 50;
 const DEFAULT_RAG_N_CTX: u32 = 2048;
 const DEFAULT_RAG_MAX_TOKENS: u32 = 256;
+
+/// Controlled error codes for on-device LINE import. Frontend maps these to
+/// sterile UI copy (Finding 13) — never put path/filename/body into the string.
+fn line_err(code: &str) -> String {
+    format!("LINE_IMPORT:{code}")
+}
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -46,6 +56,9 @@ pub struct IngestKnowledgeResult {
     pub source_id: String,
     pub chunk_count: usize,
     pub inserted: usize,
+    /// True when chunking hit [`MAX_CHUNKS`] — body may be incomplete.
+    #[serde(default)]
+    pub truncated: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -270,9 +283,8 @@ fn ingest_text_blocking(
     if chunks.is_empty() {
         return Err("no chunks produced".into());
     }
-    if chunks.len() > MAX_CHUNKS {
-        return Err("too many chunks".into());
-    }
+    // chunk_markdown already truncates at MAX_CHUNKS; flag so callers can warn.
+    let truncated = chunks.len() >= MAX_CHUNKS;
 
     let created_at = now_unix_secs();
     let mut rows = Vec::with_capacity(chunks.len());
@@ -299,6 +311,7 @@ fn ingest_text_blocking(
         source_id: source_id.to_string(),
         chunk_count: chunks.len(),
         inserted,
+        truncated,
     })
 }
 
@@ -326,6 +339,67 @@ pub async fn ingest_knowledge(
     .map_err(|_| "ingest task join failed".to_string())?
 }
 
+/// Shared blocking core after bytes are in memory (IPC payload or AppData file).
+fn ingest_line_bytes_blocking(
+    vault: &VaultHandle,
+    llm: &LlmHandle,
+    bytes: &[u8],
+    filename: &str,
+    source_id: &str,
+) -> Result<IngestKnowledgeResult, String> {
+    let byte_len = bytes.len();
+    let decoded = decode_line_export_bytes(bytes);
+    let decoded_chars = decoded.chars().count();
+    let formatted = format_line_import(&decoded, filename);
+    if formatted.trim().is_empty() {
+        log::error!(
+            "ingest_line_history: blank after decode (bytes={byte_len}, decoded_chars={decoded_chars})"
+        );
+        return Err(line_err("BLANK"));
+    }
+    match ingest_text_blocking(vault, llm, &formatted, source_id) {
+        Ok(res) => {
+            if res.truncated {
+                log::warn!(
+                    "ingest_line_history: truncated at MAX_CHUNKS (source_id={}, chunks={}, bytes={byte_len})",
+                    res.source_id,
+                    res.chunk_count
+                );
+            } else {
+                log::info!(
+                    "ingest_line_history: ok (source_id={}, chunks={}, inserted={}, bytes={byte_len})",
+                    res.source_id,
+                    res.chunk_count,
+                    res.inserted
+                );
+            }
+            Ok(res)
+        }
+        Err(e) => {
+            let code = match e.as_str() {
+                "no chunks produced" => "NO_CHUNKS",
+                other if other.starts_with("LINE_IMPORT:") => {
+                    log::error!("ingest_line_history: {other} (bytes={byte_len})");
+                    return Err(other.to_string());
+                }
+                other => {
+                    log::error!(
+                        "ingest_line_history: pipeline failed ({other}) bytes={byte_len} source_id={source_id}"
+                    );
+                    if other.contains("locked") || other == "locked" {
+                        "VAULT_LOCKED"
+                    } else if other.contains("embed") || other.contains("model") {
+                        "EMBED"
+                    } else {
+                        "PIPELINE"
+                    }
+                }
+            };
+            Err(line_err(code))
+        }
+    }
+}
+
 /// On-device LINE トーク履歴 (.txt) import (M20 データ連携 Part 1).
 ///
 /// iOS has no Python sidecar (`engine.rs` boot is `#[cfg(not(mobile))]`), so
@@ -336,6 +410,9 @@ pub async fn ingest_knowledge(
 /// [`ingest_knowledge`] so the content becomes searchable by on-device
 /// CONSULT/RAG immediately. `source_id` is derived from the filename so
 /// re-importing the same export replaces rather than duplicates.
+///
+/// Prefer [`ingest_line_history_path`] for multi-hundred-KB exports — shipping
+/// `Vec<u8>` as a JSON number array OOMs / Jetsams WKWebView on device.
 #[tauri::command]
 pub async fn ingest_line_history(
     vault: State<'_, VaultHandle>,
@@ -343,25 +420,111 @@ pub async fn ingest_line_history(
     bytes: Vec<u8>,
     filename: String,
 ) -> Result<IngestKnowledgeResult, String> {
-    if bytes.is_empty() || bytes.len() > MAX_INGEST_TEXT_BYTES {
-        return Err("invalid file".into());
+    let byte_len = bytes.len();
+    if bytes.is_empty() {
+        log::error!("ingest_line_history: empty file (bytes=0)");
+        return Err(line_err("EMPTY"));
+    }
+    if byte_len > MAX_LINE_INGEST_BYTES {
+        log::error!(
+            "ingest_line_history: file too large (bytes={byte_len}, max={MAX_LINE_INGEST_BYTES})"
+        );
+        return Err(line_err("TOO_LARGE"));
     }
     let source_id = line_source_id(&filename);
-    validate_source_id(&source_id)?;
+    if let Err(e) = validate_source_id(&source_id) {
+        log::error!("ingest_line_history: bad source_id after sanitize ({e})");
+        return Err(line_err("BAD_SOURCE_ID"));
+    }
 
     let vault = vault.inner().clone();
     let llm = llm.inner().clone();
 
     tauri::async_runtime::spawn_blocking(move || {
-        let decoded = decode_line_export_bytes(&bytes);
-        let formatted = format_line_import(&decoded, &filename);
-        if formatted.is_empty() {
-            return Err("invalid text".into());
-        }
-        ingest_text_blocking(&vault, &llm, &formatted, &source_id)
+        ingest_line_bytes_blocking(&vault, &llm, &bytes, &filename, &source_id)
     })
     .await
-    .map_err(|_| "line import task join failed".to_string())?
+    .map_err(|e| {
+        log::error!("ingest_line_history: join failed ({e})");
+        line_err("JOIN")
+    })?
+}
+
+/// Same pipeline as [`ingest_line_history`], but bytes are read from a staged
+/// file under `$APPDATA/imports/…` (written by FE `plugin-fs`). Avoids
+/// serializing multi-MB LINE exports as JSON `number[]` over IPC.
+#[tauri::command]
+pub async fn ingest_line_history_path(
+    app: AppHandle,
+    vault: State<'_, VaultHandle>,
+    llm: State<'_, LlmHandle>,
+    relative_path: String,
+    filename: String,
+) -> Result<IngestKnowledgeResult, String> {
+    let rel = relative_path.trim().replace('\\', "/");
+    if rel.is_empty()
+        || rel.contains("..")
+        || rel.starts_with('/')
+        || !rel.starts_with("imports/")
+    {
+        log::error!("ingest_line_history_path: rejected relative_path");
+        return Err(line_err("BAD_PATH"));
+    }
+    let source_id = line_source_id(&filename);
+    if let Err(e) = validate_source_id(&source_id) {
+        log::error!("ingest_line_history_path: bad source_id ({e})");
+        return Err(line_err("BAD_SOURCE_ID"));
+    }
+
+    let app_data = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| {
+            log::error!("ingest_line_history_path: app_data_dir failed: {e}");
+            line_err("BAD_PATH")
+        })?;
+    let full = app_data.join(&rel);
+    // Ensure resolved path stays inside app_data (no symlink escape).
+    let app_canon = app_data.canonicalize().unwrap_or(app_data.clone());
+    let full_canon = full.canonicalize().map_err(|e| {
+        log::error!("ingest_line_history_path: canonicalize failed: {e}");
+        line_err("READ")
+    })?;
+    if !full_canon.starts_with(&app_canon) {
+        log::error!("ingest_line_history_path: path escaped app_data");
+        return Err(line_err("BAD_PATH"));
+    }
+
+    let vault = vault.inner().clone();
+    let llm = llm.inner().clone();
+    let filename_owned = filename;
+
+    tauri::async_runtime::spawn_blocking(move || {
+        let meta = std::fs::metadata(&full_canon).map_err(|e| {
+            log::error!("ingest_line_history_path: metadata failed: {e}");
+            line_err("READ")
+        })?;
+        let byte_len = meta.len() as usize;
+        if byte_len == 0 {
+            return Err(line_err("EMPTY"));
+        }
+        if byte_len > MAX_LINE_INGEST_BYTES {
+            log::error!(
+                "ingest_line_history_path: file too large (bytes={byte_len}, max={MAX_LINE_INGEST_BYTES})"
+            );
+            return Err(line_err("TOO_LARGE"));
+        }
+        let bytes = std::fs::read(&full_canon).map_err(|e| {
+            log::error!("ingest_line_history_path: read failed: {e}");
+            line_err("READ")
+        })?;
+        ingest_line_bytes_blocking(&vault, &llm, &bytes, &filename_owned, &source_id)
+    })
+    .await
+    .map_err(|e| {
+        log::error!("ingest_line_history_path: join failed ({e})");
+        line_err("JOIN")
+    })?
 }
 
 /// Hybrid recall over `knowledge_chunks` (RRF + Ebbinghaus).

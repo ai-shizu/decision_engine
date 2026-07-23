@@ -5,9 +5,9 @@
 //! `objc2-vision` binding style in `ocr/vision.rs`: unsafe confined to this
 //! file, safe Rust everywhere else.
 //!
-//! Vault injection (turning these events into RAG-searchable / CONSULT
-//! context, the way `rag::line_import` does for LINE) is a deliberate
-//! follow-up — this module currently returns plain structured event data.
+//! Vault injection: ImportTab calls `fetch_apple_calendar_events` then
+//! `sync_daily_context` (M13) so events become RAG-searchable daily context.
+//! This module itself remains read-only EventKit I/O.
 
 use std::sync::mpsc;
 use std::time::Duration;

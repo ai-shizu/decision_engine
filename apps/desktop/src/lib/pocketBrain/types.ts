@@ -68,6 +68,8 @@ export interface IngestKnowledgeResult {
   source_id: string;
   chunk_count: number;
   inserted: number;
+  /** True when chunking hit the on-device MAX_CHUNKS cap. */
+  truncated?: boolean;
 }
 
 export interface SearchKnowledgeHit {
@@ -487,10 +489,20 @@ export interface FetchAppleCalendarEventsResult {
   events: CalendarEventOut[];
 }
 
+/** M13 daily-context sync — calendar JSON + log → vault `daily-YYYY-MM-DD`. */
+export interface SyncDailyContextResult {
+  date: string;
+  source_id: string;
+  chunk_count: number;
+  inserted: number;
+  markdown_bytes: number;
+}
+
 /** Canonical list of M11–M17 Coraxis on-device Tauri commands (invoke names). */
 export const POCKET_BRAIN_COMMANDS = [
   "ingest_knowledge",
   "ingest_line_history",
+  "ingest_line_history_path",
   "search_knowledge",
   "send_rag_chat",
   "sync_daily_context",

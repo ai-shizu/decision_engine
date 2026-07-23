@@ -1302,11 +1302,13 @@ Pocket Brain 経路は M14 tensor + M15 pulse/Rasch + gap sufficiency から loa
 4. `tauri.ios.conf.json` の `devCsp` は `'self'` + localhost/127.0.0.1:1420/1421 + **DEV 専用** `http:` / `ws:`（動的 LAN IP）。production CSP へ混ぜるな。
 5. **`ModelSetupGate` / 起動ローディングに `desktop-chrome` クラスを付けるな。** `@media (max-width:768px){ .desktop-chrome{display:none!important} }` により、iOS ではゲート UI ごと消えて漆黒になる（ネットワーク到達後も黒の主因）。
 6. `Channel` / `startMemoryMonitor` / `subscribeLlmEvents` は `isTauri()` ガード必須。未ブリッジ時の `transformCallback` 同期 throw は `.catch` で捕捉できない。
-7. **物理実機 Vite DEV:** `Info.ios.plist` に `NSAppTransportSecurity.NSAllowsLocalNetworking=true` と `NSLocalNetworkUsageDescription`（開発サーバー到達専用文言）が必要。クラウド egress / Bonjour sync とは別物。初回は OS の「ローカルネットワーク」許可ダイアログを Allow。release の UI は `frontendDist` バンドルで LAN を叩かない。
+7. **物理実機 Vite DEV:** `Info.ios.plist` に `NSAppTransportSecurity.NSAllowsLocalNetworking=true` + `NSAllowsArbitraryLoadsInWebContent=true` + RFC1918/link-local の `NSExceptionDomains`（`NSExceptionAllowsInsecureHTTPLoads`）と `NSLocalNetworkUsageDescription` が必要。iOS 17+ は **素の IP への HTTP を ATS が既定拒否**するため LocalNetworking だけでは足りないことがある。クラウド egress / Bonjour sync とは別物。初回は OS の「ローカルネットワーク」を **Allow**。release の UI は `frontendDist` バンドルで LAN を叩かない。
+8. **拒否後の復旧（コードでは再プロンプト不可）:** 画面に `Failed to request http://<LAN>:1420/ … did you grant local network permissions?` が出たら、(a) Local Network OFF、または **(b) Mac の DHCP で LAN IP が回転し app の `TAURI_DEV_HOST` が死んでいる** のどちらか。Permissions ON なのに死ぬときはほぼ (b)。**`tauri ios dev` を止めて再起動**し、CLI に現行 IP を再解決させる（`run-dev.sh` が `TAURI_DEV_HOST` ∉ Mac IPv4 なら WARNING）。Settings 経路: **設定 → プライバシーとセキュリティ → ローカルネットワーク → Coraxis ON**。USB TUN: `tauri ios dev --force-ip-prompt`（Xcode Devices 接続後、`::2` 終端 IPv6）。
+9. **Vite bind:** 常に `server.host: true`（0.0.0.0）。`TAURI_DEV_HOST` への単一 bind は IP 回転で listen ごと死ぬ。HMR の `host` だけ `TAURI_DEV_HOST`、ポートは 1420 固定。
 
-**as-built:** `vite.config.ts`、`webview_policy.rs`、`GlobalErrorBoundary.tsx`、`main.tsx`、`tauri.ios.conf.json`、`Info.ios.plist`、`.fatal-crash-*` CSS、`ModelSetupGate.tsx`、`llm.ts`。
+**as-built:** `vite.config.ts`、`webview_policy.rs`、`GlobalErrorBoundary.tsx`、`main.tsx`、`tauri.ios.conf.json`、`Info.ios.plist`、`scripts/run-dev.sh`、`.fatal-crash-*` CSS、`ModelSetupGate.tsx`、`llm.ts`。
 
-**ハマりどころ:** `TAURI_DEV_HOST` LAN IP を policy で落とすとデスクトップ黒画面。iOS は `desktop-chrome` 誤用と Channel 未ガードが同症状。実機で Local Network を拒否すると Vite に届かず漆黒（CSP 以前）。E2E は Simulator で「モデル配置を確認…」またはメインシェル文字が非黒ピクセルとして見えること。
+**ハマりどころ:** `TAURI_DEV_HOST` が DHCP で古くなると Local Network ON でも漆黒（エラー URL の IP ≠ `ipconfig getifaddr en0`）。`TAURI_DEV_HOST` を policy で落とすとデスクトップ黒画面。iOS は `desktop-chrome` 誤用と Channel 未ガードが同症状。E2E は Simulator で「モデル配置を確認…」またはメインシェル文字が非黒ピクセルとして見えること。
 
 **検証:** `cargo test --lib webview_policy` / `npx tsc --noEmit` / Simulator スクリーンショット。
 
@@ -1490,6 +1492,26 @@ Pocket Brain 経路は M14 tensor + M15 pulse/Rasch + gap sufficiency から loa
 - GD 開始前にセットアップをスキップする導線を作るな。
 - 司会者専用ペルソナをエージェント行列に追加するな（AI_SKILLS §7.1.2 カオス維持）。
 - archetype → `PRESET_PERSONA_TRAITS` 写像は `archetypeToTrait()` 経由のみ（IPC 本結線時）。
+
+### 4.79 M20 データ連携 — LINE on-device 安定化 + EventKit UI (2026-07-23)
+
+**射程:** iOS 実機での LINE `.txt` 取込失敗の診断強化、および EventKit 読取の ImportTab 結線＋ Vault 永続化。
+
+**LINE (`ingest_line_history` / `ingest_line_history_path`):**
+1. 上限を **4 MiB**（`MAX_LINE_INGEST_BYTES`）。旧 512 KiB は実エクスポートで頻発死。
+2. **IPC に `number[]` で大容量を載せない。** FE は `plugin-fs` で `$APPDATA/imports/` に stage → `ingest_line_history_path`（パス traversal 拒否）。これが iPhone の「取り込み結果を確認できませんでした」の主因対策。
+3. 失敗は制御コードのみ: `LINE_IMPORT:{EMPTY|TOO_LARGE|BLANK|BAD_SOURCE_ID|BAD_PATH|READ|NO_CHUNKS|VAULT_LOCKED|EMBED|PIPELINE|JOIN}`。
+4. モバイル (`.mobile-chrome`) は Python `import.line` を試さずオンデバイス直行き。
+5. `IngestKnowledgeResult.truncated` — `MAX_CHUNKS` 到達時 true。
+
+**EventKit UI:**
+1. ImportTab「デバイスのカレンダー (EventKit)」→ `fetchAppleCalendarEvents` → `groupEventsForDailySync` → `syncDailyContext`（Vault `daily-YYYY-MM-DD`）。
+2. 期間: 過去 30 日〜未来 60 日。権限拒否は Settings 誘導の無菌文言（throw しない）。
+3. macOS SQLite「Apple カレンダー」ボタンは並置維持。
+
+**as-built:** `commands_rag.rs` (`ingest_line_history_path`) / `api.ts` / `lineImportFeedback.ts` / `eventKitImport.ts` / `ImportTab.tsx`。
+
+**不変条件:** UI に生 IPC / 絶対パス / ファイル本文を出すな。EventKit は read-only（永続化は M13 のみ）。profiler を取込から起動するな。Vault ロック時は解錠後に再実行（`VAULT_LOCKED`）。
 
 ---
 

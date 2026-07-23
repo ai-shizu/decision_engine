@@ -1,7 +1,7 @@
 //! Tauri command surface for the EventKit calendar read bridge (M20 Part 2).
 //!
-//! Read-only, on-device, no network. Vault injection into CONSULT/RAG context
-//! is a deliberate follow-up — see `event_kit.rs` module docs.
+//! Read-only, on-device, no network. FE persists via `sync_daily_context`
+//! after a successful fetch (ImportTab EventKit block).
 
 use objc2_event_kit::EKAuthorizationStatus;
 use serde::{Deserialize, Serialize};

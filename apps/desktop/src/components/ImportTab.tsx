@@ -14,7 +14,13 @@ import {
   type DocumentImportResult,
 } from "../lib/engine";
 import { parseEngineEvent } from "../lib/parseEngineResponse";
-import { ingestLineHistory } from "../lib/pocketBrain";
+import { ingestLineHistory, fetchAppleCalendarEvents, syncDailyContext } from "../lib/pocketBrain";
+import {
+  eventKitImportRange,
+  groupEventsForDailySync,
+  sterileEventKitAuthMessage,
+} from "../lib/eventKitImport";
+import { sterileLineImportFromUnknown } from "../lib/lineImportFeedback";
 import type { ClassifyResult, EngineEvent, EsListItem, SourceStat } from "../lib/types";
 import { uiErrorMessage } from "../lib/uiErrorMessages";
 import { useCorrelationId } from "../lib/useCorrelationId";
@@ -170,34 +176,58 @@ export function ImportTab() {
     if (ref.current) ref.current.value = "";
   }
 
+  /** Mobile shell has no Python sidecar — skip the doomed desktop import hop. */
+  function preferOnDeviceLineImport(): boolean {
+    return typeof document !== "undefined" && !!document.querySelector(".mobile-chrome");
+  }
+
+  async function importLineOnDevice(files: File[]): Promise<void> {
+    let ok = 0;
+    const failNotes: string[] = [];
+    for (const file of files) {
+      try {
+        const r = await ingestLineHistory(file);
+        ok += 1;
+        if (r.truncated) {
+          pushImportLog(
+            `${file.name}: オンデバイス取込完了（先頭チャンクのみ・ファイルが大きい）`,
+          );
+        }
+      } catch (err) {
+        failNotes.push(`${file.name}: ${sterileLineImportFromUnknown(err)}`);
+      }
+    }
+    for (const note of failNotes) pushImportLog(note);
+    if (ok > 0) {
+      const suffix = ok < files.length ? `（${files.length - ok}件失敗）` : "";
+      pushImportLog(`${ok}件のLINEトーク履歴をオンデバイスで取り込みました${suffix}`);
+    } else {
+      pushImportLog(
+        failNotes.length > 0
+          ? failNotes[failNotes.length - 1]!
+          : uiErrorMessage("LINE_IMPORT"),
+      );
+    }
+  }
+
   async function handleLine(files: FileList | null) {
     if (!files?.length) return;
     setBusy(true);
     const myCid = cid.begin();
+    const list = Array.from(files);
     try {
-      const res = await importLineFiles(Array.from(files), myCid);
-      pushImportLog(
-        typeof res.message === "string" ? res.message : "LINE を取り込みました",
-      );
-    } catch {
-      // Desktop Python サイドカーが起動できない環境 (iOS 実機など — engine.rs
-      // の start() は #[cfg(not(mobile))]) では上の経路が必ず失敗する。
-      // オンデバイス Rust 経路 (BOM/UTF-16/Shift-JIS 堅牢デコード → chunk →
-      // embed → Vault) にファイル単位でフォールバックする。
-      let ok = 0;
-      for (const file of Array.from(files)) {
-        try {
-          await ingestLineHistory(file);
-          ok += 1;
-        } catch {
-          /* counted via ok below; per-file detail not user-actionable */
-        }
-      }
-      if (ok > 0) {
-        const suffix = ok < files.length ? `（${files.length - ok}件失敗）` : "";
-        pushImportLog(`${ok}件のLINEトーク履歴をオンデバイスで取り込みました${suffix}`);
+      if (preferOnDeviceLineImport()) {
+        await importLineOnDevice(list);
       } else {
-        pushImportLog(uiErrorMessage("LINE_IMPORT"));
+        try {
+          const res = await importLineFiles(list, myCid);
+          pushImportLog(
+            typeof res.message === "string" ? res.message : "LINE を取り込みました",
+          );
+        } catch {
+          // Desktop Python サイドカー不在 / 失敗時はオンデバイスへフォールバック。
+          await importLineOnDevice(list);
+        }
       }
     } finally {
       cid.end(myCid);
@@ -244,6 +274,52 @@ export function ImportTab() {
       pushImportLog(uiErrorMessage("APPLE_CALENDAR_SYNC"));
     } finally {
       cid.end(myCid);
+      if (mountedRef.current) {
+        setBusy(false);
+        setLog([...importLog]);
+      }
+      void refreshStats();
+    }
+  }
+
+  /** iOS/macOS EventKit → daily vault knowledge (on-device; prompts Calendar access). */
+  async function handleDeviceCalendar() {
+    setBusy(true);
+    try {
+      const { startUnix, endUnix } = eventKitImportRange();
+      const fetched = await fetchAppleCalendarEvents(startUnix, endUnix);
+      if (!fetched.authorized) {
+        pushImportLog(sterileEventKitAuthMessage(fetched.status));
+        return;
+      }
+      if (fetched.events.length === 0) {
+        pushImportLog("指定期間にカレンダー予定はありませんでした。");
+        return;
+      }
+      const buckets = groupEventsForDailySync(fetched.events);
+      let daysOk = 0;
+      let eventsOk = 0;
+      for (const bucket of buckets) {
+        try {
+          await syncDailyContext(bucket.date, JSON.stringify(bucket.events), "");
+          daysOk += 1;
+          eventsOk += bucket.events.length;
+        } catch {
+          pushImportLog(
+            `${bucket.date}: ${uiErrorMessage("APPLE_CALENDAR_SYNC")}`,
+          );
+        }
+      }
+      if (daysOk > 0) {
+        pushImportLog(
+          `デバイスのカレンダーから ${eventsOk}件の予定を ${daysOk}日分、知識ベースへ取り込みました`,
+        );
+      } else {
+        pushImportLog(uiErrorMessage("APPLE_CALENDAR_SYNC"));
+      }
+    } catch {
+      pushImportLog(uiErrorMessage("APPLE_CALENDAR_SYNC"));
+    } finally {
       if (mountedRef.current) {
         setBusy(false);
         setLog([...importLog]);
@@ -367,10 +443,11 @@ export function ImportTab() {
             } catch {
               // iOS 実機など Python サイドカー不在環境向けフォールバック。
               try {
-                await ingestLineHistory(file);
-                pushImportLog(`${file.name} をオンデバイスでLINEとして取り込みました`);
-              } catch {
-                pushImportLog(`${file.name}: ${uiErrorMessage("LINE_IMPORT")}`);
+                const r = await ingestLineHistory(file);
+                const trunc = r.truncated ? "（先頭チャンクのみ）" : "";
+                pushImportLog(`${file.name} をオンデバイスでLINEとして取り込みました${trunc}`);
+              } catch (err) {
+                pushImportLog(`${file.name}: ${sterileLineImportFromUnknown(err)}`);
               }
             }
             continue;
@@ -533,6 +610,17 @@ export function ImportTab() {
         </p>
         <button type="button" disabled={busy || !appleAvailable} onClick={() => void handleApple()}>
           Apple カレンダーを同期
+        </button>
+      </div>
+
+      <div className="import-block">
+        <h3>デバイスのカレンダー (EventKit)</h3>
+        <p className="hint">
+          iPhone / Mac の標準カレンダーから直近〜今後の予定を読み取り、知識ベースへ取り込みます。
+          初回は OS のカレンダーアクセス許可ダイアログが表示されます（外部通信なし）。
+        </p>
+        <button type="button" disabled={busy} onClick={() => void handleDeviceCalendar()}>
+          カレンダー予定を取り込む
         </button>
       </div>
 
