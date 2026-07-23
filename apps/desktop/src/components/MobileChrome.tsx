@@ -9,6 +9,7 @@ import { ProbeTab } from "./ProbeTab";
 import { ProfileTab } from "./ProfileTab";
 import { RecordTab } from "./RecordTab";
 import { SettingsTab } from "./SettingsTab";
+import { VaultPanel } from "./VaultPanel";
 
 function renderMobileSurface(
   id: MobileSurface,
@@ -31,7 +32,10 @@ function renderMobileSurface(
       return <ImportTab />;
     case "settings":
       return (
-        <SettingsTab engineReady={engineReady} onOpenProfile={onOpenProfile} />
+        <>
+          <VaultPanel variant="compact" />
+          <SettingsTab engineReady={engineReady} onOpenProfile={onOpenProfile} />
+        </>
       );
     default: {
       const _exhaustive: never = id;

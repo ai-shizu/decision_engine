@@ -56,6 +56,8 @@ rusqlite = { version = "=0.40.1", default-features = false, features = ["bundled
 # M9 local RAG: sqlite-vec C sources compiled + statically linked at build time
 # (`SQLITE_CORE`). Never `load_extension` / never ship a separate vec dylib.
 sqlite-vec = { version = "=0.1.9", optional = true }
+tauri-plugin-fs = "2"
+tauri-plugin-dialog = "2"
 
 [features]
 # NOTE: the blueprint prose says "reqwest/rustls-tls"; reqwest 0.13.4's actual
@@ -65,7 +67,7 @@ sqlite-vec = { version = "=0.1.9", optional = true }
 egress-live = ["dep:hickory-resolver", "dep:rustls", "dep:hyper-rustls", "dep:tokio-rustls", "reqwest/rustls-no-provider"]
 # M4 on-device LLM scaffold. Enables the optional llama-cpp-2 dep (requires cmake
 # + C++ toolchain). Never enable on default/release desktop builds.
-pocket-brain = ["llama-cpp-2", "libc", "dep:rfd"]
+pocket-brain = ["llama-cpp-2", "libc"]
 # M3 Phase 0+: SQLCipher + typed objc2 Keychain link gate. Keep off default
 # builds. All Apple bindings live in one objc2 type system; do not reintroduce
 # security-framework alongside them (docs/m3_action_plan.md §4.2.1).
@@ -97,11 +99,6 @@ windows-sys = { version = "0.61.2", features = [
 [target.'cfg(target_os = "linux")'.dependencies]
 libc = "0.2"
 
-# Offline model setup gate: native local GGUF picker (desktop only; never network).
-# Optional + enabled by `pocket-brain`. Absent on iOS (inject / Files path).
-[target.'cfg(not(target_os = "ios"))'.dependencies]
-rfd = { version = "=0.15.4", optional = true }
-
 # M4 pocket-brain jetsam probe (proc_pid_rusage). Optional; only pulled by the
 # `pocket-brain` feature so the default desktop build is unaffected.
 # M3 Keychain: exact-pin typed objc2 stack, Apple-only and secure-vault-only
@@ -111,7 +108,7 @@ libc = { version = "0.2", optional = true }
 objc2 = { version = "=0.6.4", default-features = false, features = ["std"], optional = true }
 objc2-security = { version = "=0.3.2", default-features = false, features = ["std", "objc2", "SecAccessControl", "SecBase", "SecItem", "SecRandom"], optional = true }
 objc2-local-authentication = { version = "=0.3.2", default-features = false, features = ["std", "LAContext"], optional = true }
-objc2-foundation = { version = "=0.3.2", default-features = false, features = ["std", "NSString", "NSDictionary", "NSObject", "NSValue", "NSNotification", "NSData", "NSArray", "objc2-core-foundation"], optional = true }
+objc2-foundation = { version = "=0.3.2", default-features = false, features = ["std", "NSString", "NSDictionary", "NSObject", "NSValue", "NSNotification", "NSData", "NSArray", "NSURL", "objc2-core-foundation"], optional = true }
 objc2-core-foundation = { version = "=0.3.2", default-features = false, features = ["alloc", "CFData", "CFDictionary", "CFError", "objc2"], optional = true }
 objc2-vision = { version = "=0.3.2", default-features = false, features = [
     "std",

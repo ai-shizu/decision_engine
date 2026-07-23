@@ -10,8 +10,8 @@ mod probe;
 mod apple_sensors;
 
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicU8, Ordering};
-use std::sync::Arc;
-use std::thread;
+use std::sync::{Arc, Condvar, Mutex};
+use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
 use serde::Serialize;
@@ -71,27 +71,91 @@ pub struct MemSample {
 }
 
 /// Lock-free hook invoked on Critical / over-threshold rising edge.
-/// Typically wired to `LlmMemoryGovernor::request_purge` (two atomic stores).
+/// Typically wired to `LlmMemoryGovernor::request_purge` (three atomic updates).
 pub type OverThresholdHook = Arc<dyn Fn() + Send + Sync + 'static>;
 
 /// Invoked when the ladder enters Serious (FE warning / throttle).
 pub type DegradationHook = Arc<dyn Fn(DegradationLevel) + Send + Sync + 'static>;
 
+struct MonitorControl {
+    running: AtomicBool,
+    gate: Mutex<()>,
+    wake: Condvar,
+}
+
+impl MonitorControl {
+    fn new() -> Self {
+        Self {
+            running: AtomicBool::new(false),
+            gate: Mutex::new(()),
+            wake: Condvar::new(),
+        }
+    }
+
+    fn start(&self) {
+        if let Ok(_guard) = self.gate.lock() {
+            self.running.store(true, Ordering::SeqCst);
+        }
+    }
+
+    fn stop(&self) {
+        if let Ok(_guard) = self.gate.lock() {
+            self.running.store(false, Ordering::SeqCst);
+            self.wake.notify_all();
+        } else {
+            self.running.store(false, Ordering::SeqCst);
+            self.wake.notify_all();
+        }
+    }
+
+    fn is_running(&self) -> bool {
+        self.running.load(Ordering::SeqCst)
+    }
+
+    /// Interruptible replacement for `thread::sleep`; stop/restart never waits
+    /// for the 5-second telemetry cadence to expire.
+    fn wait(&self, duration: Duration) -> bool {
+        let Ok(guard) = self.gate.lock() else {
+            return false;
+        };
+        if !self.is_running() {
+            return false;
+        }
+        match self
+            .wake
+            .wait_timeout_while(guard, duration, |_| self.is_running())
+        {
+            Ok(_) => self.is_running(),
+            Err(_) => false,
+        }
+    }
+}
+
 /// Background footprint / thermal monitor.
 pub struct MemoryMonitor {
-    running: Arc<AtomicBool>,
+    control: Arc<MonitorControl>,
+    worker: Mutex<Option<JoinHandle<()>>>,
     phase: Arc<AtomicU8>,
     baseline: Arc<AtomicU64>,
     degradation: Arc<AtomicU8>,
+    #[cfg(target_vendor = "apple")]
+    apple_sensors: Arc<apple_sensors::AppleSensorState>,
+    #[cfg(target_vendor = "apple")]
+    pressure_watch_installed: AtomicBool,
 }
 
 impl MemoryMonitor {
     pub fn new() -> Self {
         Self {
-            running: Arc::new(AtomicBool::new(false)),
+            control: Arc::new(MonitorControl::new()),
+            worker: Mutex::new(None),
             phase: Arc::new(AtomicU8::new(MemPhase::Baseline.as_u8())),
             baseline: Arc::new(AtomicU64::new(0)),
             degradation: Arc::new(AtomicU8::new(DegradationLevel::Nominal.as_u8())),
+            #[cfg(target_vendor = "apple")]
+            apple_sensors: apple_sensors::AppleSensorState::new(),
+            #[cfg(target_vendor = "apple")]
+            pressure_watch_installed: AtomicBool::new(false),
         }
     }
 
@@ -104,31 +168,47 @@ impl MemoryMonitor {
         threshold_bytes: u64,
         over_threshold_hook: Option<OverThresholdHook>,
         degradation_hook: Option<DegradationHook>,
-    ) {
-        self.running.store(false, Ordering::SeqCst);
+    ) -> Result<(), String> {
+        let mut worker = self
+            .worker
+            .lock()
+            .map_err(|_| "memory monitor lifecycle poisoned".to_string())?;
+        self.control.stop();
+        if let Some(previous) = worker.take() {
+            previous
+                .join()
+                .map_err(|_| "previous memory monitor thread panicked".to_string())?;
+        }
+
         let base = phys_footprint_bytes().unwrap_or(0);
         self.baseline.store(base, Ordering::SeqCst);
         self.phase.store(MemPhase::Baseline.as_u8(), Ordering::SeqCst);
         self.degradation
             .store(DegradationLevel::Nominal.as_u8(), Ordering::SeqCst);
-        self.running.store(true, Ordering::SeqCst);
+        self.control.start();
 
-        let running = Arc::clone(&self.running);
+        let control = Arc::clone(&self.control);
         let phase = Arc::clone(&self.phase);
         let baseline = Arc::clone(&self.baseline);
         let degradation = Arc::clone(&self.degradation);
 
         #[cfg(target_vendor = "apple")]
-        {
-            let sensors = apple_sensors::AppleSensorState::new();
-            apple_sensors::install_memory_pressure_watch(
-                Arc::clone(&sensors),
-                over_threshold_hook.clone(),
-            );
+        let spawned = {
+            let sensors = Arc::clone(&self.apple_sensors);
+            if !self.pressure_watch_installed.swap(true, Ordering::SeqCst) {
+                // The dispatch source is process-lifetime; installing it for
+                // every React remount leaks callbacks and repeats purge signals.
+                apple_sensors::install_memory_pressure_watch(
+                    Arc::clone(&sensors),
+                    over_threshold_hook.clone(),
+                );
+            }
             let sensors_thread = Arc::clone(&sensors);
-            thread::spawn(move || {
+            thread::Builder::new()
+                .name("coraxis-memory-monitor".into())
+                .spawn(move || {
                 apple_telemetry_loop(
-                    running,
+                    control,
                     phase,
                     baseline,
                     degradation,
@@ -139,14 +219,15 @@ impl MemoryMonitor {
                     over_threshold_hook,
                     degradation_hook,
                 );
-            });
-        }
+                })
+        };
 
         #[cfg(not(target_vendor = "apple"))]
-        {
-            thread::spawn(move || {
+        let spawned = thread::Builder::new()
+            .name("coraxis-memory-monitor".into())
+            .spawn(move || {
                 adaptive_poll_loop(
-                    running,
+                    control,
                     phase,
                     baseline,
                     degradation,
@@ -157,6 +238,16 @@ impl MemoryMonitor {
                     degradation_hook,
                 );
             });
+
+        match spawned {
+            Ok(handle) => {
+                *worker = Some(handle);
+                Ok(())
+            }
+            Err(error) => {
+                self.control.stop();
+                Err(format!("memory monitor spawn failed: {error}"))
+            }
         }
     }
 
@@ -164,8 +255,18 @@ impl MemoryMonitor {
         self.phase.store(phase.as_u8(), Ordering::SeqCst);
     }
 
-    pub fn stop(&self) {
-        self.running.store(false, Ordering::SeqCst);
+    pub fn stop(&self) -> Result<(), String> {
+        let mut worker = self
+            .worker
+            .lock()
+            .map_err(|_| "memory monitor lifecycle poisoned".to_string())?;
+        self.control.stop();
+        if let Some(handle) = worker.take() {
+            handle
+                .join()
+                .map_err(|_| "memory monitor thread panicked".to_string())?;
+        }
+        Ok(())
     }
 }
 
@@ -235,7 +336,7 @@ fn apply_level(
 /// Apple: ≥5s telemetry; pressure events drive Critical independently.
 #[cfg(target_vendor = "apple")]
 fn apple_telemetry_loop(
-    running: Arc<AtomicBool>,
+    control: Arc<MonitorControl>,
     phase: Arc<AtomicU8>,
     baseline: Arc<AtomicU64>,
     degradation: Arc<AtomicU8>,
@@ -252,7 +353,7 @@ fn apple_telemetry_loop(
     let mut was_critical = false;
     let mut was_serious = false;
 
-    while running.load(Ordering::SeqCst) {
+    while control.is_running() {
         apple_sensors::refresh_thermal(&sensors);
         let cur = phys_footprint_bytes().unwrap_or(0);
         let ratio = if threshold_bytes == 0 {
@@ -283,14 +384,16 @@ fn apple_telemetry_loop(
         ) {
             break;
         }
-        thread::sleep(tick);
+        if !control.wait(tick) {
+            break;
+        }
     }
 }
 
 /// Non-Apple fallback: adaptive interval from footprint ratio (1s–5s).
 #[cfg(not(target_vendor = "apple"))]
 fn adaptive_poll_loop(
-    running: Arc<AtomicBool>,
+    control: Arc<MonitorControl>,
     phase: Arc<AtomicU8>,
     baseline: Arc<AtomicU64>,
     degradation: Arc<AtomicU8>,
@@ -304,7 +407,7 @@ fn adaptive_poll_loop(
     let mut was_critical = false;
     let mut was_serious = false;
 
-    while running.load(Ordering::SeqCst) {
+    while control.is_running() {
         let cur = phys_footprint_bytes().unwrap_or(0);
         let ratio = if threshold_bytes == 0 {
             0.0
@@ -341,6 +444,32 @@ fn adaptive_poll_loop(
         } else {
             5_000
         };
-        thread::sleep(Duration::from_millis(sleep_ms));
+        if !control.wait(Duration::from_millis(sleep_ms)) {
+            break;
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn monitor_wait_is_interrupted_by_stop() {
+        let control = Arc::new(MonitorControl::new());
+        control.start();
+        let worker_control = Arc::clone(&control);
+        let (ready, ready_rx) = std::sync::mpsc::sync_channel(1);
+        let worker = thread::spawn(move || {
+            let _ = ready.send(());
+            let started = Instant::now();
+            let still_running = worker_control.wait(Duration::from_secs(5));
+            (still_running, started.elapsed())
+        });
+        ready_rx.recv().expect("waiter ready");
+        control.stop();
+        let (still_running, elapsed) = worker.join().expect("waiter joins");
+        assert!(!still_running);
+        assert!(elapsed < Duration::from_secs(1));
     }
 }

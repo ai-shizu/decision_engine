@@ -32,6 +32,11 @@ import {
   vaultStatusLabel,
 } from "../lib/vaultErrorMessages";
 import {
+  shouldApplyVaultSnapshot,
+  vaultPanelTone,
+  vaultSystemErrorLine,
+} from "../lib/vaultPanelView";
+import {
   INITIAL_VAULT_STATE,
   vaultReducer,
   type VaultAction,
@@ -432,17 +437,50 @@ function UnlockedVault(props: UnlockedVaultProps): ReactElement {
   );
 }
 
-export function VaultPanel(): ReactElement | null {
+export interface VaultPanelProps {
+  readonly variant?: "full" | "compact";
+}
+
+export function VaultPanel({
+  variant = "full",
+}: VaultPanelProps): ReactElement | null {
   const [state, dispatch] = useReducer(vaultReducer, INITIAL_VAULT_STATE);
   const [probe, setProbe] = useState<"pending" | "ready" | "absent">("pending");
+  const [probeAttempt, setProbeAttempt] = useState(0);
+  const lifecycleRevision = useRef(0);
+  const statusSnapshotRequest = useRef(0);
 
+  // Subscribe first so there is no status-probe → channel-registration gap.
+  // The worker pushes its current status and also returns the same snapshot. If
+  // event delivery wins, the revision guard prevents that snapshot from later
+  // rewinding a newer lifecycle event.
   useEffect(() => {
     let active = true;
-    void vaultStatus()
+    const revisionAtSubscription = lifecycleRevision.current;
+    void subscribeVaultEvents((event) => {
+      if (!active) {
+        return;
+      }
+      lifecycleRevision.current += 1;
+      setProbe("ready");
+      if (event.kind === "status") {
+        dispatch({ type: "statusReceived", status: event.status });
+      } else {
+        dispatch({ type: "lockEngaged", code: event.code, status: event.status });
+      }
+    })
       .then((status) => {
-        if (active) {
+        if (!active) {
+          return;
+        }
+        setProbe("ready");
+        if (
+          shouldApplyVaultSnapshot(
+            revisionAtSubscription,
+            lifecycleRevision.current,
+          )
+        ) {
           dispatch({ type: "statusReceived", status });
-          setProbe("ready");
         }
       })
       .catch(() => {
@@ -453,7 +491,7 @@ export function VaultPanel(): ReactElement | null {
     return () => {
       active = false;
     };
-  }, []);
+  }, [probeAttempt]);
 
   // Re-sync status when the app returns to the foreground. On iOS the native
   // lifecycle observer locks the vault on backgrounding; App's Phase 10 restore
@@ -465,9 +503,19 @@ export function VaultPanel(): ReactElement | null {
     }
     let active = true;
     function applyStatus(): void {
+      const requestId = statusSnapshotRequest.current + 1;
+      statusSnapshotRequest.current = requestId;
+      const revisionAtRequest = lifecycleRevision.current;
       void vaultStatus()
         .then((status) => {
-          if (active) {
+          if (
+            active &&
+            requestId === statusSnapshotRequest.current &&
+            shouldApplyVaultSnapshot(
+              revisionAtRequest,
+              lifecycleRevision.current,
+            )
+          ) {
             dispatch({ type: "statusReceived", status });
           }
         })
@@ -493,33 +541,6 @@ export function VaultPanel(): ReactElement | null {
     };
   }, [probe]);
 
-  // Subscribe once to worker-pushed lifecycle events (the "nervous system").
-  // The single Channel is created only after the initial probe succeeds; the
-  // worker keeps one sink, so this never accumulates registrations. An OS
-  // self-lock arrives as an `error` event → `lockEngaged` forces the unlocked
-  // view (and any streaming it hosts) to unmount immediately.
-  useEffect(() => {
-    if (probe !== "ready") {
-      return;
-    }
-    let active = true;
-    void subscribeVaultEvents((event) => {
-      if (!active) {
-        return;
-      }
-      if (event.kind === "status") {
-        dispatch({ type: "statusReceived", status: event.status });
-      } else {
-        dispatch({ type: "lockEngaged", code: event.code, status: event.status });
-      }
-    }).catch(() => {
-      // No event sink available (e.g. desktop without the vault command).
-    });
-    return () => {
-      active = false;
-    };
-  }, [probe]);
-
   async function onUnlock(): Promise<void> {
     dispatch({ type: "unlockStarted" });
     try {
@@ -540,8 +561,55 @@ export function VaultPanel(): ReactElement | null {
     }
   }
 
-  if (probe !== "ready") {
+  const compact = variant === "compact";
+  const headingId = compact ? "mobile-vault-heading" : "vault-heading";
+
+  if (probe !== "ready" && !compact) {
     return null;
+  }
+
+  if (probe !== "ready") {
+    const probing = probe === "pending";
+    return (
+      <section
+        className="vault-panel vault-panel--compact term-panel"
+        aria-labelledby={headingId}
+        data-vault-tone={probing ? "active" : "error"}
+      >
+        <header className="vault-header">
+          <div>
+            <p className="term-header">Secure Vault // Bio-Gate</p>
+            <h2 id={headingId}>保管庫ロック</h2>
+          </div>
+          <span className="vault-status" data-vault-status="unavailable">
+            {probing ? "状態照会中" : "利用不可"}
+          </span>
+        </header>
+        {probing ? (
+          <p className="vault-status-description" role="status" aria-live="polite">
+            生体認証ゲートを照会しています。
+          </p>
+        ) : (
+          <>
+            <p className="error-text vault-error" role="alert">
+              {vaultSystemErrorLine("unavailable")}
+            </p>
+            <div className="vault-actions">
+              <button
+                type="button"
+                className="ghost"
+                onClick={() => {
+                  setProbe("pending");
+                  setProbeAttempt((attempt) => attempt + 1);
+                }}
+              >
+                再走査
+              </button>
+            </div>
+          </>
+        )}
+      </section>
+    );
   }
 
   const showUnlock =
@@ -553,15 +621,31 @@ export function VaultPanel(): ReactElement | null {
     state.status === "recovery_required" ||
     state.status === "orphaned_key" ||
     state.status === "quarantined";
+  const operationError = state.unlock.error ?? state.lock.error;
+  const tone = vaultPanelTone(state.status, operationError);
 
   return (
-    <section className="vault-panel term-panel" aria-labelledby="vault-heading">
+    <section
+      className={
+        compact
+          ? "vault-panel vault-panel--compact term-panel"
+          : "vault-panel term-panel"
+      }
+      aria-labelledby={headingId}
+      data-vault-tone={tone}
+    >
       <header className="vault-header">
         <div>
-          <p className="term-header">Secure Vault</p>
-          <h2 id="vault-heading">暗号化保管庫</h2>
+          <p className="term-header">
+            {compact ? "Secure Vault // Bio-Gate" : "Secure Vault"}
+          </p>
+          <h2 id={headingId}>{compact ? "保管庫ロック" : "暗号化保管庫"}</h2>
         </div>
-        <span className="vault-status" data-vault-status={state.status}>
+        <span
+          className="vault-status"
+          data-vault-status={state.status}
+          data-vault-tone={tone}
+        >
           {vaultStatusLabel(state.status)}
         </span>
       </header>
@@ -575,7 +659,8 @@ export function VaultPanel(): ReactElement | null {
           {showUnlock && (
             <button
               type="button"
-              className="primary"
+              className="primary vault-unlock-control"
+              data-operation-state={state.unlock.phase}
               onClick={() => void onUnlock()}
               disabled={state.unlock.phase === "pending" || state.status === "unlocking"}
             >
@@ -597,16 +682,16 @@ export function VaultPanel(): ReactElement | null {
 
       {state.unlock.error !== null && (
         <p className="error-text vault-error" role="alert">
-          {vaultErrorMessage(state.unlock.error)}
+          {vaultSystemErrorLine(state.unlock.error)}
         </p>
       )}
       {state.lock.error !== null && (
         <p className="error-text vault-error" role="alert">
-          {vaultErrorMessage(state.lock.error)}
+          {vaultSystemErrorLine(state.lock.error)}
         </p>
       )}
 
-      {state.status === "unlocked" && (
+      {!compact && state.status === "unlocked" && (
         <UnlockedVault state={state} dispatch={dispatch} />
       )}
     </section>

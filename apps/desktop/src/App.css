@@ -3080,6 +3080,22 @@ button.secondary {
   letter-spacing: 0.08em;
 }
 
+.vault-panel[data-vault-tone="active"] .vault-status {
+  color: var(--sys-cyan);
+  border-color: var(--sys-cyan);
+}
+
+.vault-panel[data-vault-tone="locked"] .vault-status,
+.vault-panel[data-vault-tone="error"] .vault-status {
+  color: var(--err);
+  border-color: var(--err);
+}
+
+.vault-panel[data-vault-tone="unlocked"] .vault-status {
+  color: var(--ok);
+  border-color: var(--ok);
+}
+
 .vault-status-description,
 .vault-error {
   margin: var(--s2) 0 0;
@@ -4101,6 +4117,11 @@ button.secondary {
   color: var(--text);
 }
 
+/* Assistant stream = live telemetry token (never --meta-purple / generic text). */
+.rag-bubble-assistant .rag-bubble-body {
+  color: var(--sys-cyan);
+}
+
 .rag-composer {
   flex-shrink: 0;
   display: flex;
@@ -4435,6 +4456,59 @@ button.secondary {
 .mobile-chrome .term-panel {
   margin-bottom: 8px;
   padding: 8px;
+}
+
+.mobile-chrome .vault-panel--compact {
+  width: 100%;
+  margin: 0 0 -1px;
+  padding: 8px;
+  border: 1px solid var(--border);
+  background: var(--bg-deep);
+  box-shadow: none;
+}
+
+.mobile-chrome .vault-panel--compact .vault-header {
+  align-items: center;
+  gap: 8px;
+  padding-bottom: 6px;
+}
+
+.mobile-chrome .vault-panel--compact .vault-header h2 {
+  margin: 0;
+  font-size: 0.85rem;
+}
+
+.mobile-chrome .vault-panel--compact .vault-status {
+  padding: 4px 6px;
+  font-size: 0.65rem;
+}
+
+.mobile-chrome .vault-panel--compact .vault-status-description {
+  margin: 6px 0 0;
+  color: var(--text-muted);
+  font-size: 0.72rem;
+}
+
+.mobile-chrome .vault-panel--compact .vault-actions {
+  margin-top: 8px;
+  gap: 0;
+}
+
+.mobile-chrome .vault-panel--compact .vault-actions button {
+  width: 100%;
+  min-height: 44px;
+}
+
+.mobile-chrome .vault-panel--compact[data-vault-tone="active"]
+  .vault-unlock-control:disabled {
+  opacity: 1;
+  color: var(--sys-cyan);
+  border-color: var(--sys-cyan);
+}
+
+.mobile-chrome .vault-panel--compact .vault-error {
+  margin-top: 8px;
+  font-size: 0.68rem;
 }
 
 .mobile-chrome .term-panel::before,

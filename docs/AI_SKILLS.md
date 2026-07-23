@@ -738,6 +738,14 @@ Pocket Brain 経路は M14 tensor + M15 pulse/Rasch + gap sufficiency から loa
 3. `SettingsTab` は prop に加え `engineReady()` を live probe。
 4. 検証: `npx tsc --noEmit` → exit 0。
 
+### 4.29.1 M20 mobile SETTINGS — compact Bio-Gate vault (2026-07-23)
+
+**as-built:**
+1. `MobileChrome` SETTINGS に `<VaultPanel variant="compact" />` を常設（生体ゲートを SETTINGS から到達可能に）。
+2. 純関数 `vaultPanelView.ts`（tone / `vaultSystemErrorLine` / snapshot 改訂ガード）+ `tests-runtime/vaultPanelView.test.ts` + `tests/test_mobile_vault_control_contract.py`。
+3. compact は unlocked チャット UI を出さない。assistant RAG 本文色は `var(--sys-cyan)`（`.rag-bubble-assistant .rag-bubble-body`）。
+4. Model import は FE `plugin-dialog` + `plugin-fs` のみ。`Cargo.toml` / `package.json` の plugin 依存と `capabilities` の fs/dialog 許可は `lib.rs` の plugin init と必ず同時コミット（片方欠落はビルド不能）。
+
 ### 4.30 M20-F — Mobile declutter (noise / pill sub-tabs) (2026-07-20)
 
 **射程:** `.mobile-chrome` 内のみ。デスクトップ Foxtrot 表示は不変。

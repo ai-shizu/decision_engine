@@ -37,13 +37,13 @@ test("LD-03 risk none for ordinary category", () => {
 test("LD-04 warn for unplanned markers", () => {
   assertOk(ledgerRiskLevel("非計画・コンビニ") === "warn", "jp");
   assertOk(ledgerRiskLevel("impulse buy") === "warn", "en");
-  assertOk(ledgerRiskLabel("warn") === "UNPLANNED", "label");
+  assertOk(ledgerRiskLabel("warn") === "[ UNPLANNED ]", "label");
   assertOk(ledgerRowClassName("warn").includes("ledger-row--warn"), "class");
 });
 
 test("LD-05 danger for distortion markers wins over warn", () => {
   assertOk(ledgerRiskLevel("破局視・非計画") === "danger", "both");
-  assertOk(ledgerRiskLabel("danger") === "DISTORTION", "label");
+  assertOk(ledgerRiskLabel("danger") === "[ DISTORTION ]", "label");
   assertOk(ledgerRowClassName("danger").includes("ledger-row--danger"), "class");
 });
 

@@ -1,14 +1,12 @@
 // Offline model setup gate — blocks main UI until pocket-brain.gguf is local.
-// No network download: guidance opens the OS browser; import is chunk-copy only.
+// No network download: guidance opens the OS browser; import is FE fs copyFile only.
 
 import { useEffect, useReducer, useRef } from "react";
 
 import {
   checkModelExists,
-  importLocalModel,
-  listenModelImportProgress,
+  importLocalGgufViaFs,
   openRecommendedModelPage,
-  pickLocalGguf,
 } from "../lib/modelSetup";
 import {
   INITIAL_MODEL_SETUP,
@@ -56,25 +54,6 @@ export function ModelSetupGate({ onReady }: ModelSetupGateProps) {
     onReadyRef.current();
   }, [state.phase]);
 
-  useEffect(() => {
-    let unlisten: (() => void) | undefined;
-    let disposed = false;
-    void listenModelImportProgress((progress) => {
-      if (disposed) return;
-      dispatch({ type: "import_progress", percent: progress.percent });
-    }).then((fn) => {
-      if (disposed) {
-        fn();
-        return;
-      }
-      unlisten = fn;
-    });
-    return () => {
-      disposed = true;
-      unlisten?.();
-    };
-  }, []);
-
   async function handleOpenGuide() {
     try {
       await openRecommendedModelPage();
@@ -90,10 +69,21 @@ export function ModelSetupGate({ onReady }: ModelSetupGateProps) {
   async function handleImport() {
     if (state.phase === "importing") return;
     try {
-      const picked = await pickLocalGguf();
-      if (!picked) return;
       dispatch({ type: "import_start" });
-      await importLocalModel(picked);
+      const ok = await importLocalGgufViaFs({
+        onProgress: (percent) =>
+          dispatch({ type: "import_progress", percent }),
+      });
+      if (!ok) {
+        // User cancelled the dialog — return to needed without soft error.
+        dispatch({
+          type: "check_result",
+          exists: false,
+          relativePath: state.relativePath,
+          recommendedPageUrl: state.recommendedPageUrl,
+        });
+        return;
+      }
       dispatch({ type: "import_done" });
     } catch (err) {
       const raw = err instanceof Error ? err.message : String(err);
