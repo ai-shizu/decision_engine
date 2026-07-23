@@ -3,7 +3,16 @@
 <plist version="1.0">
 <dict>
 	<key>NSFaceIDUsageDescription</key>
-	<string>暗号化されたデータのロックを解除するためにFace IDを使用します。</string>
+	<string>Vaultの自動解錠および、機密性の高いプロンプトデータの保護にFace IDを使用します。</string>
+	<!-- Physical-device `tauri ios dev` only: WKWebView must reach Mac Vite on LAN.
+	     Release loads bundled frontendDist (no LAN). Not an egress / cloud path. -->
+	<key>NSAppTransportSecurity</key>
+	<dict>
+		<key>NSAllowsLocalNetworking</key>
+		<true/>
+	</dict>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>開発中のローカル開発サーバーへ接続するためにローカルネットワークを使用します。</string>
 	<key>ITSAppUsesNonExemptEncryption</key>
 	<false/>
 </dict>
