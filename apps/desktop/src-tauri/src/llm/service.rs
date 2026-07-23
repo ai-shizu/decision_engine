@@ -55,6 +55,30 @@ const PURGE_POLL_INTERVAL: Duration = Duration::from_millis(250);
 /// queue through the lock-free governor.
 const LLM_COMMAND_QUEUE_CAPACITY: usize = 8;
 
+/// `LlmHandle::load/is_loaded/generate` bounds (2026-07-24 iOS-device
+/// investigation: `send_rag_chat`'s Vault calls already bound on a 5s
+/// `recv_timeout` — worker.rs — but these three used unbounded `recv()`/
+/// `.await`. A wedged worker thread (single dedicated thread; all
+/// `LlmCommand`s serialize through one queue) left every caller pending
+/// forever with no error, matching the observed CONSULT/interview freeze:
+/// device logs showed a clean embed-context construct+destroy, then total
+/// silence with no further llama.cpp output. These do not fix why the worker
+/// might wedge — they turn a silent hang into a surfaced, retryable error.
+///
+/// The worker keeps running past a caller's timeout (it only learns the
+/// receiver was dropped when it tries to reply); once whatever blocked it
+/// clears, the queue drains and the next call succeeds normally.
+const LLM_READY_PROBE_TIMEOUT: Duration = Duration::from_secs(15);
+/// mmap-load of a >1GB GGUF + Metal context construction. Observed well under
+/// 1s warm on this hardware; generous for a cold/thermally-throttled load.
+const LLM_LOAD_TIMEOUT: Duration = Duration::from_secs(60);
+/// Generous per user instruction ("モバイル推論時間を考慮して長めに"): covers
+/// a full ~384-900 token response even under poor (throttled/contended)
+/// mobile throughput. Flat wall-clock bound on the whole call, not an
+/// idle/per-token timeout — token progress still streams over the `tokens`
+/// Channel throughout; this only bounds the terminal completion signal.
+const LLM_GENERATE_TIMEOUT: Duration = Duration::from_secs(180);
+
 /// Stable role boundary for free-form generation. Callers assemble rich RAG /
 /// interview context inside the user message; this system message supplies the
 /// model-level role that an instruction-tuned GGUF expects.
@@ -575,6 +599,7 @@ impl LlmHandle {
     }
 
     /// Blocking: mmap-load the GGUF on the worker thread and await the result.
+    /// Bounded by [`LLM_LOAD_TIMEOUT`] — see its doc comment.
     pub fn load(&self, model_path: PathBuf, params: LoadParams) -> Result<(), String> {
         let (reply, ack) = mpsc::sync_channel(1);
         let purge_epoch = self.governor.purge_epoch();
@@ -584,13 +609,21 @@ impl LlmHandle {
             purge_epoch,
             reply,
         })?;
-        ack.recv()
-            .map_err(|_| "llm worker dropped reply".to_string())?
+        match ack.recv_timeout(LLM_LOAD_TIMEOUT) {
+            Ok(result) => result,
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                Err("llm load timed out (worker unresponsive)".to_string())
+            }
+            Err(mpsc::RecvTimeoutError::Disconnected) => {
+                Err("llm worker dropped reply".to_string())
+            }
+        }
     }
 
     /// Start a generation, streaming tokens over `tokens`, and asynchronously
     /// wait until the worker has sent its terminal event.
     /// `task_id` is the sole authority for extraction routing (not copied into params).
+    /// Bounded by [`LLM_GENERATE_TIMEOUT`] — see its doc comment.
     pub async fn generate(
         &self,
         params: GenerationParams,
@@ -605,16 +638,27 @@ impl LlmHandle {
             tokens,
             completion,
         })?;
-        ack.await
-            .map_err(|_| "llm worker dropped generation completion".to_string())?
+        match tokio::time::timeout(LLM_GENERATE_TIMEOUT, ack).await {
+            Ok(Ok(result)) => result,
+            Ok(Err(_)) => Err("llm worker dropped generation completion".to_string()),
+            Err(_) => Err("llm generation timed out (worker unresponsive)".to_string()),
+        }
     }
 
     /// Phase 10: whether the worker still holds a loaded GGUF (Jetsam may have purged).
+    /// Bounded by [`LLM_READY_PROBE_TIMEOUT`] — see its doc comment.
     pub fn is_loaded(&self) -> Result<bool, String> {
         let (reply, ack) = mpsc::sync_channel(1);
         self.enqueue(LlmCommand::IsLoaded { reply })?;
-        ack.recv()
-            .map_err(|_| "llm worker dropped reply".to_string())
+        match ack.recv_timeout(LLM_READY_PROBE_TIMEOUT) {
+            Ok(result) => Ok(result),
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                Err("llm ready probe timed out (worker unresponsive)".to_string())
+            }
+            Err(mpsc::RecvTimeoutError::Disconnected) => {
+                Err("llm worker dropped reply".to_string())
+            }
+        }
     }
 
     /// Blocking: embed `text` and return little-endian f32 bytes (Phase 9 binary IPC).
