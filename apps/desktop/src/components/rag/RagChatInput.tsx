@@ -30,13 +30,13 @@ export function RagChatInput({
           onKeyDown={(e) => {
             if (e.key === "Enter" && !e.shiftKey) {
               e.preventDefault();
-              if (!streaming && modelReady) onSend();
+              if (!streaming && value.trim()) onSend();
             }
           }}
           placeholder={
             modelReady
               ? (placeholder?.ready ?? "メッセージ…")
-              : (placeholder?.notReady ?? "モデル準備中…すぐ送れます")
+              : (placeholder?.notReady ?? "モデル準備中でも送信可（自動ロード）")
           }
           rows={1}
           aria-label="チャット入力"
@@ -45,7 +45,7 @@ export function RagChatInput({
           type="button"
           className="rag-composer-send"
           onClick={onSend}
-          disabled={streaming || !modelReady || !value.trim()}
+          disabled={streaming || !value.trim()}
         >
           {streaming ? "…" : "送信"}
         </button>
@@ -62,13 +62,13 @@ export function RagChatInput({
         onKeyDown={(e) => {
           if (e.key === "Enter" && !e.shiftKey) {
             e.preventDefault();
-            if (!streaming && modelReady) onSend();
+            if (!streaming && value.trim()) onSend();
           }
         }}
         placeholder={
           modelReady
             ? (placeholder?.ready ?? "知識ベースに質問…")
-            : (placeholder?.notReady ?? "モデル準備中…完了後すぐ送れます")
+            : (placeholder?.notReady ?? "モデル準備中でも送信可（自動ロード）")
         }
         rows={2}
         aria-label="RAG chat input"
@@ -77,7 +77,7 @@ export function RagChatInput({
         type="button"
         className="rag-chat-input-send"
         onClick={onSend}
-        disabled={streaming || !modelReady || !value.trim()}
+        disabled={streaming || !value.trim()}
       >
         {streaming ? "…" : "SEND"}
       </button>

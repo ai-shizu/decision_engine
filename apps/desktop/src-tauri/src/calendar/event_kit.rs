@@ -26,7 +26,8 @@ const ACCESS_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// Hard cap on events returned per call (Jetsam / IPC payload bound, mirrors
 /// `rag::chunk::MAX_CHUNKS` / `context_merger::MAX_EVENTS` conventions).
-pub const MAX_EVENTS: usize = 500;
+pub const MAX_EVENTS: usize = 2_500;
+
 
 #[derive(Debug, Clone, serde::Serialize)]
 #[serde(rename_all = "snake_case")]

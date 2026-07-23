@@ -11,7 +11,8 @@ use super::event_kit::{self, CalendarEventOut};
 /// Sane upper bound on a single query span, independent of EventKit's own
 /// (~4 year) internal cap — avoids an accidental multi-year backlog request
 /// from a frontend bug turning into a very large event scan.
-const MAX_RANGE_SECS: f64 = 400.0 * 24.0 * 3600.0;
+const MAX_RANGE_SECS: f64 = 1200.0 * 24.0 * 3600.0; // ≥ past 365d + future 730d
+
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]

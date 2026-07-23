@@ -12,13 +12,13 @@ export interface DailyCalendarBucket {
   events: Array<{ time: string; title: string }>;
 }
 
-/** Default import window: past 30 days … next 60 days (Unix seconds, UTC). */
+/** Default import window: past 365 days … next 730 days (~3 years, Unix UTC). */
 export function eventKitImportRange(
   nowMs: number = Date.now(),
 ): { startUnix: number; endUnix: number } {
   const dayMs = 24 * 60 * 60 * 1000;
-  const startUnix = Math.floor((nowMs - 30 * dayMs) / 1000);
-  const endUnix = Math.floor((nowMs + 60 * dayMs) / 1000);
+  const startUnix = Math.floor((nowMs - 365 * dayMs) / 1000);
+  const endUnix = Math.floor((nowMs + 730 * dayMs) / 1000);
   return { startUnix, endUnix };
 }
 

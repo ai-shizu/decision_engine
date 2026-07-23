@@ -68,8 +68,10 @@ export interface IngestKnowledgeResult {
   source_id: string;
   chunk_count: number;
   inserted: number;
-  /** True when chunking hit the on-device MAX_CHUNKS cap. */
+  /** True only if LINE exceeded the multi-part safety ceiling. */
   truncated?: boolean;
+  /** Number of vault source parts written (LINE multi-part). */
+  part_count?: number;
 }
 
 export interface SearchKnowledgeHit {

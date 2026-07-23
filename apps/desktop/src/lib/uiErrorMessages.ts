@@ -116,9 +116,14 @@ export const UI_ERROR_SPECS = {
       "プロフィール再解析の結果を確認できませんでした。現在の状態を確認し、必要な場合だけ再実行してください。",
     retryPolicy: "verify-first",
   },
-  /** Coraxis on-device RAG chat (send_rag_chat) — never surface raw embedding/IPC text. */
   RAG_CHAT: {
-    message: "AIモデルの形式が一致しません。自動再準備を待つか、配置を確認してください。",
+    message:
+      "応答を生成できませんでした。モデルの準備を待つか、もう一度お試しください。",
+    retryPolicy: "retry-safe",
+  },
+  RAG_MODEL_NOT_LOADED: {
+    message:
+      "モデルがまだ準備できていません。数秒待ってからもう一度送ってください。",
     retryPolicy: "retry-safe",
   },
   /** Inner Coliseum GD multi-agent stream (llm_generate via useGdSession). */

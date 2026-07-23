@@ -21,6 +21,11 @@ import {
   sterileEventKitAuthMessage,
 } from "../lib/eventKitImport";
 import { sterileLineImportFromUnknown } from "../lib/lineImportFeedback";
+import {
+  formatVaultImportLine,
+  listVaultImports,
+  pushVaultImport,
+} from "../lib/vaultImportLedger";
 import type { ClassifyResult, EngineEvent, EsListItem, SourceStat } from "../lib/types";
 import { uiErrorMessage } from "../lib/uiErrorMessages";
 import { useCorrelationId } from "../lib/useCorrelationId";
@@ -103,6 +108,7 @@ export function ImportTab() {
   const [esItems, setEsItems] = useState<EsListItem[]>([]);
   const [esCompanyName, setEsCompanyName] = useState("");
   const [log, setLog] = useState<string[]>(importLog);
+  const [vaultLedger, setVaultLedger] = useState(() => listVaultImports());
   const [pending, setPending] = useState<PendingItem[]>([]);
   const [esConflict, setEsConflict] = useState<EsConflictPending | null>(null);
   const lineRef = useRef<HTMLInputElement>(null);
@@ -188,11 +194,18 @@ export function ImportTab() {
       try {
         const r = await ingestLineHistory(file);
         ok += 1;
-        if (r.truncated) {
-          pushImportLog(
-            `${file.name}: オンデバイス取込完了（先頭チャンクのみ・ファイルが大きい）`,
-          );
-        }
+        const parts = r.part_count && r.part_count > 1 ? ` / ${r.part_count}パート` : "";
+        const truncNote = r.truncated ? "（上限到達・末尾は未取込の可能性）" : "";
+        pushImportLog(
+          `${file.name}: Vault格納 ${r.chunk_count}チャンク${parts}${truncNote} [${r.source_id}]`,
+        );
+        setVaultLedger(
+          pushVaultImport({
+            kind: "line",
+            label: file.name,
+            detail: `${r.chunk_count}チャンク${parts} → ${r.source_id}`,
+          }),
+        );
       } catch (err) {
         failNotes.push(`${file.name}: ${sterileLineImportFromUnknown(err)}`);
       }
@@ -312,7 +325,14 @@ export function ImportTab() {
       }
       if (daysOk > 0) {
         pushImportLog(
-          `デバイスのカレンダーから ${eventsOk}件の予定を ${daysOk}日分、知識ベースへ取り込みました`,
+          `デバイスのカレンダーから ${eventsOk}件の予定を ${daysOk}日分、知識ベースへ取り込みました（過去365日〜未来730日）`,
+        );
+        setVaultLedger(
+          pushVaultImport({
+            kind: "calendar",
+            label: "EventKit",
+            detail: `${eventsOk}件 / ${daysOk}日 → daily-*`,
+          }),
         );
       } else {
         pushImportLog(uiErrorMessage("APPLE_CALENDAR_SYNC"));
@@ -444,8 +464,18 @@ export function ImportTab() {
               // iOS 実機など Python サイドカー不在環境向けフォールバック。
               try {
                 const r = await ingestLineHistory(file);
-                const trunc = r.truncated ? "（先頭チャンクのみ）" : "";
-                pushImportLog(`${file.name} をオンデバイスでLINEとして取り込みました${trunc}`);
+                const parts =
+                  r.part_count && r.part_count > 1 ? ` / ${r.part_count}パート` : "";
+                pushImportLog(
+                  `${file.name}: Vault格納 ${r.chunk_count}チャンク${parts} [${r.source_id}]`,
+                );
+                setVaultLedger(
+                  pushVaultImport({
+                    kind: "line",
+                    label: file.name,
+                    detail: `${r.chunk_count}チャンク${parts} → ${r.source_id}`,
+                  }),
+                );
               } catch (err) {
                 pushImportLog(`${file.name}: ${sterileLineImportFromUnknown(err)}`);
               }
@@ -616,12 +646,32 @@ export function ImportTab() {
       <div className="import-block">
         <h3>デバイスのカレンダー (EventKit)</h3>
         <p className="hint">
-          iPhone / Mac の標準カレンダーから直近〜今後の予定を読み取り、知識ベースへ取り込みます。
-          初回は OS のカレンダーアクセス許可ダイアログが表示されます（外部通信なし）。
+          iPhone / Mac の標準カレンダーから過去1年〜今後2年（計約3年）の予定を読み取り、
+          知識ベースへ取り込みます。初回は OS のカレンダーアクセス許可が必要です（外部通信なし）。
         </p>
         <button type="button" disabled={busy} onClick={() => void handleDeviceCalendar()}>
           カレンダー予定を取り込む
         </button>
+      </div>
+
+      <div className="term-panel import-vault-ledger">
+        <p className="term-header">今回のセッションで Vault に格納したデータ</p>
+        {vaultLedger.length > 0 ? (
+          vaultLedger
+            .slice()
+            .reverse()
+            .map((e, i) => (
+              <div key={`${e.atIso}-${i}`} className="term-row">
+                <span className="term-glyph-ok">●</span>
+                <span className="term-source-name">{formatVaultImportLine(e)}</span>
+              </div>
+            ))
+        ) : (
+          <p className="hint">
+            まだオンデバイス取込はありません。LINE .txt または EventKit
+            を取り込むとここにファイル名とチャンク数が残ります。
+          </p>
+        )}
       </div>
 
       <div className="import-block import-es-section">

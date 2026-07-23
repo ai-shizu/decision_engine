@@ -33,6 +33,7 @@ const RETRY_SAFE: UiErrorCode[] = [
   "TWIN_FORECAST",
   "SETTINGS_LOAD",
   "RAG_CHAT",
+  "RAG_MODEL_NOT_LOADED",
 ];
 
 const VERIFY_FIRST: UiErrorCode[] = [
@@ -56,9 +57,9 @@ const VERIFY_FIRST: UiErrorCode[] = [
   "GD_ARENA",
 ];
 
-test("T-01 exact 24 keys", () => {
+test("T-01 exact 25 keys", () => {
   const keys = Object.keys(UI_ERROR_SPECS).sort();
-  assertEqual(keys.length, 24, "key count");
+  assertEqual(keys.length, 25, "key count");
   const expected = [...RETRY_SAFE, ...VERIFY_FIRST].sort();
   assertEqual(JSON.stringify(keys), JSON.stringify(expected), "key set");
 });

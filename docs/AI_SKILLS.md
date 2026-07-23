@@ -1498,20 +1498,20 @@ Pocket Brain 経路は M14 tensor + M15 pulse/Rasch + gap sufficiency から loa
 **射程:** iOS 実機での LINE `.txt` 取込失敗の診断強化、および EventKit 読取の ImportTab 結線＋ Vault 永続化。
 
 **LINE (`ingest_line_history` / `ingest_line_history_path`):**
-1. 上限を **4 MiB**（`MAX_LINE_INGEST_BYTES`）。旧 512 KiB は実エクスポートで頻発死。
-2. **IPC に `number[]` で大容量を載せない。** FE は `plugin-fs` で `$APPDATA/imports/` に stage → `ingest_line_history_path`（パス traversal 拒否）。これが iPhone の「取り込み結果を確認できませんでした」の主因対策。
-3. 失敗は制御コードのみ: `LINE_IMPORT:{EMPTY|TOO_LARGE|BLANK|BAD_SOURCE_ID|BAD_PATH|READ|NO_CHUNKS|VAULT_LOCKED|EMBED|PIPELINE|JOIN}`。
-4. モバイル (`.mobile-chrome`) は Python `import.line` を試さずオンデバイス直行き。
-5. `IngestKnowledgeResult.truncated` — `MAX_CHUNKS` 到達時 true。
+1. 上限 **16 MiB**。全文を `chunk_markdown_capped` で列挙し、`source_id-p00`… に **MAX_CHUNKS 単位で分割格納**（先頭打ち切り廃止）。再取込は family wipe。
+2. IPC は AppData stage → `ingest_line_history_path`（大容量 `number[]` 禁止）。
+3. 失敗コード `LINE_IMPORT:*` → 無菌文言。モバイルはオンデバイス直行。
+4. ImportTab「今回のセッションで Vault に格納したデータ」にファイル名 / チャンク数を表示。
 
 **EventKit UI:**
-1. ImportTab「デバイスのカレンダー (EventKit)」→ `fetchAppleCalendarEvents` → `groupEventsForDailySync` → `syncDailyContext`（Vault `daily-YYYY-MM-DD`）。
-2. 期間: 過去 30 日〜未来 60 日。権限拒否は Settings 誘導の無菌文言（throw しない）。
-3. macOS SQLite「Apple カレンダー」ボタンは並置維持。
+1. 取得窓 **過去365日〜未来730日**（`MAX_RANGE_SECS` ≥ 1200日、`MAX_EVENTS` 2500）。
+2. `syncDailyContext` で `daily-YYYY-MM-DD` へ永続化。
 
-**as-built:** `commands_rag.rs` (`ingest_line_history_path`) / `api.ts` / `lineImportFeedback.ts` / `eventKitImport.ts` / `ImportTab.tsx`。
+**CONSULT / RAG_CHAT:**
+1. 誤解を招く「形式が一致しません」を廃止 → 中立文言 + `MODEL_NOT_LOADED` 専用。
+2. `send_rag_chat` は generate 前に GGUF 未ロードなら自動 load（Jetsam 復帰）。
 
-**不変条件:** UI に生 IPC / 絶対パス / ファイル本文を出すな。EventKit は read-only（永続化は M13 のみ）。profiler を取込から起動するな。Vault ロック時は解錠後に再実行（`VAULT_LOCKED`）。
+**不変条件:** UI に生 IPC / パス / 本文を出すな。EventKit は read-only。profiler を取込から起動するな。
 
 ---
 

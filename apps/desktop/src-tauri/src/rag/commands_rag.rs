@@ -24,7 +24,8 @@ use crate::db::{
     KnowledgeChunkRow, KnowledgeSearchHit as DbHit, VaultErrorCode, VaultHandle, VaultStatus,
 };
 use crate::llm::hashed_embed::hashed_ngram_embed_384;
-use crate::llm::params::GenerationParams;
+use crate::llm::model_path::resolve_loadable_model_path;
+use crate::llm::params::{GenerationParams, LoadParams};
 use crate::llm::service::{error_done_event, TokenEvent};
 use crate::llm::LlmHandle;
 
@@ -32,13 +33,17 @@ use crate::llm::LlmHandle;
 /// unlocked. The frontend maps this controlled code to a sterile sys-log message
 /// (Finding 13: never surface raw IPC/embedding text).
 const ERR_VAULT_LOCKED: &str = "VAULT_LOCKED";
+const ERR_MODEL_NOT_LOADED: &str = "MODEL_NOT_LOADED";
 
 const MAX_SOURCE_ID_BYTES: usize = 512;
 const MAX_INGEST_TEXT_BYTES: usize = 512 * 1024;
-/// LINE exports routinely exceed the generic knowledge ingest cap. Bound is
-/// still Jetsam-aware; oversized files fail with a controlled code rather than
-/// silently truncating mid-IPC.
-const MAX_LINE_INGEST_BYTES: usize = 4 * 1024 * 1024;
+/// LINE exports via AppData path staging. Soft Jetsam bound — full text is
+/// split across multiple `source_id` parts rather than silently truncated.
+const MAX_LINE_INGEST_BYTES: usize = 16 * 1024 * 1024;
+/// Max chunk batches for one LINE file (each batch ≤ [`MAX_CHUNKS`]).
+const MAX_LINE_PARTS: usize = 48;
+/// Practical upper bound when enumerating all LINE chunks before batching.
+const MAX_LINE_CHUNK_ENUM: usize = MAX_CHUNKS.saturating_mul(MAX_LINE_PARTS);
 const DEFAULT_SEARCH_LIMIT: u32 = 5;
 const MAX_SEARCH_LIMIT: u32 = 50;
 const DEFAULT_RAG_N_CTX: u32 = 2048;
@@ -56,9 +61,26 @@ pub struct IngestKnowledgeResult {
     pub source_id: String,
     pub chunk_count: usize,
     pub inserted: usize,
-    /// True when chunking hit [`MAX_CHUNKS`] — body may be incomplete.
+    /// True only if the file exceeded [`MAX_LINE_PARTS`] × [`MAX_CHUNKS`].
     #[serde(default)]
     pub truncated: bool,
+    /// Number of vault `source_id` parts written (LINE multi-part ingest).
+    #[serde(default)]
+    pub part_count: usize,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub struct KnowledgeSourceRow {
+    pub source_id: String,
+    pub chunk_count: usize,
+    pub created_at: i64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub struct ListKnowledgeSourcesResult {
+    pub sources: Vec<KnowledgeSourceRow>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -312,6 +334,7 @@ fn ingest_text_blocking(
         chunk_count: chunks.len(),
         inserted,
         truncated,
+        part_count: 1,
     })
 }
 
@@ -339,7 +362,46 @@ pub async fn ingest_knowledge(
     .map_err(|_| "ingest task join failed".to_string())?
 }
 
+/// Wipe prior LINE vault rows for this export (legacy single source + part family).
+fn wipe_line_family(vault: &VaultHandle, base_source_id: &str) {
+    let _ = vault.knowledge_replace(base_source_id.to_string(), Vec::new());
+    for i in 0..MAX_LINE_PARTS {
+        let part_id = format!("{base_source_id}-p{i:02}");
+        let _ = vault.knowledge_replace(part_id, Vec::new());
+    }
+}
+
+/// Embed a batch of chunks under `part_source_id` and vault-replace.
+fn ingest_chunk_batch(
+    vault: &VaultHandle,
+    llm: &LlmHandle,
+    part_source_id: &str,
+    batch: &[super::chunk::TextChunk],
+) -> Result<usize, String> {
+    let created_at = now_unix_secs();
+    let mut rows = Vec::with_capacity(batch.len());
+    for (i, chunk) in batch.iter().enumerate() {
+        let embed_input = if chunk.title.contains(" § ") {
+            format!("{}\n\n{}", chunk.title, chunk.text)
+        } else {
+            chunk.text.clone()
+        };
+        let embedding = embed_for_knowledge(llm, &embed_input)?;
+        rows.push(KnowledgeChunkRow {
+            id: format!("{part_source_id}::{i:04}"),
+            text_content: chunk.text.clone(),
+            embedding,
+            created_at,
+        });
+    }
+    vault
+        .knowledge_replace(part_source_id.to_string(), rows)
+        .map_err(map_vault_err)
+}
+
 /// Shared blocking core after bytes are in memory (IPC payload or AppData file).
+/// Full LINE body is chunked without the 128 soft-cap, then written as
+/// `source_id-p00` … parts of ≤[`MAX_CHUNKS`] each (no silent head-only truncate).
 fn ingest_line_bytes_blocking(
     vault: &VaultHandle,
     llm: &LlmHandle,
@@ -347,6 +409,8 @@ fn ingest_line_bytes_blocking(
     filename: &str,
     source_id: &str,
 ) -> Result<IngestKnowledgeResult, String> {
+    use super::chunk::chunk_markdown_capped;
+
     let byte_len = bytes.len();
     let decoded = decode_line_export_bytes(bytes);
     let decoded_chars = decoded.chars().count();
@@ -357,47 +421,68 @@ fn ingest_line_bytes_blocking(
         );
         return Err(line_err("BLANK"));
     }
-    match ingest_text_blocking(vault, llm, &formatted, source_id) {
-        Ok(res) => {
-            if res.truncated {
-                log::warn!(
-                    "ingest_line_history: truncated at MAX_CHUNKS (source_id={}, chunks={}, bytes={byte_len})",
-                    res.source_id,
-                    res.chunk_count
-                );
-            } else {
-                log::info!(
-                    "ingest_line_history: ok (source_id={}, chunks={}, inserted={}, bytes={byte_len})",
-                    res.source_id,
-                    res.chunk_count,
-                    res.inserted
-                );
-            }
-            Ok(res)
+
+    let all = chunk_markdown_capped(&formatted, source_id, MAX_LINE_CHUNK_ENUM);
+    if all.is_empty() {
+        return Err(line_err("NO_CHUNKS"));
+    }
+    let truncated = all.len() >= MAX_LINE_CHUNK_ENUM;
+    if truncated {
+        log::warn!(
+            "ingest_line_history: hit MAX_LINE_CHUNK_ENUM={MAX_LINE_CHUNK_ENUM} (bytes={byte_len})"
+        );
+    }
+
+    wipe_line_family(vault, source_id);
+
+    let mut total_inserted = 0usize;
+    let mut part_count = 0usize;
+    for (part_idx, batch) in all.chunks(MAX_CHUNKS).enumerate() {
+        if part_idx >= MAX_LINE_PARTS {
+            break;
         }
-        Err(e) => {
-            let code = match e.as_str() {
-                "no chunks produced" => "NO_CHUNKS",
-                other if other.starts_with("LINE_IMPORT:") => {
-                    log::error!("ingest_line_history: {other} (bytes={byte_len})");
-                    return Err(other.to_string());
-                }
-                other => {
+        let part_id = format!("{source_id}-p{part_idx:02}");
+        if let Err(e) = validate_source_id(&part_id) {
+            log::error!("ingest_line_history: bad part source_id ({e})");
+            return Err(line_err("BAD_SOURCE_ID"));
+        }
+        match ingest_chunk_batch(vault, llm, &part_id, batch) {
+            Ok(n) => {
+                total_inserted = total_inserted.saturating_add(n);
+                part_count += 1;
+            }
+            Err(e) => {
+                let code = if e.contains("locked") {
+                    "VAULT_LOCKED"
+                } else if e.contains("embed") || e.contains("model") {
+                    "EMBED"
+                } else {
                     log::error!(
-                        "ingest_line_history: pipeline failed ({other}) bytes={byte_len} source_id={source_id}"
+                        "ingest_line_history: part {part_idx} failed ({e}) bytes={byte_len}"
                     );
-                    if other.contains("locked") || other == "locked" {
-                        "VAULT_LOCKED"
-                    } else if other.contains("embed") || other.contains("model") {
-                        "EMBED"
-                    } else {
-                        "PIPELINE"
-                    }
-                }
-            };
-            Err(line_err(code))
+                    "PIPELINE"
+                };
+                return Err(line_err(code));
+            }
         }
     }
+
+    log::info!(
+        "ingest_line_history: ok (base={source_id}, parts={part_count}, chunks={}, inserted={total_inserted}, bytes={byte_len})",
+        all.len().min(MAX_LINE_PARTS.saturating_mul(MAX_CHUNKS))
+    );
+
+    Ok(IngestKnowledgeResult {
+        source_id: if part_count == 1 {
+            format!("{source_id}-p00")
+        } else {
+            source_id.to_string()
+        },
+        chunk_count: total_inserted,
+        inserted: total_inserted,
+        truncated,
+        part_count,
+    })
 }
 
 /// On-device LINE トーク履歴 (.txt) import (M20 データ連携 Part 1).
@@ -561,6 +646,7 @@ pub async fn search_knowledge(
 /// tokens over `on_token` (same Channel pipeline as `llm_generate`).
 #[tauri::command]
 pub async fn send_rag_chat(
+    app: AppHandle,
     vault: State<'_, VaultHandle>,
     llm: State<'_, LlmHandle>,
     message: String,
@@ -586,10 +672,6 @@ pub async fn send_rag_chat(
         return Err("invalid context_limit".into());
     }
 
-    // Fail-fast (Silent-Hang guard): a locked / unavailable vault cannot serve RAG
-    // retrieval. `status()` is a cached read (no worker round-trip), so this never
-    // blocks. Emit an explicit error event over the token channel and return at
-    // once — never a context-free silent answer, never a perpetual "…" spinner.
     if !matches!(vault.status(), VaultStatus::Unlocked) {
         let _ = on_token.send(error_done_event(0, ERR_VAULT_LOCKED.to_string()));
         return Ok(SendRagChatResult {
@@ -598,12 +680,48 @@ pub async fn send_rag_chat(
         });
     }
 
+    // Jetsam / cold start: ensure GGUF is resident before generate (else sterile
+    // MODEL_NOT_LOADED — never a misleading "format mismatch" catch-all alone).
+    let llm_probe = llm.inner().clone();
+    let loaded = tauri::async_runtime::spawn_blocking(move || llm_probe.is_loaded())
+        .await
+        .map_err(|_| "llm ready probe join failed".to_string())?
+        .unwrap_or(false);
+    if !loaded {
+        let path = match resolve_loadable_model_path(&app) {
+            Ok(p) => p,
+            Err(e) => {
+                log::error!("send_rag_chat: model path resolve failed: {e}");
+                let _ = on_token.send(error_done_event(0, ERR_MODEL_NOT_LOADED.to_string()));
+                return Ok(SendRagChatResult {
+                    context_count: 0,
+                    context_ids: Vec::new(),
+                });
+            }
+        };
+        let load_params = LoadParams {
+            n_gpu_layers: 999,
+            use_mmap: true,
+        };
+        let llm_load = llm.inner().clone();
+        if let Err(e) = tauri::async_runtime::spawn_blocking(move || llm_load.load(path, load_params))
+            .await
+            .map_err(|_| "llm load join failed".to_string())?
+        {
+            log::error!("send_rag_chat: auto-load failed: {e}");
+            let _ = on_token.send(error_done_event(0, ERR_MODEL_NOT_LOADED.to_string()));
+            return Ok(SendRagChatResult {
+                context_count: 0,
+                context_ids: Vec::new(),
+            });
+        }
+    }
+
     let vault = vault.inner().clone();
     let llm_for_search = llm.inner().clone();
     let message_for_search = message.clone();
 
     let (prompt, context_ids) = tauri::async_runtime::spawn_blocking(move || {
-        // Automatic retrieval: soft-fail KNN so Gap/Oracle/Tensor still inject.
         let hits = search_sync(&vault, &llm_for_search, &message_for_search, context_limit)
             .unwrap_or_default();
             let refs: Vec<RagContextRef<'_>> = hits
@@ -625,7 +743,6 @@ pub async fn send_rag_chat(
                 })
                 .collect();
             let rag_prompt = build_rag_prompt(&message_for_search, &refs);
-        // M17/M20-J: fail-safe Gap/Oracle/Tensor injection (missing → soft notes).
         let prompt = match crate::llm::consult_context::load_mentor_context(&vault) {
             Ok(mentor) => {
                 crate::llm::consult_context::append_mentor_sections(&rag_prompt, &mentor)
@@ -648,7 +765,6 @@ pub async fn send_rag_chat(
         seed: opts.seed.unwrap_or(0),
     };
 
-    // Streams on the LLM worker; cancel/purge still go through LlmMemoryGovernor.
     llm.generate(gen, None, on_token).await?;
 
     Ok(SendRagChatResult {

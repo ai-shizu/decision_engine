@@ -347,7 +347,7 @@ fn civil_from_days(z: i64) -> (i32, u32, u32) {
     (y as i32, m as u32, d as u32)
 }
 
-fn unix_to_jst_date(unix: i64) -> String {
+pub(crate) fn unix_to_jst_date(unix: i64) -> String {
     let jst = unix.saturating_add(9 * 3_600);
     let days = jst.div_euclid(86_400);
     let (y, m, d) = civil_from_days(days);

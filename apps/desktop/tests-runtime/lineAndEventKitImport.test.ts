@@ -56,12 +56,12 @@ test("line: unknown code falls back to generic sterile copy", () => {
   );
 });
 
-test("eventkit: import range spans past and future", () => {
+test("eventkit: import range spans ~3 years", () => {
   const now = Date.UTC(2026, 6, 23, 12, 0, 0);
   const { startUnix, endUnix } = eventKitImportRange(now);
   assertOk(endUnix > startUnix, "ordered");
-  assertOk(now / 1000 - startUnix >= 29 * 86400, "past ~30d");
-  assertOk(endUnix - now / 1000 >= 59 * 86400, "future ~60d");
+  assertOk(now / 1000 - startUnix >= 364 * 86400, "past ~365d");
+  assertOk(endUnix - now / 1000 >= 729 * 86400, "future ~730d");
 });
 
 test("eventkit: groups by local day and drops empty titles", () => {

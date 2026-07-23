@@ -90,7 +90,7 @@ export function PocketBrainPanel({ variant = "default" }: PocketBrainPanelProps)
         return;
       }
       setModelReady(false);
-      setError(`load: ${String(e)}`);
+      setError(softLoadError(e instanceof Error ? e.message : "load"));
       setPhaseNote("再試行待機…");
       if (
         !purgedRef.current &&

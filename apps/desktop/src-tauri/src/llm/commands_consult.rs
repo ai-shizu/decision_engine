@@ -7,14 +7,15 @@ use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 use tauri::ipc::Channel;
-use tauri::State;
+use tauri::{AppHandle, State};
 
 use crate::db::VaultHandle;
 use crate::llm::consult_context::{
     build_consult_with_oracle_prompt, format_profile_block, load_mentor_context,
 };
 use crate::llm::mentor_zpd::{load_mentor_zpd_signal, MentorZpdSignal};
-use crate::llm::params::GenerationParams;
+use crate::llm::model_path::resolve_loadable_model_path;
+use crate::llm::params::{GenerationParams, LoadParams};
 use crate::llm::service::TokenEvent;
 use crate::llm::LlmHandle;
 use crate::rag::commands_rag::{search_sync, RagChatParams};
@@ -54,9 +55,34 @@ pub struct ConsultWithOracleResult {
     pub mentor_zpd_twin_available: bool,
 }
 
+/// Probe the worker and load the on-device GGUF if it is not resident, so the
+/// caller can `generate()` safely. Same load policy as `send_rag_chat`'s inline
+/// guard (full GPU offload + mmap). Returns `Err` only when no loadable model
+/// exists or the load itself fails — the caller surfaces that to the UI.
+async fn ensure_model_loaded(app: &AppHandle, llm: &LlmHandle) -> Result<(), String> {
+    let llm_probe = llm.clone();
+    let loaded = tauri::async_runtime::spawn_blocking(move || llm_probe.is_loaded())
+        .await
+        .map_err(|_| "llm ready probe join failed".to_string())?
+        .unwrap_or(false);
+    if loaded {
+        return Ok(());
+    }
+    let path = resolve_loadable_model_path(app)?;
+    let load_params = LoadParams {
+        n_gpu_layers: 999,
+        use_mmap: true,
+    };
+    let llm_load = llm.clone();
+    tauri::async_runtime::spawn_blocking(move || llm_load.load(path, load_params))
+        .await
+        .map_err(|_| "llm load join failed".to_string())?
+}
+
 /// Mentor consult: vault Gap+Oracle (fail-safe) + optional RAG → streaming LLM.
 #[tauri::command]
 pub async fn consult_with_oracle_context(
+    app: AppHandle,
     vault: State<'_, VaultHandle>,
     llm: State<'_, LlmHandle>,
     params: ConsultWithOracleParams,
@@ -66,6 +92,14 @@ pub async fn consult_with_oracle_context(
     if message.is_empty() || message.len() > MAX_MESSAGE_BYTES {
         return Err("invalid message".into());
     }
+
+    // Ensure the GGUF is resident before generate. A cold CONSULT navigation or
+    // a Jetsam eviction leaves the worker unloaded; unlike `send_rag_chat`, this
+    // path used to call `generate()` blind → the model errored and the user saw
+    // a sterile "応答を生成できませんでした". Mirror the RAG-chat auto-load so
+    // CONSULT recovers on its own instead of failing.
+    ensure_model_loaded(&app, &llm).await?;
+
     let include_rag = params.include_rag.unwrap_or(true);
     let opts = params.gen.unwrap_or(RagChatParams {
         n_ctx: None,

@@ -22,7 +22,12 @@ pub struct TextChunk {
     pub text: String,
 }
 
-/// Split `text` into chunks.
+/// Split `text` into chunks (capped at [`MAX_CHUNKS`]).
+pub fn chunk_markdown(text: &str, source_id: &str) -> Vec<TextChunk> {
+    chunk_markdown_capped(text, source_id, MAX_CHUNKS)
+}
+
+/// Split `text` into chunks with an explicit cap (`usize::MAX` = no practical trunc).
 ///
 /// Rules (Python-compatible core):
 /// 1. Lines matching `^##\s+…` start a new section; prior body is flushed.
@@ -31,10 +36,11 @@ pub struct TextChunk {
 /// 4. Empty bodies are dropped.
 /// 5. Bodies longer than [`MAX_CHUNK_CHARS`] are split on blank-line paragraphs
 ///    (then hard-sliced if a single paragraph still overflows).
-/// 6. Output is truncated to [`MAX_CHUNKS`].
-pub fn chunk_markdown(text: &str, source_id: &str) -> Vec<TextChunk> {
+/// 6. Output is truncated to `max_chunks` (LINE full-import uses a high cap then
+///    batches into multiple `source_id` parts).
+pub fn chunk_markdown_capped(text: &str, source_id: &str, max_chunks: usize) -> Vec<TextChunk> {
     let source_id = source_id.trim();
-    if source_id.is_empty() || text.is_empty() {
+    if source_id.is_empty() || text.is_empty() || max_chunks == 0 {
         return Vec::new();
     }
 
@@ -56,7 +62,7 @@ pub fn chunk_markdown(text: &str, source_id: &str) -> Vec<TextChunk> {
     let mut chunks = Vec::new();
     for (section_title, section_body) in sections {
         for piece in split_oversized(&section_body) {
-            if chunks.len() >= MAX_CHUNKS {
+            if chunks.len() >= max_chunks {
                 return chunks;
             }
             let index = chunks.len();
@@ -66,7 +72,7 @@ pub fn chunk_markdown(text: &str, source_id: &str) -> Vec<TextChunk> {
                 text: piece,
             });
         }
-        if chunks.len() >= MAX_CHUNKS {
+        if chunks.len() >= max_chunks {
             break;
         }
     }

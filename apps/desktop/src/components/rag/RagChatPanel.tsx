@@ -43,6 +43,7 @@ const STREAM_TERMINAL_TIMEOUT_MS = 180_000;
  */
 function mapRagChatError(code: string): string {
   if (code === "VAULT_LOCKED") return SYS_ERR_VAULT_LOCKED;
+  if (code === "MODEL_NOT_LOADED") return uiErrorMessage("RAG_MODEL_NOT_LOADED");
   return uiErrorMessage("RAG_CHAT");
 }
 
@@ -116,7 +117,8 @@ export function RagChatPanel({
 
   async function onSend() {
     const prompt = state.input.trim();
-    if (!prompt || state.streaming || !modelReady) return;
+    if (!prompt || state.streaming) return;
+    // modelReady=false (Jetsam / cold) — still send; Rust auto-loads GGUF.
 
     onError(null);
     dispatch({ type: "clear_error" });

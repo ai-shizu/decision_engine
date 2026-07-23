@@ -746,7 +746,7 @@ fn worker_loop(
                         cancel_epoch,
                         &monitor,
                     ),
-                    None => Err("model not loaded".into()),
+                    None => Err("MODEL_NOT_LOADED".into()),
                 };
                 monitor.set_phase(MemPhase::Idle);
                 complete_generation(result, &tokens, completion);
@@ -762,7 +762,7 @@ fn worker_loop(
                     continue;
                 }
                 let result = match model.as_ref() {
-                    None => Err("model not loaded".into()),
+                    None => Err("MODEL_NOT_LOADED".into()),
                     Some(model) => {
                         let cancel_epoch = governor.cancel_epoch();
                         monitor.set_phase(MemPhase::CtxCreated);
