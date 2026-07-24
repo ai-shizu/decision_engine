@@ -523,6 +523,17 @@ enum LlmCommand {
     IsLoaded {
         reply: mpsc::SyncSender<bool>,
     },
+    /// 2026-07-24: exact token count via the resident model's real tokenizer.
+    /// `context_budget::estimate_tokens`'s char-based heuristic can diverge
+    /// sharply from real BPE tokenization for CJK content with rare
+    /// characters/names (observed: heuristic said "fits", `generate()`'s own
+    /// `model.str_to_token` counted 2394 against a 1792 budget) — callers
+    /// needing a budget decision that must actually hold should measure with
+    /// this, not the heuristic, before calling `generate`.
+    CountTokens {
+        text: String,
+        reply: mpsc::SyncSender<Result<usize, String>>,
+    },
     RegisterEvents {
         channel: Channel<LlmLifecycleEvent>,
     },
@@ -692,6 +703,29 @@ impl LlmHandle {
         }
     }
 
+    /// Exact token count via the resident model's real tokenizer (not the
+    /// `context_budget::estimate_tokens` char-based heuristic). See
+    /// [`LlmCommand::CountTokens`] for why this exists. `Err("MODEL_NOT_LOADED")`
+    /// if no model is resident. Bounded by [`LLM_READY_PROBE_TIMEOUT`] — a
+    /// tokenizer-only call, no generation, so it is cheap like `is_loaded`.
+    pub fn count_tokens(&self, text: String) -> Result<usize, String> {
+        let (reply, ack) = mpsc::sync_channel(1);
+        self.enqueue(LlmCommand::CountTokens { text, reply })?;
+        match ack.recv_timeout(LLM_READY_PROBE_TIMEOUT) {
+            Ok(result) => result,
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                log::error!(
+                    "llm count_tokens timed out after {LLM_READY_PROBE_TIMEOUT:?} (worker unresponsive)"
+                );
+                Err("llm count_tokens timed out (worker unresponsive)".to_string())
+            }
+            Err(mpsc::RecvTimeoutError::Disconnected) => {
+                log::error!("llm worker dropped reply during count_tokens");
+                Err("llm worker dropped reply".to_string())
+            }
+        }
+    }
+
     /// Blocking: embed `text` and return little-endian f32 bytes (Phase 9 binary IPC).
     pub fn embed_binary(&self, text: String, n_ctx: u32) -> Result<Vec<u8>, String> {
         let v = self.embed(text, n_ctx)?;
@@ -828,6 +862,16 @@ fn worker_loop(
             }
             LlmCommand::IsLoaded { reply } => {
                 let _ = reply.send(model.is_some());
+            }
+            LlmCommand::CountTokens { text, reply } => {
+                let result = match model.as_ref() {
+                    Some(model) => model
+                        .str_to_token(&text, model_add_bos(model))
+                        .map(|tokens| tokens.len())
+                        .map_err(|e| format!("tokenize: {e}")),
+                    None => Err("MODEL_NOT_LOADED".into()),
+                };
+                let _ = reply.send(result);
             }
             LlmCommand::Embed { text, n_ctx, reply } => {
                 // Fair+: suppress expensive LLM embed re-warm; callers fall back

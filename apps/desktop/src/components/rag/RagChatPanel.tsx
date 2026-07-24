@@ -138,9 +138,14 @@ export function RagChatPanel({
         (event) => {
           if (!terminal.isPending()) return;
           if (event.error) {
-            // Terminal error event: kill the spinner, print the sys-log line
-            // in-bubble. `event.error` is a controlled code (e.g. VAULT_LOCKED),
-            // mapped to a sterile message — never rendered raw (Finding 13).
+            // Lessons-learned rule (2026-07-24 context-budget hunt): the RAW
+            // stream error code is mapped to a sterile in-bubble sys-log line
+            // for the user (Finding 13), but the raw payload MUST be logged
+            // first. A backend error as precise as "prompt exceeds context
+            // budget: 2394 > 1792" was collapsed to the generic RAG_CHAT
+            // message here, hiding the true cause for a long debugging session.
+            // eslint-disable-next-line no-console -- intentional diagnostic (see above)
+            console.error("[RagChatPanel] stream error event:", event.error);
             errored = true;
             flushAndStop();
             dispatch({
@@ -172,7 +177,11 @@ export function RagChatPanel({
           contextCount: result.context_count,
         });
       }
-    } catch {
+    } catch (err) {
+      // Lessons-learned rule: log the raw exception before the sterile UI
+      // message, so a silent-failure never again masks the real cause.
+      // eslint-disable-next-line no-console -- intentional diagnostic (see above)
+      console.error("[RagChatPanel] onSend failed:", err);
       flushAndStop();
       dispatch({
         type: "send_failure",

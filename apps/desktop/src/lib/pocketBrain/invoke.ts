@@ -37,6 +37,12 @@ export async function pocketInvoke<T>(
   try {
     return await invoke<T>(command, args);
   } catch (cause) {
+    // Lessons-learned rule (2026-07-24 context-budget hunt): always surface the
+    // RAW IPC error before it is re-wrapped into a sterile PocketBrainInvokeError.
+    // The generic wrapped message alone cost hours of debugging when the true
+    // cause ("prompt exceeds context budget: 2394 > 1792") was fully available.
+    // eslint-disable-next-line no-console -- intentional diagnostic (see above)
+    console.error(`[pocketInvoke] invoke("${command}") failed:`, cause);
     throw new PocketBrainInvokeError(command, cause);
   }
 }

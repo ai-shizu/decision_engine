@@ -23,9 +23,10 @@ use super::prompt::{build_rag_prompt, RagContextRef};
 use crate::db::{
     KnowledgeChunkRow, KnowledgeSearchHit as DbHit, VaultErrorCode, VaultHandle, VaultStatus,
 };
+use crate::llm::context_budget::fit_prompt_to_budget;
 use crate::llm::hashed_embed::hashed_ngram_embed_384;
 use crate::llm::model_path::resolve_loadable_model_path;
-use crate::llm::params::{GenerationParams, LoadParams};
+use crate::llm::params::{GenerationParams, LoadParams, MIN_N_CTX};
 use crate::llm::service::{error_done_event, TokenEvent};
 use crate::llm::LlmHandle;
 
@@ -717,8 +718,12 @@ pub async fn send_rag_chat(
         }
     }
 
+    let n_ctx = opts.n_ctx.unwrap_or(DEFAULT_RAG_N_CTX);
+    let max_tokens_for_gen = opts.max_tokens.unwrap_or(DEFAULT_RAG_MAX_TOKENS);
+
     let vault = vault.inner().clone();
     let llm_for_search = llm.inner().clone();
+    let governor = llm.inner().governor();
     let message_for_search = message.clone();
 
     let (prompt, context_ids) = tauri::async_runtime::spawn_blocking(move || {
@@ -749,6 +754,70 @@ pub async fn send_rag_chat(
             }
             Err(_) => rag_prompt,
         };
+
+        // Final cross-section guard (2026-07-24 device bug): the RAG context
+        // budget and consult's mentor sections (Gap/Tensor/Oracle) are each
+        // fitted independently, but nothing previously re-checked their SUM
+        // against the model's real available input budget before tokenizing
+        // — `generate()` then failed outright with "prompt exceeds context
+        // budget" (observed 2394 > 1792 on-device), surfaced to the user as a
+        // sterile "応答を生成できませんでした" with zero retry path. Mirrors
+        // `generate()`'s own `scaled_ctx`/`input_token_budget` math exactly
+        // (including the current thermal/memory degradation factor) so this
+        // never re-diverges from what the worker will actually enforce.
+        let context_factor = governor.degradation().context_factor();
+        let scaled_ctx =
+            ((n_ctx as f64) * f64::from(context_factor)).round() as u32;
+        let scaled_ctx = scaled_ctx.clamp(MIN_N_CTX, n_ctx);
+        let available_tokens = scaled_ctx.saturating_sub(max_tokens_for_gen) as usize;
+
+        // `estimate_tokens`'s char-based heuristic ("CJK ≈ 1 tok") can diverge
+        // sharply from the model's REAL BPE tokenizer for content with rare
+        // characters / names (LINE chat usernames etc.) — device evidence:
+        // the heuristic judged a prompt "within budget" that `generate()`'s
+        // own `model.str_to_token` counted at 2394 vs a 1792 budget, so the
+        // fitted prompt was returned completely untrimmed. Never trust the
+        // heuristic's verdict on its own: measure the ACTUAL tokenizer count
+        // via `count_tokens` and iteratively re-tighten the heuristic's
+        // target until the real count is confirmed to fit, or fail closed.
+        let mut budget_target = available_tokens;
+        let mut prompt = fit_prompt_to_budget(&prompt, budget_target);
+        const MAX_FIT_ATTEMPTS: u32 = 5;
+        for attempt in 0..MAX_FIT_ATTEMPTS {
+            match llm_for_search.count_tokens(prompt.clone()) {
+                Ok(real_tokens) if real_tokens <= available_tokens => break,
+                Ok(real_tokens) => {
+                    log::error!(
+                        "send_rag_chat: fitted prompt still exceeds real budget (real={real_tokens} > budget={available_tokens}, attempt={attempt}); tightening heuristic target"
+                    );
+                    if attempt + 1 == MAX_FIT_ATTEMPTS {
+                        log::error!(
+                            "send_rag_chat: giving up after {MAX_FIT_ATTEMPTS} fit attempts; falling back to an empty context so generate() can still run"
+                        );
+                        // Fail closed to just the (never-truncated) user
+                        // question — always fits, since `generate()` itself
+                        // separately caps input tokens against the same budget.
+                        prompt = fit_prompt_to_budget(&prompt, 0);
+                        break;
+                    }
+                    // Shrink the heuristic's target proportionally to the
+                    // observed overshoot, plus a 10% extra margin so repeated
+                    // heuristic misses converge quickly instead of hovering
+                    // just above budget for several iterations.
+                    let overshoot_ratio = available_tokens as f64 / real_tokens as f64;
+                    budget_target =
+                        ((budget_target as f64) * overshoot_ratio * 0.9).floor() as usize;
+                    prompt = fit_prompt_to_budget(&prompt, budget_target);
+                }
+                Err(e) => {
+                    log::error!(
+                        "send_rag_chat: count_tokens verification failed, trusting heuristic fit: {e}"
+                    );
+                    break;
+                }
+            }
+        }
+
         let ids: Vec<String> = hits.into_iter().map(|hit| hit.id).collect();
         Ok::<_, String>((prompt, ids))
     })
@@ -757,8 +826,8 @@ pub async fn send_rag_chat(
 
     let gen = GenerationParams {
         prompt,
-        n_ctx: opts.n_ctx.unwrap_or(DEFAULT_RAG_N_CTX),
-        max_tokens: opts.max_tokens.unwrap_or(DEFAULT_RAG_MAX_TOKENS),
+        n_ctx,
+        max_tokens: max_tokens_for_gen,
         temp: opts.temp.unwrap_or(0.7),
         top_k: opts.top_k.unwrap_or(40),
         top_p: opts.top_p.unwrap_or(0.95),

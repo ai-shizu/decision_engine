@@ -1040,6 +1040,29 @@ Pocket Brain 経路は M14 tensor + M15 pulse/Rasch + gap sufficiency から loa
 
 **検証:** `cargo check|test --features pocket-brain,secure-vault` / `npx tsc --noEmit`。
 
+#### 4.52a 訂正 — ヒューリスティック予算は「安全側」ではなかった (2026-07-24 実機バグ)
+
+上記「安全側に寄せる」という前提は **CJK + 特殊文字 (LINE ユーザー名等) で崩壊する**。実機 CONSULT で
+RAG がヒットすると `generate()` が `prompt exceeds context budget: 2394 > 1792` で即死し、UI には
+汎用「応答を生成できませんでした」だけが出る症状を数日追った末の結論。三重の欠陥だった:
+
+1. **推定 ≠ 実測。** `estimate_tokens`（文字ベース）は実 BPE を大幅に下振れし、「予算内」と誤判定。
+   → **修正:** `LlmHandle::count_tokens`（ワーカー上で `model.str_to_token` 実測）を新設。
+   `send_rag_chat` はヒューリスティック切り詰め後に実測検証し、`available = scaled_ctx - max_tokens`
+   に収まるまで目標予算を締めて反復収束（最大5回、最終は空コンテキストへ fail-closed）。
+2. **合計の再検証欠落。** RAG (1500) + Gap/Tensor/Oracle 各予算は個別に詰めても、結合後が
+   `n_ctx - max_tokens` を超えれば `generate()` 側の `input_token_budget` チェックで即死。
+   → **修正:** `context_budget::fit_prompt_to_budget` を新設し `llm.generate()` 直前で全体を締める。
+   `## ユーザーの質問` マーカーで分割し **ユーザー質問本文は絶対に切らない**（前段のみ削る）。
+   degradation の `context_factor` 込みで `generate()` の `scaled_ctx` 計算と完全一致させる。
+3. **FE のエラー握り潰し。** バックエンドが正確な `event.error` を返し `done:true` で終了していたのに、
+   `RagChatPanel` が `mapRagChatError` で汎用文言に潰し、生ペイロードを一切ログしなかった。
+   → **修正:** `pocketInvoke` catch / `RagChatPanel` の catch・stream error 分岐で、汎用 UI 文言の前に
+   必ず生エラーを `console.error`（恒久ルール。`.cursorrules` 「LLM トークン予算」参照）。
+
+**教訓（不変ルール）:** プロンプト切り詰め・予算判定は必ず**ロード済みモデルの実トークナイザで実測**し、
+セクション別予算の**合計**を LLM 直前で再検証し、IPC/ストリームのエラーは**生のまま必ずログ**せよ。
+
 ### 4.53 Phase 10 — iOS lifecycle restore + Haptics + VoiceOver (2026-07-21)
 
 **射程:** (1) 前景復帰時の順序保証リストア (2) メタ認知イベントの Taptic Engine (3) SVG 可視化の WAI-ARIA / VoiceOver。RNG・外部 API・`navigator.vibrate` 禁止。

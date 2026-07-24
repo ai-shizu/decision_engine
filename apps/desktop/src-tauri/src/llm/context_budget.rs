@@ -280,6 +280,39 @@ pub fn truncate_to_token_budget(text: &str, token_budget: usize) -> String {
     format!("{acc}…")
 }
 
+/// Final cross-section guard for a fully-assembled prompt (2026-07-24: RAG
+/// context [`DEFAULT_RAG_TOKEN_BUDGET`] and consult's mentor sections
+/// (`consult_context::GAP_SECTION_TOKEN_BUDGET` + `TENSOR_...` + `ORACLE_...`)
+/// are each budgeted independently, but nothing previously re-checked their
+/// *sum* against the model's real available input budget before tokenizing —
+/// `generate()` would then fail outright with "prompt exceeds context
+/// budget", surfaced to the user as a sterile "応答を生成できませんでした").
+///
+/// Splits on the literal `"## ユーザーの質問"` marker (present in both
+/// `rag::prompt::build_rag_prompt` and after `consult_context::
+/// append_mentor_sections`) so the user's own message — the tail, from the
+/// marker onward — is **never** truncated. Only the head (system preamble +
+/// injected RAG/mentor context) is trimmed, front-preserved: the system
+/// preamble at the very start survives longest; injected context is cut from
+/// its own tail first.
+///
+/// When the marker is absent (an unrecognized prompt shape), fails closed via
+/// the same front-preserving truncation rather than silently returning an
+/// oversized prompt.
+pub fn fit_prompt_to_budget(prompt: &str, available_tokens: usize) -> String {
+    if estimate_tokens(prompt) <= available_tokens {
+        return prompt.to_string();
+    }
+    let Some(idx) = prompt.find("## ユーザーの質問") else {
+        return truncate_to_token_budget(prompt, available_tokens);
+    };
+    let tail = &prompt[idx..];
+    let tail_tokens = estimate_tokens(tail);
+    let head_budget = available_tokens.saturating_sub(tail_tokens);
+    let head = &prompt[..idx];
+    format!("{}{}", truncate_to_token_budget(head, head_budget), tail)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -399,5 +432,52 @@ mod tests {
         let old = salience_score(1.0, now - 30 * 86_400, now);
         assert!(fresh > old);
         assert!((old - 0.5).abs() < 1e-6);
+    }
+
+    #[test]
+    fn fit_prompt_leaves_untouched_when_within_budget() {
+        let prompt = "前置き\n## ユーザーの質問\nこんにちは\n";
+        let out = fit_prompt_to_budget(prompt, 1000);
+        assert_eq!(out, prompt);
+    }
+
+    #[test]
+    fn fit_prompt_never_truncates_the_user_question_tail() {
+        let head = "膨大な文脈。".repeat(400);
+        let tail = "## ユーザーの質問\n本当に伝えたい質問文\n";
+        let prompt = format!("{head}{tail}");
+        // Budget far below the head's own size, but comfortably above the tail's.
+        let out = fit_prompt_to_budget(&prompt, 50);
+        assert!(
+            out.ends_with(tail),
+            "tail must survive verbatim, got: {out}"
+        );
+        assert!(estimate_tokens(&out) <= 50 + estimate_tokens(tail));
+    }
+
+    #[test]
+    fn fit_prompt_falls_back_to_front_truncation_without_marker() {
+        let prompt = "マーカーの無い長文。".repeat(200);
+        let out = fit_prompt_to_budget(&prompt, 10);
+        assert!(estimate_tokens(&out) <= 10);
+    }
+
+    #[test]
+    fn fit_prompt_combined_rag_plus_mentor_sections_fits_real_budget() {
+        // Regression for the 2026-07-24 device bug: RAG (budget 1500) +
+        // Gap/Tensor/Oracle sections (625+300+375) summed to 2394 estimated
+        // tokens against a real 1792-token input budget, and nothing had
+        // re-checked the total before tokenizing.
+        let rag_section = "検索された関連チャンク本文。".repeat(150); // ~1500 tok
+        let mentor_sections = "決定論的Gap/Tensor/Oracleセクション。".repeat(90); // ~900 tok
+        let tail = "## ユーザーの質問\nよろしく\n";
+        let prompt = format!("{rag_section}\n{mentor_sections}\n{tail}");
+        assert!(
+            estimate_tokens(&prompt) > 1792,
+            "fixture must reproduce the overflow"
+        );
+        let out = fit_prompt_to_budget(&prompt, 1792);
+        assert!(estimate_tokens(&out) <= 1792);
+        assert!(out.ends_with(tail));
     }
 }

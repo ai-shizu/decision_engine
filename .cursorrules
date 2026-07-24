@@ -149,6 +149,26 @@
 - JS の toISOString() は UTC。日付は dateUtils.todayIso() を使え (JST で 1 日ずれる)。
 - .sh は LF 必須 (.gitattributes 済み)。Textual カレンダー日ボタンに id を付けるな。
 
+## LLM トークン予算 — 交渉不可 (2026-07-24 実機バグの教訓 / 詳細: AI_SKILLS §4.52a)
+
+数日を要したデバッグの根本原因。同じ過ちを二度と繰り返すな。
+
+- **トークン数を文字数/バイト数で推定するな。** CJK・LINE のユーザー名等の特殊文字は
+  BPE 実トークン数と致命的にズレる (実測 2394 を「予算内」と誤判定した実バグ)。
+  `context_budget::estimate_tokens` の文字ヒューリスティックは切り詰めの初期目標にのみ使い、
+  最終判定は必ずロード済みモデルの実トークナイザ (`LlmHandle::count_tokens` →
+  `model.str_to_token`) で行い、実測が予算内に収まるまで反復収束させろ。
+- **セクション別予算の「合計」を LLM 直前で再検証しろ。** RAG / Gap / Tensor / Oracle を
+  個別予算で詰めても、結合後の全体が `n_ctx - max_tokens` (= input budget) を超えれば
+  `generate()` は "prompt exceeds context budget" で即死する。プロンプトを `llm.generate()` に
+  渡す直前に `fit_prompt_to_budget` で全体を締め、ユーザー質問本文 (`## ユーザーの質問` 以降) は
+  絶対に切り詰めるな (前段の system/context のみ削れ)。
+- **IPC / ストリーム (`onToken`) のエラーを握り潰すな。** 汎用 UI メッセージを出す前に、
+  必ず生のエラーペイロード/例外を `console.error` で出せ。バックエンドが
+  "prompt exceeds context budget: 2394 > 1792" と正確に返していたのに、FE が握り潰して
+  「応答を生成できませんでした」だけ出したため原因究明に多大な時間を要した。
+  該当箇所: `pocketInvoke` / `RagChatPanel.onSend` の catch と stream error 分岐。
+
 ## コード品質
 
 - 最小 diff。依頼外リファクタ禁止。コメントは「なぜ」のみ。コミットはユーザー明示指示時のみ。
