@@ -96,6 +96,13 @@ export function ingestKnowledge(
   return pocketInvoke("ingest_knowledge", { text, sourceId });
 }
 
+/** Persist EDINET company facts into the Company knowledge namespace (fire-and-forget from FE). */
+export function ingestCompanyKnowledge(
+  facts: CompanyFacts,
+): Promise<IngestKnowledgeResult> {
+  return pocketInvoke("ingest_company_knowledge", { facts });
+}
+
 /**
  * On-device LINE トーク履歴 (.txt) import (M20 データ連携 Part 1).
  *

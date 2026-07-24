@@ -12,7 +12,7 @@ import {
   getKnowledgeResearchPolicy,
   knowledgeResearch,
 } from "./engine";
-import { fetchEdinetCompanyFacts, searchKnowledge } from "./pocketBrain";
+import { fetchEdinetCompanyFacts, ingestCompanyKnowledge, searchKnowledge } from "./pocketBrain";
 import type { CompanyFacts } from "./pocketBrain/types";
 import {
   INITIAL_RESEARCH_UI_STATE,
@@ -82,6 +82,18 @@ export function useCompanyFactsEnrichment(
           }
           setProvenanceLabel(result.provenanceLabel);
           dispatchResearchUi({ kind: "DONE", seq });
+          // 外部由来の実企業知識のみ Company 名前空間へ永続化（fire-and-forget・ソフトフェイル）。
+          // local_rag は Vault 由来なので再インジェスト禁止（edinetCode 空で自然に除外される）。
+          const f = result.facts;
+          if (f.edinetCode.trim() && f.businessSummary.trim()) {
+            void ingestCompanyKnowledge(f).catch((err) => {
+              // eslint-disable-next-line no-console -- intentional diagnostic
+              console.error(
+                "[useCompanyFactsEnrichment] company knowledge persist failed:",
+                err,
+              );
+            });
+          }
         })
         .catch((err) => {
           // eslint-disable-next-line no-console -- intentional diagnostic

@@ -24,6 +24,7 @@ use crate::db::{
     KnowledgeChunkRow, KnowledgeSearchHit as DbHit, VaultErrorCode, VaultHandle, VaultStatus,
 };
 use crate::llm::hashed_embed::hashed_ngram_embed_384;
+use crate::llm::commands_consult::ensure_model_loaded;
 use crate::llm::model_path::resolve_loadable_model_path;
 use crate::llm::params::{GenerationParams, LoadParams};
 use crate::llm::prompt_budget::fit_and_verify_prompt;
@@ -170,6 +171,43 @@ fn line_source_id(filename: &str) -> String {
         return id;
     }
     // Truncate to a UTF-8 char boundary at/under the byte cap.
+    let mut end = MAX_SOURCE_ID_BYTES;
+    while end > 0 && !id.is_char_boundary(end) {
+        end -= 1;
+    }
+    id[..end].to_string()
+}
+
+/// 企業ファクト → Company 名前空間の source_id。
+/// 接頭辞（`edinet-` / `company-`）は sanitize 後に付与し、`namespace_of` が必ず Company と
+/// 判定することを保証する（接頭辞を trim で削らない）。
+fn company_source_id(facts: &crate::knowledge::edinet_client::CompanyFacts) -> String {
+    fn sanitize_body(s: &str) -> String {
+        let mapped: String = s
+            .chars()
+            .map(|c| if matches!(c, '%' | '_' | ':') { '-' } else { c })
+            .collect();
+        mapped.trim_matches('-').to_string()
+    }
+    let code = sanitize_body(facts.edinet_code.trim());
+    let (prefix, body) = if !code.is_empty() {
+        ("edinet-", code)
+    } else {
+        let name = sanitize_body(facts.company_name.trim());
+        (
+            "company-",
+            if name.is_empty() {
+                "unknown".to_string()
+            } else {
+                name
+            },
+        )
+    };
+    let id = format!("{prefix}{body}");
+    // MAX_SOURCE_ID_BYTES 以内へ UTF-8 境界で切り詰め（接頭辞は必ず残る）。
+    if id.len() <= MAX_SOURCE_ID_BYTES {
+        return id;
+    }
     let mut end = MAX_SOURCE_ID_BYTES;
     while end > 0 && !id.is_char_boundary(end) {
         end -= 1;
@@ -363,6 +401,55 @@ pub async fn ingest_knowledge(
     })
     .await
     .map_err(|_| "ingest task join failed".to_string())?
+}
+
+/// Persist EDINET / injected company facts into the Company knowledge namespace.
+///
+/// Writer for `searchKnowledge(..., "company")`. Uses `edinet-` / `company-`
+/// source_id prefixes so `namespace_of` classifies chunks as Company.
+#[tauri::command]
+pub async fn ingest_company_knowledge(
+    app: AppHandle,
+    vault: State<'_, VaultHandle>,
+    llm: State<'_, LlmHandle>,
+    facts: crate::knowledge::edinet_client::CompanyFacts,
+) -> Result<IngestKnowledgeResult, String> {
+    use crate::knowledge::edinet_client::{render_company_facts_block, sanitize_company_facts};
+
+    // 外部由来テキストは常に sanitize（render_guard 規約）。
+    let facts = sanitize_company_facts(&facts).map_err(|e| format!("{e:?}").to_ascii_lowercase())?;
+
+    // 実知識が無いものは Company 空間に入れない（"（未取得）" チャンクで汚さない）。
+    let has_knowledge = !facts.business_summary.trim().is_empty()
+        || !facts.business_risks.trim().is_empty()
+        || !facts.performance_summary.trim().is_empty();
+    if !has_knowledge {
+        return Ok(IngestKnowledgeResult {
+            source_id: String::new(),
+            chunk_count: 0,
+            inserted: 0,
+            truncated: false,
+            part_count: 0,
+        });
+    }
+
+    let source_id = company_source_id(&facts);
+    validate_source_id(&source_id)?; // 生成物が規約準拠であることの最終保証（防御的）
+    let markdown = render_company_facts_block(&facts);
+    if markdown.is_empty() || markdown.len() > MAX_INGEST_TEXT_BYTES {
+        return Err("invalid company knowledge text".into());
+    }
+
+    // 埋め込みには GGUF 常駐が必要（他の generate/embed 経路と同じ前提）。
+    ensure_model_loaded(&app, &llm).await?;
+
+    let vault = vault.inner().clone();
+    let llm = llm.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        ingest_text_blocking(&vault, &llm, &markdown, &source_id)
+    })
+    .await
+    .map_err(|_| "company ingest task join failed".to_string())?
 }
 
 /// Wipe prior LINE vault rows for this export (legacy single source + part family).
@@ -836,5 +923,39 @@ mod tests {
         assert!(validate_source_id(&id).is_ok());
         // Must not have been truncated mid-codepoint (would panic on slice).
         assert!(id.chars().all(|c| c == 'あ' || c == '-' || c == 'l' || c == 'i' || c == 'n' || c == 'e'));
+    }
+
+    #[test]
+    fn company_source_id_is_company_namespace() {
+        use crate::db::knowledge_namespace::{namespace_of, KnowledgeNamespace};
+        use crate::knowledge::edinet_client::CompanyFacts;
+
+        let f = CompanyFacts {
+            edinet_code: "E00001".into(),
+            company_name: "マッキンゼー".into(),
+            ..Default::default()
+        };
+        let sid = company_source_id(&f);
+        assert!(sid.starts_with("edinet-"));
+        assert_eq!(
+            namespace_of(&format!("{sid}::0000")),
+            KnowledgeNamespace::Company
+        );
+        assert!(validate_source_id(&sid).is_ok());
+
+        // コードなし → company- 接頭辞、記号は sanitize、判定は Company。
+        let f2 = CompanyFacts {
+            edinet_code: "".into(),
+            company_name: "A_B:C%D".into(),
+            ..Default::default()
+        };
+        let sid2 = company_source_id(&f2);
+        assert!(sid2.starts_with("company-"));
+        assert!(!sid2.contains('_') && !sid2.contains('%') && !sid2.contains(':'));
+        assert_eq!(
+            namespace_of(&format!("{sid2}::0000")),
+            KnowledgeNamespace::Company
+        );
+        assert!(validate_source_id(&sid2).is_ok());
     }
 }

@@ -505,6 +505,7 @@ export interface SyncDailyContextResult {
 /** Canonical list of M11–M17 Coraxis on-device Tauri commands (invoke names). */
 export const POCKET_BRAIN_COMMANDS = [
   "ingest_knowledge",
+  "ingest_company_knowledge",
   "ingest_line_history",
   "ingest_line_history_path",
   "search_knowledge",
