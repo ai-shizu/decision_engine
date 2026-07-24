@@ -16,6 +16,7 @@ use crate::llm::consult_context::{
 use crate::llm::mentor_zpd::{load_mentor_zpd_signal, MentorZpdSignal};
 use crate::llm::model_path::resolve_loadable_model_path;
 use crate::llm::params::{GenerationParams, LoadParams};
+use crate::llm::prompt_budget::fit_and_verify_prompt;
 use crate::llm::service::TokenEvent;
 use crate::llm::LlmHandle;
 use crate::rag::commands_rag::{search_sync, RagChatParams};
@@ -144,8 +145,11 @@ pub async fn consult_with_oracle_context(
     let vault = vault.inner().clone();
     let llm_search = llm.inner().clone();
     let message_for_search = message.clone();
+    let n_ctx = opts.n_ctx.unwrap_or(DEFAULT_N_CTX);
+    let max_tokens = opts.max_tokens.unwrap_or(DEFAULT_MAX_TOKENS);
+    let governor = llm.inner().governor();
 
-    let (prompt, meta) = tauri::async_runtime::spawn_blocking(move || {
+    let (prompt, verified_tokens, meta) = tauri::async_runtime::spawn_blocking(move || {
         // Fail-safe mentor load: soft sections on missing data; hard error only on vault IPC.
         let mentor = load_mentor_context(&vault).unwrap_or_else(|e| {
             log::error!("consult: load_mentor_context failed, using empty sections: {e}");
@@ -209,8 +213,18 @@ pub async fn consult_with_oracle_context(
         } else {
             build_consult_with_oracle_prompt(&message_for_search, &mentor, "", &zpd, &profile_block)
         };
+        let (prompt, verified_tokens) = fit_and_verify_prompt(
+            &llm_search,
+            governor.as_ref(),
+            prompt,
+            n_ctx,
+            max_tokens,
+            &["## ユーザーの相談"],
+            "consult",
+        );
         Ok::<_, String>((
             prompt,
+            verified_tokens,
             (
                 context_ids,
                 mentor.gap_available,
@@ -241,18 +255,19 @@ pub async fn consult_with_oracle_context(
     // ZPD temperature is the deterministic default; explicit FE `temp` overrides (debug/tests).
     let gen = GenerationParams {
         prompt,
-        n_ctx: opts.n_ctx.unwrap_or(DEFAULT_N_CTX),
-        max_tokens: opts.max_tokens.unwrap_or(DEFAULT_MAX_TOKENS),
+        n_ctx,
+        max_tokens,
         temp: opts.temp.unwrap_or(zpd.temperature),
         top_k: opts.top_k.unwrap_or(40),
         top_p: opts.top_p.unwrap_or(0.95),
         seed: opts.seed.unwrap_or(0),
     };
     log::info!(
-        "consult: calling llm.generate (n_ctx={}, max_tokens={}, temp={})",
+        "consult: calling llm.generate (n_ctx={}, max_tokens={}, temp={}, prompt_tokens={:?})",
         gen.n_ctx,
         gen.max_tokens,
-        gen.temp
+        gen.temp,
+        verified_tokens
     );
     llm.generate(gen, None, on_token).await.map_err(|e| {
         log::error!("consult: llm.generate failed: {e}");
