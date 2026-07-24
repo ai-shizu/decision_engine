@@ -27,6 +27,7 @@ import type {
   IngestKnowledgeResult,
   InterviewSession,
   LatestGapAnalysisResult,
+  KnowledgeNamespace,
   MultistageInterviewResult,
   ProbeAnswerResultV1,
   ProbeQuestionOut,
@@ -151,8 +152,13 @@ export async function ingestLineHistory(file: File): Promise<IngestKnowledgeResu
 export function searchKnowledge(
   query: string,
   limit?: number,
+  namespace: KnowledgeNamespace = "all",
 ): Promise<SearchKnowledgeResult> {
-  return pocketInvoke("search_knowledge", { query, limit: limit ?? null });
+  return pocketInvoke("search_knowledge", {
+    query,
+    limit: limit ?? null,
+    namespace,
+  });
 }
 
 export function sendRagChat(

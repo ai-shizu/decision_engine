@@ -158,7 +158,13 @@ pub async fn consult_with_oracle_context(
         });
         let mut context_ids = Vec::new();
         let prompt = if include_rag {
-            let hits = search_sync(&vault, &llm_search, &message_for_search, context_limit)
+            let hits = search_sync(
+                &vault,
+                &llm_search,
+                &message_for_search,
+                context_limit,
+                crate::rag::namespace::KnowledgeNamespace::All,
+            )
                 .unwrap_or_else(|e| {
                     log::error!("consult: search_sync failed, proceeding without RAG context: {e}");
                     Vec::new()

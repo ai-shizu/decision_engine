@@ -23,12 +23,13 @@ use super::prompt::{build_rag_prompt, RagContextRef};
 use crate::db::{
     KnowledgeChunkRow, KnowledgeSearchHit as DbHit, VaultErrorCode, VaultHandle, VaultStatus,
 };
-use crate::llm::context_budget::fit_prompt_to_budget;
 use crate::llm::hashed_embed::hashed_ngram_embed_384;
 use crate::llm::model_path::resolve_loadable_model_path;
-use crate::llm::params::{GenerationParams, LoadParams, MIN_N_CTX};
+use crate::llm::params::{GenerationParams, LoadParams};
+use crate::llm::prompt_budget::fit_and_verify_prompt;
 use crate::llm::service::{error_done_event, TokenEvent};
 use crate::llm::LlmHandle;
+use crate::rag::namespace::{parse_namespace_arg, KnowledgeNamespace};
 
 /// Structured error code emitted over `Channel<TokenEvent>` when the vault is not
 /// unlocked. The frontend maps this controlled code to a sterile sys-log message
@@ -242,6 +243,7 @@ pub(crate) fn search_sync(
     llm: &LlmHandle,
     query: &str,
     limit: u32,
+    namespace: KnowledgeNamespace,
 ) -> Result<Vec<DbHit>, String> {
     let pool = candidate_pool(limit);
     let primary_emb = match try_dense_passage_embed(llm, query) {
@@ -249,7 +251,7 @@ pub(crate) fn search_sync(
         None => lexical_hash_embed(query)?,
     };
     let primary_hits = vault
-        .knowledge_search(primary_emb, pool)
+        .knowledge_search(primary_emb, pool, namespace)
         .map_err(map_vault_err)?;
 
     let primary_ids: Vec<String> = primary_hits.iter().map(|h| h.id.clone()).collect();
@@ -620,11 +622,13 @@ pub async fn search_knowledge(
     llm: State<'_, LlmHandle>,
     query: String,
     limit: Option<u32>,
+    namespace: Option<String>,
 ) -> Result<SearchKnowledgeResult, String> {
     let limit = limit.unwrap_or(DEFAULT_SEARCH_LIMIT);
     if !(1..=MAX_SEARCH_LIMIT).contains(&limit) {
         return Err("invalid limit".into());
     }
+    let ns = parse_namespace_arg(namespace.as_deref())?;
     let query = query.trim().to_string();
     if query.is_empty() || query.len() > MAX_INGEST_TEXT_BYTES {
         return Err("invalid query".into());
@@ -634,7 +638,7 @@ pub async fn search_knowledge(
     let llm = llm.inner().clone();
 
     tauri::async_runtime::spawn_blocking(move || {
-        let hits = search_sync(&vault, &llm, &query, limit)?;
+        let hits = search_sync(&vault, &llm, &query, limit, ns)?;
         Ok(SearchKnowledgeResult {
             hits: to_ipc_hits(hits),
         })
@@ -727,7 +731,13 @@ pub async fn send_rag_chat(
     let message_for_search = message.clone();
 
     let (prompt, context_ids) = tauri::async_runtime::spawn_blocking(move || {
-        let hits = search_sync(&vault, &llm_for_search, &message_for_search, context_limit)
+        let hits = search_sync(
+            &vault,
+            &llm_for_search,
+            &message_for_search,
+            context_limit,
+            KnowledgeNamespace::All,
+        )
             .unwrap_or_default();
             let refs: Vec<RagContextRef<'_>> = hits
                 .iter()
@@ -755,68 +765,16 @@ pub async fn send_rag_chat(
             Err(_) => rag_prompt,
         };
 
-        // Final cross-section guard (2026-07-24 device bug): the RAG context
-        // budget and consult's mentor sections (Gap/Tensor/Oracle) are each
-        // fitted independently, but nothing previously re-checked their SUM
-        // against the model's real available input budget before tokenizing
-        // — `generate()` then failed outright with "prompt exceeds context
-        // budget" (observed 2394 > 1792 on-device), surfaced to the user as a
-        // sterile "応答を生成できませんでした" with zero retry path. Mirrors
-        // `generate()`'s own `scaled_ctx`/`input_token_budget` math exactly
-        // (including the current thermal/memory degradation factor) so this
-        // never re-diverges from what the worker will actually enforce.
-        let context_factor = governor.degradation().context_factor();
-        let scaled_ctx =
-            ((n_ctx as f64) * f64::from(context_factor)).round() as u32;
-        let scaled_ctx = scaled_ctx.clamp(MIN_N_CTX, n_ctx);
-        let available_tokens = scaled_ctx.saturating_sub(max_tokens_for_gen) as usize;
-
-        // `estimate_tokens`'s char-based heuristic ("CJK ≈ 1 tok") can diverge
-        // sharply from the model's REAL BPE tokenizer for content with rare
-        // characters / names (LINE chat usernames etc.) — device evidence:
-        // the heuristic judged a prompt "within budget" that `generate()`'s
-        // own `model.str_to_token` counted at 2394 vs a 1792 budget, so the
-        // fitted prompt was returned completely untrimmed. Never trust the
-        // heuristic's verdict on its own: measure the ACTUAL tokenizer count
-        // via `count_tokens` and iteratively re-tighten the heuristic's
-        // target until the real count is confirmed to fit, or fail closed.
-        let mut budget_target = available_tokens;
-        let mut prompt = fit_prompt_to_budget(&prompt, budget_target);
-        const MAX_FIT_ATTEMPTS: u32 = 5;
-        for attempt in 0..MAX_FIT_ATTEMPTS {
-            match llm_for_search.count_tokens(prompt.clone()) {
-                Ok(real_tokens) if real_tokens <= available_tokens => break,
-                Ok(real_tokens) => {
-                    log::error!(
-                        "send_rag_chat: fitted prompt still exceeds real budget (real={real_tokens} > budget={available_tokens}, attempt={attempt}); tightening heuristic target"
-                    );
-                    if attempt + 1 == MAX_FIT_ATTEMPTS {
-                        log::error!(
-                            "send_rag_chat: giving up after {MAX_FIT_ATTEMPTS} fit attempts; falling back to an empty context so generate() can still run"
-                        );
-                        // Fail closed to just the (never-truncated) user
-                        // question — always fits, since `generate()` itself
-                        // separately caps input tokens against the same budget.
-                        prompt = fit_prompt_to_budget(&prompt, 0);
-                        break;
-                    }
-                    // Shrink the heuristic's target proportionally to the
-                    // observed overshoot, plus a 10% extra margin so repeated
-                    // heuristic misses converge quickly instead of hovering
-                    // just above budget for several iterations.
-                    let overshoot_ratio = available_tokens as f64 / real_tokens as f64;
-                    budget_target =
-                        ((budget_target as f64) * overshoot_ratio * 0.9).floor() as usize;
-                    prompt = fit_prompt_to_budget(&prompt, budget_target);
-                }
-                Err(e) => {
-                    log::error!(
-                        "send_rag_chat: count_tokens verification failed, trusting heuristic fit: {e}"
-                    );
-                    break;
-                }
-            }
-        }
+        // Final cross-section guard + real tokenizer verify (see prompt_budget).
+        let (prompt, _prompt_tokens) = fit_and_verify_prompt(
+            &llm_for_search,
+            governor.as_ref(),
+            prompt,
+            n_ctx,
+            max_tokens_for_gen,
+            &["## ユーザーの質問"],
+            "send_rag_chat",
+        );
 
         let ids: Vec<String> = hits.into_iter().map(|hit| hit.id).collect();
         Ok::<_, String>((prompt, ids))

@@ -27,7 +27,7 @@ function liveDeps() {
     getPolicy: getKnowledgeResearchPolicy,
     knowledgeResearch,
     searchKnowledge: (query: string, limit?: number) =>
-      searchKnowledge(query, limit),
+      searchKnowledge(query, limit, "company"),
     fetchEdinetByName: (args: { companyName: string; edinetDate: string }) =>
       fetchEdinetCompanyFacts({
         companyName: args.companyName,
@@ -83,7 +83,9 @@ export function useCompanyFactsEnrichment(
           setProvenanceLabel(result.provenanceLabel);
           dispatchResearchUi({ kind: "DONE", seq });
         })
-        .catch(() => {
+        .catch((err) => {
+          // eslint-disable-next-line no-console -- intentional diagnostic
+          console.error("[useCompanyFactsEnrichment] debounce enrich failed:", err);
           if (seq !== seqRef.current) return;
           dispatchResearchUi({ kind: "FAIL", seq });
         });

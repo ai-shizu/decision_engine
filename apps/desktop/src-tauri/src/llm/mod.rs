@@ -14,6 +14,7 @@ pub mod commands_model_setup;
 pub mod brain;
 pub mod context_budget;
 pub mod embed;
+pub mod prompt_budget;
 pub mod hashed_embed;
 pub mod model_path;
 pub mod params;

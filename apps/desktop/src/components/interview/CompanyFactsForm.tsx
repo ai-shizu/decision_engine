@@ -9,6 +9,20 @@ interface CompanyFactsFormProps {
   provenanceLabel?: string | null;
 }
 
+function readinessTag(facts: CompanyFacts): { label: string; ok: boolean } {
+  const name = facts.companyName.trim();
+  if (!name) return { label: " [ 企業名が必要 ]", ok: false };
+  if (facts.edinetCode.trim()) return { label: " [ EDINET 特定済 ]", ok: true };
+  return { label: " [ 企業名のみ ]", ok: true };
+}
+
+function previewSummary(text: string): { short: string; full: string; chars: number } {
+  const full = text.trim();
+  const chars = full.length;
+  if (chars <= 120) return { short: full, full, chars };
+  return { short: `${full.slice(0, 120)}…`, full, chars };
+}
+
 /**
  * Offline-inject CompanyFacts editor.
  * EDINET code is resolved automatically from company name (no manual field).
@@ -21,19 +35,24 @@ export function CompanyFactsForm({
   researching = false,
   provenanceLabel = null,
 }: CompanyFactsFormProps) {
-  const ready = facts.companyName.trim().length > 0;
+  const tag = readinessTag(facts);
+  const name = facts.companyName.trim();
+  const summary = facts.businessSummary.trim()
+    ? previewSummary(facts.businessSummary)
+    : null;
+  const showPreview = name.length > 0;
 
   return (
     <div
-      className={`term-panel company-facts-form interview-section${researching ? " researching-ambient" : ""}${ready ? " is-ready" : " is-missing"}`}
+      className={`term-panel company-facts-form interview-section${researching ? " researching-ambient" : ""}${tag.ok ? " is-ready" : " is-missing"}`}
       aria-busy={researching}
     >
       <p className="term-header">
         企業コンテキスト
-        {ready ? (
-          <span className="term-tag term-tag--ok"> [ 準備完了 ]</span>
+        {tag.ok ? (
+          <span className="term-tag term-tag--ok">{tag.label}</span>
         ) : (
-          <span className="term-tag term-tag--danger"> [ 企業名が必要 ]</span>
+          <span className="term-tag term-tag--danger">{tag.label}</span>
         )}
       </p>
       <p className="hint guide">
@@ -49,6 +68,75 @@ export function CompanyFactsForm({
           {provenanceLabel}
         </p>
       )}
+
+      {showPreview && (
+        <div className="term-panel company-facts-preview" aria-label="確定済み企業コンテキスト">
+          <div className="term-row">
+            <span className="term-source-name">正式社名</span>
+            <span className="term-value" style={{ overflowWrap: "anywhere" }}>
+              {name}
+            </span>
+          </div>
+          <div className="term-row">
+            <span className="term-source-name">EDINETコード</span>
+            <span
+              className="term-value"
+              style={
+                facts.edinetCode.trim()
+                  ? { overflowWrap: "anywhere" }
+                  : { opacity: 0.55, overflowWrap: "anywhere" }
+              }
+            >
+              {facts.edinetCode.trim() || "未特定"}
+            </span>
+          </div>
+          {facts.docId.trim() ? (
+            <div className="term-row">
+              <span className="term-source-name">書類ID</span>
+              <span className="term-value" style={{ overflowWrap: "anywhere" }}>
+                {facts.docId.trim()}
+              </span>
+            </div>
+          ) : null}
+          {facts.source.trim() ? (
+            <div className="term-row">
+              <span className="term-source-name">出典</span>
+              <span className="term-value" style={{ overflowWrap: "anywhere" }}>
+                {facts.source.trim()}
+              </span>
+            </div>
+          ) : null}
+          {facts.source.trim() === "local_rag" ? (
+            <p className="term-tag term-tag--danger" role="status">
+              ⚠ 個人 Vault 由来の要約です
+            </p>
+          ) : null}
+          {summary ? (
+            <div className="term-row">
+              <span className="term-source-name">事業概要</span>
+              <details className="term-value" style={{ overflowWrap: "anywhere" }}>
+                <summary>
+                  {summary.short}（全 {summary.chars} 文字）
+                </summary>
+                <p style={{ whiteSpace: "pre-wrap", margin: "0.4em 0 0" }}>{summary.full}</p>
+              </details>
+            </div>
+          ) : null}
+          <div className="term-row">
+            <span className="term-source-name">事業リスク</span>
+            <span className="term-tag">
+              {facts.businessRisks.trim() ? " [ 取得済 ]" : " [ 未取得 ]"}
+            </span>
+          </div>
+          <div className="term-row">
+            <span className="term-source-name">業績サマリ</span>
+            <span className="term-tag">
+              {facts.performanceSummary.trim() ? " [ 取得済 ]" : " [ 未取得 ]"}
+            </span>
+          </div>
+        </div>
+      )}
+
       <div className="term-row config-row">
         <span className="term-source-name">
           企業名 <span className="field-required">*</span>

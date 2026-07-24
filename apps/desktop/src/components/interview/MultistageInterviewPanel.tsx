@@ -35,6 +35,8 @@ function handleTokenStream(
   onError: (message: string) => void,
 ): void {
   if (event.error) {
+    // eslint-disable-next-line no-console -- intentional diagnostic
+    console.error("[MultistageInterviewPanel] stream error event:", event.error);
     onError(event.error);
     return;
   }
@@ -97,7 +99,9 @@ export function MultistageInterviewPanel({
     try {
       const session = await getInterviewSession(result.session_id);
       dispatch({ type: "hydrate_session", session });
-    } catch {
+    } catch (err) {
+      // eslint-disable-next-line no-console -- intentional diagnostic
+      console.error("[MultistageInterviewPanel] hydrateAfter failed:", err);
       // Best-effort sync; result meta already applied.
     }
   }
@@ -128,7 +132,9 @@ export function MultistageInterviewPanel({
         ...enriched.facts,
         source: enriched.facts.source.trim() || "injected",
       };
-    } catch {
+    } catch (err) {
+      // eslint-disable-next-line no-console -- intentional diagnostic
+      console.error("[MultistageInterviewPanel] enrich soft-fail:", err);
       // Ambient enrich soft-fail — proceed with typed facts.
     }
 
@@ -142,6 +148,8 @@ export function MultistageInterviewPanel({
         },
         (event) => {
           if (event.error) {
+            // eslint-disable-next-line no-console -- intentional diagnostic
+            console.error("[MultistageInterviewPanel] onStart stream error:", event.error);
             dispatch({
               type: "token_error",
               message: uiErrorMessage("INTERVIEW_RESPONSE"),
@@ -160,7 +168,9 @@ export function MultistageInterviewPanel({
       throttle.drainAndStop();
       dispatch({ type: "start_success", assistantId, result });
       await hydrateAfter(result);
-    } catch {
+    } catch (err) {
+      // eslint-disable-next-line no-console -- intentional diagnostic
+      console.error("[MultistageInterviewPanel] onStart failed:", err);
       throttle.flushAndStop();
       dispatch({
         type: "send_failure",
@@ -207,7 +217,9 @@ export function MultistageInterviewPanel({
         dispatch({ type: "advance_success", assistantId, result });
       }
       await hydrateAfter(result);
-    } catch {
+    } catch (err) {
+      // eslint-disable-next-line no-console -- intentional diagnostic
+      console.error("[MultistageInterviewPanel] onAdvance failed:", err);
       throttle.flushAndStop();
       dispatch({
         type: "send_failure",

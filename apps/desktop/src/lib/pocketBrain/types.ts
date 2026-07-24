@@ -74,6 +74,8 @@ export interface IngestKnowledgeResult {
   part_count?: number;
 }
 
+export type KnowledgeNamespace = "personal" | "company" | "all";
+
 export interface SearchKnowledgeHit {
   id: string;
   text_content: string;

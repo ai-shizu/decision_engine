@@ -1063,6 +1063,21 @@ RAG がヒットすると `generate()` が `prompt exceeds context budget: 2394 
 **教訓（不変ルール）:** プロンプト切り詰め・予算判定は必ず**ロード済みモデルの実トークナイザで実測**し、
 セクション別予算の**合計**を LLM 直前で再検証し、IPC/ストリームのエラーは**生のまま必ずログ**せよ。
 
+### 4.52b INTERVIEW — RAG 名前空間 + 面接予算収束 (2026-07-25)
+
+**症状:** (1) 企業「事業概要」に LINE 会話が混入 (2) 面接チャット沈黙 (3) 企業コンテキスト不可視。
+
+**as-built:**
+1. `db/knowledge_namespace.rs` + `rag/namespace.rs` — chunk id 接頭辞で Personal/Company 分類。未知は **Personal（fail-closed）**。
+2. `search_chunks` — vec0 KNN に LIKE 不可のため over-fetch×8（cap 200）→ Rust フィルタ。`All` は従来どおり k=limit。
+3. 企業レーン FE は `searchKnowledge(..., "company")` 固定。`MAX_SUMMARY_CHARS` 2400→800。
+4. `fit_prompt_to_budget_with_markers` + `prompt_budget::fit_and_verify_prompt` — 面接4コマンド + `send_rag_chat` が共有。マーカー: `## ユーザーの質問` / `## 候補者の発話` / `## 提出 ES 原稿`。
+5. Interview/Multistage/EsReview パネル: 生エラー `console.error` → sterile UI。CompanyFactsForm にプレビュー + `local_rag` 汚染警告チップ。
+
+**未修正（同一クラス）:** `commands_consult.rs` のデスクトップ `consult_with_oracle_context` は本 PR スコープ外で予算収束未適用のまま。
+
+**ハマりどころ:** 企業ブロックだけで 1792 入力予算を食い潰す。n_ctx 拡大で「解決」するな（Jetsam）。
+
 ### 4.53 Phase 10 — iOS lifecycle restore + Haptics + VoiceOver (2026-07-21)
 
 **射程:** (1) 前景復帰時の順序保証リストア (2) メタ認知イベントの Taptic Engine (3) SVG 可視化の WAI-ARIA / VoiceOver。RNG・外部 API・`navigator.vibrate` 禁止。

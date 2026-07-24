@@ -123,6 +123,38 @@ test("E-06 enrich: policy on runs research then edinet-by-name", async () => {
   assertOk(result.provenanceLabel !== null, "provenance");
 });
 
+test("E-07 enrich: searchKnowledge called with company namespace", async () => {
+  let seenNs: string | undefined;
+  await enrichCompanyFacts(emptyCompanyFacts({ companyName: "Acme" }), {
+    getPolicy: async () => ({ enabled: false }),
+    knowledgeResearch: async () => {
+      throw new Error("should not call");
+    },
+    searchKnowledge: async (_q, _limit, namespace) => {
+      seenNs = namespace;
+      return { hits: [{ text_content: "企業概要" }] };
+    },
+    todayIso: () => "2026-07-25",
+  });
+  assertOk(seenNs === "company", `namespace=${seenNs}`);
+});
+
+test("E-08 enrich: company lane empty leaves businessSummary blank", async () => {
+  const result = await enrichCompanyFacts(
+    emptyCompanyFacts({ companyName: "マッキンゼー" }),
+    {
+      getPolicy: async () => ({ enabled: false }),
+      knowledgeResearch: async () => {
+        throw new Error("should not call");
+      },
+      searchKnowledge: async () => ({ hits: [] }),
+      todayIso: () => "2026-07-25",
+    },
+  );
+  assertOk(result.facts.businessSummary === "", "summary stays empty");
+  assertOk(result.facts.source !== "local_rag", "no local_rag source without hits");
+});
+
 async function main(): Promise<void> {
   let failed = 0;
   for (const t of tests) {

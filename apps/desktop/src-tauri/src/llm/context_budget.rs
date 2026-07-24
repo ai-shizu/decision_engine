@@ -288,22 +288,33 @@ pub fn truncate_to_token_budget(text: &str, token_budget: usize) -> String {
 /// `generate()` would then fail outright with "prompt exceeds context
 /// budget", surfaced to the user as a sterile "応答を生成できませんでした").
 ///
-/// Splits on the literal `"## ユーザーの質問"` marker (present in both
-/// `rag::prompt::build_rag_prompt` and after `consult_context::
-/// append_mentor_sections`) so the user's own message — the tail, from the
-/// marker onward — is **never** truncated. Only the head (system preamble +
-/// injected RAG/mentor context) is trimmed, front-preserved: the system
-/// preamble at the very start survives longest; injected context is cut from
-/// its own tail first.
+/// Splits on a user-turn marker so the user's / candidate's own message — the
+/// tail, from the marker onward — is **never** truncated. Only the head
+/// (system preamble + injected context) is trimmed, front-preserved.
 ///
-/// When the marker is absent (an unrecognized prompt shape), fails closed via
-/// the same front-preserving truncation rather than silently returning an
-/// oversized prompt.
-pub fn fit_prompt_to_budget(prompt: &str, available_tokens: usize) -> String {
+/// When no marker is found, fails closed via the same front-preserving
+/// truncation rather than silently returning an oversized prompt.
+pub const USER_TURN_MARKERS: &[&str] = &[
+    "## ユーザーの質問",
+    "## 候補者の発話",
+    "## 提出 ES 原稿",
+];
+
+pub fn fit_prompt_to_budget_with_markers(
+    prompt: &str,
+    available_tokens: usize,
+    markers: &[&str],
+) -> String {
     if estimate_tokens(prompt) <= available_tokens {
         return prompt.to_string();
     }
-    let Some(idx) = prompt.find("## ユーザーの質問") else {
+    let mut best: Option<usize> = None;
+    for marker in markers {
+        if let Some(idx) = prompt.rfind(marker) {
+            best = Some(best.map_or(idx, |b| b.max(idx)));
+        }
+    }
+    let Some(idx) = best else {
         return truncate_to_token_budget(prompt, available_tokens);
     };
     let tail = &prompt[idx..];
@@ -311,6 +322,12 @@ pub fn fit_prompt_to_budget(prompt: &str, available_tokens: usize) -> String {
     let head_budget = available_tokens.saturating_sub(tail_tokens);
     let head = &prompt[..idx];
     format!("{}{}", truncate_to_token_budget(head, head_budget), tail)
+}
+
+/// Thin wrapper keeping the historical `"## ユーザーの質問"`-only contract
+/// (existing tests / RAG + consult callers).
+pub fn fit_prompt_to_budget(prompt: &str, available_tokens: usize) -> String {
+    fit_prompt_to_budget_with_markers(prompt, available_tokens, &["## ユーザーの質問"])
 }
 
 #[cfg(test)]
@@ -479,5 +496,30 @@ mod tests {
         let out = fit_prompt_to_budget(&prompt, 1792);
         assert!(estimate_tokens(&out) <= 1792);
         assert!(out.ends_with(tail));
+    }
+
+    #[test]
+    fn fit_markers_preserve_candidate_utterance() {
+        let head = "企業コンテキストと面接官指示。".repeat(400);
+        let utterance = "私はチームで新規事業を立ち上げました。";
+        let tail = format!("## 候補者の発話\n{utterance}\n");
+        let prompt = format!("{head}{tail}");
+        let out = fit_prompt_to_budget_with_markers(&prompt, 40, USER_TURN_MARKERS);
+        assert!(
+            out.ends_with(&tail),
+            "candidate utterance must survive verbatim, got: {out}"
+        );
+        assert!(out.contains(utterance));
+    }
+
+    #[test]
+    fn fit_markers_preserve_es_draft() {
+        let head = "レビュー観点と企業事実。".repeat(400);
+        let draft = "ガクチカ本文はここから始まります。";
+        let tail = format!("## 提出 ES 原稿\n{draft}\n");
+        let prompt = format!("{head}{tail}");
+        let out = fit_prompt_to_budget_with_markers(&prompt, 40, USER_TURN_MARKERS);
+        assert!(out.ends_with(&tail), "ES draft must survive verbatim, got: {out}");
+        assert!(out.contains(draft));
     }
 }

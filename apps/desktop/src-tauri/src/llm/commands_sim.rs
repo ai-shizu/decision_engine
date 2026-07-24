@@ -19,11 +19,14 @@ use crate::knowledge::{
     refuse_if_egress_unavailable, refuse_if_policy_off, NetworkPolicyStore,
 };
 use crate::llm::commands_consult::ensure_model_loaded;
+use crate::llm::context_budget::USER_TURN_MARKERS;
 use crate::llm::params::GenerationParams;
+use crate::llm::prompt_budget::fit_and_verify_prompt;
 use crate::llm::prompt_sim::{build_es_review_prompt, build_interview_prompt, ExperienceRef};
 use crate::llm::service::TokenEvent;
 use crate::llm::LlmHandle;
 use crate::rag::commands_rag::search_sync;
+use crate::rag::namespace::KnowledgeNamespace;
 
 const MAX_TEXT_BYTES: usize = 64 * 1024;
 const DEFAULT_CONTEXT_LIMIT: u32 = 5;
@@ -391,8 +394,12 @@ pub async fn start_interview_session(
     let message_for_prompt = message.clone();
     let facts_for_prompt = facts.clone();
     let es_for_prompt = es_text;
+    let llm_fit = llm.inner().clone();
+    let governor = llm.inner().governor();
+    let n_ctx = gen.n_ctx;
+    let max_tokens = gen.max_tokens;
 
-    let (prompt, context_ids) = tauri::async_runtime::spawn_blocking(move || {
+    let (prompt, context_ids, verified_tokens) = tauri::async_runtime::spawn_blocking(move || {
         // Foundation-style: company facts + optional ES base + utterance (no vault KNN).
         let prompt = build_interview_prompt(
             &message_for_prompt,
@@ -400,7 +407,16 @@ pub async fn start_interview_session(
             &[],
             es_for_prompt.as_deref(),
         );
-        Ok::<_, String>((prompt, Vec::<String>::new()))
+        let (prompt, verified_tokens) = fit_and_verify_prompt(
+            &llm_fit,
+            governor.as_ref(),
+            prompt,
+            n_ctx,
+            max_tokens,
+            USER_TURN_MARKERS,
+            "interview(single)",
+        );
+        Ok::<_, String>((prompt, Vec::<String>::new(), verified_tokens))
     })
     .await
     .map_err(|e| {
@@ -414,8 +430,10 @@ pub async fn start_interview_session(
 
     gen.prompt = prompt;
     log::info!(
-        "interview(single): calling llm.generate (prompt_len={}, max_tokens={})",
+        "interview(single): calling llm.generate (prompt_len={}, prompt_tokens={:?}, n_ctx={}, max_tokens={})",
         gen.prompt.len(),
+        verified_tokens,
+        gen.n_ctx,
         gen.max_tokens
     );
     llm.generate(gen, None, on_token).await.map_err(|e| {
@@ -468,11 +486,21 @@ pub async fn review_es_draft(
 
     let vault = vault.inner().clone();
     let llm_search = llm.inner().clone();
+    let governor = llm.inner().governor();
     let draft_for_prompt = draft.clone();
     let facts_for_prompt = facts.clone();
+    let n_ctx = gen.n_ctx;
+    let max_tokens = gen.max_tokens;
 
-    let (prompt, context_ids) = tauri::async_runtime::spawn_blocking(move || {
-        let hits = search_sync(&vault, &llm_search, &query, context_limit).unwrap_or_default();
+    let (prompt, context_ids, verified_tokens) = tauri::async_runtime::spawn_blocking(move || {
+        let hits = search_sync(
+            &vault,
+            &llm_search,
+            &query,
+            context_limit,
+            KnowledgeNamespace::All,
+        )
+        .unwrap_or_default();
         let refs: Vec<ExperienceRef<'_>> = hits
             .iter()
             .map(|hit| ExperienceRef {
@@ -481,8 +509,17 @@ pub async fn review_es_draft(
             })
             .collect();
         let prompt = build_es_review_prompt(&draft_for_prompt, &facts_for_prompt, &refs);
+        let (prompt, verified_tokens) = fit_and_verify_prompt(
+            &llm_search,
+            governor.as_ref(),
+            prompt,
+            n_ctx,
+            max_tokens,
+            USER_TURN_MARKERS,
+            "es_review",
+        );
         let ids: Vec<String> = hits.into_iter().map(|hit| hit.id).collect();
-        Ok::<_, String>((prompt, ids))
+        Ok::<_, String>((prompt, ids, verified_tokens))
     })
     .await
     .map_err(|e| {
@@ -496,8 +533,10 @@ pub async fn review_es_draft(
 
     gen.prompt = prompt;
     log::info!(
-        "es_review: calling llm.generate (prompt_len={}, max_tokens={})",
+        "es_review: calling llm.generate (prompt_len={}, prompt_tokens={:?}, n_ctx={}, max_tokens={})",
         gen.prompt.len(),
+        verified_tokens,
+        gen.n_ctx,
         gen.max_tokens
     );
     llm.generate(gen, None, on_token).await.map_err(|e| {
@@ -666,7 +705,14 @@ fn build_machine_prompt(
     // M20-J scope: Vault auto-RAG + Gap/Tensor ONLY in Debrief.
     // Foundation / Pressure: company facts + session transcript only (no vault KNN).
     let hits = if is_debrief {
-        search_sync(vault, llm, user_message, context_limit).unwrap_or_default()
+        search_sync(
+            vault,
+            llm,
+            user_message,
+            context_limit,
+            KnowledgeNamespace::All,
+        )
+        .unwrap_or_default()
     } else {
         Vec::new()
     };
@@ -846,19 +892,32 @@ pub async fn start_multistage_interview(
         resolve_coliseum_gen(params.gen.as_ref(), artifact_turn_seed(&session));
     let vault_c = vault.inner().clone();
     let llm_s = llm.inner().clone();
+    let governor = llm.inner().governor();
     let facts_c = facts.clone();
     let session_snapshot = session.clone();
     let opening_c = opening.clone();
+    let n_ctx = gen.n_ctx;
+    let max_tokens = gen.max_tokens;
 
-    let (prompt, context_ids) = tauri::async_runtime::spawn_blocking(move || {
-        build_machine_prompt(
+    let (prompt, context_ids, verified_tokens) = tauri::async_runtime::spawn_blocking(move || {
+        let (prompt, ids) = build_machine_prompt(
             &vault_c,
             &llm_s,
             &session_snapshot,
             &facts_c,
             &opening_c,
             context_limit,
-        )
+        )?;
+        let (prompt, verified_tokens) = fit_and_verify_prompt(
+            &llm_s,
+            governor.as_ref(),
+            prompt,
+            n_ctx,
+            max_tokens,
+            USER_TURN_MARKERS,
+            "interview(multistage-start)",
+        );
+        Ok::<_, String>((prompt, ids, verified_tokens))
     })
     .await
     .map_err(|e| {
@@ -875,8 +934,10 @@ pub async fn start_multistage_interview(
 
     gen.prompt = prompt;
     log::info!(
-        "interview(multistage-start): calling llm.generate (prompt_len={}, max_tokens={})",
+        "interview(multistage-start): calling llm.generate (prompt_len={}, prompt_tokens={:?}, n_ctx={}, max_tokens={})",
         gen.prompt.len(),
+        verified_tokens,
+        gen.n_ctx,
         gen.max_tokens
     );
     llm.generate(gen, None, on_token).await.map_err(|e| {
@@ -963,20 +1024,33 @@ pub async fn advance_interview_stage(
     let (context_limit, mut gen) =
         resolve_coliseum_gen(params.gen.as_ref(), artifact_turn_seed(&session));
     let llm_s = llm.inner().clone();
+    let governor = llm.inner().governor();
     let session_snap = session.clone();
     let answer_c = answer.clone();
     let facts_c = facts.clone();
     let vault_c = vault_h.clone();
+    let n_ctx = gen.n_ctx;
+    let max_tokens = gen.max_tokens;
 
-    let (prompt, context_ids) = tauri::async_runtime::spawn_blocking(move || {
-        build_machine_prompt(
+    let (prompt, context_ids, verified_tokens) = tauri::async_runtime::spawn_blocking(move || {
+        let (prompt, ids) = build_machine_prompt(
             &vault_c,
             &llm_s,
             &session_snap,
             &facts_c,
             &answer_c,
             context_limit,
-        )
+        )?;
+        let (prompt, verified_tokens) = fit_and_verify_prompt(
+            &llm_s,
+            governor.as_ref(),
+            prompt,
+            n_ctx,
+            max_tokens,
+            USER_TURN_MARKERS,
+            "interview(multistage-advance)",
+        );
+        Ok::<_, String>((prompt, ids, verified_tokens))
     })
     .await
     .map_err(|e| {
@@ -991,8 +1065,10 @@ pub async fn advance_interview_stage(
     persist_session(&vault_h, &session)?;
     gen.prompt = prompt;
     log::info!(
-        "interview(multistage-advance): calling llm.generate (prompt_len={}, max_tokens={})",
+        "interview(multistage-advance): calling llm.generate (prompt_len={}, prompt_tokens={:?}, n_ctx={}, max_tokens={})",
         gen.prompt.len(),
+        verified_tokens,
+        gen.n_ctx,
         gen.max_tokens
     );
     llm.generate(gen, None, on_token).await.map_err(|e| {

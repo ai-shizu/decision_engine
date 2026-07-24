@@ -4,15 +4,13 @@ import { CompanyFactsForm } from "./CompanyFactsForm";
 import { todayIso } from "../../lib/dateUtils";
 import { companyFactsReady } from "../../lib/interviewStage";
 import { redactHiddenReasoning } from "../../lib/redactHiddenReasoning";
-import {
-  isPocketBrainInvokeError,
-  reviewEsDraft,
-} from "../../lib/pocketBrain";
+import { reviewEsDraft } from "../../lib/pocketBrain";
 import type { CompanyFacts } from "../../lib/pocketBrain/types";
 import {
   esReviewReducer,
   initialEsReviewState,
 } from "../../lib/esReviewReducer";
+import { uiErrorMessage } from "../../lib/uiErrorMessages";
 import { useCompanyFactsEnrichment } from "../../lib/useCompanyFactsEnrichment";
 import { useThrottledStream } from "../../lib/useThrottledStream";
 
@@ -95,11 +93,14 @@ export function EsReviewPanel({
         ...enriched.facts,
         source: enriched.facts.source.trim() || "injected",
       };
-    } catch {
+    } catch (err) {
+      // eslint-disable-next-line no-console -- intentional diagnostic
+      console.error("[EsReviewPanel] enrich soft-fail:", err);
       // proceed with typed facts
     }
 
     const edinetDate = todayIso();
+    const sterile = uiErrorMessage("INTERVIEW_RESPONSE");
     try {
       const result = await reviewEsDraft(
         {
@@ -110,7 +111,9 @@ export function EsReviewPanel({
         },
         (event) => {
           if (event.error) {
-            dispatch({ type: "token_error", message: event.error });
+            // eslint-disable-next-line no-console -- intentional diagnostic
+            console.error("[EsReviewPanel] stream error event:", event.error);
+            dispatch({ type: "token_error", message: sterile });
             return;
           }
           if (event.done) {
@@ -126,11 +129,10 @@ export function EsReviewPanel({
       throttle.drainAndStop();
       dispatch({ type: "review_success", reviewerId, result });
     } catch (err) {
+      // eslint-disable-next-line no-console -- intentional diagnostic
+      console.error("[EsReviewPanel] onReview failed:", err);
       throttle.flushAndStop();
-      const message = isPocketBrainInvokeError(err)
-        ? err.message
-        : `es review: ${String(err)}`;
-      dispatch({ type: "review_failure", message });
+      dispatch({ type: "review_failure", message: sterile });
     } finally {
       reviewerIdRef.current = null;
       dispatch({ type: "review_end" });

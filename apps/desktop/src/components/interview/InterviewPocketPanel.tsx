@@ -215,7 +215,9 @@ export function InterviewPocketPanel({
         ...enriched.facts,
         source: enriched.facts.source.trim() || "injected",
       };
-    } catch {
+    } catch (err) {
+      // eslint-disable-next-line no-console -- intentional diagnostic
+      console.error("[InterviewPocketPanel] enrich soft-fail:", err);
       // Ambient enrich soft-fail — proceed with typed facts.
     }
 
@@ -230,6 +232,8 @@ export function InterviewPocketPanel({
         },
         (event) => {
           if (event.error) {
+            // eslint-disable-next-line no-console -- intentional diagnostic
+            console.error("[InterviewPocketPanel] stream error event:", event.error);
             dispatch({ type: "token_error", message: sterile });
             return;
           }
@@ -251,7 +255,9 @@ export function InterviewPocketPanel({
         factsSource: result.facts_source,
         contextCount: result.context_count,
       });
-    } catch {
+    } catch (err) {
+      // eslint-disable-next-line no-console -- intentional diagnostic
+      console.error("[InterviewPocketPanel] onSend failed:", err);
       throttle.flushAndStop();
       dispatch({ type: "send_failure", message: sterile });
     } finally {

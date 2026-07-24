@@ -216,6 +216,7 @@ enum VaultRequest {
     KnowledgeSearch {
         embedding: Vec<f32>,
         limit: u32,
+        namespace: crate::db::KnowledgeNamespace,
         control: RequestControl,
         reply: SyncSender<VaultReply>,
     },
@@ -606,12 +607,14 @@ impl VaultHandle {
         &self,
         embedding: Vec<f32>,
         limit: u32,
+        namespace: crate::db::KnowledgeNamespace,
     ) -> Result<Vec<KnowledgeSearchHit>, VaultErrorCode> {
         let (reply_sender, receiver) = mpsc::sync_channel(1);
         let cancelled = Arc::new(AtomicBool::new(false));
         let request = VaultRequest::KnowledgeSearch {
             embedding,
             limit,
+            namespace,
             control: RequestControl {
                 deadline: Instant::now() + SHORT_OPERATION_TIMEOUT,
                 cancelled: Arc::clone(&cancelled),
@@ -1213,13 +1216,14 @@ impl VaultWorker {
                 VaultRequest::KnowledgeSearch {
                     embedding,
                     limit,
+                    namespace,
                     control,
                     reply,
                 } => {
                     let result = if request_expired(&control) {
                         Err(VaultErrorCode::Timeout)
                     } else {
-                        self.search_knowledge(embedding, limit)
+                        self.search_knowledge(embedding, limit, namespace)
                     };
                     let _ = reply.send(VaultReply::KnowledgeSearch(result));
                 }
@@ -1699,13 +1703,15 @@ impl VaultWorker {
         &mut self,
         embedding: Vec<f32>,
         limit: u32,
+        namespace: crate::db::KnowledgeNamespace,
     ) -> Result<Vec<KnowledgeSearchHit>, VaultErrorCode> {
         gate(snapshot_status(&self.status))?;
         if !(1..=MAX_LIST_LIMIT).contains(&limit) {
             return Err(VaultErrorCode::InvalidInput);
         }
-        let outcome = self
-            .read_repository(|connection| knowledge_repo::search_chunks(connection, &embedding, limit));
+        let outcome = self.read_repository(|connection| {
+            knowledge_repo::search_chunks(connection, &embedding, limit, namespace)
+        });
         self.resolve_repository(outcome)
     }
 

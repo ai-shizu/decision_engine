@@ -9,7 +9,9 @@ import type { CompanyFacts } from "./pocketBrain/types";
 import type { KnowledgeResearchReceipt } from "./parseEngineResponse";
 import { deriveProvenance, provenanceChipText } from "./researchUiReducer";
 
-const MAX_SUMMARY_CHARS = 2400;
+// Cap company-lane RAG summary so interview prompts (input budget ≈1792) are
+// not exhausted by businessSummary alone before the budget fitter runs.
+const MAX_SUMMARY_CHARS = 800;
 
 export function buildCompanyResearchQuery(companyName: string): string {
   return `${companyName.trim()} 事業概要`;
@@ -88,6 +90,7 @@ export interface CompanyFactsEnrichDeps {
   searchKnowledge?: (
     query: string,
     limit?: number,
+    namespace?: "personal" | "company" | "all",
   ) => Promise<{ hits: Array<{ text_content: string }> }>;
   /** Auto-resolve EDINET code from company name (no manual code). */
   fetchEdinetByName?: (args: {
@@ -120,10 +123,14 @@ export async function enrichCompanyFacts(
   let provenanceLabel: string | null = null;
   let attemptedNet = false;
 
-  // Offline RAG: local vault hits → empty businessSummary (no egress).
+  // Offline RAG: company namespace only — never pull LINE/daily personal chunks.
   if (next.businessSummary.trim().length === 0 && deps.searchKnowledge) {
     try {
-      const local = await deps.searchKnowledge(buildCompanyResearchQuery(name), 3);
+      const local = await deps.searchKnowledge(
+        buildCompanyResearchQuery(name),
+        3,
+        "company",
+      );
       const summary = summarizeKnowledgeHits(local.hits);
       if (summary) {
         next = mergeCompanyFactsPreferFilled(next, {
@@ -131,8 +138,10 @@ export async function enrichCompanyFacts(
           source: "local_rag",
         });
       }
-    } catch {
-      // vault / model cold — ignore
+      // hits=0 → leave businessSummary empty (never invent a placeholder).
+    } catch (err) {
+      // eslint-disable-next-line no-console -- intentional diagnostic
+      console.error("[companyFactsEnrich] local_rag lane failed:", err);
     }
   }
 
@@ -158,7 +167,7 @@ export async function enrichCompanyFacts(
       provenanceLabel = provenanceChipText(provenance);
       if (deps.searchKnowledge && next.businessSummary.trim().length === 0) {
         try {
-          const again = await deps.searchKnowledge(query, 3);
+          const again = await deps.searchKnowledge(query, 3, "company");
           const summary = summarizeKnowledgeHits(again.hits);
           if (summary) {
             next = mergeCompanyFactsPreferFilled(next, {
@@ -166,13 +175,15 @@ export async function enrichCompanyFacts(
               source: "wikipedia_research",
             });
           }
-        } catch {
-          // ignore
+        } catch (err) {
+          // eslint-disable-next-line no-console -- intentional diagnostic
+          console.error("[companyFactsEnrich] wikipedia_research lane failed:", err);
         }
       }
     }
-  } catch {
-    // EGRESS_LIVE_NOT_READY / policy race — continue
+  } catch (err) {
+    // eslint-disable-next-line no-console -- intentional diagnostic
+    console.error("[companyFactsEnrich] knowledgeResearch lane failed:", err);
   }
 
   // EDINET: company-name auto lookup (fills edinetCode + facts behind the scenes).
@@ -186,8 +197,9 @@ export async function enrichCompanyFacts(
       if (!provenanceLabel && edinet.source) {
         provenanceLabel = `🔗 EDINET (${edinet.source})`;
       }
-    } catch {
-      // keep offline / local_rag facts
+    } catch (err) {
+      // eslint-disable-next-line no-console -- intentional diagnostic
+      console.error("[companyFactsEnrich] edinet lane failed:", err);
     }
   }
 
