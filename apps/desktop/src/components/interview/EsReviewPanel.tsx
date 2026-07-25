@@ -27,10 +27,12 @@ export function EsReviewPanel({
   sharedFacts,
   onSharedFactsPatch,
   hideEmbeddedFactsForm = false,
+  preparingOverride,
 }: {
   sharedFacts?: CompanyFacts;
   onSharedFactsPatch?: (patch: Partial<CompanyFacts>) => void;
   hideEmbeddedFactsForm?: boolean;
+  preparingOverride?: boolean;
 } = {}) {
   const [state, dispatch] = useReducer(
     esReviewReducer,
@@ -46,11 +48,9 @@ export function EsReviewPanel({
     else dispatch({ type: "patch_facts", patch });
   }
 
-  const { researching, provenanceLabel, enrichNow } = useCompanyFactsEnrichment(
-    facts,
-    patchFacts,
-    !hideEmbeddedFactsForm,
-  );
+  const { researching, preparing: localPreparing, provenanceLabel, enrichNow } =
+    useCompanyFactsEnrichment(facts, patchFacts, !hideEmbeddedFactsForm);
+  const preparing = preparingOverride ?? localPreparing;
 
   const throttle = useThrottledStream((chunk) => {
     const id = reviewerIdRef.current;
@@ -207,6 +207,7 @@ export function EsReviewPanel({
             className="primary"
             disabled={
               state.streaming ||
+              preparing ||
               !state.esDraft.trim() ||
               !companyFactsReady(facts)
             }

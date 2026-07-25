@@ -43,6 +43,8 @@ export function useCompanyFactsEnrichment(
   enabled = true,
 ): {
   researching: boolean;
+  /** Alias of researching — blocks start/send only (inputs stay enabled). */
+  preparing: boolean;
   provenanceLabel: string | null;
   enrichNow: () => Promise<CompanyFactsEnrichResult>;
 } {
@@ -125,6 +127,8 @@ export function useCompanyFactsEnrichment(
       }
       return result;
     } catch (err) {
+      // eslint-disable-next-line no-console -- intentional diagnostic
+      console.error("[useCompanyFactsEnrichment] enrichNow failed:", err);
       if (seq === seqRef.current) {
         dispatchResearchUi({ kind: "FAIL", seq });
       }
@@ -132,8 +136,10 @@ export function useCompanyFactsEnrichment(
     }
   }
 
+  const researching = isResearching(researchUi);
   return {
-    researching: isResearching(researchUi),
+    researching,
+    preparing: researching,
     provenanceLabel,
     enrichNow,
   };

@@ -186,7 +186,10 @@ pub fn safe_truncate(s: &str, max_bytes: usize) -> String {
 // URL construction / send-time invariant (STEP 5.B)
 // ---------------------------------------------------------------------------
 
-fn percent_encode_query_param(s: &str) -> String {
+/// Percent-encode a query parameter value (RFC 3986 unreserved leave-as-is).
+/// `pub` so the second fixed Wikipedia template (`wiki_extract`) can share the
+/// encoder without reimplementing / widening URL construction.
+pub fn percent_encode_query_param(s: &str) -> String {
     let mut out = String::new();
     for b in s.as_bytes() {
         match *b {

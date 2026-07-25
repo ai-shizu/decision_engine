@@ -57,10 +57,12 @@ export function MultistageInterviewPanel({
   sharedFacts,
   onSharedFactsPatch,
   hideEmbeddedFactsForm = false,
+  preparingOverride,
 }: {
   sharedFacts?: CompanyFacts;
   onSharedFactsPatch?: (patch: Partial<CompanyFacts>) => void;
   hideEmbeddedFactsForm?: boolean;
+  preparingOverride?: boolean;
 } = {}) {
   const [state, dispatch] = useReducer(
     multistageInterviewReducer,
@@ -77,11 +79,13 @@ export function MultistageInterviewPanel({
   }
 
   // Shared form on narrow InterviewTab owns debounce; embedded form enriches here.
-  const { researching, provenanceLabel, enrichNow } = useCompanyFactsEnrichment(
-    facts,
-    patchFacts,
-    !hideEmbeddedFactsForm && !state.sessionId,
-  );
+  const { researching, preparing: localPreparing, provenanceLabel, enrichNow } =
+    useCompanyFactsEnrichment(
+      facts,
+      patchFacts,
+      !hideEmbeddedFactsForm && !state.sessionId,
+    );
+  const preparing = preparingOverride ?? localPreparing;
 
   const throttle = useThrottledStream((chunk) => {
     const id = assistantIdRef.current;
@@ -279,7 +283,7 @@ export function MultistageInterviewPanel({
             <button
               type="button"
               className="primary"
-              disabled={state.streaming || !companyFactsReady(facts)}
+              disabled={state.streaming || preparing || !companyFactsReady(facts)}
               onClick={() => void onStart()}
             >
               {state.streaming ? "開始中…" : "多段面接を開始"}
@@ -370,7 +374,7 @@ export function MultistageInterviewPanel({
             <button
               type="submit"
               className="primary"
-              disabled={state.streaming || !state.input.trim()}
+              disabled={state.streaming || preparing || !state.input.trim()}
             >
               {state.streaming
                 ? "生成中…"

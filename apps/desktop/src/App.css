@@ -1906,6 +1906,34 @@ button:disabled {
   color: var(--text-muted);
 }
 
+.company-facts-progress {
+  flex-wrap: wrap;
+}
+
+.company-facts-progress-track {
+  flex: 1 1 100%;
+  height: 3px;
+  margin-top: 4px;
+  background: var(--text-dim);
+  overflow: hidden;
+}
+
+.company-facts-progress-fill {
+  width: 40%;
+  height: 100%;
+  background: var(--accent);
+  animation: company-facts-progress-slide 1.6s steps(4) infinite;
+}
+
+@keyframes company-facts-progress-slide {
+  from {
+    transform: translateX(-100%);
+  }
+  to {
+    transform: translateX(350%);
+  }
+}
+
 /* 正方形アウトラインの段階回転 (許可ループ c) */
 .consult-research-spinner {
   width: 12px;

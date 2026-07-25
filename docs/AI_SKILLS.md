@@ -1737,6 +1737,35 @@ Python dispatch に足すな**（fetch は Rust 専有）。
   research は `setBusy(true)`（consult 本流）の**前**に走らせ、
   research 中に busy で入力を塞がないこと。
 
+### 7.2.4 Wikipedia レーン開通 + Company インクリメンタル・インジェスト（2026-07-25 監査承認）
+
+**採用 Path A**（スパイク根拠）: in-memory `run_migrations` 後、非 KNN
+`SELECT id, text_content, embedding FROM knowledge_chunks WHERE id = ?` で
+f32×384 LE を復元可能 → `list_source_chunks` / `VaultHandle::knowledge_list_source`。
+v11 `knowledge_embed_cache`（Path B）は**作らない**。
+
+不変条件（逸脱ではなく設計。善意の「一本化」は破壊）:
+
+1. **固定 URL テンプレートは 2 本**（search = `build_request`/`validate_outbound_url`、
+   extract = `wiki_extract::{build_extract_request,validate_extract_url}`）。キー集合の
+   緩和・共通化・片方だけの変更禁止。送信時再検証・重複キー拒否・`#`/`@` 拒否は同格。
+2. **E0b 認証 FSM（`research_fetch` / `AttestedIntentPayload` / `k_spawn`）は本番呼び出ししない。**
+   本番 producer 不在の同一プロセス自己署名は価値ゼロ。検証専用コードへ自己署名を足すな。
+3. **外向きクエリの原材料は企業名のみ**（`CompanyNameForWiki::from_company_name`）。
+   Vault 行・プロファイル型に `From`/`Into` を足すな — これが PII 保護の実体。
+4. **差分キーは本文ハッシュ**（`chunk_content_hash(chunk.text)` = SHA-256 hex）。
+   chunk id は位置ベース（`{source_id}::{index:04}`）のまま。位置シフトでも本文同一なら
+   再 Embedding しない。見出しだけ変わって本文同一の再利用は意図的コスト優先。
+5. **FE**: テキスト入力の `disabled` / モーダル禁止は維持。監査承認の例外として
+   Interview の**開始/送信ボタンのみ** `preparing`（=`isResearching`）で block 可。
+6. **既定ビルドは封鎖**: `knowledge_research` は policy Live ∧ `egress-live` ∧
+   Apple+pocket-brain+secure-vault でのみ Wikipedia→sanitize→`wiki-` Company 空間へ
+   インクリメンタル ingest。それ以外は `EGRESS_LIVE_NOT_READY`。receipt の exact-keys
+   （`schema`/`research_id`/`results_persisted`）変更禁止。
+
+**ハマりどころ**: `wiki_extract.rs` に `reqwest::` を名指しするな（憲章ガード）。
+  `ingest_text_blocking` / `ingest_company_knowledge` / search レーン関数は触るな。
+
 ---
 
 ## 8. Target Alpha: KV slot cache — RETIRED by FSA-2026-07-13-01/02

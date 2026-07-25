@@ -52,6 +52,7 @@ export function InterviewTab() {
   };
   const {
     researching: sharedResearching,
+    preparing: sharedPreparing,
     provenanceLabel: sharedProvenance,
   } = useCompanyFactsEnrichment(sharedFacts, patchSharedFacts, isNarrow);
 
@@ -132,6 +133,7 @@ export function InterviewTab() {
           sharedFacts={isNarrow ? sharedFacts : undefined}
           onSharedFactsPatch={isNarrow ? patchSharedFacts : undefined}
           hideEmbeddedFactsForm={isNarrow}
+          preparingOverride={isNarrow ? sharedPreparing : undefined}
           esText={esBase.esText}
           esBaseSlot={
             isNarrow ? null : (
@@ -153,6 +155,7 @@ export function InterviewTab() {
           sharedFacts={isNarrow ? sharedFacts : undefined}
           onSharedFactsPatch={isNarrow ? patchSharedFacts : undefined}
           hideEmbeddedFactsForm={isNarrow}
+          preparingOverride={isNarrow ? sharedPreparing : undefined}
         />
       )}
       {surface === "es_pocket" && (
@@ -160,6 +163,7 @@ export function InterviewTab() {
           sharedFacts={isNarrow ? sharedFacts : undefined}
           onSharedFactsPatch={isNarrow ? patchSharedFacts : undefined}
           hideEmbeddedFactsForm={isNarrow}
+          preparingOverride={isNarrow ? sharedPreparing : undefined}
         />
       )}
       {surface === "coliseum" && <ColiseumRoot />}

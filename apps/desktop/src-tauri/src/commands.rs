@@ -466,13 +466,218 @@ pub async fn knowledge_policy_set(
 pub async fn knowledge_research(
     store: State<'_, NetworkPolicyStore>,
     request: KnowledgeResearchRequest,
+    #[cfg(all(
+        feature = "pocket-brain",
+        feature = "secure-vault",
+        target_vendor = "apple"
+    ))]
+    app: tauri::AppHandle,
+    #[cfg(all(
+        feature = "pocket-brain",
+        feature = "secure-vault",
+        target_vendor = "apple"
+    ))]
+    vault: State<'_, crate::db::VaultHandle>,
+    #[cfg(all(
+        feature = "pocket-brain",
+        feature = "secure-vault",
+        target_vendor = "apple"
+    ))]
+    llm: State<'_, crate::llm::LlmHandle>,
 ) -> Result<Value, String> {
     request.validate()?;
     refuse_if_policy_off(store.get()).map_err(|e| e.to_string())?;
     refuse_if_egress_unavailable().map_err(|e| e.to_string())?;
-    // Full live pipeline (intent → fetch → integrate) ships with egress-live ACK;
-    // until wired end-to-end, fail closed after both gates pass.
-    Err("EGRESS_LIVE_NOT_READY".to_string())
+
+    #[cfg(all(
+        feature = "egress-live",
+        feature = "pocket-brain",
+        feature = "secure-vault",
+        target_vendor = "apple"
+    ))]
+    {
+        return knowledge_research_wiki_live(app, vault, llm, request).await;
+    }
+
+    #[cfg(not(all(
+        feature = "egress-live",
+        feature = "pocket-brain",
+        feature = "secure-vault",
+        target_vendor = "apple"
+    )))]
+    {
+        #[cfg(all(
+            feature = "pocket-brain",
+            feature = "secure-vault",
+            target_vendor = "apple"
+        ))]
+        {
+            let _ = (app, vault, llm, request);
+        }
+        #[cfg(not(all(
+            feature = "pocket-brain",
+            feature = "secure-vault",
+            target_vendor = "apple"
+        )))]
+        {
+            let _ = request;
+        }
+        Err("EGRESS_LIVE_NOT_READY".to_string())
+    }
+}
+
+/// Wikipedia search → extract → sanitize → Company-namespace incremental ingest.
+/// E0b FSM / attestation / self-signing intentionally unused (audit-approved).
+#[cfg(all(
+    feature = "egress-live",
+    feature = "pocket-brain",
+    feature = "secure-vault",
+    target_vendor = "apple"
+))]
+async fn knowledge_research_wiki_live(
+    app: tauri::AppHandle,
+    vault: State<'_, crate::db::VaultHandle>,
+    llm: State<'_, crate::llm::LlmHandle>,
+    request: KnowledgeResearchRequest,
+) -> Result<Value, String> {
+    use std::time::Duration;
+
+    use sha2::{Digest, Sha256};
+
+    use crate::db::knowledge_namespace::{namespace_of, KnowledgeNamespace};
+    use crate::knowledge::net_gateway::{
+        fetch_bounded_with_deadline, fetch_one, validate_response_meta, HttpTransport,
+        ReqwestTransport, MAX_TITLE_BYTES,
+    };
+    use crate::knowledge::render_guard::sanitize_external_text;
+    use crate::knowledge::wiki_extract::{
+        build_extract_request, extract_page_text, validate_extract_url, wiki_sections_to_markdown,
+        CompanyNameForWiki, WIKI_EXTRACT_CHARS, WIKI_EXTRACT_DEADLINE_SECS,
+    };
+    use crate::llm::commands_consult::ensure_model_loaded;
+    use crate::rag::commands_rag::{
+        ingest_text_incremental_blocking, validate_source_id, wiki_source_id,
+    };
+
+    const WIKI_BODY_SANITIZE_MAX: usize = WIKI_EXTRACT_CHARS.saturating_mul(4);
+    const SEARCH_DEADLINE: Duration = Duration::from_secs(WIKI_EXTRACT_DEADLINE_SECS);
+    const EXTRACT_DEADLINE: Duration = Duration::from_secs(WIKI_EXTRACT_DEADLINE_SECS);
+
+    let query = serde_json::to_value(&request)
+        .ok()
+        .and_then(|v| {
+            v.get("query")
+                .and_then(|q| q.as_str())
+                .map(str::to_string)
+        })
+        .ok_or_else(|| "invalid query".to_string())?;
+
+    let company_q = CompanyNameForWiki::from_company_name(&query).map_err(|e| {
+        log::error!("knowledge_research: company name rejected: {e}");
+        e.to_string()
+    })?;
+
+    let transport = ReqwestTransport::new().map_err(|e| {
+        log::error!("knowledge_research: transport init failed: {e}");
+        e.to_string()
+    })?;
+
+    let search_hits = fetch_one(
+        &transport,
+        company_q.as_str(),
+        std::future::pending::<()>(),
+        SEARCH_DEADLINE,
+    )
+    .await
+    .map_err(|e| {
+        log::error!("knowledge_research: search failed: {e}");
+        e.to_string()
+    })?;
+
+    let research_id = {
+        let mut hasher = Sha256::new();
+        hasher.update(company_q.as_str().as_bytes());
+        hasher.update(b"|wiki-research|");
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        hasher.update(nanos.to_le_bytes());
+        hex::encode(hasher.finalize())
+    };
+
+    let Some(first) = search_hits.first() else {
+        return Ok(serde_json::json!({
+            "schema": "knowledge_research_receipt.v1",
+            "research_id": research_id,
+            "results_persisted": 0,
+        }));
+    };
+
+    let title_raw = first.title.clone();
+    let extract_url = build_extract_request(&title_raw);
+    validate_extract_url(&extract_url, &title_raw).map_err(|e| {
+        log::error!("knowledge_research: extract url violation: {e}");
+        e.to_string()
+    })?;
+
+    let (meta, body) = transport.get(&extract_url).await.map_err(|e| {
+        log::error!("knowledge_research: extract GET failed: {e}");
+        e.to_string()
+    })?;
+    validate_response_meta(&meta).map_err(|e| {
+        log::error!("knowledge_research: extract meta rejected: {e}");
+        e.to_string()
+    })?;
+    let raw = fetch_bounded_with_deadline(body, std::future::pending::<()>(), EXTRACT_DEADLINE)
+        .await
+        .map_err(|e| {
+            log::error!("knowledge_research: extract body failed: {e}");
+            e.to_string()
+        })?;
+    let plain = extract_page_text(&raw).map_err(|e| {
+        log::error!("knowledge_research: extract parse failed: {e}");
+        e.to_string()
+    })?;
+    let markdown = wiki_sections_to_markdown(&plain);
+
+    let title = sanitize_external_text(&title_raw, MAX_TITLE_BYTES).map_err(|e| {
+        log::error!("knowledge_research: title sanitize failed: {e:?}");
+        format!("{e:?}").to_ascii_lowercase()
+    })?;
+    let body_text = sanitize_external_text(&markdown, WIKI_BODY_SANITIZE_MAX).map_err(|e| {
+        log::error!("knowledge_research: body sanitize failed: {e:?}");
+        format!("{e:?}").to_ascii_lowercase()
+    })?;
+
+    let source_id = wiki_source_id(&title);
+    validate_source_id(&source_id)?;
+    if namespace_of(&format!("{source_id}::0000")) != KnowledgeNamespace::Company {
+        log::error!("knowledge_research: namespace not Company for sid={source_id}");
+        return Err("wiki source_id namespace check failed".into());
+    }
+
+    let ingest_text = format!("## {title}\n\n{body_text}");
+    ensure_model_loaded(&app, &llm).await?;
+
+    let vault = vault.inner().clone();
+    let llm = llm.inner().clone();
+    let sid = source_id.clone();
+    let result = tauri::async_runtime::spawn_blocking(move || {
+        ingest_text_incremental_blocking(&vault, &llm, &ingest_text, &sid)
+    })
+    .await
+    .map_err(|_| "knowledge_research ingest join failed".to_string())?
+    .map_err(|e| {
+        log::error!("knowledge_research: ingest failed: {e}");
+        e
+    })?;
+
+    Ok(serde_json::json!({
+        "schema": "knowledge_research_receipt.v1",
+        "research_id": research_id,
+        "results_persisted": result.chunk_count,
+    }))
 }
 
 #[tauri::command]

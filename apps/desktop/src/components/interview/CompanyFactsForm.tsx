@@ -59,9 +59,12 @@ export function CompanyFactsForm({
         企業名を入れると EDINET コードを自動特定し、必要に応じて情報を補強します。
       </p>
       {researching && (
-        <p className="consult-research-ambient" role="status">
-          企業情報を補強中…
-        </p>
+        <div className="consult-research-ambient company-facts-progress" role="status">
+          <span>企業情報を補強中…</span>
+          <div className="company-facts-progress-track" aria-hidden="true">
+            <div className="company-facts-progress-fill" />
+          </div>
+        </div>
       )}
       {provenanceLabel && !researching && (
         <p className="consult-research-ambient provenance-chip" role="status">

@@ -46,6 +46,18 @@ fn embedding_blob(embedding: &[f32]) -> Result<Vec<u8>, RepositoryError> {
     Ok(bytes)
 }
 
+fn embedding_from_blob(blob: &[u8]) -> Option<Vec<f32>> {
+    if blob.len() != KNOWLEDGE_EMBEDDING_DIMS * 4 {
+        return None;
+    }
+    let mut out = Vec::with_capacity(KNOWLEDGE_EMBEDDING_DIMS);
+    for chunk in blob.chunks_exact(4) {
+        let arr: [u8; 4] = chunk.try_into().ok()?;
+        out.push(f32::from_le_bytes(arr));
+    }
+    Some(out)
+}
+
 /// Replace every chunk whose id is prefixed by `source_id::`, then insert `rows`
 /// inside the caller's transaction.
 pub(crate) fn replace_source_chunks(
@@ -129,6 +141,50 @@ pub(crate) fn search_chunks(
     Ok(hits)
 }
 
+/// Non-KNN listing of all chunks for a `source_id` prefix (`{source_id}::%`).
+/// Used by incremental ingest to reuse existing embeddings (Path A).
+pub(crate) fn list_source_chunks(
+    connection: &Connection,
+    source_id: &str,
+) -> Result<Vec<KnowledgeChunkRow>, RepositoryError> {
+    if source_id.contains('%') || source_id.contains('_') {
+        return Err(RepositoryError::StorageFailed);
+    }
+    let pattern = format!("{source_id}::%");
+    let mut statement = connection
+        .prepare(
+            "SELECT id, text_content, embedding, created_at \
+             FROM knowledge_chunks \
+             WHERE id LIKE ?1",
+        )
+        .map_err(map_storage_error)?;
+    let rows = statement
+        .query_map(params![pattern], |row| {
+            let id: String = row.get(0)?;
+            let text_content: String = row.get::<_, Option<String>>(1)?.unwrap_or_default();
+            let emb_blob: Vec<u8> = row.get(2)?;
+            let created_at: i64 = row.get::<_, Option<i64>>(3)?.unwrap_or(0);
+            Ok((id, text_content, emb_blob, created_at))
+        })
+        .map_err(map_storage_error)?;
+
+    let mut out = Vec::new();
+    for row in rows {
+        let (id, text_content, emb_blob, created_at) = row.map_err(map_storage_error)?;
+        // Drop rows whose embedding blob is not exactly f32×384 (do not reuse).
+        let Some(embedding) = embedding_from_blob(&emb_blob) else {
+            continue;
+        };
+        out.push(KnowledgeChunkRow {
+            id,
+            text_content,
+            embedding,
+            created_at,
+        });
+    }
+    Ok(out)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -206,5 +262,32 @@ mod tests {
         let all = search_chunks(&connection, &q, 10, KnowledgeNamespace::All)?;
         assert!(all.len() >= 2, "All should return mixed hits, got {}", all.len());
         Ok(())
+    }
+
+    /// Step 0 spike (kept as Path A regression): non-KNN SELECT restores embedding.
+    #[test]
+    fn spike_select_embedding_column_roundtrip() -> Result<(), Box<dyn Error>> {
+        let mut connection = Connection::open_in_memory()?;
+        run_migrations(&mut connection)?;
+        let expected = emb(0.42);
+        insert_chunk(&connection, "edinet-spike::0000", "spike text", 0.42)?;
+
+        let listed = list_source_chunks(&connection, "edinet-spike")?;
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].id, "edinet-spike::0000");
+        assert_eq!(listed[0].text_content, "spike text");
+        assert_eq!(listed[0].embedding.len(), KNOWLEDGE_EMBEDDING_DIMS);
+        for (a, b) in expected.iter().zip(listed[0].embedding.iter()) {
+            assert!((a - b).abs() < 1e-6);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn list_source_chunks_rejects_like_metachar() {
+        let mut connection = Connection::open_in_memory().unwrap();
+        run_migrations(&mut connection).unwrap();
+        assert!(list_source_chunks(&connection, "bad%id").is_err());
+        assert!(list_source_chunks(&connection, "bad_id").is_err());
     }
 }

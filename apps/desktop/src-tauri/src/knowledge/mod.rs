@@ -20,6 +20,7 @@ pub mod orchestrator;
 pub mod pii_snapshot;
 pub mod policy_store;
 pub mod render_guard;
+pub mod wiki_extract;
 
 pub use attestation::{attestation_framing, verify_tag};
 pub use canonicalize::canonicalize_for_match;

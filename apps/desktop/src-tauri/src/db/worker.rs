@@ -146,6 +146,8 @@ enum VaultReply {
     MessagesList(Result<Vec<MessageRecord>, VaultErrorCode>),
     KnowledgeReplace(Result<usize, VaultErrorCode>),
     KnowledgeSearch(Result<Vec<KnowledgeSearchHit>, VaultErrorCode>),
+    #[allow(dead_code)] // Path A incremental ingest (egress-live knowledge_research)
+    KnowledgeListSource(Result<Vec<KnowledgeChunkRow>, VaultErrorCode>),
     GapAnalysisInsert(Result<(), VaultErrorCode>),
     GapAnalysisLatest(Result<Option<GapAnalysisRow>, VaultErrorCode>),
     TensorProfileInsert(Result<(), VaultErrorCode>),
@@ -217,6 +219,12 @@ enum VaultRequest {
         embedding: Vec<f32>,
         limit: u32,
         namespace: crate::db::KnowledgeNamespace,
+        control: RequestControl,
+        reply: SyncSender<VaultReply>,
+    },
+    #[allow(dead_code)] // Path A incremental ingest (egress-live knowledge_research)
+    KnowledgeListSource {
+        source_id: String,
         control: RequestControl,
         reply: SyncSender<VaultReply>,
     },
@@ -623,6 +631,28 @@ impl VaultHandle {
         };
         match self.submit(request, receiver, cancelled, SHORT_OPERATION_TIMEOUT)? {
             VaultReply::KnowledgeSearch(result) => result,
+            _ => Err(VaultErrorCode::Unavailable),
+        }
+    }
+
+    /// List all chunks for `source_id` (non-KNN) for incremental embed reuse.
+    #[allow(dead_code)] // Called from rag incremental ingest under egress-live
+    pub(crate) fn knowledge_list_source(
+        &self,
+        source_id: String,
+    ) -> Result<Vec<KnowledgeChunkRow>, VaultErrorCode> {
+        let (reply_sender, receiver) = mpsc::sync_channel(1);
+        let cancelled = Arc::new(AtomicBool::new(false));
+        let request = VaultRequest::KnowledgeListSource {
+            source_id,
+            control: RequestControl {
+                deadline: Instant::now() + SHORT_OPERATION_TIMEOUT,
+                cancelled: Arc::clone(&cancelled),
+            },
+            reply: reply_sender,
+        };
+        match self.submit(request, receiver, cancelled, SHORT_OPERATION_TIMEOUT)? {
+            VaultReply::KnowledgeListSource(result) => result,
             _ => Err(VaultErrorCode::Unavailable),
         }
     }
@@ -1227,6 +1257,18 @@ impl VaultWorker {
                     };
                     let _ = reply.send(VaultReply::KnowledgeSearch(result));
                 }
+                VaultRequest::KnowledgeListSource {
+                    source_id,
+                    control,
+                    reply,
+                } => {
+                    let result = if request_expired(&control) {
+                        Err(VaultErrorCode::Timeout)
+                    } else {
+                        self.list_knowledge_source(source_id)
+                    };
+                    let _ = reply.send(VaultReply::KnowledgeListSource(result));
+                }
                 VaultRequest::GapAnalysisInsert {
                     row,
                     control,
@@ -1712,6 +1754,23 @@ impl VaultWorker {
         let outcome = self.read_repository(|connection| {
             knowledge_repo::search_chunks(connection, &embedding, limit, namespace)
         });
+        self.resolve_repository(outcome)
+    }
+
+    #[allow(dead_code)] // Path A: VaultHandle::knowledge_list_source → incremental ingest
+    fn list_knowledge_source(
+        &mut self,
+        source_id: String,
+    ) -> Result<Vec<KnowledgeChunkRow>, VaultErrorCode> {
+        gate(snapshot_status(&self.status))?;
+        if source_id.is_empty() || source_id.len() > TITLE_MAX_BYTES {
+            return Err(VaultErrorCode::InvalidInput);
+        }
+        if source_id.contains('%') || source_id.contains('_') {
+            return Err(VaultErrorCode::InvalidInput);
+        }
+        let outcome = self
+            .read_repository(|connection| knowledge_repo::list_source_chunks(connection, &source_id));
         self.resolve_repository(outcome)
     }
 

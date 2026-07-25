@@ -135,7 +135,7 @@ fn now_unix_secs() -> i64 {
         .unwrap_or(0)
 }
 
-fn validate_source_id(source_id: &str) -> Result<(), String> {
+pub(crate) fn validate_source_id(source_id: &str) -> Result<(), String> {
     let trimmed = source_id.trim();
     if trimmed.is_empty() || trimmed.len() > MAX_SOURCE_ID_BYTES {
         return Err("invalid source_id".into());
@@ -377,6 +377,127 @@ fn ingest_text_blocking(
         truncated,
         part_count: 1,
     })
+}
+
+/// Body-only content hash (SHA-256 hex). Sole incremental-diff key.
+///
+/// Known limitation (intentional): hash is `chunk.text` only. If a heading
+/// changes while the body is identical, the prior vector is reused — embed
+/// cost reduction over title fidelity.
+#[cfg_attr(not(feature = "egress-live"), allow(dead_code))]
+fn chunk_content_hash(text: &str) -> String {
+    use sha2::{Digest, Sha256};
+    hex::encode(Sha256::digest(text.as_bytes()))
+}
+
+/// Resolve embeddings for chunks, reusing `prior` hits keyed by [`chunk_content_hash`].
+/// Returns `(embeddings aligned to chunks, number of embed() calls)`.
+///
+/// Injectable `embed` enables unit tests to count calls without a live `LlmHandle`.
+#[cfg_attr(not(feature = "egress-live"), allow(dead_code))]
+fn resolve_incremental_embeddings<E>(
+    chunks: &[super::chunk::TextChunk],
+    source_id: &str,
+    prior: &HashMap<String, Vec<f32>>,
+    mut embed: E,
+) -> Result<(Vec<Vec<f32>>, usize), String>
+where
+    E: FnMut(&str) -> Result<Vec<f32>, String>,
+{
+    let mut embeddings = Vec::with_capacity(chunks.len());
+    let mut embed_calls = 0usize;
+    for chunk in chunks {
+        let embed_input = if chunk.title == source_id {
+            chunk.text.clone()
+        } else {
+            format!("{}\n\n{}", chunk.title, chunk.text)
+        };
+        let hash = chunk_content_hash(&chunk.text);
+        if let Some(existing) = prior.get(&hash) {
+            embeddings.push(existing.clone());
+        } else {
+            embed_calls = embed_calls.saturating_add(1);
+            embeddings.push(embed(&embed_input)?);
+        }
+    }
+    Ok((embeddings, embed_calls))
+}
+
+/// Incremental ingest (Path A): list existing source rows → reuse embeddings by
+/// body hash → replace all rows. DB write is cheap; embed is the expensive part.
+#[cfg_attr(not(feature = "egress-live"), allow(dead_code))]
+pub(crate) fn ingest_text_incremental_blocking(
+    vault: &VaultHandle,
+    llm: &LlmHandle,
+    text: &str,
+    source_id: &str,
+) -> Result<IngestKnowledgeResult, String> {
+    let chunks = chunk_markdown(text, source_id);
+    if chunks.is_empty() {
+        return Err("no chunks produced".into());
+    }
+    let truncated = chunks.len() >= MAX_CHUNKS;
+
+    let existing = vault
+        .knowledge_list_source(source_id.to_string())
+        .map_err(map_vault_err)?;
+    let mut prior: HashMap<String, Vec<f32>> = HashMap::new();
+    for row in existing {
+        // First-seen hash wins; later duplicate bodies share the same vector.
+        prior
+            .entry(chunk_content_hash(&row.text_content))
+            .or_insert(row.embedding);
+    }
+
+    let (embeddings, _embed_calls) =
+        resolve_incremental_embeddings(&chunks, source_id, &prior, |input| {
+            embed_for_knowledge(llm, input)
+        })?;
+
+    let created_at = now_unix_secs();
+    let mut rows = Vec::with_capacity(chunks.len());
+    for (chunk, embedding) in chunks.iter().zip(embeddings.into_iter()) {
+        rows.push(KnowledgeChunkRow {
+            id: chunk.id.clone(),
+            text_content: chunk.text.clone(),
+            embedding,
+            created_at,
+        });
+    }
+
+    let inserted = vault
+        .knowledge_replace(source_id.to_string(), rows)
+        .map_err(map_vault_err)?;
+
+    Ok(IngestKnowledgeResult {
+        source_id: source_id.to_string(),
+        chunk_count: chunks.len(),
+        inserted,
+        truncated,
+        part_count: 1,
+    })
+}
+
+/// Wikipedia lane → Company namespace `source_id` (`wiki-` prefix, same sanitize
+/// rules as [`company_source_id`]). Prefix is applied after sanitize so it cannot
+/// be trimmed away; runtime `namespace_of` must still be checked by the caller.
+#[cfg_attr(not(feature = "egress-live"), allow(dead_code))]
+pub(crate) fn wiki_source_id(title: &str) -> String {
+    let mapped: String = title
+        .chars()
+        .map(|c| if matches!(c, '%' | '_' | ':') { '-' } else { c })
+        .collect();
+    let body = mapped.trim_matches('-');
+    let body = if body.is_empty() { "unknown" } else { body };
+    let id = format!("wiki-{body}");
+    if id.len() <= MAX_SOURCE_ID_BYTES {
+        return id;
+    }
+    let mut end = MAX_SOURCE_ID_BYTES;
+    while end > 0 && !id.is_char_boundary(end) {
+        end -= 1;
+    }
+    id[..end].to_string()
 }
 
 /// Ingest markdown/plain text: chunk → embed each → transactional vault replace.
@@ -957,5 +1078,112 @@ mod tests {
             KnowledgeNamespace::Company
         );
         assert!(validate_source_id(&sid2).is_ok());
+    }
+
+    #[test]
+    fn chunk_content_hash_stable_and_distinct() {
+        let a = chunk_content_hash("同一本文");
+        let b = chunk_content_hash("同一本文");
+        let c = chunk_content_hash("別本文");
+        assert_eq!(a, b);
+        assert_ne!(a, c);
+        assert_eq!(a.len(), 64);
+    }
+
+    #[test]
+    fn incremental_second_pass_embeds_zero_times() {
+        let source_id = "wiki-inc-test";
+        let text = "## 概要\n本文Aです。\n\n## 沿革\n本文Bです。";
+        let chunks = chunk_markdown(text, source_id);
+        assert!(chunks.len() >= 2);
+
+        let mut calls = 0usize;
+        let (emb1, n1) = resolve_incremental_embeddings(
+            &chunks,
+            source_id,
+            &HashMap::new(),
+            |_| {
+                calls += 1;
+                Ok(vec![0.1f32; 384])
+            },
+        )
+        .unwrap();
+        assert_eq!(n1, chunks.len());
+        assert_eq!(calls, chunks.len());
+
+        let mut prior = HashMap::new();
+        for (chunk, emb) in chunks.iter().zip(emb1.iter()) {
+            prior.insert(chunk_content_hash(&chunk.text), emb.clone());
+        }
+
+        calls = 0;
+        let (_emb2, n2) = resolve_incremental_embeddings(
+            &chunks,
+            source_id,
+            &prior,
+            |_| {
+                calls += 1;
+                Ok(vec![0.9f32; 384])
+            },
+        )
+        .unwrap();
+        assert_eq!(n2, 0, "second pass must reuse all embeddings");
+        assert_eq!(calls, 0);
+    }
+
+    #[test]
+    fn incremental_position_shift_reuses_existing_bodies() {
+        let source_id = "wiki-shift-test";
+        let text1 = "## 概要\n不変本文です。\n\n## 沿革\n別の不変本文。";
+        let text2 = "## 新節\n新規だけ埋め込む。\n\n## 概要\n不変本文です。\n\n## 沿革\n別の不変本文。";
+        let chunks1 = chunk_markdown(text1, source_id);
+        let chunks2 = chunk_markdown(text2, source_id);
+        assert!(chunks2.len() > chunks1.len());
+
+        let mut prior = HashMap::new();
+        let (emb1, _) = resolve_incremental_embeddings(&chunks1, source_id, &prior, |_| {
+            Ok(vec![0.25f32; 384])
+        })
+        .unwrap();
+        for (chunk, emb) in chunks1.iter().zip(emb1.iter()) {
+            prior.insert(chunk_content_hash(&chunk.text), emb.clone());
+        }
+
+        let mut calls = 0usize;
+        let (_emb2, n2) = resolve_incremental_embeddings(&chunks2, source_id, &prior, |_| {
+            calls += 1;
+            Ok(vec![0.5f32; 384])
+        })
+        .unwrap();
+        // Only the newly inserted section body should embed.
+        assert_eq!(n2, 1, "only the new section should embed; got {n2}");
+        assert_eq!(calls, 1);
+    }
+
+    #[test]
+    fn wiki_source_id_namespace_and_sanitize_cases() {
+        use crate::db::knowledge_namespace::{namespace_of, KnowledgeNamespace};
+
+        let cases = [
+            ("Toyota", true),
+            ("A%B_C:D", true),
+            ("", true), // falls back to wiki-unknown
+            ("マッキンゼー", true),
+            (&"あ".repeat(400), true),
+        ];
+        for (title, _) in cases {
+            let sid = wiki_source_id(title);
+            assert!(
+                sid.starts_with("wiki-"),
+                "prefix must survive sanitize: {sid}"
+            );
+            assert!(validate_source_id(&sid).is_ok(), "sid={sid}");
+            assert_eq!(
+                namespace_of(&format!("{sid}::0000")),
+                KnowledgeNamespace::Company
+            );
+            assert!(!sid.contains('%') && !sid.contains('_') && !sid.contains(':'));
+            assert!(sid.len() <= MAX_SOURCE_ID_BYTES);
+        }
     }
 }

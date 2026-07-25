@@ -147,12 +147,15 @@ export function InterviewPocketPanel({
   sharedFacts,
   onSharedFactsPatch,
   hideEmbeddedFactsForm = false,
+  preparingOverride,
   esText = "",
   esBaseSlot = null,
 }: {
   sharedFacts?: CompanyFacts;
   onSharedFactsPatch?: (patch: Partial<CompanyFacts>) => void;
   hideEmbeddedFactsForm?: boolean;
+  /** When parent owns enrichment (narrow shared form), pass preparing here. */
+  preparingOverride?: boolean;
   /** Optional ES body injected into interviewer prompt. */
   esText?: string;
   /** Desktop: ES picker rendered above company facts. Mobile: null (parent owns). */
@@ -168,11 +171,9 @@ export function InterviewPocketPanel({
     else dispatch({ type: "patch_facts", patch });
   }
 
-  const { researching, provenanceLabel, enrichNow } = useCompanyFactsEnrichment(
-    facts,
-    patchFacts,
-    !hideEmbeddedFactsForm,
-  );
+  const { researching, preparing: localPreparing, provenanceLabel, enrichNow } =
+    useCompanyFactsEnrichment(facts, patchFacts, !hideEmbeddedFactsForm);
+  const preparing = preparingOverride ?? localPreparing;
 
   const throttle = useThrottledStream((chunk) => {
     const id = assistantIdRef.current;
@@ -339,6 +340,7 @@ export function InterviewPocketPanel({
             className="primary"
             disabled={
               state.streaming ||
+              preparing ||
               !state.input.trim() ||
               !companyFactsReady(facts)
             }
