@@ -22,10 +22,15 @@ use crate::llm::commands_consult::ensure_model_loaded;
 use crate::llm::context_budget::USER_TURN_MARKERS;
 use crate::llm::params::GenerationParams;
 use crate::llm::prompt_budget::fit_and_verify_prompt;
-use crate::llm::prompt_sim::{build_es_review_prompt, build_interview_prompt, ExperienceRef};
+use crate::llm::prompt_sim::{
+    build_company_analysis_prompt, build_es_review_prompt, build_interview_prompt,
+    build_session_memory_prompt, ExperienceRef,
+};
 use crate::llm::service::TokenEvent;
 use crate::llm::LlmHandle;
-use crate::rag::commands_rag::search_sync;
+use crate::rag::commands_rag::{
+    ingest_text_incremental_blocking, search_sync, validate_source_id, IngestKnowledgeResult,
+};
 use crate::rag::namespace::KnowledgeNamespace;
 
 const MAX_TEXT_BYTES: usize = 64 * 1024;
@@ -729,7 +734,12 @@ fn build_machine_prompt(
     prompt.push_str(&render_company_facts_block(facts));
 
     if is_debrief {
-        prompt.push_str("\n## 参考情報（Vault 自動探索・講評専用）\n");
+        prompt.push_str(
+            "\n## 参考情報（Vault 自動探索・講評専用）\n\
+（この候補者の過去セッションから抽出された記憶と、日常の記録が混在している。\n\
+静的なプロフィールと最新の記憶を区別せず、一体の人物像として解釈せよ。\n\
+記録に無いことを補完するな。矛盾があれば、その矛盾自体を指摘せよ。）\n",
+        );
         if refs.is_empty() {
             prompt.push_str("（該当する知識チャンクは見つかりませんでした）\n");
         } else {
@@ -1104,3 +1114,291 @@ pub async fn get_interview_session(
         .await
         .map_err(|_| "get_interview_session join failed".to_string())?
 }
+
+/// Company-namespace dashboard analysis (delayed evaluation; never auto-runs).
+#[tauri::command]
+pub async fn analyze_company_knowledge(
+    app: AppHandle,
+    vault: State<'_, VaultHandle>,
+    llm: State<'_, LlmHandle>,
+    company_name: String,
+    on_token: Channel<TokenEvent>,
+) -> Result<SimSessionResult, String> {
+    let company_name = company_name.trim().to_string();
+    if company_name.is_empty() || company_name.len() > MAX_TEXT_BYTES {
+        return Err("invalid company_name".into());
+    }
+    ensure_model_loaded(&app, &llm).await?;
+
+    let (_, mut gen) = resolve_gen(None);
+    let vault_h = vault.inner().clone();
+    let llm_fit = llm.inner().clone();
+    let governor = llm.inner().governor();
+    let n_ctx = gen.n_ctx;
+    let max_tokens = gen.max_tokens;
+    let name_for_search = company_name.clone();
+
+    let (prompt, context_ids, verified_tokens) =
+        tauri::async_runtime::spawn_blocking(move || {
+            let hits = search_sync(
+                &vault_h,
+                &llm_fit,
+                &name_for_search,
+                8,
+                KnowledgeNamespace::Company,
+            )?;
+            if hits.is_empty() {
+                return Ok((String::new(), Vec::<String>::new(), None::<usize>));
+            }
+            let refs: Vec<ExperienceRef<'_>> = hits
+                .iter()
+                .map(|hit| ExperienceRef {
+                    id: hit.id.as_str(),
+                    text: hit.text_content.as_str(),
+                })
+                .collect();
+            let prompt = build_company_analysis_prompt(&name_for_search, &refs);
+            let (prompt, verified_tokens) = fit_and_verify_prompt(
+                &llm_fit,
+                governor.as_ref(),
+                prompt,
+                n_ctx,
+                max_tokens,
+                &["## 分析対象"],
+                "company_analysis",
+            );
+            let ids: Vec<String> = hits.into_iter().map(|h| h.id).collect();
+            Ok::<_, String>((prompt, ids, verified_tokens))
+        })
+        .await
+        .map_err(|e| {
+            log::error!("company_analysis: prompt-build join failed: {e}");
+            "company_analysis join failed".to_string()
+        })?
+        .map_err(|e| {
+            log::error!("company_analysis: prompt-build error: {e}");
+            e
+        })?;
+
+    if context_ids.is_empty() {
+        return Ok(SimSessionResult {
+            context_ids,
+            context_count: 0,
+            company_name,
+            facts_source: String::new(),
+        });
+    }
+
+    gen.prompt = prompt;
+    log::info!(
+        "company_analysis: llm.generate (prompt_len={}, prompt_tokens={:?})",
+        gen.prompt.len(),
+        verified_tokens
+    );
+    llm.generate(gen, None, on_token).await.map_err(|e| {
+        log::error!("company_analysis: generate failed: {e}");
+        e
+    })?;
+
+    Ok(SimSessionResult {
+        context_count: context_ids.len(),
+        context_ids,
+        company_name,
+        facts_source: "company_vault".into(),
+    })
+}
+
+/// Personal-namespace session memory (background; no FE stream).
+#[tauri::command]
+pub async fn ingest_session_memory(
+    app: AppHandle,
+    vault: State<'_, VaultHandle>,
+    llm: State<'_, LlmHandle>,
+    transcript: String,
+    session_kind: String,
+) -> Result<IngestKnowledgeResult, String> {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::{Arc, Mutex};
+
+    use tauri::ipc::InvokeResponseBody;
+
+    use crate::db::knowledge_namespace::{namespace_of, KnowledgeNamespace as Ns};
+
+    let transcript = transcript.trim().to_string();
+    if transcript.is_empty() || transcript.len() > MAX_TEXT_BYTES {
+        return Err("invalid transcript".into());
+    }
+    let session_kind = session_kind.trim().to_string();
+    if session_kind != "interview" && session_kind != "consult" {
+        return Err("invalid session_kind".into());
+    }
+    ensure_model_loaded(&app, &llm).await?;
+
+    let (_, mut gen) = resolve_gen(None);
+    let llm_fit = llm.inner().clone();
+    let governor = llm.inner().governor();
+    let n_ctx = gen.n_ctx;
+    let max_tokens = gen.max_tokens;
+    let kind_for_prompt = session_kind.clone();
+    let transcript_for_prompt = transcript.clone();
+
+    let (prompt, verified_tokens) = tauri::async_runtime::spawn_blocking(move || {
+        let prompt = build_session_memory_prompt(&kind_for_prompt, &transcript_for_prompt);
+        let (prompt, verified_tokens) = fit_and_verify_prompt(
+            &llm_fit,
+            governor.as_ref(),
+            prompt,
+            n_ctx,
+            max_tokens,
+            &["## 対話ログ"],
+            "session_memory",
+        );
+        Ok::<_, String>((prompt, verified_tokens))
+    })
+    .await
+    .map_err(|e| {
+        log::error!("session_memory: prompt-build join failed: {e}");
+        "session_memory join failed".to_string()
+    })?
+    .map_err(|e| {
+        log::error!("session_memory: prompt-build error: {e}");
+        e
+    })?;
+
+    let acc = Arc::new(Mutex::new(String::new()));
+    let failed = Arc::new(AtomicBool::new(false));
+    let sink = Arc::clone(&acc);
+    let fail_flag = Arc::clone(&failed);
+    let collector = Channel::new(move |body| {
+        if fail_flag.load(Ordering::SeqCst) {
+            return Ok(());
+        }
+        match body {
+            InvokeResponseBody::Json(json) => {
+                let Ok(value) = serde_json::from_str::<serde_json::Value>(&json) else {
+                    return Ok(());
+                };
+                if value
+                    .get("error")
+                    .map(|e| !e.is_null())
+                    .unwrap_or(false)
+                {
+                    fail_flag.store(true, Ordering::SeqCst);
+                    if let Ok(mut g) = sink.lock() {
+                        g.clear();
+                    }
+                    return Ok(());
+                }
+                if let Some(text) = value.get("text").and_then(|t| t.as_str()) {
+                    if !text.is_empty() {
+                        if let Ok(mut g) = sink.lock() {
+                            g.push_str(text);
+                        }
+                    }
+                }
+            }
+            InvokeResponseBody::Raw(_) => {}
+        }
+        Ok(())
+    });
+
+    gen.prompt = prompt;
+    log::info!(
+        "session_memory: llm.generate (prompt_len={}, prompt_tokens={:?})",
+        gen.prompt.len(),
+        verified_tokens
+    );
+    llm.generate(gen, None, collector).await.map_err(|e| {
+        log::error!("session_memory: generate failed: {e}");
+        e
+    })?;
+
+    if failed.load(Ordering::SeqCst) {
+        return Ok(IngestKnowledgeResult {
+            source_id: String::new(),
+            chunk_count: 0,
+            inserted: 0,
+            truncated: false,
+            part_count: 0,
+        });
+    }
+
+    let memory_text = acc
+        .lock()
+        .map_err(|_| "session_memory accumulator lock poisoned".to_string())?
+        .clone();
+    if memory_text.trim().is_empty() {
+        return Ok(IngestKnowledgeResult {
+            source_id: String::new(),
+            chunk_count: 0,
+            inserted: 0,
+            truncated: false,
+            part_count: 0,
+        });
+    }
+
+    let sid = memory_source_id(&session_kind, &transcript);
+    validate_source_id(&sid)?;
+    if namespace_of(&format!("{sid}::0000")) != Ns::Personal {
+        return Err("memory source_id namespace check failed".into());
+    }
+
+    let vault_h = vault.inner().clone();
+    let llm_h = llm.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        ingest_text_incremental_blocking(&vault_h, &llm_h, &memory_text, &sid)
+    })
+    .await
+    .map_err(|_| "session_memory ingest join failed".to_string())?
+}
+
+/// `memory-{kind}-{yyyy-mm-dd}-{sha256[:16]}` — must stay Personal (`memory-` prefix).
+pub(crate) fn memory_source_id(session_kind: &str, transcript: &str) -> String {
+    use sha2::{Digest, Sha256};
+    let digest = hex::encode(Sha256::digest(transcript.as_bytes()));
+    let short = digest.get(..16).unwrap_or("0000000000000000");
+    let date = utc_ymd_today();
+    format!("memory-{session_kind}-{date}-{short}")
+}
+
+/// UTC calendar date YYYY-MM-DD (no chrono dependency).
+fn utc_ymd_today() -> String {
+    let secs = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    // Civil date from Unix day count (Howard Hinnant).
+    let z = (secs / 86_400).saturating_add(719_468);
+    let era = z / 146_097;
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146_096) / 365;
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let y = if m <= 2 { y + 1 } else { y };
+    format!("{y:04}-{m:02}-{d:02}")
+}
+
+#[cfg(test)]
+mod memory_id_tests {
+    use super::memory_source_id;
+    use crate::db::knowledge_namespace::{namespace_of, KnowledgeNamespace};
+
+    #[test]
+    fn memory_source_id_is_personal_not_company() {
+        let sid = memory_source_id("interview", "hello transcript");
+        assert!(sid.starts_with("memory-interview-"));
+        assert_eq!(
+            namespace_of(&format!("{sid}::0000")),
+            KnowledgeNamespace::Personal
+        );
+        // Trap: knowledge- is Company — never use for session memory.
+        assert_eq!(
+            namespace_of("knowledge-interview-2026-07-25-deadbeef::0000"),
+            KnowledgeNamespace::Company
+        );
+    }
+}
+

@@ -5,6 +5,7 @@ import { useCompanyFactsEnrichment } from "../lib/useCompanyFactsEnrichment";
 import { useInterviewEsBase } from "../lib/useInterviewEsBase";
 import { useIsNarrowViewport } from "../lib/useIsNarrowViewport";
 import { ColiseumRoot } from "./consult/coliseum";
+import { CompanyDashboardPanel } from "./interview/CompanyDashboardPanel";
 import { CompanyFactsForm } from "./interview/CompanyFactsForm";
 import { EsReviewPanel } from "./interview/EsReviewPanel";
 import { InterviewEsBaseForm } from "./interview/InterviewEsBaseForm";
@@ -12,7 +13,12 @@ import { InterviewPocketPanel } from "./interview/InterviewPocketPanel";
 import { MultistageInterviewPanel } from "./interview/MultistageInterviewPanel";
 
 // M18-E: Interview tab is Coraxis-only (Python consult dual-stack removed).
-type InterviewSurface = "interview_pocket" | "multistage" | "es_pocket" | "coliseum";
+type InterviewSurface =
+  | "interview_pocket"
+  | "multistage"
+  | "es_pocket"
+  | "coliseum"
+  | "company";
 
 const MODES: { id: InterviewSurface; label: string; shortLabel: string; hint: string }[] = [
   {
@@ -38,6 +44,12 @@ const MODES: { id: InterviewSurface; label: string; shortLabel: string; hint: st
     label: "[ GD闘技 ]",
     shortLabel: "[ GD ]",
     hint: "グループディスカッションの闘技シミュレーション。",
+  },
+  {
+    id: "company",
+    label: "[ 企業DB ]",
+    shortLabel: "[ 企業 ]",
+    hint: "取得済み企業データを面接対策ダッシュボードに構造化します。",
   },
 ];
 
@@ -126,6 +138,21 @@ export function InterviewTab() {
             provenanceLabel={sharedProvenance}
           />
         </div>
+      )}
+
+      {surface === "company" && !isNarrow && (
+        <div className="interview-shared-context">
+          <CompanyFactsForm
+            facts={sharedFacts}
+            onPatch={patchSharedFacts}
+            researching={sharedResearching}
+            provenanceLabel={sharedProvenance}
+          />
+        </div>
+      )}
+
+      {surface === "company" && (
+        <CompanyDashboardPanel companyName={sharedFacts.companyName} />
       )}
 
       {surface === "interview_pocket" && (

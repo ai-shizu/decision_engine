@@ -261,6 +261,10 @@ pub fn build_consult_with_oracle_prompt(
     out.push_str("\n## Oracle予測（決定論・Vault）\n");
     out.push_str(&mentor.oracle_block);
     if !rag_block.is_empty() {
+        out.push_str(
+            "\n（参考情報には、過去セッションから抽出された記憶と日常記録が混在する。\n\
+一体の人物像として解釈し、記録に無いことを補完するな。）\n",
+        );
         out.push_str("\n");
         out.push_str(rag_block);
     }

@@ -8,6 +8,7 @@ import { interviewFallbackFor } from "../../lib/interviewFallback";
 import {
   advanceInterviewStage,
   getInterviewSession,
+  ingestSessionMemory,
   startMultistageInterview,
 } from "../../lib/pocketBrain";
 import type { CompanyFacts, MultistageInterviewResult } from "../../lib/pocketBrain/types";
@@ -196,6 +197,7 @@ export function MultistageInterviewPanel({
 
     const terminal = createStreamTerminalGate(STREAM_TERMINAL_TIMEOUT_MS);
     let errored = false;
+    let streamedAssistant = "";
     try {
       const result = await advanceInterviewStage(
         { sessionId: state.sessionId, candidateAnswer: answer },
@@ -224,6 +226,7 @@ export function MultistageInterviewPanel({
             return;
           }
           if (event.text) {
+            streamedAssistant += event.text;
             throttle.push(event.text);
           }
         },
@@ -234,6 +237,27 @@ export function MultistageInterviewPanel({
       if (!errored) {
         if (result.outcome === "closed" || result.stage === "closed") {
           dispatch({ type: "session_closed", result });
+          // Closure `state.messages` is pre-advance; append this turn's answer + stream.
+          const transcript = state.messages
+            .filter((m) => m.role === "candidate" || m.role === "interviewer")
+            .map((m) => `${m.role}: ${m.text}`)
+            .concat([`candidate: ${answer}`])
+            .concat(
+              streamedAssistant.trim()
+                ? [`interviewer: ${streamedAssistant}`]
+                : [],
+            )
+            .filter((line) => line.trim().length > 0)
+            .join("\n");
+          if (transcript.trim()) {
+            void ingestSessionMemory(transcript, "interview").catch((err) => {
+              // eslint-disable-next-line no-console -- intentional diagnostic
+              console.error(
+                "[MultistageInterviewPanel] session memory ingest failed:",
+                err,
+              );
+            });
+          }
         } else {
           dispatch({ type: "advance_success", assistantId, result });
         }

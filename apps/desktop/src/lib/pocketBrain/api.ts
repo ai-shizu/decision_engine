@@ -469,6 +469,31 @@ export function getInterviewSession(
   return pocketInvoke("get_interview_session", { sessionId });
 }
 
+/** Company-namespace dashboard analysis (streams tokens). */
+export function analyzeCompanyKnowledge(
+  companyName: string,
+  onToken: (event: TokenEvent) => void,
+): Promise<SimSessionResult> {
+  return pocketInvoke("analyze_company_knowledge", {
+    companyName,
+    onToken: tokenChannel(onToken),
+  });
+}
+
+/**
+ * Background Personal-namespace memory ingest (no UI stream).
+ * Soft-fail at call sites — never block interview UX.
+ */
+export function ingestSessionMemory(
+  transcript: string,
+  sessionKind: "interview" | "consult",
+): Promise<IngestKnowledgeResult> {
+  return pocketInvoke("ingest_session_memory", {
+    transcript,
+    sessionKind,
+  });
+}
+
 /** Persist a GBNF-validated CBT extraction report into vault `distortion_tags`. */
 export async function recordCognitiveDistortions(args: {
   report: CognitiveDistortionReportV1;

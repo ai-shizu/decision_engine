@@ -1781,6 +1781,20 @@ v11 `knowledge_embed_cache`（Path B）は**作らない**。
   テストの無効化を防ぐため、文字列の「逐語一致」ではなく「`verify-first` の意味論を満たす
   語彙が含まれているか」を判定する述語ベース（Predicate-based）の検査へ作り直すこと。
 
+### 7.2.6 Phase 4 — Company ダッシュボードと Personal 記憶統合（2026-07-25）
+
+1. **記憶 source_id は `memory-` 接頭辞のみ。`knowledge-` を使うな。**
+   `namespace_of` は `knowledge-` / `wiki-` 等を Company と判定する。セッション記憶を
+   誤って `knowledge-…` にすると Personal 隔離が静かに壊れ、Company 検索に混入する。
+   `memory_source_id` + 実行時 `namespace_of == Personal` のフェイルクローズドが回帰ガード。
+2. **Personal 記憶の参照範囲は Debrief と CONSULT のみ。** Foundation / Pressure /
+   ES レビュー / GD への注入は禁止のまま（`_assert_no_gap_leak` と同格）。
+   `INTERVIEWER_PERSONA` と `build_machine_prompt` の非 Debrief 枝は変更禁止。
+3. **企業分析は非永続・遅延評価。** `analyze_company_knowledge` は Company 名前空間のみ
+   検索し、結果を新規テーブルに書かない。マウント時の自動実行禁止。
+4. **記憶抽出プロンプトは抽出項目を列挙しない。** 定型スキーマ（「以下の項目を抽出」等）を
+   足すことは第3条違反。観点の自由裁量そのものが設計であり、スキーマ化は退化。
+
 ---
 
 ## 8. Target Alpha: KV slot cache — RETIRED by FSA-2026-07-13-01/02

@@ -1,7 +1,7 @@
 import { useEffect, useReducer, useRef } from "react";
 
 import { cancelGeneration } from "../../lib/llm";
-import { sendRagChat } from "../../lib/pocketBrain";
+import { ingestSessionMemory, sendRagChat } from "../../lib/pocketBrain";
 import {
   initialRagChatState,
   ragChatReducer,
@@ -198,6 +198,20 @@ export function RagChatPanel({
     }
   }
 
+  function onRememberConsult() {
+    if (state.streaming) return;
+    const transcript = state.messages
+      .filter((m) => m.role === "user" || m.role === "assistant")
+      .map((m) => `${m.role}: ${m.text}`)
+      .filter((line) => line.trim().length > 0)
+      .join("\n");
+    if (!transcript.trim()) return;
+    void ingestSessionMemory(transcript, "consult").catch((err) => {
+      // eslint-disable-next-line no-console -- intentional diagnostic
+      console.error("[RagChatPanel] session memory ingest failed:", err);
+    });
+  }
+
   return (
     <div
       className={
@@ -213,6 +227,16 @@ export function RagChatPanel({
         modelReady={modelReady}
         variant={variant}
       />
+      <div className="action-row">
+        <button
+          type="button"
+          className="ghost"
+          disabled={state.streaming || state.messages.length === 0}
+          onClick={onRememberConsult}
+        >
+          この相談を記憶する
+        </button>
+      </div>
       {!messenger ? <RagIngestPanel modelReady={modelReady} /> : null}
       {state.error ? (
         <p className="rag-chat-error error-text" role="alert">

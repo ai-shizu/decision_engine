@@ -352,6 +352,18 @@ pub fn run() {
                 target_vendor = "apple"
             ))]
             llm::commands_sim::get_interview_session,
+            #[cfg(all(
+                feature = "pocket-brain",
+                feature = "secure-vault",
+                target_vendor = "apple"
+            ))]
+            llm::commands_sim::analyze_company_knowledge,
+            #[cfg(all(
+                feature = "pocket-brain",
+                feature = "secure-vault",
+                target_vendor = "apple"
+            ))]
+            llm::commands_sim::ingest_session_memory,
             #[cfg(all(feature = "secure-vault", target_vendor = "apple"))]
             commands_db::vault_status,
             #[cfg(all(feature = "secure-vault", target_vendor = "apple"))]
