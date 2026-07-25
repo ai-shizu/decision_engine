@@ -1795,6 +1795,41 @@ v11 `knowledge_embed_cache`（Path B）は**作らない**。
 4. **記憶抽出プロンプトは抽出項目を列挙しない。** 定型スキーマ（「以下の項目を抽出」等）を
    足すことは第3条違反。観点の自由裁量そのものが設計であり、スキーマ化は退化。
 
+### 7.2.7 iOS 実機 E2E で判明した 4 つの不変条件（2026-07-25・実機検証済み）
+
+Phase 2〜4 の実機投入で初めて露見した。いずれも**デスクトップと CI では一切再現しない**。
+
+1. **`egress-live` の iOS ビルドでは、プロセス起動時に `CryptoProvider` を必ず登録する。**
+   `egress-live` は reqwest を `rustls-no-provider` でビルドするため、rustls に既定の暗号
+   プロバイダが無い。未登録のまま TLS クライアントが構築されると rustls が panic し、iOS では
+   それが `did_finish_launching`（`extern "C"`）の内側で起きるため巻き戻せず
+   `panic_cannot_unwind` → **起動即 SIGABRT**。`lib.rs::run()` の冒頭で
+   `rustls::crypto::ring::default_provider().install_default()` を呼ぶこと。この行を消すな。
+   なお panic メッセージは `StdoutRedirector` 経由で os_log の **Info レベル**に落ちるため、
+   Console.app の既定（エラーのみ）では**見えない**。これが診断を最も遅らせた。
+2. **iOS で hickory-resolver は使えない。** `TokioResolver::builder_tokio()` はシステムの
+   リゾルバ設定を読むが、アプリサンドボックス内では読めず構築に失敗する。iOS は
+   `SystemLookup`（`getaddrinfo` を `spawn_blocking`）を使う。**SSRF 保証は不変**:
+   `SafeKnowledgeResolver` が `enforce_deny_table` を適用し、reqwest はその戻り値にしか
+   接続しない。ホスト名を reqwest 既定リゾルバへ直接渡す「簡略化」は deny-table のバイパス。
+3. **`GatewayError` の変種を集約するな。** かつて「リゾルバ構築失敗」「名前解決失敗」
+   「deny-table 拒否」の 3 つが全て `DnsDenied` に潰され、実機では
+   `"resolved IP(s) denied by SSRF deny-table"` と表示された。名前解決は一度も行われて
+   おらず拒否された IP も存在しないのに、調査を**「SSRF ガードを緩めろ」へ誤誘導した**。
+   `DnsDenied` は実際に deny-table が拒否した時のみ。`DnsResolverInit` /
+   `DnsLookupFailed` と混ぜるな。**エラーの集約はセキュリティガードを壊す方向に効く。**
+4. **`sanitize_external_text` は空入力を拒否する。** 「非空の外部入力が無害化後に空＝全部
+   剥ぎ取られた＝敵対的」という正しい契約だが、**未取得フィールド（`""`）を通すと
+   誤判定になる**。`CompanyFacts` は company_name だけ埋まった状態が正常なので、
+   `sanitize_optional_field`（空は空のまま通す）を使うこと。これを怠ると
+   `fetch_edinet_company_facts` がネットワークにもファイルにも到達する前に
+   `edinet_malformed` で失敗する（実機で発生。デスクトップでも同条件なら同じく壊れる）。
+
+**モバイルの構造的事実**: `settings_get` / `es_list` 等の Python エンジン proxy は iOS で
+必ず `"PKB エンジンが ready ではありません"` を返す（サイドカーが存在しない設計）。
+純 Rust コマンド（`knowledge_policy_get/set` 等）をこの try ブロック内にネストするな。
+実機で永続化された設定が一度も読まれないまま UI 初期値が固定される（設定トグル無反応の真因）。
+
 ---
 
 ## 8. Target Alpha: KV slot cache — RETIRED by FSA-2026-07-13-01/02

@@ -114,6 +114,20 @@ fn install_stderr_logger() {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     install_stderr_logger();
+
+    // `egress-live` builds reqwest with `rustls-no-provider`, so rustls has NO
+    // compiled-in default CryptoProvider. Any TLS client constructed before one
+    // is installed panics ("no process-level CryptoProvider available"). On iOS
+    // that panic happens inside the `extern "C"` UIApplicationDelegate callback
+    // (`did_finish_launching`), where it cannot unwind → `panic_cannot_unwind`
+    // → SIGABRT at launch (2026-07-25 device crash). Install once, here, before
+    // anything can build a client. `ReqwestTransport::new`'s own call then
+    // becomes a no-op (it already discards the Result).
+    #[cfg(feature = "egress-live")]
+    {
+        let _ = rustls::crypto::ring::default_provider().install_default();
+    }
+
     let engine = EngineManager::new();
     let engine_for_exit = Arc::clone(&engine);
 

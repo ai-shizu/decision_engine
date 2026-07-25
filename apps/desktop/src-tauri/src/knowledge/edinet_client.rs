@@ -555,23 +555,33 @@ pub fn merge_company_facts(
     sanitize_company_facts(&facts)
 }
 
+/// Sanitize one optional fact field. An **empty** field means "not fetched yet",
+/// which is a legitimate state — not malformed external input. `sanitize_external_text`
+/// rejects empty/whitespace-only strings (`render_guard.rs`: an empty result from a
+/// non-empty external payload means everything was stripped, i.e. hostile), so passing
+/// a natively-empty field into it turned every partially-filled `CompanyFacts` into
+/// `edinet_malformed`. That is exactly what `fetch_edinet_company_facts` builds
+/// (company_name only, all other fields `""`), so the EDINET lane failed before any
+/// network or file access ever happened (2026-07-25 device E2E). Empty in ⇒ empty out;
+/// non-empty input keeps the full fail-closed sanitize.
+fn sanitize_optional_field(value: &str, max_bytes: usize) -> Result<String, EdinetError> {
+    if value.trim().is_empty() {
+        return Ok(String::new());
+    }
+    sanitize_external_text(value, max_bytes).map_err(|_| EdinetError::Malformed)
+}
+
 /// Fail-closed sanitize of all fact fields (external evidence discipline).
 pub fn sanitize_company_facts(facts: &CompanyFacts) -> Result<CompanyFacts, EdinetError> {
-    let company_name = sanitize_external_text(&facts.company_name, MAX_FACT_FIELD_BYTES)
-        .map_err(|_| EdinetError::Malformed)?;
-    let edinet_code = sanitize_external_text(&facts.edinet_code, 64)
-        .map_err(|_| EdinetError::Malformed)?;
-    let doc_id = sanitize_external_text(&facts.doc_id, 64).map_err(|_| EdinetError::Malformed)?;
+    let company_name = sanitize_optional_field(&facts.company_name, MAX_FACT_FIELD_BYTES)?;
+    let edinet_code = sanitize_optional_field(&facts.edinet_code, 64)?;
+    let doc_id = sanitize_optional_field(&facts.doc_id, 64)?;
     let business_summary =
-        sanitize_external_text(&facts.business_summary, MAX_FACT_FIELD_BYTES)
-            .map_err(|_| EdinetError::Malformed)?;
-    let business_risks = sanitize_external_text(&facts.business_risks, MAX_FACT_FIELD_BYTES)
-        .map_err(|_| EdinetError::Malformed)?;
+        sanitize_optional_field(&facts.business_summary, MAX_FACT_FIELD_BYTES)?;
+    let business_risks = sanitize_optional_field(&facts.business_risks, MAX_FACT_FIELD_BYTES)?;
     let performance_summary =
-        sanitize_external_text(&facts.performance_summary, MAX_FACT_FIELD_BYTES)
-            .map_err(|_| EdinetError::Malformed)?;
-    let source =
-        sanitize_external_text(&facts.source, 64).map_err(|_| EdinetError::Malformed)?;
+        sanitize_optional_field(&facts.performance_summary, MAX_FACT_FIELD_BYTES)?;
+    let source = sanitize_optional_field(&facts.source, 64)?;
 
     let total = company_name
         .len()

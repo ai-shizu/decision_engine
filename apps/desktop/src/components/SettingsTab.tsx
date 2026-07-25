@@ -71,6 +71,18 @@ export function SettingsTab({
   const [policyBusy, setPolicyBusy] = useState(false);
   const [waitingEngine, setWaitingEngine] = useState(false);
 
+  /// Read the persisted NetworkPolicy. Independent of the Python engine so it
+  /// still runs on iOS (see the call site in `fetchSettings`).
+  async function loadKnowledgePolicy(): Promise<void> {
+    try {
+      const policy = await withTimeout(getKnowledgeResearchPolicy(), 1500);
+      setKnowledgeResearchEnabled(policy.enabled);
+    } catch (err) {
+      // eslint-disable-next-line no-console -- intentional diagnostic (原則3)
+      console.error("[SettingsTab] knowledge policy load failed:", err);
+    }
+  }
+
   async function probeReady(budgetMs: number): Promise<boolean> {
     if (engineReady) return true;
     const deadline = Date.now() + budgetMs;
@@ -106,17 +118,20 @@ export function SettingsTab({
     if (isNarrow) {
       // Instant local shell — never block or scare on mobile.
       applySettings(localSettingsShell(readLocalFixedAttributes()));
+      // NetworkPolicy is a pure-Rust command (`knowledge_policy_get`) and works on
+      // iOS, where `loadSettings()` (a Python-engine proxy) can never succeed —
+      // there is no sidecar on mobile by design. Nesting the policy read inside
+      // the settings try meant it was never reached on device, so the toggle was
+      // stuck at its initial `false` no matter what was persisted (2026-07-25
+      // device E2E). Read it independently, before and regardless of the engine.
+      await loadKnowledgePolicy();
       try {
         const s = await withTimeout(loadSettings(), SETTINGS_LOAD_TIMEOUT_MS);
         applySettings(s);
         writeLocalFixedAttributes({ ...s.fixed_attributes });
-        try {
-          const policy = await withTimeout(getKnowledgeResearchPolicy(), 1500);
-          setKnowledgeResearchEnabled(policy.enabled);
-        } catch {
-          /* optional */
-        }
-      } catch {
+      } catch (err) {
+        // eslint-disable-next-line no-console -- intentional diagnostic (原則3)
+        console.error("[SettingsTab] settings load failed (mobile shell):", err);
         /* stay on local shell — seamless */
       }
       return;
@@ -135,17 +150,14 @@ export function SettingsTab({
       // branch above) so on-device CONSULT sees current Vault-saved basics
       // even when the user hasn't re-hit Save this session.
       writeLocalFixedAttributes({ ...s.fixed_attributes });
-      try {
-        const policy = await withTimeout(getKnowledgeResearchPolicy(), 1500);
-        setKnowledgeResearchEnabled(policy.enabled);
-      } catch {
-        /* best-effort */
-      }
+      await loadKnowledgePolicy();
       if (!ready) {
         setStatusKind("info");
         setStatus("一部の保存機能は後から有効になります。");
       }
-    } catch {
+    } catch (err) {
+      // eslint-disable-next-line no-console -- intentional diagnostic (原則3)
+      console.error("[SettingsTab] settings load failed:", err);
       applySettings(localSettingsShell(readLocalFixedAttributes()));
       setLoadError("");
       setStatusKind("info");
@@ -174,7 +186,9 @@ export function SettingsTab({
     try {
       await saveFixedAttributes(attrs);
       setSaveNotice({ text: "基本情報を保存しました", kind: "success" });
-    } catch {
+    } catch (err) {
+      // eslint-disable-next-line no-console -- intentional diagnostic (原則3)
+      console.error("[SettingsTab] saveFixedAttributes failed:", err);
       if (isNarrow) {
         setSaveNotice({ text: "基本情報を端末に保存しました", kind: "success" });
       } else {
@@ -190,7 +204,11 @@ export function SettingsTab({
     try {
       const policy = await setKnowledgeResearchPolicy(enabled);
       setKnowledgeResearchEnabled(policy.enabled);
-    } catch {
+    } catch (err) {
+      // eslint-disable-next-line no-console -- intentional diagnostic (原則3).
+      // This exact catch swallowed the 2026-07-25 device failure: the toggle
+      // appeared inert with nothing in the console to act on.
+      console.error("[SettingsTab] knowledge policy save failed:", err);
       setStatusKind("error");
       setStatus("外部検索の同意設定を保存できませんでした");
     } finally {

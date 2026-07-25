@@ -76,10 +76,29 @@ async function invokeEngine<T>(
   request?: Record<string, unknown>,
   cid?: number,
 ): Promise<T> {
-  const raw = request === undefined
-    ? await invoke<unknown>(command)
-    : await invoke<unknown>(command, { request, cid: cid ?? null });
-  return parser(raw);
+  let raw: unknown;
+  try {
+    raw = request === undefined
+      ? await invoke<unknown>(command)
+      : await invoke<unknown>(command, { request, cid: cid ?? null });
+  } catch (cause) {
+    // Lessons-learned rule (2026-07-24 context-budget hunt, re-confirmed by the
+    // 2026-07-25 device E2E where the NetworkPolicy toggle failed in total
+    // silence): surface the RAW IPC error before any caller can swallow it.
+    // `pocketInvoke` has had this since Phase 1; this engine lane did not, so
+    // every failure on it was invisible.
+    // eslint-disable-next-line no-console -- intentional diagnostic (see above)
+    console.error(`[invokeEngine] invoke("${command}") failed:`, cause);
+    throw cause;
+  }
+  try {
+    return parser(raw);
+  } catch (cause) {
+    // A parser rejection is just as invisible as a transport failure.
+    // eslint-disable-next-line no-console -- intentional diagnostic (see above)
+    console.error(`[invokeEngine] parse of "${command}" response failed:`, cause, raw);
+    throw cause;
+  }
 }
 
 

@@ -47,7 +47,17 @@ pub const WIKI_PATH: &str = "/w/api.php";
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum GatewayError {
     UrlViolation,
+    /// The SSRF deny-table actually rejected a resolved address. **Only** this
+    /// variant may be reported as a deny-table rejection. Collapsing resolver
+    /// construction / lookup failures into it produced a message that blamed the
+    /// deny-table for a failure where no address was ever resolved, and pointed a
+    /// device investigation at "loosen the SSRF guard" (2026-07-25 device E2E).
     DnsDenied,
+    /// The DNS resolver could not be constructed (e.g. system resolver config is
+    /// unreadable inside the iOS app sandbox). No lookup was attempted.
+    DnsResolverInit,
+    /// The hostname lookup itself failed (NXDOMAIN / no network / timeout).
+    DnsLookupFailed,
     WireViolation,
     StatusRejected,
     Malformed,
@@ -62,6 +72,10 @@ impl std::fmt::Display for GatewayError {
         match self {
             Self::UrlViolation => write!(f, "outbound URL violates fixed-template invariant"),
             Self::DnsDenied => write!(f, "resolved IP(s) denied by SSRF deny-table"),
+            Self::DnsResolverInit => {
+                write!(f, "DNS resolver init failed (no lookup attempted)")
+            }
+            Self::DnsLookupFailed => write!(f, "DNS lookup failed for host"),
             Self::WireViolation => write!(f, "response wire violates identity/size contract"),
             Self::StatusRejected => write!(f, "response status/content-type rejected"),
             Self::Malformed => write!(f, "response body malformed"),
@@ -457,14 +471,24 @@ mod live {
     };
 
     /// Production DNS lookup via hickory-resolver (real network; egress-live only).
+    /// Unused on iOS — see [`SystemLookup`] and `ReqwestTransport::new` — but kept
+    /// compiled there so the two lookup paths cannot drift apart unnoticed.
+    #[cfg_attr(target_os = "ios", allow(dead_code))]
     pub struct HickoryLookup {
         inner: hickory_resolver::TokioResolver,
     }
 
+    #[cfg_attr(target_os = "ios", allow(dead_code))]
     impl HickoryLookup {
         pub fn new() -> Result<Self, GatewayError> {
+            // Reads the system resolver config; unreadable inside the iOS app
+            // sandbox. Must NOT report as a deny-table rejection — nothing was
+            // resolved, so nothing could have been denied.
             let inner = hickory_resolver::TokioResolver::builder_tokio()
-                .map_err(|_| GatewayError::DnsDenied)?
+                .map_err(|e| {
+                    log::error!("dns: resolver init failed: {e}");
+                    GatewayError::DnsResolverInit
+                })?
                 .build();
             Ok(Self { inner })
         }
@@ -480,7 +504,10 @@ mod live {
                 let response = inner
                     .lookup_ip(host)
                     .await
-                    .map_err(|_| GatewayError::DnsDenied)?;
+                    .map_err(|e| {
+                        log::error!("dns: lookup failed: {e}");
+                        GatewayError::DnsLookupFailed
+                    })?;
                 let mut addrs = Vec::new();
                 for ip in response.iter() {
                     addrs.push(SocketAddr::new(ip, 443));
@@ -490,11 +517,65 @@ mod live {
         }
     }
 
+    /// OS resolver (`getaddrinfo`) lookup. Used on iOS, where hickory cannot read
+    /// the system resolver config inside the app sandbox — device evidence
+    /// (2026-07-25): `HickoryLookup::new()` failed before any lookup, surfacing as
+    /// `DnsResolverInit`. Apple's resolver works in-sandbox and honours the
+    /// device's real DNS settings (Wi-Fi/cellular/VPN).
+    ///
+    /// **The SSRF guarantee is unchanged**: this only supplies candidate
+    /// addresses. [`SafeKnowledgeResolver`] still runs [`enforce_deny_table`] on
+    /// them, and reqwest connects only to what that returns — so the deny-table
+    /// and the DNS-rebinding TOCTOU closure both remain in force. Do NOT
+    /// "simplify" by handing the host straight to reqwest's default resolver;
+    /// that would bypass the deny-table entirely.
+    #[cfg_attr(not(target_os = "ios"), allow(dead_code))]
+    pub struct SystemLookup;
+
+    impl AsyncLookup for SystemLookup {
+        fn lookup(
+            &self,
+            host: String,
+        ) -> Pin<Box<dyn Future<Output = Result<Vec<SocketAddr>, GatewayError>> + Send + '_>> {
+            Box::pin(async move {
+                // getaddrinfo is blocking — keep it off the async runtime.
+                let resolved = tokio::task::spawn_blocking(move || {
+                    use std::net::ToSocketAddrs;
+                    (host.as_str(), 443u16)
+                        .to_socket_addrs()
+                        .map(|it| it.collect::<Vec<SocketAddr>>())
+                })
+                .await
+                .map_err(|e| {
+                    log::error!("dns: system lookup join failed: {e}");
+                    GatewayError::DnsLookupFailed
+                })?
+                .map_err(|e| {
+                    log::error!("dns: system lookup failed: {e}");
+                    GatewayError::DnsLookupFailed
+                })?;
+                if resolved.is_empty() {
+                    log::error!("dns: system lookup returned no addresses");
+                    return Err(GatewayError::DnsLookupFailed);
+                }
+                Ok(resolved)
+            })
+        }
+    }
+
     pub struct ReqwestTransport {
         client: reqwest::Client,
     }
 
     impl ReqwestTransport {
+        /// iOS: OS resolver (hickory cannot init in-sandbox). Elsewhere: hickory,
+        /// unchanged. Both feed the same deny-table via `SafeKnowledgeResolver`.
+        #[cfg(target_os = "ios")]
+        pub fn new() -> Result<Self, GatewayError> {
+            Self::with_lookup(SystemLookup)
+        }
+
+        #[cfg(not(target_os = "ios"))]
         pub fn new() -> Result<Self, GatewayError> {
             Self::with_lookup(HickoryLookup::new()?)
         }
