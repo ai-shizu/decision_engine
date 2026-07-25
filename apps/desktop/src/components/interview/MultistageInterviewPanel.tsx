@@ -4,7 +4,7 @@ import { CompanyFactsForm } from "./CompanyFactsForm";
 import { InterviewStageRail } from "./InterviewStageRail";
 import { todayIso } from "../../lib/dateUtils";
 import { companyFactsReady } from "../../lib/interviewStage";
-import { redactHiddenReasoning } from "../../lib/redactHiddenReasoning";
+import { interviewFallbackFor } from "../../lib/interviewFallback";
 import {
   advanceInterviewStage,
   getInterviewSession,
@@ -15,38 +15,21 @@ import {
   initialMultistageInterviewState,
   multistageInterviewReducer,
 } from "../../lib/multistageInterviewReducer";
-import { uiErrorMessage } from "../../lib/uiErrorMessages";
+import {
+  extractHiddenReasoning,
+  interviewReasoningMode,
+  visibleBody,
+} from "../../lib/reasoningVisibility";
+import { createStreamTerminalGate } from "../../lib/streamTerminalGate";
 import { useCompanyFactsEnrichment } from "../../lib/useCompanyFactsEnrichment";
 import { useThrottledStream } from "../../lib/useThrottledStream";
+
+const STREAM_TERMINAL_TIMEOUT_MS = 180_000;
 
 let nextMsgId = 1;
 function allocId(prefix: string): string {
   nextMsgId += 1;
   return `${prefix}-${nextMsgId}`;
-}
-
-function handleTokenStream(
-  event: { text: string; done: boolean; error: string | null },
-  throttle: {
-    push: (t: string) => void;
-    drainAndStop: () => void;
-    flushAndStop: () => void;
-  },
-  onError: (message: string) => void,
-): void {
-  if (event.error) {
-    // eslint-disable-next-line no-console -- intentional diagnostic
-    console.error("[MultistageInterviewPanel] stream error event:", event.error);
-    onError(event.error);
-    return;
-  }
-  if (event.done) {
-    throttle.drainAndStop();
-    return;
-  }
-  if (event.text) {
-    throttle.push(event.text);
-  }
 }
 
 /**
@@ -143,6 +126,8 @@ export function MultistageInterviewPanel({
     }
 
     const edinetDate = todayIso();
+    const terminal = createStreamTerminalGate(STREAM_TERMINAL_TIMEOUT_MS);
+    let errored = false;
     try {
       const result = await startMultistageInterview(
         {
@@ -151,36 +136,45 @@ export function MultistageInterviewPanel({
           edinetDate,
         },
         (event) => {
+          if (!terminal.isPending()) return;
           if (event.error) {
             // eslint-disable-next-line no-console -- intentional diagnostic
             console.error("[MultistageInterviewPanel] onStart stream error:", event.error);
-            dispatch({
-              type: "token_error",
-              message: uiErrorMessage("INTERVIEW_RESPONSE"),
-            });
+            const fb = interviewFallbackFor(event.error);
+            errored = true;
+            throttle.flushAndStop();
+            dispatch({ type: "token_error", message: fb.message });
+            terminal.settle();
             return;
           }
-          handleTokenStream(event, throttle, () =>
-            dispatch({
-              type: "token_error",
-              message: uiErrorMessage("INTERVIEW_RESPONSE"),
-            }),
-          );
+          if (event.done) {
+            throttle.drainAndStop();
+            terminal.settle();
+            return;
+          }
+          if (event.text) {
+            throttle.push(event.text);
+          }
         },
       );
+      await terminal.promise;
 
       throttle.drainAndStop();
-      dispatch({ type: "start_success", assistantId, result });
-      await hydrateAfter(result);
+      if (!errored) {
+        dispatch({ type: "start_success", assistantId, result });
+        await hydrateAfter(result);
+      }
     } catch (err) {
       // eslint-disable-next-line no-console -- intentional diagnostic
       console.error("[MultistageInterviewPanel] onStart failed:", err);
       throttle.flushAndStop();
+      const fb = interviewFallbackFor(err);
       dispatch({
         type: "send_failure",
-        message: uiErrorMessage("INTERVIEW_RESPONSE"),
+        message: fb.message,
       });
     } finally {
+      terminal.abort();
       assistantIdRef.current = null;
       dispatch({ type: "send_end" });
       scrollToBottom();
@@ -200,36 +194,63 @@ export function MultistageInterviewPanel({
     dispatch({ type: "advance_begin", userId, assistantId, answer });
     scrollToBottom();
 
+    const terminal = createStreamTerminalGate(STREAM_TERMINAL_TIMEOUT_MS);
+    let errored = false;
     try {
       const result = await advanceInterviewStage(
         { sessionId: state.sessionId, candidateAnswer: answer },
         (event) => {
-          handleTokenStream(event, throttle, () =>
+          if (!terminal.isPending()) return;
+          if (event.error) {
+            // eslint-disable-next-line no-console -- intentional diagnostic
+            console.error(
+              "[MultistageInterviewPanel] onAdvance stream error:",
+              event.error,
+            );
+            const fb = interviewFallbackFor(event.error);
+            errored = true;
+            throttle.flushAndStop();
             dispatch({
               type: "token_error",
-              message: uiErrorMessage("INTERVIEW_RESPONSE"),
-            }),
-          );
+              message: fb.message,
+              restoreInput: fb.resendable ? answer : undefined,
+            });
+            terminal.settle();
+            return;
+          }
+          if (event.done) {
+            throttle.drainAndStop();
+            terminal.settle();
+            return;
+          }
+          if (event.text) {
+            throttle.push(event.text);
+          }
         },
       );
+      await terminal.promise;
 
       throttle.drainAndStop();
-
-      if (result.outcome === "closed" || result.stage === "closed") {
-        dispatch({ type: "session_closed", result });
-      } else {
-        dispatch({ type: "advance_success", assistantId, result });
+      if (!errored) {
+        if (result.outcome === "closed" || result.stage === "closed") {
+          dispatch({ type: "session_closed", result });
+        } else {
+          dispatch({ type: "advance_success", assistantId, result });
+        }
+        await hydrateAfter(result);
       }
-      await hydrateAfter(result);
     } catch (err) {
       // eslint-disable-next-line no-console -- intentional diagnostic
       console.error("[MultistageInterviewPanel] onAdvance failed:", err);
       throttle.flushAndStop();
+      const fb = interviewFallbackFor(err);
       dispatch({
         type: "send_failure",
-        message: uiErrorMessage("INTERVIEW_RESPONSE"),
+        message: fb.message,
+        restoreInput: fb.resendable ? answer : undefined,
       });
     } finally {
+      terminal.abort();
       assistantIdRef.current = null;
       dispatch({ type: "send_end" });
       scrollToBottom();
@@ -238,6 +259,8 @@ export function MultistageInterviewPanel({
 
   const closed = state.stage === "closed" || state.status === "closed";
   const inSession = Boolean(state.sessionId);
+  const mode = interviewReasoningMode(state.stage, state.outcome);
+  const showSessionMeta = mode === "revealed";
 
   return (
     <div className="multistage-interview-panel">
@@ -249,13 +272,15 @@ export function MultistageInterviewPanel({
         議論フェーズに Gap/Oracle は注入されず、Debrief のみ講評に接続されます。
       </p>
 
-      <InterviewStageRail
-        stage={state.stage}
-        turnInStage={state.turnInStage}
-        totalTurns={state.totalTurns}
-        status={state.status}
-        outcome={state.outcome}
-      />
+      {showSessionMeta && (
+        <InterviewStageRail
+          stage={state.stage}
+          turnInStage={state.turnInStage}
+          totalTurns={state.totalTurns}
+          status={state.status}
+          outcome={state.outcome}
+        />
+      )}
 
       {!inSession && (
         <>
@@ -302,7 +327,7 @@ export function MultistageInterviewPanel({
           >
             セッションをリセット
           </button>
-          {state.companyName && (
+          {showSessionMeta && state.companyName && (
             <span className="hint">company={state.companyName}</span>
           )}
         </div>
@@ -313,7 +338,7 @@ export function MultistageInterviewPanel({
           <p className="hint chat-empty">開始後、面接官の発話がここにストリームされます。</p>
         ) : (
           state.messages.map((m) => {
-            const visible = redactHiddenReasoning(m.text, m.streaming);
+            const visible = visibleBody(m.text, mode, !!m.streaming);
             if (m.role === "candidate") {
               return (
                 <div key={m.id} className="line-row user">
@@ -344,6 +369,16 @@ export function MultistageInterviewPanel({
                     {m.streaming && <span className="chat-cursor">▌</span>}
                   </pre>
                 </div>
+                {mode === "revealed" && (() => {
+                  const thoughts = extractHiddenReasoning(m.text);
+                  if (thoughts.length === 0) return null;
+                  return (
+                    <details className="term-panel interview-reasoning-reveal">
+                      <summary>この質問の意図</summary>
+                      <pre className="chat-text">{thoughts.join("\n\n")}</pre>
+                    </details>
+                  );
+                })()}
               </div>
             );
           })

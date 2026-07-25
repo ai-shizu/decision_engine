@@ -1934,6 +1934,20 @@ button:disabled {
   }
 }
 
+.interview-reasoning-reveal,
+.rag-reasoning-live {
+  margin-top: 0.5em;
+  padding: 0.4em 0.6em;
+}
+
+.interview-reasoning-reveal summary,
+.rag-reasoning-live summary {
+  cursor: pointer;
+  font-family: var(--font-mono);
+  font-size: 0.85rem;
+  color: var(--text-muted);
+}
+
 /* 正方形アウトラインの段階回転 (許可ループ c) */
 .consult-research-spinner {
   width: 12px;

@@ -69,6 +69,7 @@ function persistRagSession(state: RagChatState): void {
  * RAG chat surface: pure-reducer timeline + Channel streaming via pocketBrain API.
  * Cancellation / memory purge remain owned by the parent PocketBrainPanel.
  * Finding 13: never pass raw IPC / embedding errors into UI state.
+ * Live `<think>` reveal is owned by RagMessageList (`visibleBody(..., "live", …)`).
  */
 export function RagChatPanel({
   modelReady,

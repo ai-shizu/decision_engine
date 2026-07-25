@@ -1766,6 +1766,21 @@ v11 `knowledge_embed_cache`（Path B）は**作らない**。
 **ハマりどころ**: `wiki_extract.rs` に `reqwest::` を名指しするな（憲章ガード）。
   `ingest_text_blocking` / `ingest_company_knowledge` / search レーン関数は触るな。
 
+### 7.2.5 面接 UI Phase 3 — ストリーム終端ゲートと無菌フォールバック（2026-07-25）
+
+- **無限ロード遮断**: `InterviewPocketPanel` / `MultistageInterviewPanel` は
+  `createStreamTerminalGate`（CONSULT `RagChatPanel` と同契約）で `done`/`error` 欠落時も
+  `streaming` を必ず解除する。タイムアウトは `interviewFallbackFor` 経路へ落とす。
+- **フォールバック**: `interviewFallbackFor` + `UI_ERROR_SPECS.INTERVIEW_FALLBACK_*`。
+  生エラーは `console.error` のみ。VAULT_LOCKED のみ `resendable=false`（入力非復元）。
+- **思考秘匿**: 本文は常に `visibleBody`→`redactHiddenReasoning`。開示は多段の
+  `debrief`/`closed`（`interviewReasoningMode`）と CONSULT `live` のみ。
+  `redactHiddenReasoning.ts` 自体は変更禁止（`visibleBody` が一致回帰を保証）。
+- **将来のリスクとリファクタリング要件**: `ui_error_boundary.test.ts` (T-06) における
+  `INTERVIEW_FALLBACK_VAULT_LOCKED` のようなコード別の例外分岐が今後さらに増える場合、
+  テストの無効化を防ぐため、文字列の「逐語一致」ではなく「`verify-first` の意味論を満たす
+  語彙が含まれているか」を判定する述語ベース（Predicate-based）の検査へ作り直すこと。
+
 ---
 
 ## 8. Target Alpha: KV slot cache — RETIRED by FSA-2026-07-13-01/02

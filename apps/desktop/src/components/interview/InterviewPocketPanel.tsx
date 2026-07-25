@@ -3,10 +3,13 @@ import { useReducer, useRef, type ReactNode } from "react";
 import { CompanyFactsForm } from "./CompanyFactsForm";
 import { todayIso } from "../../lib/dateUtils";
 import { companyFactsReady } from "../../lib/interviewStage";
-import { redactHiddenReasoning } from "../../lib/redactHiddenReasoning";
+import { interviewFallbackFor } from "../../lib/interviewFallback";
 import { startInterviewSession } from "../../lib/pocketBrain";
 import type { CompanyFacts } from "../../lib/pocketBrain/types";
-import { uiErrorMessage } from "../../lib/uiErrorMessages";
+import { visibleBody } from "../../lib/reasoningVisibility";
+import {
+  createStreamTerminalGate,
+} from "../../lib/streamTerminalGate";
 import { useCompanyFactsEnrichment } from "../../lib/useCompanyFactsEnrichment";
 import { useThrottledStream } from "../../lib/useThrottledStream";
 
@@ -34,7 +37,7 @@ type PanelAction =
   | { type: "clear_error" }
   | { type: "send_begin"; userId: string; assistantId: string; prompt: string }
   | { type: "token"; assistantId: string; text: string }
-  | { type: "token_error"; message: string }
+  | { type: "token_error"; message: string; restoreInput?: string }
   | {
       type: "send_success";
       assistantId: string;
@@ -42,9 +45,11 @@ type PanelAction =
       factsSource: string;
       contextCount: number;
     }
-  | { type: "send_failure"; message: string }
+  | { type: "send_failure"; message: string; restoreInput?: string }
   | { type: "send_end" }
   | { type: "reset" };
+
+const STREAM_TERMINAL_TIMEOUT_MS = 180_000;
 
 function emptyFacts(): CompanyFacts {
   return {
@@ -101,6 +106,8 @@ function reducer(state: PanelState, action: PanelAction): PanelState {
         ...state,
         streaming: false,
         error: action.message,
+        input:
+          action.restoreInput !== undefined ? action.restoreInput : state.input,
         messages: state.messages.map((m) =>
           m.streaming ? { ...m, streaming: false } : m,
         ),
@@ -122,6 +129,8 @@ function reducer(state: PanelState, action: PanelAction): PanelState {
         ...state,
         streaming: false,
         error: action.message,
+        input:
+          action.restoreInput !== undefined ? action.restoreInput : state.input,
         messages: state.messages.filter((m) => !(m.streaming && !m.text)),
       };
     case "send_end":
@@ -222,7 +231,8 @@ export function InterviewPocketPanel({
       // Ambient enrich soft-fail — proceed with typed facts.
     }
 
-    const sterile = uiErrorMessage("INTERVIEW_RESPONSE");
+    const terminal = createStreamTerminalGate(STREAM_TERMINAL_TIMEOUT_MS);
+    let errored = false;
     try {
       const result = await startInterviewSession(
         {
@@ -232,14 +242,24 @@ export function InterviewPocketPanel({
           esText: esText.trim() || undefined,
         },
         (event) => {
+          if (!terminal.isPending()) return;
           if (event.error) {
             // eslint-disable-next-line no-console -- intentional diagnostic
             console.error("[InterviewPocketPanel] stream error event:", event.error);
-            dispatch({ type: "token_error", message: sterile });
+            const fb = interviewFallbackFor(event.error);
+            errored = true;
+            throttle.flushAndStop();
+            dispatch({
+              type: "token_error",
+              message: fb.message,
+              restoreInput: fb.resendable ? prompt : undefined,
+            });
+            terminal.settle();
             return;
           }
           if (event.done) {
             throttle.drainAndStop();
+            terminal.settle();
             return;
           }
           if (event.text) {
@@ -247,21 +267,30 @@ export function InterviewPocketPanel({
           }
         },
       );
+      await terminal.promise;
 
       throttle.drainAndStop();
-      dispatch({
-        type: "send_success",
-        assistantId,
-        companyName: result.company_name,
-        factsSource: result.facts_source,
-        contextCount: result.context_count,
-      });
+      if (!errored) {
+        dispatch({
+          type: "send_success",
+          assistantId,
+          companyName: result.company_name,
+          factsSource: result.facts_source,
+          contextCount: result.context_count,
+        });
+      }
     } catch (err) {
       // eslint-disable-next-line no-console -- intentional diagnostic
       console.error("[InterviewPocketPanel] onSend failed:", err);
       throttle.flushAndStop();
-      dispatch({ type: "send_failure", message: sterile });
+      const fb = interviewFallbackFor(err);
+      dispatch({
+        type: "send_failure",
+        message: fb.message,
+        restoreInput: fb.resendable ? prompt : undefined,
+      });
     } finally {
+      terminal.abort();
       assistantIdRef.current = null;
       dispatch({ type: "send_end" });
       scrollToBottom();
@@ -296,7 +325,7 @@ export function InterviewPocketPanel({
           </p>
         ) : (
           state.messages.map((m) => {
-            const visible = redactHiddenReasoning(m.text, m.streaming);
+            const visible = visibleBody(m.text, "hidden", !!m.streaming);
             if (m.role === "user") {
               return (
                 <div key={m.id} className="line-row user">
@@ -358,23 +387,7 @@ export function InterviewPocketPanel({
         </div>
       </form>
 
-      {state.meta && (
-        <div className="term-panel">
-          <p className="term-header">SESSION_META</p>
-          <div className="term-row">
-            <span className="term-source-name">company_name</span>
-            <span className="term-value">{state.meta.companyName}</span>
-          </div>
-          <div className="term-row">
-            <span className="term-source-name">facts_source</span>
-            <span className="term-value">{state.meta.factsSource}</span>
-          </div>
-          <div className="term-row">
-            <span className="term-source-name">context_count</span>
-            <span className="term-value">{state.meta.contextCount}</span>
-          </div>
-        </div>
-      )}
+      {/* SESSION_META kept in state.meta but never shown (1on1 has no debrief). */}
 
       {state.error && (
         <p className="status-line error-text" role="alert">

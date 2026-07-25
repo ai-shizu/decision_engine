@@ -126,6 +126,26 @@ export const UI_ERROR_SPECS = {
       "モデルがまだ準備できていません。数秒待ってからもう一度送ってください。",
     retryPolicy: "retry-safe",
   },
+  INTERVIEW_FALLBACK_THINKING: {
+    message:
+      "面接官が少し考え込んでいます。もう一度発言していただけますか？",
+    retryPolicy: "retry-safe",
+  },
+  INTERVIEW_FALLBACK_MODEL_COLD: {
+    message:
+      "面接官が資料を取りに行っています。数秒後にもう一度発言してください。",
+    retryPolicy: "retry-safe",
+  },
+  INTERVIEW_FALLBACK_VAULT_LOCKED: {
+    message:
+      "記録の保管庫が施錠されています。ロックを解除してから再開してください。",
+    retryPolicy: "verify-first",
+  },
+  INTERVIEW_FALLBACK_TOO_LONG: {
+    message:
+      "面接官が話の要点を整理しています。もう一度、簡潔に発言していただけますか？",
+    retryPolicy: "retry-safe",
+  },
   /** Inner Coliseum GD multi-agent stream (llm_generate via useGdSession). */
   GD_ARENA: {
     message:

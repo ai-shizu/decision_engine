@@ -34,6 +34,9 @@ const RETRY_SAFE: UiErrorCode[] = [
   "SETTINGS_LOAD",
   "RAG_CHAT",
   "RAG_MODEL_NOT_LOADED",
+  "INTERVIEW_FALLBACK_THINKING",
+  "INTERVIEW_FALLBACK_MODEL_COLD",
+  "INTERVIEW_FALLBACK_TOO_LONG",
 ];
 
 const VERIFY_FIRST: UiErrorCode[] = [
@@ -55,11 +58,12 @@ const VERIFY_FIRST: UiErrorCode[] = [
   "SETTINGS_SAVE",
   "PROFILER_RUN",
   "GD_ARENA",
+  "INTERVIEW_FALLBACK_VAULT_LOCKED",
 ];
 
-test("T-01 exact 25 keys", () => {
+test("T-01 exact 29 keys", () => {
   const keys = Object.keys(UI_ERROR_SPECS).sort();
-  assertEqual(keys.length, 25, "key count");
+  assertEqual(keys.length, 29, "key count");
   const expected = [...RETRY_SAFE, ...VERIFY_FIRST].sort();
   assertEqual(JSON.stringify(keys), JSON.stringify(expected), "key set");
 });
@@ -96,6 +100,13 @@ test("T-05 verify-first key set exact", () => {
 
 test("T-06 verify-first messages guide safe re-run", () => {
   for (const code of VERIFY_FIRST) {
+    if (code === "INTERVIEW_FALLBACK_VAULT_LOCKED") {
+      assertOk(
+        UI_ERROR_SPECS[code].message.includes("ロックを解除"),
+        `${code} vault wording`,
+      );
+      continue;
+    }
     assertOk(
       UI_ERROR_SPECS[code].message.includes("必要な場合だけ再実行"),
       `${code} verify wording`,

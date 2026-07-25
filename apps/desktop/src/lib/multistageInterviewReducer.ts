@@ -57,8 +57,8 @@ export type MultistageInterviewAction =
     }
   | { type: "session_closed"; result: MultistageInterviewResult }
   | { type: "token"; assistantId: string; text: string }
-  | { type: "token_error"; message: string }
-  | { type: "send_failure"; message: string }
+  | { type: "token_error"; message: string; restoreInput?: string }
+  | { type: "send_failure"; message: string; restoreInput?: string }
   | { type: "send_end" }
   | { type: "hydrate_session"; session: InterviewSession };
 
@@ -212,11 +212,18 @@ export function multistageInterviewReducer(
       return { ...state, messages };
     }
     case "token_error":
-      return { ...state, error: action.message };
+      return {
+        ...state,
+        error: action.message,
+        input:
+          action.restoreInput !== undefined ? action.restoreInput : state.input,
+      };
     case "send_failure":
       return {
         ...state,
         error: action.message,
+        input:
+          action.restoreInput !== undefined ? action.restoreInput : state.input,
         messages: state.messages.filter(
           (m) => !(m.streaming === true && m.text.trim() === ""),
         ),

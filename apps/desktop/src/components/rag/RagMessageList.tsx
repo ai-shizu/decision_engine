@@ -1,5 +1,9 @@
 import { memo, useEffect, useRef } from "react";
 import type { RagChatMessage } from "../../lib/ragChatReducer";
+import {
+  extractHiddenReasoning,
+  visibleBody,
+} from "../../lib/reasoningVisibility";
 import { SimpleMarkdown } from "./SimpleMarkdown";
 
 export type { RagChatMessage };
@@ -12,6 +16,15 @@ export interface RagMessageListProps {
 
 function RagBubble({ message }: { message: RagChatMessage }) {
   const isUser = message.role === "user";
+  const streaming = !!message.streaming;
+  const bodyText = isUser
+    ? message.text
+    : visibleBody(message.text, "live", streaming);
+  const thoughts =
+    !isUser && !message.error
+      ? extractHiddenReasoning(message.text)
+      : [];
+
   return (
     <li
       className={
@@ -27,7 +40,7 @@ function RagBubble({ message }: { message: RagChatMessage }) {
       </div>
       <div className="rag-bubble-body">
         {isUser ? (
-          message.text
+          bodyText
         ) : message.error ? (
           <div
             className="sys-log sys-log--err rag-bubble-syserr"
@@ -41,12 +54,18 @@ function RagBubble({ message }: { message: RagChatMessage }) {
           // parse once when `streaming` flips false.
           <div className="rag-md">
             <p className="rag-md-line" style={{ whiteSpace: "pre-wrap" }}>
-              {message.text || "…"}
+              {bodyText || "…"}
             </p>
           </div>
         ) : (
-          <SimpleMarkdown text={message.text || "…"} />
+          <SimpleMarkdown text={bodyText || "…"} />
         )}
+        {!isUser && !message.error && thoughts.length > 0 ? (
+          <details className="term-panel rag-reasoning-live">
+            <summary>思考プロセス</summary>
+            <pre className="chat-text">{thoughts.join("\n\n")}</pre>
+          </details>
+        ) : null}
       </div>
     </li>
   );
