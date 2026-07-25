@@ -17,6 +17,17 @@ export function buildCompanyResearchQuery(companyName: string): string {
   return `${companyName.trim()} 事業概要`;
 }
 
+/**
+ * Wikipedia レーン専用クエリ。記事ヒット率を優先し、修飾語を付けない素の企業名。
+ * Vault のベクトル検索とは目的が異なるため `buildCompanyResearchQuery` と分離する
+ * （`事業概要` は全文検索ではノイズ語としてスコアを歪める）。
+ * 法人格サフィックスの除去は意図的に行わない（Rust 側は list=search の全文検索であり、
+ * 除去ヒューリスティックは前置・後置の揺れで誤動作するため）。
+ */
+export function buildWikipediaResearchQuery(companyName: string): string {
+  return companyName.trim();
+}
+
 /** Fill empty base fields from incoming; never wipe user-typed non-empty values. */
 export function mergeCompanyFactsPreferFilled(
   base: CompanyFacts,
@@ -157,17 +168,18 @@ export async function enrichCompanyFacts(
   }
 
   attemptedNet = true;
-  const query = buildCompanyResearchQuery(name);
+  const vaultQuery = buildCompanyResearchQuery(name);
+  const wikiQuery = buildWikipediaResearchQuery(name);
 
   // E0b Wikipedia/research lane (fail-closed without egress-live).
   try {
-    const receipt = await deps.knowledgeResearch(query);
+    const receipt = await deps.knowledgeResearch(wikiQuery);
     const provenance = deriveProvenance(receipt);
     if (provenance) {
       provenanceLabel = provenanceChipText(provenance);
       if (deps.searchKnowledge && next.businessSummary.trim().length === 0) {
         try {
-          const again = await deps.searchKnowledge(query, 3, "company");
+          const again = await deps.searchKnowledge(vaultQuery, 3, "company");
           const summary = summarizeKnowledgeHits(again.hits);
           if (summary) {
             next = mergeCompanyFactsPreferFilled(next, {

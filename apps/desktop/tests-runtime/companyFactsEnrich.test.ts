@@ -1,5 +1,6 @@
 import {
   buildCompanyResearchQuery,
+  buildWikipediaResearchQuery,
   enrichCompanyFacts,
   mergeCompanyFactsPreferFilled,
   patchFromEnriched,
@@ -153,6 +154,52 @@ test("E-08 enrich: company lane empty leaves businessSummary blank", async () =>
   );
   assertOk(result.facts.businessSummary === "", "summary stays empty");
   assertOk(result.facts.source !== "local_rag", "no local_rag source without hits");
+});
+
+test("E-09 buildWikipediaResearchQuery trims without adding qualifiers", () => {
+  const q = buildWikipediaResearchQuery(" サンプル株式会社 ");
+  assertOk(q === "サンプル株式会社", "trim only");
+  assertOk(!q.includes("事業概要"), "no qualifier");
+  assertOk(q.includes("株式会社"), "corporate suffix preserved");
+});
+
+test("E-10 wikipedia and vault lanes receive different queries", async () => {
+  let researchQuery: string | undefined;
+  const seenSearchQueries: string[] = [];
+  let edinetName: string | undefined;
+  await enrichCompanyFacts(
+    emptyCompanyFacts({ companyName: "公開企業" }),
+    {
+      getPolicy: async () => ({ enabled: true }),
+      knowledgeResearch: async (q) => {
+        researchQuery = q;
+        return {
+          schema: "knowledge_research_receipt.v1",
+          research_id: "a".repeat(64),
+          results_persisted: 1,
+        };
+      },
+      searchKnowledge: async (q) => {
+        seenSearchQueries.push(q);
+        return { hits: [] };
+      },
+      fetchEdinetByName: async (args) => {
+        edinetName = args.companyName;
+        return emptyCompanyFacts({
+          companyName: "公開企業",
+          edinetCode: "E02144",
+          source: "edinet_list",
+        });
+      },
+      todayIso: () => "2026-07-18",
+    },
+  );
+  assertOk(researchQuery !== undefined && !researchQuery.includes("事業概要"), "wiki lane no qualifier");
+  assertOk(
+    seenSearchQueries.length > 0 && seenSearchQueries.every((q) => q.includes("事業概要")),
+    "vault lane keeps qualifier",
+  );
+  assertOk(edinetName === "公開企業", "edinet name unmodified");
 });
 
 async function main(): Promise<void> {
