@@ -546,7 +546,7 @@ async fn knowledge_research_wiki_live(
 
     use crate::db::knowledge_namespace::{namespace_of, KnowledgeNamespace};
     use crate::knowledge::net_gateway::{
-        fetch_bounded_with_deadline, fetch_one, validate_response_meta, HttpTransport,
+        fetch_bounded_with_deadline, fetch_one, validate_response_meta, GatewayError, HttpTransport,
         ReqwestTransport, MAX_TITLE_BYTES,
     };
     use crate::knowledge::render_guard::sanitize_external_text;
@@ -582,18 +582,6 @@ async fn knowledge_research_wiki_live(
         e.to_string()
     })?;
 
-    let search_hits = fetch_one(
-        &transport,
-        company_q.as_str(),
-        std::future::pending::<()>(),
-        SEARCH_DEADLINE,
-    )
-    .await
-    .map_err(|e| {
-        log::error!("knowledge_research: search failed: {e}");
-        e.to_string()
-    })?;
-
     let research_id = {
         let mut hasher = Sha256::new();
         hasher.update(company_q.as_str().as_bytes());
@@ -606,39 +594,70 @@ async fn knowledge_research_wiki_live(
         hex::encode(hasher.finalize())
     };
 
-    let Some(first) = search_hits.first() else {
-        return Ok(serde_json::json!({
-            "schema": "knowledge_research_receipt.v1",
-            "research_id": research_id,
-            "results_persisted": 0,
-        }));
+    // Fetch one article's plaintext by exact title. `redirects=1` in the template
+    // means "トヨタ自動車" resolves through redirects to the real article.
+    async fn extract_for_title(
+        transport: &ReqwestTransport,
+        title: &str,
+        deadline: Duration,
+    ) -> Result<String, crate::knowledge::net_gateway::GatewayError> {
+        let url = build_extract_request(title);
+        validate_extract_url(&url, title)?;
+        let (meta, body) = transport.get(&url).await?;
+        validate_response_meta(&meta)?;
+        let raw = fetch_bounded_with_deadline(body, std::future::pending::<()>(), deadline).await?;
+        extract_page_text(&raw)
+    }
+
+    // Title-first, search-as-fallback. `list=search` is *relevance-scored
+    // full-text* search: for "トヨタ自動車" it can rank the huge generic article
+    // 「自動車」 above the exact-title company article, and blindly taking
+    // `hits.first()` then ingested the wrong page (device E2E 2026-07-25).
+    // The company name is almost always the article title, so try it directly.
+    let plain = match extract_for_title(&transport, company_q.as_str(), EXTRACT_DEADLINE).await {
+        Ok(text) => text,
+        Err(GatewayError::PageMissing) => {
+            log::info!(
+                "knowledge_research: no exact article for the company name; falling back to search"
+            );
+            let hits = fetch_one(
+                &transport,
+                company_q.as_str(),
+                std::future::pending::<()>(),
+                SEARCH_DEADLINE,
+            )
+            .await
+            .map_err(|e| {
+                log::error!("knowledge_research: search failed: {e}");
+                e.to_string()
+            })?;
+            // Prefer an exact title match over relevance rank; only then fall
+            // back to the top hit.
+            let chosen = hits
+                .iter()
+                .find(|h| h.title.trim() == company_q.as_str())
+                .or_else(|| hits.first());
+            let Some(hit) = chosen else {
+                return Ok(serde_json::json!({
+                    "schema": "knowledge_research_receipt.v1",
+                    "research_id": research_id,
+                    "results_persisted": 0,
+                }));
+            };
+            log::info!("knowledge_research: search fallback selected an article");
+            extract_for_title(&transport, &hit.title, EXTRACT_DEADLINE)
+                .await
+                .map_err(|e| {
+                    log::error!("knowledge_research: fallback extract failed: {e}");
+                    e.to_string()
+                })?
+        }
+        Err(e) => {
+            log::error!("knowledge_research: extract failed: {e}");
+            return Err(e.to_string());
+        }
     };
-
-    let title_raw = first.title.clone();
-    let extract_url = build_extract_request(&title_raw);
-    validate_extract_url(&extract_url, &title_raw).map_err(|e| {
-        log::error!("knowledge_research: extract url violation: {e}");
-        e.to_string()
-    })?;
-
-    let (meta, body) = transport.get(&extract_url).await.map_err(|e| {
-        log::error!("knowledge_research: extract GET failed: {e}");
-        e.to_string()
-    })?;
-    validate_response_meta(&meta).map_err(|e| {
-        log::error!("knowledge_research: extract meta rejected: {e}");
-        e.to_string()
-    })?;
-    let raw = fetch_bounded_with_deadline(body, std::future::pending::<()>(), EXTRACT_DEADLINE)
-        .await
-        .map_err(|e| {
-            log::error!("knowledge_research: extract body failed: {e}");
-            e.to_string()
-        })?;
-    let plain = extract_page_text(&raw).map_err(|e| {
-        log::error!("knowledge_research: extract parse failed: {e}");
-        e.to_string()
-    })?;
+    let title_raw = company_q.as_str().to_string();
     let markdown = wiki_sections_to_markdown(&plain);
 
     let title = sanitize_external_text(&title_raw, MAX_TITLE_BYTES).map_err(|e| {

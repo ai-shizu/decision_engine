@@ -125,8 +125,11 @@ pub fn extract_page_text(body: &[u8]) -> Result<String, GatewayError> {
     // Take the first page entry (exlimit=1).
     let mut page_iter = pages.values();
     let page = page_iter.next().ok_or(GatewayError::Malformed)?;
+    // Distinct from `Malformed`: the response is well-formed, the article simply
+    // does not exist. Callers use this to fall back to search (AI_SKILLS §7.2.7 #3
+    // — collapsing error variants sends investigations the wrong way).
     if page.get("missing").is_some() {
-        return Err(GatewayError::Malformed);
+        return Err(GatewayError::PageMissing);
     }
     let extract = page
         .get("extract")
@@ -228,11 +231,14 @@ mod tests {
         let ok = r#"{"query":{"pages":{"123":{"pageid":123,"title":"T","extract":"本文です。"}}}}"#;
         assert_eq!(extract_page_text(ok.as_bytes()).unwrap(), "本文です。");
 
+        // A missing article is NOT malformed — the caller falls back to search on
+        // this exact variant, so the two must stay distinguishable.
         let missing =
             br#"{"query":{"pages":{"-1":{"title":"No","missing":""}}}}"#;
-        assert_eq!(extract_page_text(missing), Err(GatewayError::Malformed));
+        assert_eq!(extract_page_text(missing), Err(GatewayError::PageMissing));
 
-        // Adversarial: pages as array — must not panic.
+        // Adversarial: pages as array — must not panic, and must NOT be mistaken
+        // for a missing page (that would trigger a pointless search fallback).
         let hostile = br#"{"query":{"pages":[{"extract":"x"}]}}"#;
         assert_eq!(extract_page_text(hostile), Err(GatewayError::Malformed));
     }

@@ -6738,3 +6738,71 @@ button.secondary {
     padding-bottom: 0;
   }
 }
+
+/* ─── Mobile interview surfaces (2026-07-25 device E2E) ──────────────────────
+   Measured on a 375px viewport: the mode tabs had shrunk to 9.28px text with
+   2px of horizontal padding (Phase 4's 5th "[ 企業 ]" tab pushed a 4-up row
+   past its limit), and the company-facts inputs were 26px tall — well under
+   the 44px minimum tap target. Font-size stays 16px everywhere: anything
+   smaller makes iOS Safari zoom the whole page on focus. */
+@media (max-width: 30rem) {
+  /* Scroll the mode row instead of compressing it further. Each tab keeps a
+     readable size and a real tap target; adding a 6th tab now costs scroll
+     distance rather than legibility. */
+  .interview-panel .interview-mode-array {
+    display: flex;
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;
+    gap: var(--s1);
+    padding-bottom: 2px;
+  }
+
+  .interview-panel .interview-mode-array::-webkit-scrollbar {
+    display: none;
+  }
+
+  .interview-panel .interview-mode-array button {
+    flex: 0 0 auto;
+    min-height: 44px;
+    padding: 10px 14px;
+    font-size: 11px;
+    white-space: nowrap;
+  }
+
+  /* 44px tap targets + breathing room. */
+  .interview-panel .config-row input,
+  .interview-panel .config-row select {
+    min-height: 44px;
+    padding: 10px 12px;
+  }
+
+  /* Padding and leading only — deliberately NO min-height here. The shared
+     context form is capped by `.mobile-chrome .interview-shared-context
+     .company-facts-form textarea { max-height: 72px }`, which exists so the
+     form cannot push the interview chat off screen. A min-height would either
+     lose to that rule (dead CSS) or fight an intentional layout constraint. */
+  .interview-panel .config-row textarea {
+    padding: 10px 12px;
+    line-height: 1.5;
+  }
+
+  .interview-panel .config-row {
+    gap: var(--s2);
+    margin-bottom: var(--s2);
+  }
+
+  /* The company preview is read-only rows; give the values room to wrap
+     instead of colliding with their labels. */
+  .interview-panel .company-facts-preview .term-row {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    padding: 6px 0;
+  }
+
+  .interview-panel .company-facts-preview .term-value {
+    overflow-wrap: anywhere;
+  }
+}

@@ -58,6 +58,9 @@ pub enum GatewayError {
     DnsResolverInit,
     /// The hostname lookup itself failed (NXDOMAIN / no network / timeout).
     DnsLookupFailed,
+    /// A well-formed API response saying the requested article does not exist.
+    /// Distinct from [`Self::Malformed`] so callers can fall back to search.
+    PageMissing,
     WireViolation,
     StatusRejected,
     Malformed,
@@ -76,6 +79,7 @@ impl std::fmt::Display for GatewayError {
                 write!(f, "DNS resolver init failed (no lookup attempted)")
             }
             Self::DnsLookupFailed => write!(f, "DNS lookup failed for host"),
+            Self::PageMissing => write!(f, "requested article does not exist"),
             Self::WireViolation => write!(f, "response wire violates identity/size contract"),
             Self::StatusRejected => write!(f, "response status/content-type rejected"),
             Self::Malformed => write!(f, "response body malformed"),
