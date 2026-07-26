@@ -5,6 +5,7 @@
 //! `prompt_sim`, then streams through the existing M6 `LlmHandle::generate`
 //! Channel pipeline (M7 cancel/purge unchanged).
 
+use std::collections::HashSet;
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
@@ -13,7 +14,8 @@ use tauri::{AppHandle, State};
 
 use crate::db::{VaultErrorCode, VaultHandle};
 use crate::knowledge::edinet_client::{
-    sanitize_company_facts, subscription_key_from_env, CompanyFacts, EdinetError,
+    normalize_filer_key, render_company_facts_block, sanitize_company_facts,
+    subscription_key_from_env, CompanyFacts, EdinetError,
 };
 use crate::knowledge::{
     refuse_if_egress_unavailable, refuse_if_policy_off, NetworkPolicyStore,
@@ -38,6 +40,11 @@ const DEFAULT_CONTEXT_LIMIT: u32 = 5;
 const MAX_CONTEXT_LIMIT: u32 = 20;
 const DEFAULT_N_CTX: u32 = 2048;
 const DEFAULT_MAX_TOKENS: u32 = 256;
+/// Company-analysis dashboard only: 4 headed sections x 3-5 bullets does not fit
+/// in a single-turn output budget. Kept local to that command so interview turns
+/// (latency-sensitive, one question at a time) are unaffected.
+const ANALYSIS_MAX_TOKENS: u32 = 768;
+const ANALYSIS_N_CTX: u32 = 3072;
 const EDINET_FETCH_DEADLINE: Duration = Duration::from_secs(15);
 /// How many calendar days before anchor to scan when resolving by filer name.
 const EDINET_NAME_LOOKBACK_DAYS: u32 = 21;
@@ -111,6 +118,59 @@ fn map_vault_err(code: VaultErrorCode) -> String {
 
 fn map_edinet_err(err: EdinetError) -> String {
     err.to_string()
+}
+
+fn has_company_knowledge(facts: &CompanyFacts) -> bool {
+    !facts.business_summary.trim().is_empty()
+        || !facts.business_risks.trim().is_empty()
+        || !facts.performance_summary.trim().is_empty()
+}
+
+fn company_keys_match(left: &str, right: &str) -> bool {
+    let left = normalize_filer_key(left);
+    let right = normalize_filer_key(right);
+    if left.is_empty() || right.is_empty() {
+        return false;
+    }
+    left == right
+        || (left.chars().count() >= 2
+            && right.chars().count() >= 2
+            && (left.contains(&right) || right.contains(&left)))
+}
+
+fn company_source_matches(source_id: &str, company_name: &str, edinet_code: &str) -> bool {
+    let source = crate::db::knowledge_namespace::source_id_of(source_id);
+    if let Some(code) = source.strip_prefix("edinet-") {
+        return !edinet_code.trim().is_empty()
+            && code.trim().eq_ignore_ascii_case(edinet_code.trim());
+    }
+    for prefix in ["company-", "wiki-"] {
+        if let Some(alias) = source.strip_prefix(prefix) {
+            return company_keys_match(alias, company_name);
+        }
+    }
+    false
+}
+
+fn select_company_hits(
+    hits: Vec<crate::db::KnowledgeSearchHit>,
+    company_name: &str,
+    edinet_code: &str,
+) -> Vec<crate::db::KnowledgeSearchHit> {
+    let mut matched_sources = HashSet::new();
+    for hit in &hits {
+        let source = crate::db::knowledge_namespace::source_id_of(&hit.id);
+        if company_source_matches(source, company_name, edinet_code)
+            || company_keys_match(&hit.text_content, company_name)
+        {
+            matched_sources.insert(source.to_string());
+        }
+    }
+    hits.into_iter()
+        .filter(|hit| {
+            matched_sources.contains(crate::db::knowledge_namespace::source_id_of(&hit.id))
+        })
+        .collect()
 }
 
 fn resolve_gen(gen: Option<&SimGenParams>) -> (u32, GenerationParams) {
@@ -563,7 +623,6 @@ pub async fn review_es_draft(
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::db::InterviewSessionRow;
-use crate::knowledge::edinet_client::render_company_facts_block;
 use crate::llm::consult_context::load_mentor_context;
 use crate::coliseum::session_artifact::{
     amount_band, is_late_night_jst, purchase_text_summary, DistortionEvidenceSnap,
@@ -1122,6 +1181,7 @@ pub async fn analyze_company_knowledge(
     vault: State<'_, VaultHandle>,
     llm: State<'_, LlmHandle>,
     company_name: String,
+    company_facts: Option<CompanyFacts>,
     on_token: Channel<TokenEvent>,
 ) -> Result<SimSessionResult, String> {
     let company_name = company_name.trim().to_string();
@@ -1131,15 +1191,30 @@ pub async fn analyze_company_knowledge(
     ensure_model_loaded(&app, &llm).await?;
 
     let (_, mut gen) = resolve_gen(None);
+    // The dashboard asks for 4 sections x 3-5 bullets. `DEFAULT_MAX_TOKENS`
+    // (256) is sized for a single conversational turn and cut the last section
+    // off mid-word on device ("- トヨタが20", 2026-07-25). Raise the output
+    // budget and n_ctx together: `fit_and_verify_prompt` derives the *input*
+    // budget as `n_ctx - max_tokens`, so lifting max_tokens alone would shrink
+    // the room left for the company chunks being analysed.
+    gen.max_tokens = ANALYSIS_MAX_TOKENS;
+    gen.n_ctx = ANALYSIS_N_CTX;
     let vault_h = vault.inner().clone();
     let llm_fit = llm.inner().clone();
     let governor = llm.inner().governor();
     let n_ctx = gen.n_ctx;
     let max_tokens = gen.max_tokens;
     let name_for_search = company_name.clone();
+    let current_facts = company_facts
+        .and_then(|facts| sanitize_company_facts(&facts).ok())
+        .filter(has_company_knowledge);
 
-    let (prompt, context_ids, verified_tokens) =
+    let (prompt, context_ids, verified_tokens, facts_source) =
         tauri::async_runtime::spawn_blocking(move || {
+            let edinet_code = current_facts
+                .as_ref()
+                .map(|facts| facts.edinet_code.as_str())
+                .unwrap_or("");
             let hits = search_sync(
                 &vault_h,
                 &llm_fit,
@@ -1147,14 +1222,37 @@ pub async fn analyze_company_knowledge(
                 8,
                 KnowledgeNamespace::Company,
             )?;
-            if hits.is_empty() {
-                return Ok((String::new(), Vec::<String>::new(), None::<usize>));
+            let hits = select_company_hits(hits, &name_for_search, edinet_code);
+
+            // The editor preview and the dashboard used to read different data
+            // sources: React held freshly fetched facts while the dashboard only
+            // searched the asynchronously persisted Vault. Include the currently
+            // displayed, sanitized facts as the primary context so an ingest race
+            // or an absent EDINET code cannot produce a false "no data" state.
+            let mut contexts: Vec<(String, String)> = Vec::new();
+            if let Some(facts) = current_facts.as_ref() {
+                contexts.push((
+                    "current-company-facts".to_string(),
+                    render_company_facts_block(facts),
+                ));
             }
-            let refs: Vec<ExperienceRef<'_>> = hits
+            contexts.extend(
+                hits.iter()
+                    .map(|hit| (hit.id.clone(), hit.text_content.clone())),
+            );
+            if contexts.is_empty() {
+                return Ok((
+                    String::new(),
+                    Vec::<String>::new(),
+                    None::<usize>,
+                    String::new(),
+                ));
+            }
+            let refs: Vec<ExperienceRef<'_>> = contexts
                 .iter()
-                .map(|hit| ExperienceRef {
-                    id: hit.id.as_str(),
-                    text: hit.text_content.as_str(),
+                .map(|(id, text)| ExperienceRef {
+                    id: id.as_str(),
+                    text: text.as_str(),
                 })
                 .collect();
             let prompt = build_company_analysis_prompt(&name_for_search, &refs);
@@ -1167,8 +1265,15 @@ pub async fn analyze_company_knowledge(
                 &["## 分析対象"],
                 "company_analysis",
             );
-            let ids: Vec<String> = hits.into_iter().map(|h| h.id).collect();
-            Ok::<_, String>((prompt, ids, verified_tokens))
+            let ids: Vec<String> = contexts.into_iter().map(|(id, _)| id).collect();
+            let facts_source = match (current_facts.is_some(), hits.is_empty()) {
+                (true, false) => "current_state+company_vault",
+                (true, true) => "current_state",
+                (false, false) => "company_vault",
+                (false, true) => "",
+            }
+            .to_string();
+            Ok::<_, String>((prompt, ids, verified_tokens, facts_source))
         })
         .await
         .map_err(|e| {
@@ -1204,7 +1309,7 @@ pub async fn analyze_company_knowledge(
         context_count: context_ids.len(),
         context_ids,
         company_name,
-        facts_source: "company_vault".into(),
+        facts_source,
     })
 }
 
@@ -1402,3 +1507,37 @@ mod memory_id_tests {
     }
 }
 
+#[cfg(test)]
+mod company_identity_tests {
+    use super::{company_keys_match, company_source_matches};
+
+    #[test]
+    fn short_name_matches_normalized_official_name() {
+        assert!(company_keys_match("トヨタ", "トヨタ自動車株式会社"));
+        assert!(company_keys_match(" 株式会社 サンプル ", "サンプル"));
+    }
+
+    #[test]
+    fn unrelated_company_names_do_not_match() {
+        assert!(!company_keys_match("トヨタ", "本田技研工業株式会社"));
+    }
+
+    #[test]
+    fn source_matches_alias_or_stable_edinet_code() {
+        assert!(company_source_matches(
+            "wiki-トヨタ自動車::0002",
+            "トヨタ",
+            ""
+        ));
+        assert!(company_source_matches(
+            "edinet-E02144::0001",
+            "トヨタ",
+            "e02144"
+        ));
+        assert!(!company_source_matches(
+            "edinet-E00001::0001",
+            "トヨタ",
+            "E02144"
+        ));
+    }
+}

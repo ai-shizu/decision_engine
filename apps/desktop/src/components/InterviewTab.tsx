@@ -152,7 +152,7 @@ export function InterviewTab() {
       )}
 
       {surface === "company" && (
-        <CompanyDashboardPanel companyName={sharedFacts.companyName} />
+        <CompanyDashboardPanel facts={sharedFacts} />
       )}
 
       {surface === "interview_pocket" && (

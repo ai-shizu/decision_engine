@@ -9,10 +9,6 @@ import type { CompanyFacts } from "./pocketBrain/types";
 import type { KnowledgeResearchReceipt } from "./parseEngineResponse";
 import { deriveProvenance, provenanceChipText } from "./researchUiReducer";
 
-// Cap company-lane RAG summary so interview prompts (input budget ≈1792) are
-// not exhausted by businessSummary alone before the budget fitter runs.
-const MAX_SUMMARY_CHARS = 800;
-
 export function buildCompanyResearchQuery(companyName: string): string {
   return `${companyName.trim()} 事業概要`;
 }
@@ -80,17 +76,12 @@ export function summarizeKnowledgeHits(
   hits: ReadonlyArray<{ text_content: string }>,
 ): string {
   const parts: string[] = [];
-  let total = 0;
+  const seen = new Set<string>();
   for (const hit of hits) {
     const t = hit.text_content.trim();
-    if (!t) continue;
-    if (total + t.length > MAX_SUMMARY_CHARS) {
-      const room = MAX_SUMMARY_CHARS - total;
-      if (room > 80) parts.push(t.slice(0, room));
-      break;
-    }
+    if (!t || seen.has(t)) continue;
+    seen.add(t);
     parts.push(t);
-    total += t.length + 1;
   }
   return parts.join("\n\n");
 }
@@ -144,9 +135,15 @@ export async function enrichCompanyFacts(
       );
       const summary = summarizeKnowledgeHits(local.hits);
       if (summary) {
+        // `vault_company`, not `local_rag`: this search is namespace-scoped to
+        // "company", and `namespace_of` fails closed to Personal for unknown
+        // ids, so a Personal chunk cannot come back here. Once the Wikipedia
+        // lane opened (Phase 2) these hits are usually the freshly ingested
+        // company article read back from the Vault — legitimate provenance, not
+        // a contamination signal.
         next = mergeCompanyFactsPreferFilled(next, {
           businessSummary: summary,
-          source: "local_rag",
+          source: "vault_company",
         });
       }
       // hits=0 → leave businessSummary empty (never invent a placeholder).

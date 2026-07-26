@@ -84,10 +84,17 @@ export function useCompanyFactsEnrichment(
           }
           setProvenanceLabel(result.provenanceLabel);
           dispatchResearchUi({ kind: "DONE", seq });
-          // 外部由来の実企業知識のみ Company 名前空間へ永続化（fire-and-forget・ソフトフェイル）。
-          // local_rag は Vault 由来なので再インジェスト禁止（edinetCode 空で自然に除外される）。
+          // 実企業知識を Company 名前空間へ永続化（fire-and-forget・ソフトフェイル）。
+          // EDINET コードは企業の同一性を強める任意キーであり、Wikipedia や手動
+          // ファクトの保存条件にはしない。vault_company は既存 Vault 行からの
+          // 復元なので再インジェストしない。
           const f = result.facts;
-          if (f.edinetCode.trim() && f.businessSummary.trim()) {
+          const restoredFromCompanyVault = f.source.trim() === "vault_company";
+          const hasCompanyKnowledge =
+            f.businessSummary.trim().length > 0 ||
+            f.businessRisks.trim().length > 0 ||
+            f.performanceSummary.trim().length > 0;
+          if (!restoredFromCompanyVault && hasCompanyKnowledge) {
             void ingestCompanyKnowledge(f).catch((err) => {
               // eslint-disable-next-line no-console -- intentional diagnostic
               console.error(

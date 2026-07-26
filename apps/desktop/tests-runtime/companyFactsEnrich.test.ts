@@ -41,12 +41,14 @@ test("E-02 merge prefers filled base", () => {
   assertOk(merged.businessRisks === "リスク", "fill empty");
 });
 
-test("E-03 summarize hits caps length", () => {
+test("E-03 summarize hits preserves complete text", () => {
+  const longSentence = `${"あ".repeat(900)}。`;
   const text = summarizeKnowledgeHits([
-    { text_content: "alpha" },
-    { text_content: "beta" },
+    { text_content: longSentence },
+    { text_content: "末尾の段落です。" },
   ]);
-  assertOk(text.includes("alpha") && text.includes("beta"), "joined");
+  assertOk(text.startsWith(longSentence), "first hit is not hard-truncated");
+  assertOk(text.endsWith("末尾の段落です。"), "last hit is preserved");
 });
 
 test("E-04 patchFromEnriched only changed keys", () => {
@@ -54,7 +56,7 @@ test("E-04 patchFromEnriched only changed keys", () => {
   const after = emptyCompanyFacts({
     companyName: "A",
     businessSummary: "概要",
-    source: "local_rag",
+    source: "vault_company",
   });
   const patch = patchFromEnriched(before, after);
   assertOk(patch.businessSummary === "概要", "summary");
@@ -153,7 +155,10 @@ test("E-08 enrich: company lane empty leaves businessSummary blank", async () =>
     },
   );
   assertOk(result.facts.businessSummary === "", "summary stays empty");
-  assertOk(result.facts.source !== "local_rag", "no local_rag source without hits");
+  assertOk(
+    result.facts.source !== "vault_company",
+    "no vault_company source without hits",
+  );
 });
 
 test("E-09 buildWikipediaResearchQuery trims without adding qualifiers", () => {

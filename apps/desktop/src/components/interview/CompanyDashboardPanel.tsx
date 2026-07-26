@@ -1,7 +1,8 @@
-import { useReducer, useRef } from "react";
+import { useEffect, useReducer, useRef } from "react";
 
 import { parseCompanyAnalysis } from "../../lib/companyAnalysisParse";
 import { analyzeCompanyKnowledge } from "../../lib/pocketBrain";
+import type { CompanyFacts } from "../../lib/pocketBrain/types";
 import { redactHiddenReasoning } from "../../lib/redactHiddenReasoning";
 import { createStreamTerminalGate } from "../../lib/streamTerminalGate";
 import { uiErrorMessage } from "../../lib/uiErrorMessages";
@@ -23,6 +24,7 @@ type DashAction =
   | { type: "empty_vault" }
   | { type: "success" }
   | { type: "failure"; message: string }
+  | { type: "reset" }
   | { type: "end" };
 
 function initialState(): DashState {
@@ -53,6 +55,8 @@ function reducer(state: DashState, action: DashAction): DashState {
       return { ...state, done: true };
     case "failure":
       return { ...state, error: action.message, done: true };
+    case "reset":
+      return initialState();
     case "end":
       return { ...state, streaming: false };
     default:
@@ -64,23 +68,42 @@ function reducer(state: DashState, action: DashAction): DashState {
  * Delayed company-knowledge dashboard (Company namespace only).
  * Never auto-runs on mount.
  */
-export function CompanyDashboardPanel({ companyName }: { companyName: string }) {
+export function CompanyDashboardPanel({ facts }: { facts: CompanyFacts }) {
   const [state, dispatch] = useReducer(reducer, undefined, initialState);
-  const name = companyName.trim();
+  const name = facts.companyName.trim();
+  const hasVisibleKnowledge =
+    facts.businessSummary.trim().length > 0 ||
+    facts.businessRisks.trim().length > 0 ||
+    facts.performanceSummary.trim().length > 0;
+  const companyIdentity = `${name}\u0000${facts.edinetCode.trim()}\u0000${hasVisibleKnowledge ? "ready" : "empty"}`;
   const throttle = useThrottledStream((chunk) => {
     dispatch({ type: "token", text: chunk });
   });
   const runningRef = useRef(false);
+  const identityRef = useRef(companyIdentity);
+
+  useEffect(() => {
+    if (identityRef.current === companyIdentity) return;
+    identityRef.current = companyIdentity;
+    throttle.flushAndStop();
+    dispatch({ type: "reset" });
+  }, [companyIdentity, throttle.flushAndStop]);
 
   async function onGenerate() {
     if (!name || state.streaming || runningRef.current) return;
+    const requestIdentity = companyIdentity;
     runningRef.current = true;
     dispatch({ type: "start" });
     const terminal = createStreamTerminalGate(STREAM_TERMINAL_TIMEOUT_MS);
     let errored = false;
     try {
-      const result = await analyzeCompanyKnowledge(name, (event) => {
-        if (!terminal.isPending()) return;
+      const result = await analyzeCompanyKnowledge(facts, (event) => {
+        if (
+          !terminal.isPending() ||
+          identityRef.current !== requestIdentity
+        ) {
+          return;
+        }
         if (event.error) {
           // eslint-disable-next-line no-console -- intentional diagnostic
           console.error("[CompanyDashboardPanel] stream error:", event.error);
@@ -103,6 +126,10 @@ export function CompanyDashboardPanel({ companyName }: { companyName: string }) 
         }
       });
 
+      if (identityRef.current !== requestIdentity) {
+        terminal.settle();
+        return;
+      }
       if (result.context_count === 0) {
         terminal.settle();
         dispatch({ type: "empty_vault" });
@@ -116,14 +143,18 @@ export function CompanyDashboardPanel({ companyName }: { companyName: string }) 
     } catch (err) {
       // eslint-disable-next-line no-console -- intentional diagnostic
       console.error("[CompanyDashboardPanel] analyze failed:", err);
-      throttle.flushAndStop();
-      dispatch({
-        type: "failure",
-        message: uiErrorMessage("INTERVIEW_RESPONSE"),
-      });
+      if (identityRef.current === requestIdentity) {
+        throttle.flushAndStop();
+        dispatch({
+          type: "failure",
+          message: uiErrorMessage("INTERVIEW_RESPONSE"),
+        });
+      }
     } finally {
       terminal.abort();
-      dispatch({ type: "end" });
+      if (identityRef.current === requestIdentity) {
+        dispatch({ type: "end" });
+      }
       runningRef.current = false;
     }
   }
@@ -182,11 +213,20 @@ export function CompanyDashboardPanel({ companyName }: { companyName: string }) 
           {sec.items.length === 0 ? (
             <p className="hint">（箇条書きなし）</p>
           ) : (
-            sec.items.map((item) => (
-              <div key={item} className="term-row">
-                <span className="term-value">- {item}</span>
-              </div>
-            ))
+            // NOT `term-row`/`term-value`: those are for short right-aligned
+            // key/value metrics (`.term-value` is `flex-shrink: 0`), so long
+            // prose bullets refused to shrink and overflowed the card to the
+            // right on device (2026-07-25).
+            // Index in the key, not the text alone: the model can emit the same
+            // bullet twice (observed on device — 逆質問 repeated verbatim), and a
+            // duplicate React key silently breaks reconciliation for that list.
+            <ul className="company-analysis-list">
+              {sec.items.map((item, i) => (
+                <li key={`${i}-${item}`} className="company-analysis-item">
+                  {item}
+                </li>
+              ))}
+            </ul>
           )}
         </div>
       ))}

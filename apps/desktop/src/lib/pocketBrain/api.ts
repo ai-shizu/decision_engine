@@ -471,11 +471,12 @@ export function getInterviewSession(
 
 /** Company-namespace dashboard analysis (streams tokens). */
 export function analyzeCompanyKnowledge(
-  companyName: string,
+  facts: CompanyFacts,
   onToken: (event: TokenEvent) => void,
 ): Promise<SimSessionResult> {
   return pocketInvoke("analyze_company_knowledge", {
-    companyName,
+    companyName: facts.companyName,
+    companyFacts: facts,
     onToken: tokenChannel(onToken),
   });
 }

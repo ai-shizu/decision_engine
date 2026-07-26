@@ -1,3 +1,5 @@
+import { useState } from "react";
+
 import type { CompanyFacts } from "../../lib/pocketBrain/types";
 
 interface CompanyFactsFormProps {
@@ -35,12 +37,16 @@ export function CompanyFactsForm({
   researching = false,
   provenanceLabel = null,
 }: CompanyFactsFormProps) {
+  const [summaryExpanded, setSummaryExpanded] = useState(false);
+  const [editSummary, setEditSummary] = useState(false);
+  const [editorExpanded, setEditorExpanded] = useState(false);
   const tag = readinessTag(facts);
   const name = facts.companyName.trim();
   const summary = facts.businessSummary.trim()
     ? previewSummary(facts.businessSummary)
     : null;
   const showPreview = name.length > 0;
+  const truncated = summary !== null && summary.chars > 120;
 
   return (
     <div
@@ -109,20 +115,39 @@ export function CompanyFactsForm({
               </span>
             </div>
           ) : null}
-          {facts.source.trim() === "local_rag" ? (
-            <p className="term-tag term-tag--danger" role="status">
-              ⚠ 個人 Vault 由来の要約です
+          {/* Was a red "個人 Vault 由来" alarm keyed on `local_rag`. That claim is
+              false: the lane searches the "company" namespace only, and
+              `namespace_of` fails closed to Personal for unknown ids, so a
+              Personal chunk cannot be returned. Since the Wikipedia lane opened,
+              these hits are normally the ingested company article read back from
+              the Vault — a red danger chip there sends investigations after a
+              breach that cannot happen. Report provenance, do not alarm. */}
+          {facts.source.trim() === "vault_company" ? (
+            <p className="term-tag term-tag--muted" role="status">
+              Vault（企業空間）から復元
             </p>
           ) : null}
+          {/* Was a bare <details> carrying `.term-value`, which is `text-align:
+              right` + `flex-shrink: 0` — meant for short right-aligned metrics.
+              Long prose came out ragged/right-aligned and the collapsed summary
+              line stayed duplicated above the expanded body. Prose gets its own
+              left-aligned block and an explicit toggle. */}
           {summary ? (
-            <div className="term-row">
+            <div className="company-summary-block">
               <span className="term-source-name">事業概要</span>
-              <details className="term-value" style={{ overflowWrap: "anywhere" }}>
-                <summary>
-                  {summary.short}（全 {summary.chars} 文字）
-                </summary>
-                <p style={{ whiteSpace: "pre-wrap", margin: "0.4em 0 0" }}>{summary.full}</p>
-              </details>
+              <p className="company-summary-text">
+                {summaryExpanded ? summary.full : summary.short}
+              </p>
+              {truncated ? (
+                <button
+                  type="button"
+                  className="ghost company-summary-toggle"
+                  aria-expanded={summaryExpanded}
+                  onClick={() => setSummaryExpanded((v) => !v)}
+                >
+                  {summaryExpanded ? "閉じる" : `もっと見る（全 ${summary.chars} 文字）`}
+                </button>
+              ) : null}
             </div>
           ) : null}
           <div className="term-row">
@@ -152,16 +177,56 @@ export function CompanyFactsForm({
           aria-required="true"
         />
       </div>
-      <div className="term-row config-row">
-        <span className="term-source-name">事業概要</span>
-        <textarea
-          rows={3}
-          value={facts.businessSummary}
-          disabled={disabled}
-          onChange={(e) => onPatch({ businessSummary: e.target.value })}
-          placeholder="事業内容の要約（空なら自動補強を試行）"
-        />
-      </div>
+      {/* Once the preview above shows the fetched summary, repeating the whole
+          text in an editable box is pure duplication and pushed the rest of the
+          form off screen. Collapse it behind an explicit toggle rather than
+          deleting it: this component is the *offline-inject* editor (see the
+          docstring), so a user with no egress must still be able to type a
+          summary by hand. Empty summary ⇒ the box is shown outright. */}
+      {summary && !editSummary ? (
+        <div className="term-row config-row">
+          <span className="term-source-name">事業概要</span>
+          <button
+            type="button"
+            className="ghost company-summary-toggle"
+            onClick={() => setEditSummary(true)}
+          >
+            手動で編集する
+          </button>
+        </div>
+      ) : (
+        <div className="term-row config-row">
+          <span className="term-source-name">事業概要</span>
+          <div className="company-summary-editor">
+            <textarea
+              id="company-business-summary-editor"
+              className={`company-summary-editor-textarea${editorExpanded ? " is-expanded" : ""}`}
+              rows={editorExpanded ? 12 : 3}
+              value={facts.businessSummary}
+              disabled={disabled}
+              onChange={(e) => {
+                // If this field started empty, keep the editor open after the
+                // first keystroke instead of immediately collapsing to the
+                // "手動で編集する" button on the next render.
+                setEditSummary(true);
+                onPatch({ businessSummary: e.target.value });
+              }}
+              placeholder="事業内容の要約（空なら自動補強を試行）"
+            />
+            {summary ? (
+              <button
+                type="button"
+                className="ghost company-summary-toggle"
+                aria-controls="company-business-summary-editor"
+                aria-expanded={editorExpanded}
+                onClick={() => setEditorExpanded((v) => !v)}
+              >
+                {editorExpanded ? "閉じる" : `もっと見る（全 ${summary.chars} 文字）`}
+              </button>
+            ) : null}
+          </div>
+        </div>
+      )}
       <div className="term-row config-row">
         <span className="term-source-name">事業リスク</span>
         <textarea

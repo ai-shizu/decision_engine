@@ -6806,3 +6806,120 @@ button.secondary {
     overflow-wrap: anywhere;
   }
 }
+
+/* ─── Company analysis dashboard (2026-07-25 device E2E) ─────────────────────
+   The bullets used to reuse `.term-row` / `.term-value`, which exist for short
+   right-aligned key/value metrics — `.term-value` is `flex-shrink: 0`, so long
+   prose refused to shrink and ran off the right edge of the card on device.
+   These are prose lists, so they get their own left-aligned, wrapping style. */
+.company-analysis-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.company-analysis-item {
+  position: relative;
+  padding: 4px 0 4px 1.1em;
+  font-family: var(--font-mono);
+  font-size: 0.85rem;
+  line-height: 1.6;
+  color: var(--text-muted);
+  text-align: left;
+  overflow-wrap: anywhere;
+  word-break: normal;
+}
+
+.company-analysis-item::before {
+  content: "-";
+  position: absolute;
+  left: 0;
+  color: var(--text-dim);
+}
+
+/* Belt-and-braces: nothing inside an analysis card may establish a horizontal
+   scroll of its own. */
+.company-dashboard-panel .term-panel {
+  overflow-x: hidden;
+}
+
+@media (max-width: 30rem) {
+  .company-analysis-item {
+    font-size: 0.9rem;
+    line-height: 1.7;
+  }
+}
+
+/* Company summary preview: prose, not a metric row. `.term-value` (right
+   aligned, flex-shrink:0) made long text ragged and overflow; this block is a
+   plain left-aligned column with an explicit expand toggle. */
+.company-summary-block {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 6px 0;
+}
+
+.company-summary-text {
+  margin: 0;
+  font-family: var(--font-mono);
+  font-size: 0.85rem;
+  line-height: 1.7;
+  color: var(--text-muted);
+  text-align: left;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.company-summary-toggle {
+  align-self: flex-start;
+  font-size: 0.8rem;
+  padding: 6px 10px;
+}
+
+.company-summary-editor {
+  display: flex;
+  flex: 1 1 auto;
+  min-width: 0;
+  flex-direction: column;
+  align-items: stretch;
+  gap: var(--s2);
+}
+
+.config-row .company-summary-editor-textarea {
+  flex: none;
+  width: 100%;
+  overflow-y: auto;
+  resize: vertical;
+  -webkit-overflow-scrolling: touch;
+}
+
+.config-row .company-summary-editor-textarea.is-expanded {
+  min-height: min(22rem, 55vh);
+  max-height: 60vh;
+}
+
+@media (max-width: 30rem) {
+  .company-summary-text {
+    font-size: 0.9rem;
+    max-height: 45vh;
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .company-summary-toggle {
+    min-height: 44px;
+    padding: 10px 14px;
+    font-size: 0.85rem;
+  }
+
+  /* Override the shared interview-form 72px cap only after the user explicitly
+     expands the summary editor. Other interview textareas stay compact. */
+  .mobile-chrome
+    .interview-shared-context
+    .company-facts-form
+    .company-summary-editor-textarea.is-expanded {
+    min-height: min(24rem, 55dvh);
+    max-height: 55dvh;
+  }
+}
