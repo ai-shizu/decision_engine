@@ -24,9 +24,9 @@ mod monitor;
 // (docs/m3_action_plan.md §4.1 / §4.2.1). Feature-gated so the default desktop
 // build never pulls rusqlite/SQLCipher or Apple security bindings.
 #[cfg(feature = "secure-vault")]
-mod db;
-#[cfg(feature = "secure-vault")]
 mod commands_db;
+#[cfg(feature = "secure-vault")]
+mod db;
 
 /// Phase 10: Taptic Engine IPC (soft no-op off iOS).
 mod haptics;
@@ -59,9 +59,9 @@ use engine::EngineManager;
 use knowledge::NetworkPolicyStore;
 #[cfg(not(mobile))]
 use tauri::webview::{DownloadEvent, NewWindowResponse};
-use tauri::RunEvent;
 #[cfg(all(feature = "secure-vault", target_vendor = "apple"))]
 use tauri::Manager;
+use tauri::RunEvent;
 #[cfg(not(mobile))]
 use tauri::WebviewWindowBuilder;
 
@@ -151,7 +151,10 @@ pub fn run() {
             llm::LlmHandle::unavailable(error)
         });
         let governor = handle.governor();
-        (builder.manage(Arc::clone(&monitor)).manage(handle), governor)
+        (
+            builder.manage(Arc::clone(&monitor)).manage(handle),
+            governor,
+        )
     };
 
     builder
@@ -341,6 +344,12 @@ pub fn run() {
                 feature = "secure-vault",
                 target_vendor = "apple"
             ))]
+            llm::commands_sim::enrich_company_facts_from_edinet,
+            #[cfg(all(
+                feature = "pocket-brain",
+                feature = "secure-vault",
+                target_vendor = "apple"
+            ))]
             llm::commands_sim::start_interview_session,
             #[cfg(all(
                 feature = "pocket-brain",
@@ -441,7 +450,8 @@ pub fn run() {
             {
                 let handle = app.handle().clone();
                 let manager = Arc::clone(&engine);
-                tauri::async_runtime::block_on(manager.start(handle)).map_err(std::io::Error::other)?;
+                tauri::async_runtime::block_on(manager.start(handle))
+                    .map_err(std::io::Error::other)?;
 
                 let window_config = app
                     .config()

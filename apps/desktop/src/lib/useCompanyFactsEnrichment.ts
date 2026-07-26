@@ -5,6 +5,7 @@ import { useEffect, useReducer, useRef, useState } from "react";
 import {
   enrichCompanyFacts,
   patchFromEnriched,
+  type EnrichmentSnapshot,
   type CompanyFactsEnrichResult,
 } from "./companyFactsEnrich";
 import { todayIso } from "./dateUtils";
@@ -12,26 +13,64 @@ import {
   getKnowledgeResearchPolicy,
   knowledgeResearch,
 } from "./engine";
-import { fetchEdinetCompanyFacts, ingestCompanyKnowledge, searchKnowledge } from "./pocketBrain";
-import type { CompanyFacts } from "./pocketBrain/types";
+import { enrichCompanyFactsFromEdinet, ingestCompanyKnowledge, searchKnowledge } from "./pocketBrain";
+import type { CompanyFacts, SubjectKey } from "./pocketBrain/types";
 import {
   INITIAL_RESEARCH_UI_STATE,
   isResearching,
   reduceResearchUi,
 } from "./researchUiReducer";
+import filerNameNormalizationGolden from "./filerNameNormalizationGolden.json";
 
 const DEBOUNCE_MS = 700;
 
-function liveDeps() {
+export function normalizeSubjectName(value: string): SubjectKey {
+  let normalized = value.normalize("NFKC").trim();
+  for (const suffix of [
+    "株式会社", "有限会社", "合同会社", "合名会社", "合資会社",
+    "(株)", "（株）", "(有)", "（有）", "㈱", "㈲",
+    "Inc.", "Inc", "Corp.", "Corp", "Ltd.", "Ltd", "LLC",
+    "Co., Ltd.", "Co.,Ltd.", "Co. Ltd.",
+  ]) {
+    normalized = normalized.split(suffix).join("");
+  }
+  normalized = normalized
+    .replace(/[ \u3000・･.\/／\-ー—_]/g, "")
+    .toLowerCase();
+  return `name:${normalized}`;
+}
+
+export function filerNameNormalizationGoldenMatches(): boolean {
+  return filerNameNormalizationGolden.every(
+    ({ input, normalized }) => normalizeSubjectName(input) === `name:${normalized}`,
+  );
+}
+
+function liveDeps(
+  snapshot: EnrichmentSnapshot | undefined,
+  current: CompanyFacts,
+  switching: boolean,
+) {
+  const targetSubject = normalizeSubjectName(current.companyName);
   return {
     getPolicy: getKnowledgeResearchPolicy,
     knowledgeResearch,
     searchKnowledge: (query: string, limit?: number) =>
       searchKnowledge(query, limit, "company"),
     fetchEdinetByName: (args: { companyName: string; edinetDate: string }) =>
-      fetchEdinetCompanyFacts({
-        companyName: args.companyName,
+      enrichCompanyFactsFromEdinet({
+        schemaVersion: 3,
+        subjectKey: switching ? targetSubject : (snapshot?.subjectKey ?? targetSubject),
+        subjectRevision: snapshot?.subjectRevision ?? 0,
+        subjectTransition:
+          switching && snapshot
+            ? { kind: "switch", from: snapshot.subjectKey, to: targetSubject }
+            : null,
+        factCells: snapshot?.factCells ?? null,
+        companyFacts: current,
+        edinetCode: null,
         edinetDate: args.edinetDate,
+        filingText: null,
       }),
     todayIso,
   };
@@ -55,12 +94,26 @@ export function useCompanyFactsEnrichment(
   const [provenanceLabel, setProvenanceLabel] = useState<string | null>(null);
   const seqRef = useRef(0);
   const factsRef = useRef(facts);
+  const enrichmentSnapshotRef = useRef<EnrichmentSnapshot | undefined>(undefined);
+  const enrichmentCompanyRef = useRef<string | undefined>(undefined);
   factsRef.current = facts;
   const onPatchRef = useRef(onPatch);
   onPatchRef.current = onPatch;
 
   async function runEnrich(current: CompanyFacts): Promise<CompanyFactsEnrichResult> {
-    return enrichCompanyFacts(current, liveDeps());
+    const normalizedCompany = current.companyName.normalize("NFKC").trim();
+    const switching =
+      enrichmentCompanyRef.current !== undefined &&
+      enrichmentCompanyRef.current !== normalizedCompany;
+    const result = await enrichCompanyFacts(
+      current,
+      liveDeps(enrichmentSnapshotRef.current, current, switching),
+    );
+    if (result.enrichmentSnapshot) {
+      enrichmentSnapshotRef.current = result.enrichmentSnapshot;
+      enrichmentCompanyRef.current = normalizedCompany;
+    }
+    return result;
   }
 
   useEffect(() => {

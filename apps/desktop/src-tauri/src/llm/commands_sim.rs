@@ -6,20 +6,26 @@
 //! Channel pipeline (M7 cancel/purge unchanged).
 
 use std::collections::HashSet;
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 use tauri::ipc::Channel;
 use tauri::{AppHandle, State};
 
 use crate::db::{VaultErrorCode, VaultHandle};
+#[cfg(feature = "egress-live")]
+use crate::knowledge::edinet_client::subscription_key_from_env;
 use crate::knowledge::edinet_client::{
-    normalize_filer_key, render_company_facts_block, sanitize_company_facts,
-    subscription_key_from_env, CompanyFacts, EdinetError,
+    normalize_filer_key, render_company_facts_block, sanitize_company_facts, CompanyFacts,
+    EdinetError, EdinetFactAcquisition,
 };
-use crate::knowledge::{
-    refuse_if_egress_unavailable, refuse_if_policy_off, NetworkPolicyStore,
+use crate::knowledge::fact_merge::{
+    apply_subject_transition, cell_from_wire, cell_to_wire, cells_from_edinet_acquisition,
+    display_company_facts, merge_fact_cells, protected_cells_from_company_facts, FactCell,
+    FactCellWire, FactCells, FactOrigin, FactOriginWire, FactStorage, FactStorageWire, SubjectKey,
+    SubjectTransition,
 };
+use crate::knowledge::{refuse_if_egress_unavailable, refuse_if_policy_off, NetworkPolicyStore};
 use crate::llm::commands_consult::ensure_model_loaded;
 use crate::llm::context_budget::USER_TURN_MARKERS;
 use crate::llm::params::GenerationParams;
@@ -49,7 +55,7 @@ const EDINET_FETCH_DEADLINE: Duration = Duration::from_secs(15);
 /// How many calendar days before anchor to scan when resolving by filer name.
 const EDINET_NAME_LOOKBACK_DAYS: u32 = 21;
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SimGenParams {
     pub n_ctx: Option<u32>,
@@ -101,6 +107,138 @@ pub struct FetchEdinetFactsParams {
     /// Filing date YYYY-MM-DD (anchor for list scan).
     pub edinet_date: Option<String>,
     pub filing_text: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EdinetEnrichmentRequestV3 {
+    pub schema_version: u16,
+    pub subject_key: SubjectKey,
+    pub subject_revision: i64,
+    pub subject_transition: Option<SubjectTransition>,
+    pub fact_cells: Option<Vec<FactCellWire>>,
+    pub company_facts: Option<CompanyFacts>,
+    pub edinet_code: Option<String>,
+    pub edinet_date: Option<String>,
+    pub filing_text: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EdinetEnrichmentResponseV3 {
+    pub schema_version: u16,
+    pub facts: CompanyFacts,
+    pub fact_cells: Vec<FactCellWire>,
+    pub subject_key: SubjectKey,
+    pub subject_revision: i64,
+    pub field_provenance: Vec<FieldProvenance>,
+    pub fetch: FetchStatus,
+    pub extraction: ExtractionStatus,
+    pub discovery_coverage: DiscoveryCoverage,
+    pub discovery_result: DiscoveryResult,
+    pub fact_persistence: FactPersistence,
+    pub evidence_persistence: EvidencePersistence,
+    pub served_from: ServedFrom,
+    pub freshness: FilingFreshnessReport,
+    pub warnings: Vec<EdinetWarningCode>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FieldProvenance {
+    pub field: String,
+    pub origin: FactOriginWire,
+    pub storage: FactStorageWire,
+    pub doc_id: Option<String>,
+    pub submitted_at: Option<String>,
+    pub fetched_at: Option<i64>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FilingFreshnessReport {
+    pub selected_doc_id: Option<String>,
+    pub submitted_at: Option<String>,
+    pub correction_available: Tristate,
+}
+
+macro_rules! status_enum {
+    ($name:ident { $($variant:ident),+ $(,)? }) => {
+        #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+        #[allow(dead_code)] // Stable V3 wire variants; not every status is emitted by this tranche.
+        #[serde(rename_all = "snake_case")]
+        pub enum $name { $($variant),+ }
+    };
+}
+status_enum!(FetchStatus {
+    NotAttempted,
+    Succeeded,
+    NetworkFailed,
+    ApiError,
+    Cancelled,
+    MemoryPressure
+});
+status_enum!(ExtractionStatus {
+    None,
+    FinancialsOnly,
+    NarrativesOnly,
+    Both,
+    ParseFailed,
+    Cancelled
+});
+status_enum!(DiscoveryCoverage {
+    NotRun,
+    WindowComplete,
+    WindowIncomplete,
+    Pinned
+});
+status_enum!(DiscoveryResult {
+    NotRun,
+    Selected,
+    NoEligibleInWindow,
+    IdentityAmbiguous
+});
+status_enum!(FactPersistence {
+    NotAttempted,
+    Persisted,
+    Conflict,
+    Failed
+});
+status_enum!(EvidencePersistence {
+    NotAttempted,
+    SavedPendingEmbedding,
+    Ready,
+    Failed
+});
+status_enum!(ServedFrom {
+    Live,
+    Cache,
+    Mixed,
+    NotApplicable
+});
+status_enum!(Tristate { Yes, No, Unknown });
+status_enum!(EdinetWarningCode {
+    VaultReadFailed,
+    VaultWriteFailed,
+    SoftFallback
+});
+
+struct ResolvedEdinetAcquisition {
+    acquisition: EdinetFactAcquisition,
+    coverage: DiscoveryCoverage,
+    result: DiscoveryResult,
+    served_from: ServedFrom,
+    correction_available: Tristate,
+}
+
+struct EdinetResolveFailure {
+    message: String,
+    fetch: FetchStatus,
+    extraction: ExtractionStatus,
+    coverage: DiscoveryCoverage,
+    result: DiscoveryResult,
+    served_from: ServedFrom,
+    correction_available: Tristate,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -223,13 +361,77 @@ fn artifact_turn_seed(session: &InterviewSession) -> Option<u32> {
         .map(|a| a.seed_for_turn(session.total_turns as usize))
 }
 
+/// Production entry: dual-factor gate + env key + (egress-live) Reqwest factory.
+/// Tests use [`resolve_company_facts_with`] to inject key/factory and count calls.
 async fn resolve_company_facts(
     store: &NetworkPolicyStore,
+    _vault: &VaultHandle,
     injected: Option<CompanyFacts>,
     edinet_code: Option<String>,
     edinet_date: Option<String>,
     filing_text: Option<String>,
 ) -> Result<CompanyFacts, String> {
+    #[cfg(feature = "egress-live")]
+    {
+        use crate::knowledge::net_gateway::ReqwestTransport;
+        let mut discovery_cache =
+            crate::knowledge::edinet_discovery::VaultDiscoveryCache::new(_vault);
+        resolve_company_facts_with(
+            store,
+            Some(&mut discovery_cache),
+            injected,
+            edinet_code,
+            edinet_date,
+            filing_text,
+            || subscription_key_from_env(),
+            || ReqwestTransport::new().map_err(|_| "edinet_transport_unavailable".to_string()),
+        )
+        .await
+    }
+    #[cfg(not(feature = "egress-live"))]
+    {
+        // refuse_if_egress_unavailable always fails here — key/factory are never
+        // invoked. Types exist only so the shared with() path typechecks.
+        resolve_company_facts_with(
+            store,
+            None,
+            injected,
+            edinet_code,
+            edinet_date,
+            filing_text,
+            || Err(EdinetError::ApiKeyMissing),
+            || Err::<EgressDisabledTransport, String>("edinet_transport_unavailable".into()),
+        )
+        .await
+    }
+}
+
+/// Injectable resolve path (Step 1 contract seam).
+///
+/// Call order after local early-returns:
+/// 1. policy ∧ egress gate — on fail: soft-fallback, **no** key/factory/HTTP
+/// 2. `key_provider` — on fail: soft-fallback, **no** factory/HTTP
+/// 3. `transport_factory` (lazy) — on fail: soft-fallback, **no** HTTP get
+/// 4. `HttpTransport::get` via EDINET list fetch — on fail: soft-fallback
+async fn resolve_company_facts_with<KP, TF, T>(
+    store: &NetworkPolicyStore,
+    mut discovery_cache: Option<&mut dyn crate::knowledge::edinet_discovery::DiscoveryCache>,
+    injected: Option<CompanyFacts>,
+    edinet_code: Option<String>,
+    edinet_date: Option<String>,
+    filing_text: Option<String>,
+    mut key_provider: KP,
+    mut transport_factory: TF,
+) -> Result<CompanyFacts, String>
+where
+    KP: FnMut() -> Result<String, EdinetError>,
+    TF: FnMut() -> Result<T, String>,
+    T: crate::knowledge::net_gateway::HttpTransport,
+{
+    use crate::knowledge::edinet_client::{
+        fetch_company_facts_by_code, fetch_company_facts_by_name,
+    };
+
     let injected_sanitized = match injected {
         Some(facts) => Some(sanitize_company_facts(&facts).map_err(map_edinet_err)?),
         None => None,
@@ -269,102 +471,157 @@ async fn resolve_company_facts(
         return Err("company_facts_or_edinet_code_required".into());
     }
 
-    // Policy/egress off → soft-fail to injected company name (interview must not die).
+    // Policy/egress off → soft-fail before key or transport (interview must not die).
     if refuse_if_policy_off(store.get()).is_err() || refuse_if_egress_unavailable().is_err() {
-        if let Some(base) = injected_sanitized {
-            if !base.company_name.trim().is_empty() {
-                return Ok(base);
-            }
-        }
-        return Err("EGRESS_LIVE_NOT_READY".into());
+        return soft_fallback_named_base(injected_sanitized, "EGRESS_LIVE_NOT_READY");
     }
-    let key = match subscription_key_from_env() {
+    let key = match key_provider() {
         Ok(k) => k,
         Err(err) => {
-            if let Some(base) = injected_sanitized {
-                if !base.company_name.trim().is_empty() {
-                    return Ok(base);
-                }
-            }
-            return Err(map_edinet_err(err));
+            return soft_fallback_named_base(injected_sanitized, &map_edinet_err(err));
         }
     };
 
-    #[cfg(feature = "egress-live")]
-    {
-        use crate::knowledge::edinet_client::{
-            fetch_company_facts_by_code, fetch_company_facts_by_name,
-        };
-        use crate::knowledge::net_gateway::ReqwestTransport;
-        let transport = ReqwestTransport::new().map_err(|e| e.to_string())?;
-
-        let fetched = if can_fetch_by_code {
-            fetch_company_facts_by_code(
-                &transport,
-                date.trim(),
-                code.trim(),
-                &key,
-                filing_text.as_deref(),
-                EDINET_FETCH_DEADLINE,
-            )
-            .await
-        } else {
-            fetch_company_facts_by_name(
-                &transport,
-                date.trim(),
-                &lookup_name,
-                &key,
-                filing_text.as_deref(),
-                EDINET_FETCH_DEADLINE,
-                EDINET_NAME_LOOKBACK_DAYS,
-            )
-            .await
-        };
-
-        match fetched {
-            Ok(fetched) => {
-                if let Some(base) = injected_sanitized {
-                    Ok(merge_company_facts_prefer_filled(&base, &fetched))
-                } else {
-                    Ok(fetched)
-                }
-            }
-            Err(err) => {
-                if let Some(base) = injected_sanitized {
-                    if !base.company_name.trim().is_empty() {
-                        return Ok(base);
-                    }
-                }
-                Err(map_edinet_err(err))
-            }
+    // Transport construction failure stays inside soft-fallback — never wipe base.
+    let transport = match transport_factory() {
+        Ok(t) => t,
+        Err(msg) => {
+            return soft_fallback_named_base(injected_sanitized, &msg);
         }
-    }
+    };
 
-    #[cfg(not(feature = "egress-live"))]
-    {
-        let _ = (
-            filing_text,
-            key,
+    let fetched = if let Some(cache) = discovery_cache.as_deref_mut() {
+        use crate::knowledge::edinet_client::{merge_company_facts, ListCandidateFilter};
+        use crate::knowledge::edinet_discovery::{
+            discover_eligible_in_window, may_transition_to_zip, DiscoverParams, DiscoveryResult,
+            DEFAULT_DISCOVERY_WINDOW_DAYS_BACK,
+        };
+        let (subject_key, filter) = if can_fetch_by_code {
+            (
+                format!("edinet:{}", code.trim()),
+                ListCandidateFilter::by_edinet_code(code.trim())
+                    .ok_or_else(|| "edinet_invalid_argument".to_string())?,
+            )
+        } else {
+            (
+                format!("name:{}", normalize_filer_key(&lookup_name)),
+                ListCandidateFilter::by_filer_name(&lookup_name)
+                    .ok_or_else(|| "edinet_invalid_argument".to_string())?,
+            )
+        };
+        match discover_eligible_in_window(
+            cache,
+            &transport,
+            DiscoverParams {
+                subject_key: &subject_key,
+                anchor_date: date.trim(),
+                window_days_back: DEFAULT_DISCOVERY_WINDOW_DAYS_BACK,
+                filter: &filter,
+                subscription_key: &key,
+                now_secs: now_unix(),
+                max_live_gets: None,
+                deadline: EDINET_FETCH_DEADLINE,
+            },
+        )
+        .await
+        {
+            Ok(outcome) if may_transition_to_zip(&outcome) => match outcome.selected {
+                Some(selected) => merge_company_facts(&selected, filing_text.as_deref()),
+                None => Err(EdinetError::Malformed),
+            },
+            Ok(outcome) if outcome.result == DiscoveryResult::IdentityAmbiguous => {
+                Err(EdinetError::AmbiguousSelection)
+            }
+            Ok(_) => Err(EdinetError::NoEligibleFiling),
+            Err(crate::knowledge::edinet_discovery::DiscoveryError::Edinet(err)) => Err(err),
+            Err(_) => Err(EdinetError::Malformed),
+        }
+    } else if can_fetch_by_code {
+        fetch_company_facts_by_code(
+            &transport,
+            date.trim(),
+            code.trim(),
+            &key,
+            filing_text.as_deref(),
+            EDINET_FETCH_DEADLINE,
+        )
+        .await
+    } else {
+        fetch_company_facts_by_name(
+            &transport,
+            date.trim(),
+            &lookup_name,
+            &key,
+            filing_text.as_deref(),
             EDINET_FETCH_DEADLINE,
             EDINET_NAME_LOOKBACK_DAYS,
-            can_fetch_by_code,
-            can_fetch_by_name,
-            lookup_name,
-            code,
-            date,
-        );
-        if let Some(base) = injected_sanitized {
-            if !base.company_name.trim().is_empty() {
-                return Ok(base);
+        )
+        .await
+    };
+
+    match fetched {
+        Ok(fetched) => {
+            if let Some(base) = injected_sanitized {
+                Ok(merge_company_facts_prefer_filled(&base, &fetched))
+            } else {
+                Ok(fetched)
             }
         }
-        Err("EGRESS_LIVE_NOT_READY".into())
+        Err(err) => soft_fallback_named_base(injected_sanitized, &map_edinet_err(err)),
     }
 }
 
+/// Type placeholder when `egress-live` is off (factory never succeeds / never used).
+#[cfg(not(feature = "egress-live"))]
+struct EgressDisabledTransport;
+
+#[cfg(not(feature = "egress-live"))]
+struct EgressDisabledBody;
+
+#[cfg(not(feature = "egress-live"))]
+impl crate::knowledge::net_gateway::ResponseBody for EgressDisabledBody {
+    fn next_chunk(
+        &mut self,
+    ) -> impl std::future::Future<
+        Output = Option<Result<Vec<u8>, crate::knowledge::net_gateway::GatewayError>>,
+    > + Send {
+        async { None }
+    }
+}
+
+#[cfg(not(feature = "egress-live"))]
+impl crate::knowledge::net_gateway::HttpTransport for EgressDisabledTransport {
+    type Body = EgressDisabledBody;
+
+    fn get(
+        &self,
+        _url: &str,
+        _request_deadline: std::time::Duration,
+    ) -> impl std::future::Future<
+        Output = Result<
+            (crate::knowledge::net_gateway::ResponseMeta, Self::Body),
+            crate::knowledge::net_gateway::GatewayError,
+        >,
+    > + Send {
+        async { Err(crate::knowledge::net_gateway::GatewayError::WireViolation) }
+    }
+}
+
+/// Soft-fallback: keep sanitize済み base when it has a company name; else Err.
+/// Never returns a fresh empty `CompanyFacts::default()`.
+fn soft_fallback_named_base(
+    base: Option<CompanyFacts>,
+    err_without_base: &str,
+) -> Result<CompanyFacts, String> {
+    if let Some(base) = base {
+        if !base.company_name.trim().is_empty() {
+            return Ok(base);
+        }
+    }
+    Err(err_without_base.to_string())
+}
+
 /// Fill empty fields on `base` from `incoming` (interview start merge).
-/// Only compiled with `egress-live` — the sole call site is the live EDINET fetch path.
-#[cfg(feature = "egress-live")]
 fn merge_company_facts_prefer_filled(base: &CompanyFacts, incoming: &CompanyFacts) -> CompanyFacts {
     let pick = |cur: &str, next: &str| -> String {
         if !cur.trim().is_empty() {
@@ -375,8 +632,7 @@ fn merge_company_facts_prefer_filled(base: &CompanyFacts, incoming: &CompanyFact
             cur.to_string()
         }
     };
-    let source = if base.business_summary.trim().is_empty() && !incoming.source.trim().is_empty()
-    {
+    let source = if base.business_summary.trim().is_empty() && !incoming.source.trim().is_empty() {
         incoming.source.clone()
     } else {
         base.source.clone()
@@ -395,28 +651,656 @@ fn merge_company_facts_prefer_filled(base: &CompanyFacts, incoming: &CompanyFact
 /// Dual-gated EDINET list → [`CompanyFacts`] (UI prep / offline inject preferred).
 #[tauri::command]
 pub async fn fetch_edinet_company_facts(
+    vault: State<'_, VaultHandle>,
     store: State<'_, NetworkPolicyStore>,
+    llm: State<'_, LlmHandle>,
     params: FetchEdinetFactsParams,
 ) -> Result<CompanyFacts, String> {
-    let injected = params.company_name.as_ref().and_then(|n| {
-        let name = n.trim();
-        if name.is_empty() {
-            None
-        } else {
-            Some(CompanyFacts {
-                company_name: name.to_string(),
-                ..CompanyFacts::default()
-            })
-        }
-    });
-    resolve_company_facts(
+    let company_name = params.company_name.clone().unwrap_or_default();
+    let sanitized = sanitize_company_facts(&CompanyFacts {
+        company_name,
+        ..CompanyFacts::default()
+    })
+    .map_err(map_edinet_err)?;
+    let subject_key = if let Some(code) = params.edinet_code.as_deref() {
+        SubjectKey::try_from(format!("edinet:{}", code.trim()))
+    } else {
+        SubjectKey::try_from(format!(
+            "name:{}",
+            normalize_filer_key(&sanitized.company_name)
+        ))
+    }
+    .map_err(|_| "invalid subject key".to_string())?;
+    enrich_company_facts_from_edinet_inner(
+        vault.inner(),
         store.inner(),
-        injected,
-        params.edinet_code,
-        params.edinet_date,
-        params.filing_text,
+        llm.inner(),
+        EdinetEnrichmentRequestV3 {
+            schema_version: 3,
+            subject_key,
+            subject_revision: 0,
+            subject_transition: None,
+            fact_cells: None,
+            company_facts: Some(sanitized),
+            edinet_code: params.edinet_code,
+            edinet_date: params.edinet_date,
+            filing_text: params.filing_text,
+        },
     )
     .await
+    .map(|response| response.facts)
+}
+
+#[tauri::command]
+pub async fn enrich_company_facts_from_edinet(
+    vault: State<'_, VaultHandle>,
+    store: State<'_, NetworkPolicyStore>,
+    llm: State<'_, LlmHandle>,
+    request: EdinetEnrichmentRequestV3,
+) -> Result<EdinetEnrichmentResponseV3, String> {
+    enrich_company_facts_from_edinet_inner(vault.inner(), store.inner(), llm.inner(), request).await
+}
+
+async fn enrich_company_facts_from_edinet_inner(
+    vault: &VaultHandle,
+    store: &NetworkPolicyStore,
+    llm: &LlmHandle,
+    request: EdinetEnrichmentRequestV3,
+) -> Result<EdinetEnrichmentResponseV3, String> {
+    if request.schema_version != 3 || request.subject_revision < 0 {
+        return Err("invalid_v3_request".into());
+    }
+    if request.fact_cells.as_ref().is_some_and(|cells| {
+        cells.is_empty()
+            || cells.iter().any(|cell| {
+                cell.schema_version != 3
+                    || cell.revision != request.subject_revision
+                    || !matches!(
+                        cell.field.as_str(),
+                        "company_name"
+                            | "edinet_code"
+                            | "doc_id"
+                            | "business_summary"
+                            | "business_risks"
+                            | "performance_summary"
+                    )
+            })
+    }) {
+        return Err("invalid_v3_fact_cells".into());
+    }
+    if let Some(transition) = request.subject_transition.as_ref() {
+        let to = match transition {
+            SubjectTransition::Rekey { to, .. } | SubjectTransition::Switch { to, .. } => to,
+        };
+        if to != &request.subject_key {
+            return Err("invalid_subject_transition".into());
+        }
+    }
+    let sanitized_injected = request
+        .company_facts
+        .as_ref()
+        .map(sanitize_company_facts)
+        .transpose()
+        .map_err(map_edinet_err)?;
+    let params = FetchEdinetFactsParams {
+        company_name: sanitized_injected
+            .as_ref()
+            .map(|facts| facts.company_name.clone()),
+        edinet_code: request.edinet_code.clone(),
+        edinet_date: request.edinet_date.clone(),
+        filing_text: request.filing_text.clone(),
+    };
+    let subject = request.subject_key.clone();
+    let subject_wire = String::from(subject.clone());
+    let read_subject = request
+        .subject_transition
+        .as_ref()
+        .map(|transition| match transition {
+            SubjectTransition::Rekey { from, .. } | SubjectTransition::Switch { from, .. } => {
+                from.clone()
+            }
+        })
+        .unwrap_or_else(|| subject.clone());
+    let read_subject_wire = String::from(read_subject.clone());
+    let (vault_wire, read_failed) = match vault.fact_cells(read_subject_wire.clone()) {
+        Ok(cells) => (cells, false),
+        Err(_) => (Vec::new(), true),
+    };
+    let vault_revision = vault_wire
+        .iter()
+        .map(|cell| cell.revision)
+        .max()
+        .unwrap_or(0);
+    if !read_failed && stale_subject_revision(request.subject_revision, vault_revision) {
+        return current_v3_response(
+            vault,
+            &read_subject_wire,
+            read_subject,
+            FactPersistence::Conflict,
+            DiscoveryResult::NotRun,
+        );
+    }
+    let revision = request.subject_revision;
+    let input_wire = request.fact_cells.unwrap_or(vault_wire);
+    let existing: FactCells = input_wire
+        .iter()
+        .map(|cell| (cell.field.clone(), cell_from_wire(cell)))
+        .collect();
+    let is_switch = matches!(
+        request.subject_transition,
+        Some(SubjectTransition::Switch { .. })
+    );
+    let transitioned = apply_subject_transition(&existing, request.subject_transition.as_ref());
+    let base = if is_switch {
+        switch_base_from_company_facts(sanitized_injected.as_ref())
+    } else if transitioned.is_empty() {
+        sanitized_injected
+            .as_ref()
+            .map(protected_cells_from_company_facts)
+            .unwrap_or_default()
+    } else {
+        transitioned
+    };
+    let resolved = match resolve_typed_edinet_acquisition(
+        vault,
+        store,
+        llm,
+        sanitized_injected.as_ref(),
+        params.edinet_code.as_deref(),
+        params.edinet_date.as_deref(),
+        params.filing_text.as_deref(),
+    )
+    .await
+    {
+        Ok(resolved) => resolved,
+        Err(error) if base.is_empty() => return Err(error.message),
+        Err(error) => {
+            return Ok(v3_response(
+                wires_from_cells(&base, revision),
+                subject,
+                revision,
+                error.fetch,
+                error.extraction,
+                error.coverage,
+                error.result,
+                FactPersistence::NotAttempted,
+                error.served_from,
+                None,
+                error.correction_available,
+                vec![EdinetWarningCode::SoftFallback],
+            ))
+        }
+    };
+    let acquisition = &resolved.acquisition;
+    let incoming = cells_from_edinet_acquisition(acquisition);
+    let merged = merge_fact_cells(&base, &incoming);
+    let now = now_unix();
+    let wires = wires_from_cells(&merged, revision + 1);
+    let explicit_rekey_from =
+        request
+            .subject_transition
+            .as_ref()
+            .and_then(|transition| match transition {
+                SubjectTransition::Rekey { from, to } if to == &subject => Some(from.clone()),
+                _ => None,
+            });
+    if subject_wire.starts_with("name:") || explicit_rekey_from.is_some() {
+        let target = SubjectKey::try_from(format!("edinet:{}", acquisition.edinet_code()))
+            .map_err(|_| "invalid confirmed identity".to_string())?;
+        if target != subject && explicit_rekey_from.is_some() {
+            return Err("confirmed identity does not match rekey target".into());
+        }
+        let target_wire = String::from(target.clone());
+        let from_wire = explicit_rekey_from
+            .map(String::from)
+            .unwrap_or_else(|| subject_wire.clone());
+        let rekey_revision = if matches!(
+            request.subject_transition,
+            Some(SubjectTransition::Switch { .. })
+        ) {
+            0
+        } else {
+            revision
+        };
+        let persistence = match vault.fact_cells_rekey(
+            from_wire,
+            target_wire.clone(),
+            rekey_revision,
+            wires,
+            now,
+        ) {
+            Ok(_) => FactPersistence::Persisted,
+            Err(VaultErrorCode::Conflict) => FactPersistence::Conflict,
+            Err(VaultErrorCode::IdentityAmbiguous) => {
+                return current_v3_response(
+                    vault,
+                    &target_wire,
+                    target,
+                    FactPersistence::Conflict,
+                    DiscoveryResult::IdentityAmbiguous,
+                )
+            }
+            Err(_) => FactPersistence::Failed,
+        };
+        return persistence_response(vault, target, revision, persistence, &merged, &resolved);
+    }
+    let persist_revision = if matches!(
+        request.subject_transition,
+        Some(SubjectTransition::Switch { .. })
+    ) {
+        0
+    } else {
+        revision
+    };
+    let persistence = match vault.fact_cells_persist(subject_wire, persist_revision, wires, now) {
+        Ok(_) => FactPersistence::Persisted,
+        Err(VaultErrorCode::Conflict) => FactPersistence::Conflict,
+        Err(_) => FactPersistence::Failed,
+    };
+    persistence_response(vault, subject, revision, persistence, &merged, &resolved)
+}
+
+fn switch_base_from_company_facts(facts: Option<&CompanyFacts>) -> FactCells {
+    let mut cells = FactCells::new();
+    if let Some(company_name) = facts
+        .map(|facts| facts.company_name.trim())
+        .filter(|value| !value.is_empty())
+    {
+        cells.insert(
+            "company_name".into(),
+            FactCell {
+                value: company_name.into(),
+                origin: FactOrigin::Manual,
+                storage: FactStorage::Session,
+                doc_id: None,
+                submitted_at: None,
+                fetched_at: None,
+            },
+        );
+    }
+    cells
+}
+
+fn wires_from_cells(cells: &FactCells, revision: i64) -> Vec<FactCellWire> {
+    cells
+        .iter()
+        .map(|(field, cell)| cell_to_wire(field, cell, revision, 3))
+        .collect()
+}
+
+fn stale_subject_revision(expected: i64, current: i64) -> bool {
+    expected != current
+}
+
+fn v3_response(
+    fact_cells: Vec<FactCellWire>,
+    subject_key: SubjectKey,
+    revision: i64,
+    fetch: FetchStatus,
+    extraction: ExtractionStatus,
+    discovery_coverage: DiscoveryCoverage,
+    discovery_result: DiscoveryResult,
+    fact_persistence: FactPersistence,
+    served_from: ServedFrom,
+    acquisition: Option<&EdinetFactAcquisition>,
+    correction_available: Tristate,
+    warnings: Vec<EdinetWarningCode>,
+) -> EdinetEnrichmentResponseV3 {
+    let cells: FactCells = fact_cells
+        .iter()
+        .map(|wire| (wire.field.clone(), cell_from_wire(wire)))
+        .collect();
+    let field_provenance = fact_cells
+        .iter()
+        .map(|cell| FieldProvenance {
+            field: cell.field.clone(),
+            origin: cell.origin,
+            storage: cell.storage,
+            doc_id: cell.doc_id.clone(),
+            submitted_at: cell.submitted_at.clone(),
+            fetched_at: cell.fetched_at,
+        })
+        .collect();
+    EdinetEnrichmentResponseV3 {
+        schema_version: 3,
+        facts: display_company_facts(&cells, &CompanyFacts::default()),
+        fact_cells,
+        subject_key,
+        subject_revision: revision,
+        field_provenance,
+        fetch,
+        extraction,
+        discovery_coverage,
+        discovery_result,
+        fact_persistence,
+        evidence_persistence: EvidencePersistence::NotAttempted,
+        served_from,
+        freshness: FilingFreshnessReport {
+            selected_doc_id: acquisition.map(|value| value.selected_doc_id().into()),
+            submitted_at: acquisition.map(|value| value.submitted_at().into()),
+            correction_available,
+        },
+        warnings,
+    }
+}
+
+fn current_v3_response(
+    vault: &VaultHandle,
+    subject_wire: &str,
+    subject_key: SubjectKey,
+    persistence: FactPersistence,
+    discovery_result: DiscoveryResult,
+) -> Result<EdinetEnrichmentResponseV3, String> {
+    let current = vault
+        .fact_cells(subject_wire.to_string())
+        .map_err(map_vault_err)?;
+    let revision = current.iter().map(|cell| cell.revision).max().unwrap_or(0);
+    Ok(v3_response(
+        current,
+        subject_key,
+        revision,
+        FetchStatus::NotAttempted,
+        ExtractionStatus::None,
+        DiscoveryCoverage::NotRun,
+        discovery_result,
+        persistence,
+        ServedFrom::Cache,
+        None,
+        Tristate::Unknown,
+        Vec::new(),
+    ))
+}
+
+fn persistence_response(
+    vault: &VaultHandle,
+    subject_key: SubjectKey,
+    previous_revision: i64,
+    persistence: FactPersistence,
+    merged: &FactCells,
+    resolved: &ResolvedEdinetAcquisition,
+) -> Result<EdinetEnrichmentResponseV3, String> {
+    if matches!(persistence, FactPersistence::Conflict) {
+        let subject_wire = String::from(subject_key.clone());
+        return current_v3_response(
+            vault,
+            &subject_wire,
+            subject_key,
+            persistence,
+            DiscoveryResult::Selected,
+        );
+    }
+    if matches!(persistence, FactPersistence::Persisted) {
+        let subject_wire = String::from(subject_key.clone());
+        let current = vault.fact_cells(subject_wire).map_err(map_vault_err)?;
+        let revision = current.iter().map(|cell| cell.revision).max().unwrap_or(0);
+        return Ok(v3_response(
+            current,
+            subject_key,
+            revision,
+            FetchStatus::Succeeded,
+            extraction_from_acquisition(&resolved.acquisition),
+            resolved.coverage,
+            resolved.result,
+            FactPersistence::Persisted,
+            resolved.served_from,
+            Some(&resolved.acquisition),
+            resolved.correction_available,
+            Vec::new(),
+        ));
+    }
+    Ok(v3_response(
+        wires_from_cells(merged, previous_revision),
+        subject_key,
+        previous_revision,
+        FetchStatus::Succeeded,
+        extraction_from_acquisition(&resolved.acquisition),
+        resolved.coverage,
+        resolved.result,
+        FactPersistence::Failed,
+        resolved.served_from,
+        Some(&resolved.acquisition),
+        resolved.correction_available,
+        vec![EdinetWarningCode::VaultWriteFailed],
+    ))
+}
+
+fn extraction_from_acquisition(acquisition: &EdinetFactAcquisition) -> ExtractionStatus {
+    let fields = acquisition.fields();
+    let narratives = fields.business_summary || fields.business_risks;
+    match (fields.performance_summary, narratives) {
+        (true, true) => ExtractionStatus::Both,
+        (true, false) => ExtractionStatus::FinancialsOnly,
+        (false, true) => ExtractionStatus::NarrativesOnly,
+        (false, false) => ExtractionStatus::None,
+    }
+}
+
+async fn resolve_typed_edinet_acquisition(
+    vault: &VaultHandle,
+    store: &NetworkPolicyStore,
+    llm: &LlmHandle,
+    injected: Option<&CompanyFacts>,
+    edinet_code: Option<&str>,
+    edinet_date: Option<&str>,
+    filing_text: Option<&str>,
+) -> Result<ResolvedEdinetAcquisition, EdinetResolveFailure> {
+    #[cfg(feature = "egress-live")]
+    {
+        if refuse_if_policy_off(store.get()).is_err() || refuse_if_egress_unavailable().is_err() {
+            return Err(resolve_failure(
+                "edinet_not_ready",
+                FetchStatus::NotAttempted,
+            ));
+        }
+        let key = subscription_key_from_env()
+            .map_err(|error| resolve_failure(&map_edinet_err(error), FetchStatus::ApiError))?;
+        let transport = crate::knowledge::net_gateway::ReqwestTransport::new().map_err(|_| {
+            resolve_failure("edinet_transport_unavailable", FetchStatus::NetworkFailed)
+        })?;
+        let date = edinet_date
+            .filter(|value| !value.trim().is_empty())
+            .ok_or_else(|| resolve_failure("edinet_date_required", FetchStatus::NotAttempted))?;
+        let mut discovery_cache =
+            crate::knowledge::edinet_discovery::VaultDiscoveryCache::new(vault);
+        let (subject_key, filter) = if let Some(code) =
+            edinet_code.filter(|value| !value.trim().is_empty())
+        {
+            (
+                format!("edinet:{}", code.trim()),
+                crate::knowledge::edinet_client::ListCandidateFilter::by_edinet_code(code.trim())
+                    .ok_or_else(|| {
+                    resolve_failure("edinet_invalid_argument", FetchStatus::NotAttempted)
+                })?,
+            )
+        } else {
+            let name = injected
+                .map(|facts| facts.company_name.as_str())
+                .filter(|value| !value.trim().is_empty())
+                .ok_or_else(|| {
+                    resolve_failure("company_name_required", FetchStatus::NotAttempted)
+                })?;
+            (
+                format!("name:{}", normalize_filer_key(name)),
+                crate::knowledge::edinet_client::ListCandidateFilter::by_filer_name(name)
+                    .ok_or_else(|| {
+                        resolve_failure("edinet_invalid_argument", FetchStatus::NotAttempted)
+                    })?,
+            )
+        };
+        use crate::knowledge::edinet_discovery::{
+            discover_eligible_in_window, may_transition_to_zip, DiscoverParams, DiscoveryResult,
+            DEFAULT_DISCOVERY_WINDOW_DAYS_BACK,
+        };
+        let outcome = discover_eligible_in_window(
+            &mut discovery_cache,
+            &transport,
+            DiscoverParams {
+                subject_key: &subject_key,
+                anchor_date: date.trim(),
+                window_days_back: DEFAULT_DISCOVERY_WINDOW_DAYS_BACK,
+                filter: &filter,
+                subscription_key: &key,
+                now_secs: now_unix(),
+                max_live_gets: None,
+                deadline: EDINET_FETCH_DEADLINE,
+            },
+        )
+        .await
+        .map_err(|error| {
+            use crate::knowledge::edinet_discovery::DiscoveryError;
+            let fetch = match error {
+                DiscoveryError::Gateway(_)
+                | DiscoveryError::RetryableTransient
+                | DiscoveryError::ExhaustedRetries => FetchStatus::NetworkFailed,
+                DiscoveryError::AuthStopped
+                | DiscoveryError::RateLimitedStopped
+                | DiscoveryError::NonRetryableApi
+                | DiscoveryError::Edinet(_) => FetchStatus::ApiError,
+                _ => FetchStatus::NotAttempted,
+            };
+            resolve_failure("edinet_discovery_failed", fetch)
+        })?;
+        let coverage = map_discovery_coverage(outcome.coverage);
+        let result = map_discovery_result(outcome.result);
+        let correction_available = map_tristate(outcome.correction_available);
+        let served_from = served_from_for_discovery(outcome.cache_days, outcome.live_days);
+        if outcome.result == DiscoveryResult::IdentityAmbiguous {
+            return Err(EdinetResolveFailure {
+                message: "edinet_identity_ambiguous".into(),
+                fetch: FetchStatus::Succeeded,
+                extraction: ExtractionStatus::None,
+                coverage,
+                result,
+                served_from,
+                correction_available,
+            });
+        }
+        if !may_transition_to_zip(&outcome) {
+            return Err(EdinetResolveFailure {
+                message: "edinet_discovery_incomplete".into(),
+                fetch: FetchStatus::Succeeded,
+                extraction: ExtractionStatus::None,
+                coverage,
+                result,
+                served_from,
+                correction_available,
+            });
+        }
+        let selected = outcome.selected.ok_or_else(|| EdinetResolveFailure {
+            message: "edinet_no_eligible_filing".into(),
+            fetch: FetchStatus::Succeeded,
+            extraction: ExtractionStatus::None,
+            coverage,
+            result,
+            served_from,
+            correction_available,
+        })?;
+        let guard = llm.acquire_edinet_job().map_err(|error| {
+            let mut failure = resolve_failure(&error, FetchStatus::MemoryPressure);
+            failure.coverage = coverage;
+            failure.result = result;
+            failure.served_from = served_from;
+            failure.correction_available = correction_available;
+            failure
+        })?;
+        guard.set_phase(crate::monitor::MemPhase::EdinetFetch);
+        guard.set_phase(crate::monitor::MemPhase::EdinetExtract);
+        if guard.is_cancelled() {
+            return Err(resolve_failure(
+                "edinet_cancelled",
+                FetchStatus::MemoryPressure,
+            ));
+        }
+        let _guard = guard;
+        let acquisition =
+            crate::knowledge::edinet_client::acquisition_from_document_meta_with_body(
+                &selected,
+                filing_text,
+            )
+            .map_err(|error| {
+                let mut failure = resolve_failure(&map_edinet_err(error), FetchStatus::Succeeded);
+                failure.extraction = ExtractionStatus::ParseFailed;
+                failure
+            })?;
+        if _guard.is_cancelled() {
+            return Err(resolve_failure(
+                "edinet_cancelled",
+                FetchStatus::MemoryPressure,
+            ));
+        }
+        Ok(ResolvedEdinetAcquisition {
+            acquisition,
+            coverage,
+            result,
+            served_from,
+            correction_available,
+        })
+    }
+    #[cfg(not(feature = "egress-live"))]
+    {
+        let _ = (store, llm, injected, edinet_code, edinet_date, filing_text);
+        Err(resolve_failure(
+            "egress_unavailable",
+            FetchStatus::NotAttempted,
+        ))
+    }
+}
+
+fn resolve_failure(message: &str, fetch: FetchStatus) -> EdinetResolveFailure {
+    EdinetResolveFailure {
+        message: message.into(),
+        fetch,
+        extraction: ExtractionStatus::None,
+        coverage: DiscoveryCoverage::NotRun,
+        result: DiscoveryResult::NotRun,
+        served_from: ServedFrom::NotApplicable,
+        correction_available: Tristate::Unknown,
+    }
+}
+
+fn served_from_for_discovery(cache_days: u32, live_days: u32) -> ServedFrom {
+    match (cache_days, live_days) {
+        (0, 0) => ServedFrom::NotApplicable,
+        (_, 0) => ServedFrom::Cache,
+        (0, _) => ServedFrom::Live,
+        _ => ServedFrom::Mixed,
+    }
+}
+
+#[cfg(feature = "egress-live")]
+fn map_discovery_coverage(
+    value: crate::knowledge::edinet_discovery::DiscoveryCoverage,
+) -> DiscoveryCoverage {
+    use crate::knowledge::edinet_discovery::DiscoveryCoverage as Source;
+    match value {
+        Source::NotRun => DiscoveryCoverage::NotRun,
+        Source::WindowComplete => DiscoveryCoverage::WindowComplete,
+        Source::WindowIncomplete => DiscoveryCoverage::WindowIncomplete,
+        Source::Pinned => DiscoveryCoverage::Pinned,
+    }
+}
+
+#[cfg(feature = "egress-live")]
+fn map_discovery_result(
+    value: crate::knowledge::edinet_discovery::DiscoveryResult,
+) -> DiscoveryResult {
+    use crate::knowledge::edinet_discovery::DiscoveryResult as Source;
+    match value {
+        Source::NotRun => DiscoveryResult::NotRun,
+        Source::Selected => DiscoveryResult::Selected,
+        Source::NoEligibleInWindow => DiscoveryResult::NoEligibleInWindow,
+        Source::IdentityAmbiguous => DiscoveryResult::IdentityAmbiguous,
+    }
+}
+
+#[cfg(feature = "egress-live")]
+fn map_tristate(value: crate::knowledge::edinet_discovery::Tristate) -> Tristate {
+    use crate::knowledge::edinet_discovery::Tristate as Source;
+    match value {
+        Source::Yes => Tristate::Yes,
+        Source::No => Tristate::No,
+        Source::Unknown => Tristate::Unknown,
+    }
 }
 
 /// Interview turn: RAG experience + company facts → streaming interviewer.
@@ -440,6 +1324,7 @@ pub async fn start_interview_session(
 
     let facts = resolve_company_facts(
         store.inner(),
+        vault.inner(),
         params.company_facts,
         params.edinet_code,
         params.edinet_date,
@@ -533,6 +1418,7 @@ pub async fn review_es_draft(
 
     let facts = resolve_company_facts(
         store.inner(),
+        vault.inner(),
         params.company_facts,
         params.edinet_code,
         params.edinet_date,
@@ -620,19 +1506,17 @@ pub async fn review_es_draft(
 
 // ─── M17 multi-stage interview machine ───────────────────────────────────────
 
-use std::time::{SystemTime, UNIX_EPOCH};
-
-use crate::db::InterviewSessionRow;
-use crate::llm::consult_context::load_mentor_context;
 use crate::coliseum::session_artifact::{
     amount_band, is_late_night_jst, purchase_text_summary, DistortionEvidenceSnap,
     EvidenceSnapshot, InterviewSessionArtifact, PurchaseEvidenceSnap,
 };
 use crate::coliseum::CognitiveFossilSnapshot;
+use crate::db::InterviewSessionRow;
+use crate::llm::consult_context::load_mentor_context;
 use crate::llm::interview_machine::{
     apply_candidate_answer, artifact_evidence_prompt_block, build_stage_prompt_prefix,
-    oni_pressure_prompt_from_artifact, oni_pressure_prompt_from_fossils, record_interviewer_utterance,
-    AdvanceOutcome, InterviewSession, InterviewStage,
+    oni_pressure_prompt_from_artifact, oni_pressure_prompt_from_fossils,
+    record_interviewer_utterance, AdvanceOutcome, InterviewSession, InterviewStage,
 };
 use crate::llm::model_path::MODEL_FILENAME;
 use sha2::{Digest, Sha256};
@@ -702,15 +1586,16 @@ fn fossil_from_evidence(evidence: &EvidenceSnapshot, r_unit: f64) -> CognitiveFo
                 _ => None,
             })
             .collect(),
-        late_night_purchase_count: evidence.purchases.iter().filter(|p| p.late_night).count() as u32,
+        late_night_purchase_count: evidence.purchases.iter().filter(|p| p.late_night).count()
+            as u32,
         impulse_purchase_count: 0,
         blacklist_seed_terms: Vec::new(),
     }
 }
 
 fn persist_session(vault: &VaultHandle, session: &InterviewSession) -> Result<(), String> {
-    let payload_json =
-        serde_json::to_string(session).map_err(|_| "interview session serialize failed".to_string())?;
+    let payload_json = serde_json::to_string(session)
+        .map_err(|_| "interview session serialize failed".to_string())?;
     let (artifact_json, artifact_fingerprint) = match &session.session_artifact {
         Some(art) => {
             let json = serde_json::to_string(art)
@@ -915,6 +1800,7 @@ pub async fn start_multistage_interview(
     ensure_model_loaded(&app, &llm).await?;
     let facts = resolve_company_facts(
         store.inner(),
+        vault.inner(),
         params.company_facts,
         params.edinet_code,
         params.edinet_date,
@@ -1383,11 +2269,7 @@ pub async fn ingest_session_memory(
                 let Ok(value) = serde_json::from_str::<serde_json::Value>(&json) else {
                     return Ok(());
                 };
-                if value
-                    .get("error")
-                    .map(|e| !e.is_null())
-                    .unwrap_or(false)
-                {
+                if value.get("error").map(|e| !e.is_null()).unwrap_or(false) {
                     fail_flag.store(true, Ordering::SeqCst);
                     if let Ok(mut g) = sink.lock() {
                         g.clear();
@@ -1539,5 +2421,511 @@ mod company_identity_tests {
             "トヨタ",
             "E02144"
         ));
+    }
+}
+
+#[cfg(test)]
+mod edinet_v3_wire_tests {
+    use super::*;
+
+    #[test]
+    fn request_subject_and_fact_cells_round_trip() {
+        let request = EdinetEnrichmentRequestV3 {
+            schema_version: 3,
+            subject_key: SubjectKey::Edinet("E02144".into()),
+            subject_revision: 7,
+            subject_transition: Some(SubjectTransition::Rekey {
+                from: SubjectKey::Name("トヨタ自動車".into()),
+                to: SubjectKey::Edinet("E02144".into()),
+            }),
+            fact_cells: Some(vec![FactCellWire {
+                field: "business_summary".into(),
+                value: "value".into(),
+                origin: FactOriginWire::Edinet,
+                storage: FactStorageWire::Vault,
+                doc_id: Some("S100TEST".into()),
+                submitted_at: Some("2026-07-25 15:00".into()),
+                fetched_at: None,
+                revision: 7,
+                schema_version: 3,
+            }]),
+            company_facts: None,
+            edinet_code: Some("E02144".into()),
+            edinet_date: Some("2026-07-26".into()),
+            filing_text: None,
+        };
+        let value = serde_json::to_value(&request).expect("serialize request");
+        let decoded: EdinetEnrichmentRequestV3 =
+            serde_json::from_value(value.clone()).expect("deserialize request");
+        assert_eq!(decoded.schema_version, 3);
+        assert_eq!(decoded.subject_revision, 7);
+        assert_eq!(decoded.fact_cells, request.fact_cells);
+        assert_eq!(value["subjectKey"], "edinet:E02144");
+        assert_eq!(value["subjectTransition"]["kind"], "rekey");
+    }
+
+    #[test]
+    fn initial_full_ui_facts_are_promoted_without_loss() {
+        let facts = CompanyFacts {
+            company_name: "  株式会社テスト  ".into(),
+            business_summary: "事業概要".into(),
+            business_risks: "事業リスク".into(),
+            performance_summary: "業績".into(),
+            source: "wikipedia".into(),
+            ..CompanyFacts::default()
+        };
+        let sanitized = sanitize_company_facts(&facts).expect("sanitize");
+        let cells = protected_cells_from_company_facts(&sanitized);
+        let displayed = display_company_facts(&cells, &CompanyFacts::default());
+        assert_eq!(displayed.business_summary, "事業概要");
+        assert_eq!(displayed.business_risks, "事業リスク");
+        assert_eq!(displayed.performance_summary, "業績");
+    }
+
+    #[test]
+    fn discovery_served_from_distinguishes_cache_mixed_and_live() {
+        assert_eq!(served_from_for_discovery(4, 0), ServedFrom::Cache);
+        assert_eq!(served_from_for_discovery(4, 3), ServedFrom::Mixed);
+        assert_eq!(served_from_for_discovery(0, 3), ServedFrom::Live);
+    }
+
+    #[test]
+    fn stale_request_revision_is_detected_before_acquisition() {
+        assert!(stale_subject_revision(3, 4));
+        assert!(!stale_subject_revision(4, 4));
+    }
+
+    #[test]
+    fn switch_base_keeps_only_new_company_name_as_manual() {
+        let facts = CompanyFacts {
+            company_name: "新会社".into(),
+            business_summary: "旧会社の概要".into(),
+            business_risks: "旧会社のリスク".into(),
+            performance_summary: "旧会社の業績".into(),
+            ..CompanyFacts::default()
+        };
+        let cells = switch_base_from_company_facts(Some(&facts));
+        assert_eq!(cells.len(), 1);
+        let company = cells.get("company_name").expect("company name");
+        assert_eq!(company.value, "新会社");
+        assert_eq!(company.origin, FactOrigin::Manual);
+    }
+
+    #[test]
+    fn rust_normalizer_matches_shared_frontend_golden() {
+        let vectors: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../src/lib/filerNameNormalizationGolden.json"
+        ))
+        .expect("golden json");
+        for vector in vectors.as_array().expect("golden array") {
+            let input = vector["input"].as_str().expect("input");
+            let expected = vector["normalized"].as_str().expect("normalized");
+            let sanitized = sanitize_company_facts(&CompanyFacts {
+                company_name: input.into(),
+                ..CompanyFacts::default()
+            })
+            .expect("sanitize");
+            assert_eq!(normalize_filer_key(&sanitized.company_name), expected);
+        }
+    }
+}
+
+/// Step 1 contract: soft-fallback / gate / name-only base (no live network).
+/// The instrumented path uses [`resolve_company_facts_with`] with injected key
+/// provider + lazy transport factory + fake `HttpTransport`, so no test ever
+/// touches the real env key or Reqwest. Every scenario asserts the exact
+/// call-count contract and `assert_eq!(out, before)`.
+#[cfg(test)]
+mod edinet_step1_fallback_contract_tests {
+    use super::{resolve_company_facts_with, soft_fallback_named_base, CompanyFacts};
+    #[cfg(all(feature = "egress-live", target_vendor = "apple"))]
+    use crate::knowledge::edinet_client::EdinetDocumentMeta;
+    use crate::knowledge::edinet_client::{sanitize_company_facts, EdinetError};
+    #[cfg(all(feature = "egress-live", target_vendor = "apple"))]
+    use crate::knowledge::edinet_discovery::{
+        CoverageDayStatus, CoverageRecord, DayCommit, VaultDiscoveryCache,
+    };
+    use crate::knowledge::net_gateway::{GatewayError, HttpTransport, ResponseBody, ResponseMeta};
+    use crate::knowledge::NetworkPolicyStore;
+    use std::future::Future;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Arc;
+    use tempfile::TempDir;
+
+    /// Holds the `TempDir` for the store's whole lifetime. OS-guaranteed unique
+    /// path (no process-local counter) so parallel cargo-test processes across
+    /// feature configs never collide on the same policy-store directory.
+    struct StoreFixture {
+        _dir: TempDir,
+        store: NetworkPolicyStore,
+    }
+
+    fn isolated_store() -> StoreFixture {
+        let dir = tempfile::Builder::new()
+            .prefix("pkb-edinet-step1-")
+            .tempdir()
+            .expect("unique temp dir");
+        let store = NetworkPolicyStore::from_root(dir.path().to_path_buf());
+        StoreFixture { _dir: dir, store }
+    }
+
+    fn wiki_base_raw() -> CompanyFacts {
+        CompanyFacts {
+            company_name: "トヨタ自動車".into(),
+            edinet_code: String::new(),
+            doc_id: String::new(),
+            business_summary: "自動車の製造・販売".into(),
+            business_risks: String::new(),
+            performance_summary: String::new(),
+            source: "wikipedia".into(),
+        }
+    }
+
+    /// Sanitized base — soft-fallback returns this shape (`assert_eq!(out, before)`).
+    fn wiki_before() -> CompanyFacts {
+        sanitize_company_facts(&wiki_base_raw()).expect("wiki sanitize")
+    }
+
+    struct CountingFailTransport {
+        gets: Arc<AtomicUsize>,
+    }
+
+    struct EmptyBody;
+
+    impl ResponseBody for EmptyBody {
+        fn next_chunk(
+            &mut self,
+        ) -> impl Future<Output = Option<Result<Vec<u8>, GatewayError>>> + Send {
+            async { None }
+        }
+    }
+
+    impl HttpTransport for CountingFailTransport {
+        type Body = EmptyBody;
+
+        fn get(
+            &self,
+            _url: &str,
+            _request_deadline: std::time::Duration,
+        ) -> impl Future<Output = Result<(ResponseMeta, Self::Body), GatewayError>> + Send {
+            self.gets.fetch_add(1, Ordering::SeqCst);
+            async { Err(GatewayError::StatusRejected) }
+        }
+    }
+
+    struct CallCounters {
+        key: Arc<AtomicUsize>,
+        factory: Arc<AtomicUsize>,
+        gets: Arc<AtomicUsize>,
+    }
+
+    impl CallCounters {
+        fn new() -> Self {
+            Self {
+                key: Arc::new(AtomicUsize::new(0)),
+                factory: Arc::new(AtomicUsize::new(0)),
+                gets: Arc::new(AtomicUsize::new(0)),
+            }
+        }
+
+        fn snapshot(&self) -> (usize, usize, usize) {
+            (
+                self.key.load(Ordering::SeqCst),
+                self.factory.load(Ordering::SeqCst),
+                self.gets.load(Ordering::SeqCst),
+            )
+        }
+    }
+
+    /// Counting key provider that yields a fixed fake key.
+    fn ok_key(counts: &CallCounters) -> impl FnMut() -> Result<String, EdinetError> {
+        let key_c = Arc::clone(&counts.key);
+        move || {
+            key_c.fetch_add(1, Ordering::SeqCst);
+            Ok("test-subscription-key".into())
+        }
+    }
+
+    /// Counting transport factory that yields a fake counting transport.
+    fn ok_factory(counts: &CallCounters) -> impl FnMut() -> Result<CountingFailTransport, String> {
+        let factory_c = Arc::clone(&counts.factory);
+        let gets_c = Arc::clone(&counts.gets);
+        move || {
+            factory_c.fetch_add(1, Ordering::SeqCst);
+            Ok(CountingFailTransport {
+                gets: Arc::clone(&gets_c),
+            })
+        }
+    }
+
+    #[test]
+    fn soft_fallback_keeps_named_base_never_empty_default() {
+        let kept = soft_fallback_named_base(Some(wiki_before()), "boom").expect("base");
+        assert_eq!(kept, wiki_before());
+        assert!(soft_fallback_named_base(None, "boom").is_err());
+        assert!(soft_fallback_named_base(
+            Some(CompanyFacts {
+                company_name: "   ".into(),
+                ..CompanyFacts::default()
+            }),
+            "boom"
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn name_only_default_is_valid_sanitize_and_fallback_input() {
+        let raw = CompanyFacts {
+            company_name: "トヨタ自動車".into(),
+            ..CompanyFacts::default()
+        };
+        let sanitized = sanitize_company_facts(&raw).expect("name-only sanitize");
+        assert_eq!(sanitized.company_name, "トヨタ自動車");
+        assert!(sanitized.business_summary.is_empty());
+        let kept = soft_fallback_named_base(Some(sanitized.clone()), "x").expect("fallback");
+        assert_eq!(kept, sanitized);
+    }
+
+    #[tokio::test]
+    async fn policy_off_zero_key_factory_and_http() {
+        let fx = isolated_store();
+        assert!(!fx.store.enabled());
+        let before = wiki_before();
+        let counts = CallCounters::new();
+
+        let out = resolve_company_facts_with(
+            &fx.store,
+            None,
+            Some(wiki_base_raw()),
+            Some("E02144".into()),
+            Some("2026-07-26".into()),
+            None,
+            ok_key(&counts),
+            ok_factory(&counts),
+        )
+        .await
+        .expect("soft fallback");
+
+        assert_eq!(out, before);
+        assert_eq!(
+            counts.snapshot(),
+            (0, 0, 0),
+            "policy off: key/factory/get must be 0"
+        );
+    }
+
+    /// egress-live OFF: even with consent ON + key present + factory available,
+    /// the second egress factor closes the gate → key/factory/get all 0.
+    #[cfg(not(feature = "egress-live"))]
+    #[tokio::test]
+    async fn egress_disabled_consent_on_still_zero_key_factory_and_http() {
+        let fx = isolated_store();
+        fx.store.set_enabled(true).expect("enable");
+        let before = wiki_before();
+        let counts = CallCounters::new();
+
+        let out = resolve_company_facts_with(
+            &fx.store,
+            None,
+            Some(wiki_base_raw()),
+            Some("E02144".into()),
+            Some("2026-07-26".into()),
+            None,
+            ok_key(&counts),
+            ok_factory(&counts),
+        )
+        .await
+        .expect("soft fallback");
+
+        assert_eq!(out, before);
+        assert_eq!(
+            counts.snapshot(),
+            (0, 0, 0),
+            "egress-live off: consent alone must not reach key/factory/get"
+        );
+    }
+
+    /// egress-live ON: consent ON + key missing → key consulted, factory/get 0.
+    #[cfg(all(feature = "egress-live", target_vendor = "apple"))]
+    #[tokio::test]
+    async fn api_key_missing_zero_factory_and_http() {
+        let fx = isolated_store();
+        fx.store.set_enabled(true).expect("enable");
+        let before = wiki_before();
+        let counts = CallCounters::new();
+        let key_c = Arc::clone(&counts.key);
+
+        let out = resolve_company_facts_with(
+            &fx.store,
+            None,
+            Some(wiki_base_raw()),
+            Some("E02144".into()),
+            Some("2026-07-26".into()),
+            None,
+            move || {
+                key_c.fetch_add(1, Ordering::SeqCst);
+                Err(EdinetError::ApiKeyMissing)
+            },
+            ok_factory(&counts),
+        )
+        .await
+        .expect("soft fallback");
+
+        assert_eq!(out, before);
+        assert_eq!(
+            counts.key.load(Ordering::SeqCst),
+            1,
+            "key provider must be consulted"
+        );
+        assert_eq!(
+            counts.factory.load(Ordering::SeqCst),
+            0,
+            "no factory when key missing"
+        );
+        assert_eq!(
+            counts.gets.load(Ordering::SeqCst),
+            0,
+            "no HTTP when key missing"
+        );
+    }
+
+    #[cfg(feature = "egress-live")]
+    #[tokio::test]
+    async fn transport_new_failure_preserves_wikipedia_exact() {
+        let fx = isolated_store();
+        fx.store.set_enabled(true).expect("enable");
+        let before = wiki_before();
+        let counts = CallCounters::new();
+        let factory_c = Arc::clone(&counts.factory);
+
+        let out = resolve_company_facts_with(
+            &fx.store,
+            None,
+            Some(wiki_base_raw()),
+            Some("E02144".into()),
+            Some("2026-07-26".into()),
+            None,
+            ok_key(&counts),
+            move || {
+                factory_c.fetch_add(1, Ordering::SeqCst);
+                Err::<CountingFailTransport, _>("edinet_transport_unavailable".into())
+            },
+        )
+        .await
+        .expect("soft fallback");
+
+        assert_eq!(out, before);
+        assert_eq!(counts.key.load(Ordering::SeqCst), 1);
+        assert_eq!(counts.factory.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            counts.gets.load(Ordering::SeqCst),
+            0,
+            "failed factory must not HTTP"
+        );
+    }
+
+    #[cfg(feature = "egress-live")]
+    #[tokio::test]
+    async fn http_fetch_failure_preserves_wikipedia_exact_one_get() {
+        let fx = isolated_store();
+        fx.store.set_enabled(true).expect("enable");
+        let before = wiki_before();
+        let counts = CallCounters::new();
+
+        // Explicit edinet_code → single list GET (not name lookback loop).
+        let out = resolve_company_facts_with(
+            &fx.store,
+            None,
+            Some(wiki_base_raw()),
+            Some("E02144".into()),
+            Some("2026-07-26".into()),
+            None,
+            ok_key(&counts),
+            ok_factory(&counts),
+        )
+        .await
+        .expect("soft fallback");
+
+        assert_eq!(out, before);
+        assert_eq!(counts.key.load(Ordering::SeqCst), 1);
+        assert_eq!(counts.factory.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            counts.gets.load(Ordering::SeqCst),
+            1,
+            "by-code fetch: exactly one GET"
+        );
+    }
+
+    #[cfg(feature = "egress-live")]
+    #[tokio::test]
+    async fn vault_discovery_prefix_gap_preserves_base_without_auto_merge() {
+        let fx = isolated_store();
+        fx.store.set_enabled(true).expect("enable");
+        let before = wiki_before();
+        let counts = CallCounters::new();
+        let vault = crate::db::VaultHandle::spawn_test_unlocked().expect("test vault");
+        vault
+            .edinet_commit_day(DayCommit {
+                coverage: CoverageRecord {
+                    subject_key: "edinet:E02144".into(),
+                    date: "2026-07-25".into(),
+                    status: CoverageDayStatus::Ok,
+                    fetched_at: 1,
+                    process_date_time: None,
+                    error_class: None,
+                    revalidate_after: None,
+                },
+                filings: vec![EdinetDocumentMeta {
+                    doc_id: Some("S100GAP".into()),
+                    edinet_code: Some("E02144".into()),
+                    filer_name: Some("トヨタ自動車".into()),
+                    doc_type_code: Some("120".into()),
+                    submit_date_time: Some("2026-07-25 15:00".into()),
+                    withdrawal_status: Some("0".into()),
+                    disclosure_status: Some("0".into()),
+                    xbrl_flag: Some("1".into()),
+                    legal_status: Some("1".into()),
+                    ..EdinetDocumentMeta::default()
+                }],
+            })
+            .expect("seed vault filing");
+        let mut cache = VaultDiscoveryCache::new(&vault);
+
+        let out = resolve_company_facts_with(
+            &fx.store,
+            Some(&mut cache),
+            Some(wiki_base_raw()),
+            Some("E02144".into()),
+            Some("2026-07-26".into()),
+            None,
+            ok_key(&counts),
+            ok_factory(&counts),
+        )
+        .await
+        .expect("gap must soft-fallback");
+
+        assert_eq!(out, before);
+        assert_eq!(counts.snapshot(), (1, 1, 1));
+    }
+
+    #[tokio::test]
+    async fn without_base_policy_off_is_egress_not_ready() {
+        let fx = isolated_store();
+        let counts = CallCounters::new();
+
+        let err = resolve_company_facts_with(
+            &fx.store,
+            None,
+            None,
+            Some("E02144".into()),
+            Some("2026-07-26".into()),
+            None,
+            ok_key(&counts),
+            ok_factory(&counts),
+        )
+        .await
+        .expect_err("no base");
+        assert_eq!(err, "EGRESS_LIVE_NOT_READY");
+        assert_eq!(counts.snapshot(), (0, 0, 0));
     }
 }

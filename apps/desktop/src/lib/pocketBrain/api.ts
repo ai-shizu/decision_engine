@@ -18,6 +18,8 @@ import type {
   CognitiveMonthView,
   CognitiveDistortionReportV1,
   CompanyFacts,
+  EdinetEnrichmentRequestV3,
+  EdinetEnrichmentResponseV3,
   ConsultWithOracleResult,
   EvaluateRaschRequest,
   EvaluateRaschResult,
@@ -345,6 +347,12 @@ export function fetchEdinetCompanyFacts(args: {
       filingText: args.filingText ?? null,
     },
   });
+}
+
+export function enrichCompanyFactsFromEdinet(
+  request: EdinetEnrichmentRequestV3,
+): Promise<EdinetEnrichmentResponseV3> {
+  return pocketInvoke("enrich_company_facts_from_edinet", { request });
 }
 
 export function startInterviewSession(

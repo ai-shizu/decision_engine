@@ -17,7 +17,8 @@ tauri-build = { version = "2", features = [] }
 tauri = { version = "2", features = [] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-tokio = { version = "1", features = ["time", "macros", "rt", "sync"] }
+tokio = { version = "1", features = ["time", "macros", "rt", "sync", "fs", "io-util"] }
+tokio-util = { version = "=0.7.18", default-features = false, features = ["rt"] }
 base64 = "=0.22.1"
 ed25519-dalek = "=3.0.0"
 sha2 = "=0.11.0"
@@ -62,6 +63,15 @@ log = "0.4"
 # LINE export decode fallback (BOM-aware UTF-8/UTF-16/Shift-JIS). Pure Rust,
 # no C toolchain — safe on the default build and on iOS cross-compiles.
 encoding_rs = "=0.8.35"
+encoding_rs_io = "=0.1.7"
+# EDINET lane (DESIGN_V3 Phase 0): stream ZIP/XML/CSV. zip must NOT enable
+# default features (AES/bzip2/lzma/xz/zstd). flate2 is pinned to the existing
+# rust_backend/miniz_oxide path so zlib-rs is never introduced alongside it.
+quick-xml = { version = "=0.41.0", default-features = false, features = ["encoding"] }
+zip = { version = "=8.6.0", default-features = false, features = ["deflate-flate2"] }
+flate2 = { version = "=1.1.9", default-features = false, features = ["rust_backend"] }
+csv-core = "=0.1.13"
+tempfile = "=3.27.0"
 
 [features]
 # NOTE: the blueprint prose says "reqwest/rustls-tls"; reqwest 0.13.4's actual
@@ -153,6 +163,7 @@ objc2-ui-kit = { version = "=0.3.2", default-features = false, features = [
     "UIImpactFeedbackGenerator",
     "UISelectionFeedbackGenerator",
     "UINotificationFeedbackGenerator",
+    "block2",
 ], optional = true }
 
 [dev-dependencies]

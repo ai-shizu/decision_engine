@@ -118,7 +118,6 @@ pub(crate) fn list_purchases_in_range(
     Ok(out)
 }
 
-
 /// Newest-first purchase snapshots for cognition × spend analysis.
 pub(crate) fn list_purchases_recent(
     connection: &Connection,

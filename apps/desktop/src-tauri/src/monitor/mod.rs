@@ -17,11 +17,11 @@ use std::time::{Duration, Instant};
 use serde::Serialize;
 use tauri::ipc::Channel;
 
-pub use degradation::DegradationLevel;
 use degradation::combine_degradation;
+pub use degradation::DegradationLevel;
 #[cfg(not(target_vendor = "apple"))]
 use degradation::PressureClass;
-pub use probe::phys_footprint_bytes;
+pub use probe::{os_proc_available_memory_bytes, phys_footprint_bytes};
 
 /// Lifecycle phase used to attribute footprint deltas.
 #[derive(Clone, Copy, Serialize)]
@@ -32,6 +32,8 @@ pub enum MemPhase {
     CtxCreated,
     Inference,
     Idle,
+    EdinetFetch,
+    EdinetExtract,
 }
 
 impl MemPhase {
@@ -42,6 +44,8 @@ impl MemPhase {
             Self::CtxCreated => 2,
             Self::Inference => 3,
             Self::Idle => 4,
+            Self::EdinetFetch => 5,
+            Self::EdinetExtract => 6,
         }
     }
 
@@ -51,6 +55,9 @@ impl MemPhase {
             1 => Self::ModelLoaded,
             2 => Self::CtxCreated,
             3 => Self::Inference,
+            4 => Self::Idle,
+            5 => Self::EdinetFetch,
+            6 => Self::EdinetExtract,
             _ => Self::Idle,
         }
     }
@@ -182,7 +189,8 @@ impl MemoryMonitor {
 
         let base = phys_footprint_bytes().unwrap_or(0);
         self.baseline.store(base, Ordering::SeqCst);
-        self.phase.store(MemPhase::Baseline.as_u8(), Ordering::SeqCst);
+        self.phase
+            .store(MemPhase::Baseline.as_u8(), Ordering::SeqCst);
         self.degradation
             .store(DegradationLevel::Nominal.as_u8(), Ordering::SeqCst);
         self.control.start();
@@ -207,18 +215,18 @@ impl MemoryMonitor {
             thread::Builder::new()
                 .name("coraxis-memory-monitor".into())
                 .spawn(move || {
-                apple_telemetry_loop(
-                    control,
-                    phase,
-                    baseline,
-                    degradation,
-                    sensors_thread,
-                    channel,
-                    threshold_bytes,
-                    interval_ms,
-                    over_threshold_hook,
-                    degradation_hook,
-                );
+                    apple_telemetry_loop(
+                        control,
+                        phase,
+                        baseline,
+                        degradation,
+                        sensors_thread,
+                        channel,
+                        threshold_bytes,
+                        interval_ms,
+                        over_threshold_hook,
+                        degradation_hook,
+                    );
                 })
         };
 
@@ -323,8 +331,7 @@ fn apply_level(
     if level < DegradationLevel::Critical {
         *was_critical = false;
     }
-    if level >= DegradationLevel::Serious && (prev < DegradationLevel::Serious || !*was_serious)
-    {
+    if level >= DegradationLevel::Serious && (prev < DegradationLevel::Serious || !*was_serious) {
         *was_serious = true;
         // Serious+ already notified via degradation_hook; keep flag for rising-edge.
     }
@@ -361,11 +368,7 @@ fn apple_telemetry_loop(
         } else {
             cur as f64 / threshold_bytes as f64
         };
-        let level = combine_degradation(
-            sensors.thermal_level(),
-            sensors.pressure_class(),
-            ratio,
-        );
+        let level = combine_degradation(sensors.thermal_level(), sensors.pressure_class(), ratio);
         apply_level(
             &degradation,
             level,
@@ -374,14 +377,7 @@ fn apple_telemetry_loop(
             &over_threshold_hook,
             &degradation_hook,
         );
-        if !emit_sample(
-            &channel,
-            &phase,
-            &baseline,
-            level,
-            threshold_bytes,
-            t0,
-        ) {
+        if !emit_sample(&channel, &phase, &baseline, level, threshold_bytes, t0) {
             break;
         }
         if !control.wait(tick) {
@@ -414,11 +410,7 @@ fn adaptive_poll_loop(
         } else {
             cur as f64 / threshold_bytes as f64
         };
-        let level = combine_degradation(
-            DegradationLevel::Nominal,
-            PressureClass::Normal,
-            ratio,
-        );
+        let level = combine_degradation(DegradationLevel::Nominal, PressureClass::Normal, ratio);
         apply_level(
             &degradation,
             level,
@@ -427,14 +419,7 @@ fn adaptive_poll_loop(
             &over_threshold_hook,
             &degradation_hook,
         );
-        if !emit_sample(
-            &channel,
-            &phase,
-            &baseline,
-            level,
-            threshold_bytes,
-            t0,
-        ) {
+        if !emit_sample(&channel, &phase, &baseline, level, threshold_bytes, t0) {
             break;
         }
         let sleep_ms = if ratio >= 0.90 {

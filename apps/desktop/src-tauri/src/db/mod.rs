@@ -11,25 +11,29 @@ pub(crate) mod connection;
 mod keychain_probe;
 // Background auto-lock is iOS-only: it observes UIKit lifecycle notifications,
 // and UIKit does not exist on macOS (docs/m3_action_plan.md §0, §8).
-#[cfg(target_os = "ios")]
-pub(crate) mod lifecycle;
 #[cfg(target_vendor = "apple")]
 mod analytics_repo;
+#[cfg(target_vendor = "apple")]
+mod commitment_repo;
+#[cfg(target_vendor = "apple")]
+mod distortion_repo;
+#[cfg(target_vendor = "apple")]
+mod edinet_discovery_repo;
+#[cfg(target_vendor = "apple")]
+mod fact_repo;
 #[cfg(target_vendor = "apple")]
 pub(crate) mod knowledge_namespace;
 #[cfg(target_vendor = "apple")]
 mod knowledge_repo;
+#[cfg(target_os = "ios")]
+pub(crate) mod lifecycle;
+#[cfg(target_vendor = "apple")]
+mod migrations;
 #[cfg(target_vendor = "apple")]
 mod oracle_repo;
 #[cfg(target_vendor = "apple")]
 mod psychometrics_repo;
-#[cfg(target_vendor = "apple")]
-mod distortion_repo;
 mod purchase_repo;
-#[cfg(target_vendor = "apple")]
-mod commitment_repo;
-#[cfg(target_vendor = "apple")]
-mod migrations;
 #[cfg(target_vendor = "apple")]
 mod repository;
 #[cfg(target_vendor = "apple")]
@@ -44,18 +48,20 @@ mod worker;
 #[cfg(target_vendor = "apple")]
 pub(crate) use analytics_repo::{GapAnalysisRow, TensorProfileRow};
 #[cfg(target_vendor = "apple")]
-pub(crate) use knowledge_namespace::KnowledgeNamespace;
-#[cfg(target_vendor = "apple")]
-pub(crate) use knowledge_repo::{KnowledgeChunkRow, KnowledgeSearchHit};
-#[cfg(target_vendor = "apple")]
-pub(crate) use distortion_repo::DistortionTagRow;
-pub(crate) use purchase_repo::{PurchaseLineRow, PurchaseRow};
-#[cfg(target_vendor = "apple")]
 pub(crate) use commitment_repo::CommitmentRow;
 #[cfg(target_vendor = "apple")]
+pub(crate) use distortion_repo::DistortionTagRow;
+#[cfg(target_vendor = "apple")]
+pub(crate) use knowledge_namespace::KnowledgeNamespace;
+#[cfg(target_vendor = "apple")]
+#[allow(unused_imports)]
+pub(crate) use knowledge_repo::{KnowledgeChunkRow, KnowledgeSearchHit};
+#[cfg(target_vendor = "apple")]
+#[allow(unused_imports)]
 pub(crate) use oracle_repo::{InterviewSessionRow, OracleRunRow, TwinRunRow};
 #[cfg(target_vendor = "apple")]
-pub(crate) use psychometrics_repo::{PulseRunRow, ProbeStoreRow, RaschRunRow};
+pub(crate) use psychometrics_repo::{ProbeStoreRow, PulseRunRow, RaschRunRow};
+pub(crate) use purchase_repo::{PurchaseLineRow, PurchaseRow};
 #[cfg(target_vendor = "apple")]
 pub(crate) use repository::{ChatCreate, ChatRecord, MessageAppend, MessageCursor, MessageRecord};
 #[cfg(target_vendor = "apple")]

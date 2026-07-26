@@ -25,6 +25,8 @@ use objc2::{
 use objc2_foundation::NSNotificationCenter;
 #[cfg(feature = "pocket-brain")]
 use objc2_ui_kit::UIApplicationDidReceiveMemoryWarningNotification;
+#[cfg(feature = "pocket-brain")]
+use objc2_ui_kit::UIApplicationWillEnterForegroundNotification;
 use objc2_ui_kit::{
     UIApplicationDidEnterBackgroundNotification, UIApplicationProtectedDataWillBecomeUnavailable,
 };
@@ -32,9 +34,9 @@ use objc2_ui_kit::{
 #[cfg(feature = "pocket-brain")]
 use std::sync::Arc;
 
+use super::{VaultErrorCode, VaultHandle};
 #[cfg(feature = "pocket-brain")]
 use crate::llm::service::LlmMemoryGovernor;
-use super::{VaultErrorCode, VaultHandle};
 
 /// Bounded lock retries. A backgrounded iOS app has only a short window before
 /// suspension, so we never spin unboundedly. If every attempt fails, iOS
@@ -77,6 +79,8 @@ define_class!(
             // `request_purge` is two lock-free atomic stores — safe on the main
             // thread; the heavy model Drop happens later on the worker thread.
             #[cfg(feature = "pocket-brain")]
+            self.ivars().llm.set_background_restricted(true);
+            #[cfg(feature = "pocket-brain")]
             self.ivars().llm.request_purge();
         }
 
@@ -85,7 +89,16 @@ define_class!(
         #[cfg(feature = "pocket-brain")]
         #[unsafe(method(onMemoryWarning:))]
         fn on_memory_warning(&self, _notification: *mut AnyObject) {
+            self.ivars()
+                .llm
+                .set_admission_bit(crate::llm::service::ADMISSION_MEMORY_PRESSURE, true);
             self.ivars().llm.request_purge();
+        }
+
+        #[cfg(feature = "pocket-brain")]
+        #[unsafe(method(onForeground:))]
+        fn on_foreground(&self, _notification: *mut AnyObject) {
+            self.ivars().llm.set_background_restricted(false);
         }
     }
 
@@ -156,6 +169,12 @@ pub(crate) fn install_auto_lock(
             &*observer,
             sel!(onMemoryWarning:),
             Some(UIApplicationDidReceiveMemoryWarningNotification),
+            None,
+        );
+        center.addObserver_selector_name_object(
+            &*observer,
+            sel!(onForeground:),
+            Some(UIApplicationWillEnterForegroundNotification),
             None,
         );
     }

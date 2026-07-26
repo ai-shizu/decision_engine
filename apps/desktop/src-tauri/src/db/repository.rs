@@ -53,6 +53,7 @@ pub(crate) struct MessageCursor {
 pub(crate) enum RepositoryError {
     NotFound,
     Conflict,
+    IdentityAmbiguous,
     StorageFailed,
     /// OS-level storage access denial (e.g. iOS Data Protection sealing the
     /// database file while the device is locked). The worker treats this as a
@@ -65,6 +66,7 @@ impl fmt::Display for RepositoryError {
         let message = match self {
             Self::NotFound => "repository record not found",
             Self::Conflict => "repository record conflict",
+            Self::IdentityAmbiguous => "repository identity ambiguous",
             Self::StorageFailed => "repository storage failed",
             Self::DataProtection => "repository storage access denied by the OS",
         };

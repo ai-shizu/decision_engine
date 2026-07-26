@@ -133,12 +133,7 @@ pub fn install_memory_pressure_watch(
     // SAFETY: libdispatch symbols are process-global; handler only touches atomics.
     unsafe {
         let queue = dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0);
-        let source = dispatch_source_create(
-            &_dispatch_source_type_memorypressure,
-            0,
-            mask,
-            queue,
-        );
+        let source = dispatch_source_create(&_dispatch_source_type_memorypressure, 0, mask, queue);
         if source.is_null() {
             return;
         }

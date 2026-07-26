@@ -28,6 +28,7 @@
 | macOS ビルド・配布・コード署名 | §1, §2.3, §4 |
 | Tauri iOS (M0〜) 初期化・シミュレータ | §1, §2.3, §4.4, §4.22〜§4.29, `docs/M0_IOS_INIT_INSTRUCTIONS.md`, `docs/M19_IOS_BUILD_AUDIT.md` |
 | Pocket Brain / on-device LLM (M4〜M5) / OOM defense (M7) / 浄化 (M8) / local RAG (M9〜M13) / Gap·Tensor (M14) / Psychometrics (M15) / Twin·Oracle (M16) / Consult·Interview parity (M17) / Frontend API (M18) | §1, §1.1, §4.5〜§4.21, §5, §6, §7.1, §12, `docs/m5_action_plan.md` |
+| EDINETレーン凍結解除（ZIP/XBRL/CSV抽出・Heavy Coordinator） | §1, §1.1, §4.12, §4.12a, §7.2.1〜7.2.3, `docs/architecture/EDINET_LANE_DESIGN_V3.md`, `docs/EDINET_LANE_IMPLEMENTATION_DIRECTIVE.md` |
 | SQLCipher vault / Keychain (M3) | §1, §4.8, `docs/m3_action_plan.md` |
 | LLM モデル選定・consult/KV キャッシュ | §1, §5, §5.1, §7, §8 |
 | 検索エンジン・mmap・LSM 索引 | §1, §9, §10 |
@@ -526,6 +527,191 @@ rm -rf .boundary-tests-out
 - Subscription-Key はクエリに載るがログ・プロンプト・エラーへ絶対に出さない。
 - 書類 ZIP の XBRL 展開は未実装 — `filing_text` 注入または一覧メタデータの sparse facts で面接/ES を回す。
 - `prompt_sim` は `rag` feature に依存しない（`ExperienceRef` を自前定義）。
+
+### 4.12a EDINETレーン凍結解除設計 V3（2026-07-26 正式承認）
+
+**正本:** `docs/architecture/EDINET_LANE_DESIGN_V3.md`（V3＋V3.1＋V3.2訂正の統合契約）。
+実装指示: `docs/EDINET_LANE_IMPLEMENTATION_DIRECTIVE.md`。評価: `docs/architecture/EDINET_LANE_UNFREEZE_REPORT.md`。
+
+**承認範囲の不変条件（要約・詳細は正本）:**
+1. Origin（Manual/Wikipedia/Edinet/…）と Storage（Session/Vault/Live）は直交。Vault は provenance ではない。
+2. IPC 正本は `EdinetEnrichmentRequestV3` / `ResponseV3`（`subject_key`・`subject_revision`・`fact_cells` 往復）。Serde: fields=`camelCase` / variants=`snake_case`。
+3. `SubjectKey` は `try_from`/`into` String（`"name:…"` / `"edinet:…"`）。**Serialize/Deserialize derive 必須**。未知 prefix/空は `InvalidArgument`。複数企業候補のみ `IdentityAmbiguous`。
+4. Heavy Coordinator: cancel → Barrier → purge → Park(epoch)。`EdinetJobGuard(Arc)`。Admission は bit mask（BACKGROUND/MEMORY/THERMAL）。
+5. ZIP 完全直列（type=5→delete→type=1→delete）。bounded XML（読後 `event_consumed`）+ `csv-core`。
+6. Discovery は coverage 付き再開可能。「直近」ではなく窓内最新。`candidate_prefix_complete` で ZIP 可否。一覧は light、Heavy は ZIP 直前のみ。
+7. V11 additive（vec0 無改造）。`source_id=edinet-{code}`。Pending Evidence + claim recovery。`latest_selected` / `rag_ready` 分離。
+8. facts + latest_selected + pending Evidence は同一 Vault transaction。
+9. 本番 Keychain ゲート。失敗時に空 `CompanyFacts::default()` を返さない。企業名のみの `..Default::default()` 初期化は削除禁止。
+
+**Phase 0 / 0.5 as-built (2026-07-26):**
+- 依存確定: `zip`=`deflate-flate2` + `flate2`=`rust_backend`（`zlib-rs` / `deflate-flate2-zlib-rs` 禁止）。`csv-core` のみ。
+- `#[tauri::command]` に cfg 付き引数を置くな — 相互排他的な関数定義へ分離（`knowledge_research`）。
+- `pkb-sandbox-probe` は非対応 target でもコンパイル可、runtime は fail-closed（exit 1）。
+
+**Step 1 as-built (2026-07-26) — 契約テストと fallback 境界のみ:**
+1. `resolve_company_facts` は `resolve_company_facts_with(key_provider, transport_factory)` に委譲。本番は env key + Reqwest factory；テストは両方を注入し実ネットワーク禁止。
+2. soft-fallback は `soft_fallback_named_base` に集約。企業名付き base がある限り Wikipedia/手動 facts を完全維持（`assert_eq!(out, before)`）。空の `CompanyFacts::default()` は返さない。
+3. 呼び出し順: policy∧egress → key_provider → **lazy** transport_factory → `HttpTransport::get`。各失敗点で後段の呼出回数は 0。
+4. 企業名だけの `CompanyFacts { company_name, ..Default::default() }` は sanitize + soft-fallback の有効入力（削除禁止）。
+5. 憲法ガード: `reqwest::` 文字列は `net_gateway.rs` 以外に出現させない（コメント含む）。
+6. テストは両構成で回す。`egress-live` ON = key/factory/get 分岐到達の 7 件。OFF = 二要素目が閉じる契約（consent ON でも key/factory/get=0）専用 1 件を含む 5 件。ZIP/V11/Heavy Coordinator は未着手。
+
+**Step 1 ハマりどころ:**
+- `egress-live` 無しのテストは `refuse_if_egress_unavailable` で止まり、API key 分岐を検証したことにならない。だが「OFF で通信0」自体が契約なので `#[cfg(not(feature="egress-live"))]` 専用テストで固定する（計測 fake と `resolve_company_facts_with` は両構成でコンパイルさせ、cfg は個別テストにのみ付ける）。
+- name lookback は複数 GET になり得る — HTTP 失敗契約は `edinet_code` 明示の by-code 経路で get=1 を固定せよ。
+- soft-fallback は sanitize 済み base を返す。`assert_eq!` の期待値は `sanitize_company_facts` 後とせよ。
+- テスト用 temp root に `AtomicU64` 等のプロセスローカル連番を使うな。feature 違いの `cargo test` を並列起動すると同名 dir を相互削除し `policy persist failed` になる。`tempfile::TempDir` で OS 一意 dir を作り、`TempDir` と `NetworkPolicyStore` を fixture 寿命中ずっと保持せよ。
+
+**Step 2 as-built (2026-07-26) — 一覧 metadata 完全化と厳格選定のみ:**
+1. `EdinetDocumentMeta` は全必要項目を `Option<String>`（null 許容）。`docID`/`parentDocID` は明示 rename。
+2. 一覧 body 上限は `MAX_EDINET_LIST_BYTES`=8MiB（Wikipedia の 1MiB は不変）。`fetch_bounded_with_deadline_limit` 経由。
+3. `collect_list_candidates`: custom visitor で `results` を逐次検査。`serde_json::Value` 全体構築禁止。先頭500切捨て禁止。
+4. 対象企業の 120/130 のみ保持。上限 `MAX_EDINET_LIST_CANDIDATES`=32。超過は `CandidateLimitExceeded`（曖昧選択禁止）。
+5. `select_eligible_yuho_original`: 適格 120 のみ（`withdrawalStatus=="0"` ∧ `disclosureStatus=="0"` ∧ `legalStatus`∈{1,2} ∧ `xbrlFlag=="1"` ∧ **非空 `submitDateTime`**）。`submitDateTime` 降順。同時刻 tie → `AmbiguousSelection`。`docID` dedupe（候補上限の計数前）。
+6. **同名別企業:** 適格 120 に相異なる非空 `edinetCode` が複数あれば日時に関係なく `AmbiguousSelection`（最新日時での無言選択禁止）。
+7. 130 は原本にしない。`correction_available` は選択 120 と**同コード**かつ status 適格（非取下・開示・legal∈{1,2}）の 130 のみ。120 不在/`130` 単独 → `NoEligibleFiling`。
+8. `collect_list_candidates` は visitor 成功後に `Deserializer::end()` 必須（後続トークン → `Malformed`）。
+9. Step 3（期間探索・cache）as-built 下記。ZIP / Heavy Coordinator / RAG embed は未着手。追加依存なし。
+
+**Step 2 ハマりどころ:**
+- EDINET API の `disclosureStatus` は `"0"`=通常開示、`"1"`/`"2"`=不開示系。「開示中」ゲートは `"0"` と照合せよ（`"1"` と誤読するな）。
+- 候補超過は parse 中に即エラー。保持してから「どれか選ぶ」は契約違反。
+- 企業名 filter は同正規化名の別 `edinetCode` を混ぜ得る。日時 sort の前にコード集合を検査せよ。
+- `submitDateTime` 空/null の 120 を「単独だから」と採用するな — 最新性が定義できない。
+
+**Step 3 as-built (2026-07-26) — 探索・coverage・cache のみ（ZIP/Heavy/RAG embed 禁止）:**
+1. モジュール `knowledge/edinet_discovery.rs`。一覧探索は **light job**（`heavy_lease_acquired` は常に false）。Heavy lease / ZIP / XBRL / RAG embed へ進まない。
+2. 有限窓 `DEFAULT_DISCOVERY_WINDOW_DAYS_BACK`=21。対話中の 365 日総当たり禁止。中断再開は `edinet_scan_cursor` / `DiscoveryCache::cursor`。
+3. raw JSON 永続化禁止。`collect_list_parse` が 120/130 metadata + `metadata.processDateTime` のみ返す。`DayCommit` = coverage + filings を同一 `commit_day`。
+4. cache hit（`coverage=ok` かつ `revalidate_after` 未到来、または min refetch 60s 内）⇒ HTTP 0。
+5. `coverage=ok` は全件 parse + index 保存 + coverage 更新が同一 commit で完了したときのみ。
+6. `candidate_prefix_complete(anchor…submitDay)`。gap があれば `may_transition_to_zip=false`（自動 merge/ZIP 移行禁止）。Step 3 自体は ZIP を起動しない。
+7. `WindowComplete + NoEligibleInWindow` と `WindowIncomplete` を厳密分離。不完全時は `NoEligibleInWindow` に縮退させない（旧指示書の単純 `NoEligibleFiling` 縮退禁止）。
+8. 不完全探索時の `correction_available` は常に `Unknown`。
+9. HTTP: 401 即停止、429 job 停止、400/404 再試行なし、500/`RetryableTransient` と timeout のみ有限 retry（`LIST_RETRYABLE_MAX_RETRIES`=2）。**5xx を `GatewayError::StatusRejected` に落とすな**（NoRetry 分類になる）。
+10. V11 additive migration（`LATEST_SCHEMA_VERSION=11`）: `company_fact_cells` / `subject_alias_candidate` / `company_doc_pointers` / `company_filing_index` / `edinet_list_coverage` / `edinet_scan_cursor` / `knowledge_chunk_meta` / `edinet_evidence_pending`。暫定テーブル・部分 V11 禁止。vec0 無改造。
+11. `db/edinet_discovery_repo.rs` + `VaultDiscoveryCache` + Vault worker request/reply を実装し、本番 `resolve_company_facts` へ配線済み。day commit は `write_repository` の IMMEDIATE transaction。file reopen 後の cache hit HTTP 0 と、index 挿入後に coverage が失敗した場合の全体 rollback を回帰テストする。ZIP は未着手。
+
+**Step 3 ハマりどころ:**
+- 5xx を `StatusRejected` 経由で返すと `classify_gateway_error` が NoRetry になり、有限 retry 契約が静かに死ぬ。`DiscoveryError::RetryableTransient` を使え。
+- 不完全 scan で適格 0 件でも `NoEligibleInWindow` にするな — 窓外に適格がある可能性を潰す（旧 directive の単純 fallback 文言に引っ張られるな。V3 正本優先）。
+- `CandidateLimitExceeded` を `NoEligibleInWindow` にマップするな — 探索故障であり「適格なし」ではない。
+- `coverage=ok` を parse 成功前や index 未保存で書くな。cache hit = HTTP 0 の前提が壊れる。
+- cursor 再開後の選定は、新規取得分だけでなく探索窓全体の `coverage=ok` index を再集約せよ。そうしないと前回取得した候補が消える。
+- cursor は `anchor_date` / `window_days_back` / `WindowIncomplete` の完全一致時だけ再利用する。不一致 cursor は、HTTP 予算停止が最初の GET より前でも現在窓の anchor へ再初期化せよ。
+- 適格候補の `submitDateTime` が解析不能なら `candidate_prefix_complete=false`。anchor への代入は fail-open になる。
+- V11 verifier は凍結列を `columns_match` で完全一致検証する。`subject_alias_candidate.created_at`、pointer の `*_rev`、chunk の `source_id/created_at`、pending evidence の `unit` を省略・改名するな。
+- 本番 facts 採用も `may_transition_to_zip` と同じ完全性ゲートを必須にする。`DiscoveryResult::Selected` 単独で merge すると prefix gap を無視する。
+- cursor は進捗ヒントにすぎない。skip 対象も fresh な `coverage=ok` を確認し、最終 `WindowComplete` は窓内全日の fresh coverage から再計算する。
+- 15分 `revalidate_after` は anchor（当日）だけ。過去日の成功 coverage は `None` とし、履歴窓全体を15分ごとに再取得しない。
+- `max_live_gets` は retry を含む実 GET 総数。retry ループの各 attempt 前に残予算を検査し、枯渇時は `WindowIncomplete` で停止する。
+
+**Step 4 as-built (2026-07-26) — 型安全な書類取得APIのみ（ZIP展開 / stream-to-temp / Heavy / RAG embed 禁止）:**
+1. `EdinetDocumentKind { FilingAndXbrl /*type=1*/, XbrlCsv /*type=5*/ }`。`as_type_query()` からのみ query `type` を生成。呼出側の生整数・文字列禁止。
+2. `build_document_download_url(doc_id, kind, key)` / `validate_document_download_url(url, doc_id, kind)`。host・path・query key・type を send 直前検証。`#`/`@` 拒否。`type` / `Subscription-Key` は各1回のみ。`is_doc_id` / `is_subscription_key` を validator でも再適用（builder 迂回でも fail-closed）。
+3. 成功判定は HTTP status 単独禁止。`classify_document_response_meta`: `application/octet-stream`(+params) ∧ status 200 → ExpectedZip。`application/json`（200 含む）→ ApiErrorJson。HTML / `application/zip` / 空 CT 等 → `InvalidContentType`。
+4. JSON error は `metadata.status`（string/number）と top-level `StatusCode`（number/string）を解析。`EdinetError::ApiResponse { status }` は sanitize 済み短い token のみ（body・key を載せない）。
+5. content-type 通過後に ZIP local-file magic `PK\x03\x04`（`verify_zip_local_file_magic`）。不一致は `InvalidZip`。
+6. `fetch_document_bytes` は kind 必須 + 上記分類を適用。**本番 ZIP 経路ではない**（1MiB `Vec<u8>` バッファのまま）。stream-to-temp は Step 5。
+7. 開発時 `PKB_EDINET_API_KEY` は維持。**本番 iOS Keychain 供給は未実装 — 本番有効化の明示 blocker**（共有 key のバイナリ直書き禁止）。
+
+**Step 4 ハマりどころ:**
+- `type` を `&str` / `u8` で受け取るな。`EdinetDocumentKind` 以外から `"1"`/`"5"` を組み立てると検証を迂回できる。
+- send-time validator で query key の「存在」だけ見るな。`type=1&type=1` や不正 charset の `Subscription-Key` / `docID` を通すと固定テンプレートを証明できない。重複拒否 + `is_doc_id` / `is_subscription_key` 再適用が必須。
+- HTTP 200 + `application/json` を ZIP 成功にするな。EDINET は API error を 200+JSON で返す。
+- `application/zip` や空 content-type を成功扱いにするな。正本は `application/octet-stream` のみ。
+- content-type 前に ZIP magic だけ見て成功にするな（HTML/Sorry をすり抜ける）。順序: meta 分類 → body → magic。
+- `ApiResponse` やログに Subscription-Key 付き完全 URL / 生 body を載せるな。
+- `fetch_document_bytes` を本番数MB ZIP に使うな（1MiB WireViolation）。Step 5 stream-to-temp へ。
+
+**Step 5 as-built (2026-07-26) — bounded stream-to-temp のみ（ZIP展開 / preflight / Heavy Coordinator / XBRL/CSV / RAG 禁止）:**
+1. 新規 `knowledge/edinet_archive.rs`。`download_edinet_archive_to_temp` は chunk ごとに temp ファイルへ書き、ZIP 全体を `Vec<u8>` に保持しない。Wikipedia `MAX_RESPONSE_BYTES`=1MiB は不変。
+2. 上限は `MAX_EDINET_ARCHIVE_BYTES`=64MiB（圧縮アーカイブ、V3 §4.1）。`ResponseMeta.content_length`（reqwest 境界で取得）は**参考の早期拒否のみ**。正本は実測累計 byte で、超過 chunk は書き込み前に `TooLarge`。
+3. **単一絶対deadline**: `tokio::time::Instant::now() + deadline` を GET 開始前に固定。`transport.get`・各 `next_chunk`・各 `write_all`・`flush`/`rewind` をすべて `select!` で包む。同一 budget を `HttpTransport::get(..., request_deadline)` に渡し、本番 reqwest はクライアント固定15秒ではなく **per-request `.timeout(request_deadline)`**（`ReqwestTransport` から client-level timeout を撤去）。pressure は `EdinetError::MemoryPressure`。
+4. partial file は成功にしない。EOF 後も ZIP magic `PK\x03\x04` 必須（不一致・空 body は `InvalidZip`）。成功時のみ flush → rewind → `TempArchive` へ所有権移動。
+5. `TempArchive` は `tempfile::TempPath` の RAII で error / cancel / timeout / drop の全経路で削除。ファイル名は `edinet-archive-` + ランダム（docID・企業名・API key 禁止）。
+6. 同時1: `ArchiveGate`（`production_archive_gate()` がプロセス唯一）。permit は `TempArchive` が保持し drop で解放 — `type=5` → extract → delete → `type=1` の直列が構造的に強制される。busy 検査は **HTTP GET より前**（`TempArchiveBusy`、GET 0 回）。
+7. `EdinetError` 追加 variant: `TooLarge` / `MemoryPressure` / `TempArchiveBusy` / `TempFileIo`（key・URL・本文を保持しない）。
+8. temp dir は呼出側引数（本番 = Tauri app cache 配下、Heavy Coordinator 配線時に固定）。本番 iOS Keychain 供給は引き続き未実装 = リリース判定 blocker。
+
+**Step 5 ハマりどころ:**
+- `Content-Length` を信じて cap 検査を省くな。宣言 4 byte で実測超過を流す偽装をテストが回帰ガード（`measured_bytes_over_cap_reject_even_with_small_declared_length`）。
+- busy 検査を transport.get の後に置くな。同時2本目が GET を発行したら単一飛行契約が破れる（GET 0 回をテストで固定）。
+- `TempArchive` の permit を先に解放して temp を後から消す構造にするな。permit 解放 = 次の DL 開始可能 = 同時 TempArchive 2 個の窓が開く。permit は `TempArchive` のフィールドとして drop 時に一括解放。
+- EOF = 成功ではない。magic 検査前に `TempArchive` を返すな（HTML/Sorry の 200+octet-stream 偽装が通る）。
+- temp ファイルの drop 順序: tokio `File`（handle）→ `TempPath`（unlink）。逆にすると Windows で削除失敗する（mmap/truncate 問題の変奏）。
+- `tokio::fs::File` へ書いた後の rewind は `flush` の後。忘れると Step 6 の reader が途中位置から読む。
+- deadline を body chunk だけに掛けるな。`transport.get` / `write_all` / `flush` / `rewind` が監視外だとハングで永久待ち、または reqwest 固定15秒が 120秒 archive deadline より先に大容量ZIPを落とす。絶対 Instant を GET 前に開始し、transport 境界へ同じ budget を渡せ。
+
+**Step 6 as-built (2026-07-26) — ZIP EOCD/CD preflight のみ（展開 / XBRL/CSV / Heavy / RAG 禁止）:**
+1. `preflight_edinet_archive` / `TempArchive::preflight` / `preflight_zip_file`。`ZipArchive::new()` より前に、末尾固定窓（EOCD 22 + max comment 65535 ≈ 64KiB）だけで EOCD を探索。アーカイブ全体を `Vec` / mmap しない。
+2. ZIP64 拒否は**構造位置のみ**: 確定 EOCD の直前 20 byte が ZIP64 locator（`PK\x06\x07`）なら `UnsupportedArchive`。末尾窓の任意位置や comment 内シグネチャは見ない。classic EOCD の 0xFFFF / 0xFFFFFFFF sentinel も拒否。
+3. 複数ディスク拒否: `disk_number` / `disk_with_cd` ≠ 0、または `entries_on_disk` ≠ `total_entries` → `UnsupportedArchive`。
+4. 上限: `MAX_CENTRAL_DIRECTORY_BYTES`=2MiB、`MAX_ZIP_ENTRIES`=512。超過は `TooLarge`。CD が EOCD より後ろへ食み出す・comment 長不一致・CD 先頭が `PK\x01\x02` でない場合は `InvalidZip`。
+5. 成功時も失敗時も file を `SeekFrom::Start(0)` へ戻す（次段 extract 用）。entry 本体の展開・path/暗号化/overlap 検査は Step 7+。
+6. `EdinetError::UnsupportedArchive` を追加（key/URL/本文を載せない）。
+
+**Step 6 ハマりどころ:**
+- `ZipArchive::new()` を preflight 代わりにするな。crate が CD 全体を先に集めてから失敗すると 2MiB 超 CD でメモリを食う。EOCD 固定窓検査が先。
+- EOCD 探索窓をアーカイブサイズに比例させるな。comment 上限由来の固定 65557 byte が契約。
+- 末尾から見た「最後の `PK\x05\x06`」を EOCD にするな。comment 内の偽シグネチャを踏む。候補は `candidate + 22 + comment_len == archive_len` を満たすものだけ。
+- 末尾窓全体を ZIP64 シグネチャで grep するな。comment / CD に `PK\x06\x06` / `PK\x06\x07` が偶然入った classic ZIP を `UnsupportedArchive` にする。locator は確定 EOCD の直前 20 byte だけ見る。
+- preflight 後に file offset を CD 位置のまま残すな。必ず rewind（成功・失敗とも）。
+
+**Step 7 as-built (2026-07-26) — 財務 TSV 逐次抽出のみ（XBRL/XHTML / Heavy / RAG 禁止）:**
+1. `knowledge/edinet_csv.rs` — `extract_financials_from_type5_archive(..., cancel)`。`kind == XbrlCsv` のみ。先に `preflight_edinet_archive`（失敗は fail-closed）。`TempArchive`（= single-flight permit）は戻りまで借用保持。
+2. `CancellationToken` を ZIP entry 走査・entry read・CSV row / drain ループで確認（`GatewayError::Cancelled`）。blocking 抽出は abort だけでは止まらない。
+3. `ZipArchive` で `XBRL_TO_CSV/` 配下の `.csv` を `enclosed_name` のみ採用（lexicographically 最小）。暗号化・Stored/Deflate 以外 → `UnsupportedArchive`。宣言 `size`/`compressed_size` または**raw 実測**が 64MiB 超 → `TooLarge`。
+4. **raw 展開量**は `CountingRead` を `ZipFile` と decoder の間に置き計測（UTF-8 後ではない）。exact `cap` + EOF は受理、`cap+1` は拒否。UTF-16LE BOM（`FF FE`）を実読検査；欠落 / UTF-16BE（`FE FF`）→ `UnsupportedEncoding`。
+5. UTF-16LE → UTF-8 は `encoding_rs_io` + 固定 transcoder 8KiB。高水準 `csv` 禁止。`csv-core` のみ（tab / quote）。`InputEmpty` は `field_buf[outpos..]` 追記。`OutputFull` は行破棄 + warning（改行 skip 禁止）。record 64KiB / rows 500,000。
+6. 行上限到達時は成功値を返す前に、同一 raw/deadline/cancel 制約で decoder を EOF まで drain（ZIP CRC 完了）。drain 失敗は非成功。
+7. 9列ヘッダー厳密一致。allowlist 概念のみ。当期・連結優先。同点未取得。U+FFFD 行破棄。`EdinetError::{UnsupportedEncoding, Parse}`。ナラティブは Step 8。
+
+**Step 7 ハマりどころ:**
+- `CountingRead` を decoder の**後**に置くな。ASCII UTF-16 は raw を約半分に過少計測し、日本語は逆に早期拒否する。exact cap で次 read を即 `TooLarge` にするな（EOF probe で区別）。
+- `csv-core` の `InputEmpty` で `field_buf` 先頭へ書き戻すな。部分出力を捨てると巨大フィールドなのに `OutputFull` が起きない。
+- `OutputFull` 後に raw newline 探索で行スキップするな。decoder 指定だけで BOM を「確認した」と呼ぶな — `FF FE` を実読し、BE/欠落を拒否せよ。
+- 行上限で CSV を打ち切って成功を返すな。CRC 未完了のまま `Ok` になる。成功するなら EOF drain 必須。
+- permit を extract 前に drop するな。cancel 無しの抽出 API を残すな。
+- `io::ErrorKind::InvalidData` を全部 `TooLarge` にするな。自前 meter は `edinet_tsv_too_large`、ZIP CRC は `Invalid checksum` → `InvalidZip`。
+
+**Step 8 as-built (2026-07-26) — XBRL/Inline XBRL ナラティブ逐次抽出のみ（Heavy / RAG evidence 禁止）:**
+1. `knowledge/bounded_io.rs` — `BoundedXmlReader`（唯一 adapter）。`EventBudgetBufReader` が event ごとに最大 64KiB を `BufRead` 経路で課金（scratch 拡張前に拒否）。属性 ≤64・値 ≤4KiB。events 500k / depth 64。生 `quick_xml::Reader` を extract から直接呼ばない。
+2. `knowledge/edinet_xbrl.rs` — `extract_narratives_from_type1_archive(..., cancel)`。`kind == FilingAndXbrl`。preflight 後、正規化パスが **正確に** `XBRL/PublicDoc/` 接頭の `.htm/.xhtml/.xbrl` を最大 16 候補（lexicographic）。単体 raw ≤32MiB。選択候補の宣言+実測合計 ≤96MiB。
+3. 概念は **resolved namespace URI + local-name** allowlist（prefix 文字列は無関係）。IX = `http://www.xbrl.org/2013|2008/inlineXBRL` の `nonNumeric`/`continuation`。概念 URI = `http://disclosure.edinet-fsa.go.jp/taxonomy/jpcrp/` かつ `jpcrp_cor` を含む + `BusinessRisksTextBlock` / `DescriptionOfBusinessTextBlock` / `ManagementAnalysisOfFinancialPositionOperatingResultsAndCashFlowsTextBlock`。未知・未宣言 NS は採用しない。
+4. `script`/`style`/`noscript` スキップ。`DOCTYPE`・終了タグ不一致 → entry soft-fail。`continuedAt` は fact/continuation を EOF まで保留し一度解決。断片 ≤32・chain ≤8・first-ID-wins・cycle 検出・section 128KiB。continuation の truncation は chain 全体で OR して最終 fact へ伝播。
+5. EOF 保留 fact は件数 ≤32・保持 field 総 byte ≤512KiB。超過は entry soft-fail（不完全な narrative を成功扱いしない）。選択候補 96MiB は `extract_one_entry` の成功/soft-fail/CRC・parse error を問わず、attempt 終了直後に `declared.max(measured)` を課金。
+6. `PartialEdinetFacts.narratives` に格納。evidence vault / RAG / Heavy Coordinator / Step 9 merge は未着手。cancel/deadline は event ごと。
+
+**Step 8 ハマりどころ:**
+- extract 経路から `quick_xml::Reader` を直接 new するな。必ず `BoundedXmlReader`。
+- `Vec::with_capacity` は上限ではない。event 予算は `EventBudgetBufReader`（または同等の allocation-bounded `BufRead`）で確保前に切れ。
+- `read_resolved_event_into` の戻り値は `&mut NsReader` に寿命が結び付き、`name=` の `resolver().resolve` と共存できない。event を `into_owned` してから resolve せよ。
+- namespace prefix 文字列を allowlist にするな。URI+local。未宣言 prefix の概念は拒否。
+- `continuedAt` を fact 出現時点で解決するな（forward を落とす）。EOF 後に chain。duplicate は後勝ち禁止（first-wins）。
+- 候補パスに `contains("XBRL/PublicDoc/")` を使うな（`evil/XBRL/PublicDoc/...` が通る）。`starts_with` + `..` 拒否。
+- 選択展開合計 96MiB は `Ok` arm だけで加算するな。CRC/parse/cancel を含む全 attempt が measured byte を返し、結果を分岐する**前**に `declared.max(measured)` を加算せよ。
+- EOF 解決のための `pending_facts` を無制限にするな。件数と保持 byte の二重上限を持ち、超過は entry soft-fail。
+- continuation の capture 時 `truncated` を捨てるな。解決 chain で OR し、`ExtractedNarrative.truncated` へ伝播せよ。
+- `NsReader.config_mut().check_end_names` を無効化するな。malformed XML は soft-fail し、HTML tokenizer は別設計レビューに留める。
+- DOCTYPE を黙って無視するな。entry soft-fail。
+- HTML4 不正に DOM/`html5ever::TreeBuilder` を足すな（別設計レビュー必須）。
+
+**Step 9 as-built (2026-07-26) — 原文証拠と表示用 facts の分離のみ（Vault 保存 / embedding / Heavy Coordinator 禁止）:**
+1. `edinet_csv.rs::EdinetEvidenceSection` — RAG 用原文の別型。`doc_id` / `edinet_code` / `submitted_at` / `period_start` / `period_end` / `concept` / `local_name` / `unit`（ナラティブは常に `None`、chunk-meta 契約の予約枠）/ `text` / `truncated`。`PartialEdinetFacts.evidence` に載る。**`CompanyFacts` には有報全文を入れない**。
+2. 構築は `edinet_xbrl.rs::build_evidence_sections(meta, narratives, warnings)` のみ。archive 入口 `extract_narratives_from_type1_archive` が `NarrativeExtractMeta`（`period_start/end` を追加）から provenance を焼き込む。`parse_narrative_xml_reader` は meta を持たないため evidence を作らない。
+3. 上限: 単一 section ≤128KiB（`MAX_SECTION_BYTES`）・文書合計 ≤256KiB（`MAX_TOTAL_EVIDENCE_BYTES`）。予算超過 section は truncate-to-fit + `truncated=true`、全く入らなければ丸ごと破棄。いずれも `EvidenceBudgetExceeded` warning 付き — **無言 truncate は存在しない**。
+4. sanitize は section ごとに `render_guard::sanitize_external_text`。失敗（全部剥がされて空 = hostile）はその section **のみ** `EvidenceSanitizeFailed` で破棄し、他 section と base は維持。
+5. sanitize は NFKC / 全角写像でバイト数が**膨張**し得るうえ内部 truncate が無言。`SANITIZE_PROBE_MARGIN`（cap+16 で sanitize → cap 超過なら自前で `truncate_utf8` + `truncated=true`）で切断を検出可能にしてある。
+6. `CompanyFacts` 側の総量矛盾を解消: `MAX_COMPANY_FACTS_BYTES = 4 × MAX_FACT_FIELD_BYTES`（旧 12,000 はフィールド上限いっぱいの正当データが fail-closed する実バグ）。
+
+**Step 9 ハマりどころ:**
+- `sanitize_external_text` を cap ちょうどで呼ぶな。内部 `utf8_truncate` が無言で切るため「全文」表示詐称になる。probe margin 付きで呼び、超過を自前 truncate + flag 化せよ。
+- 予算オーバー section を黙って skip するな（`EvidenceBudgetExceeded` 必須）。sanitize 失敗と予算超過は別 warning（前者は破棄、後者は truncate または破棄）。
+- `EdinetEvidenceSection.truncated` は capture / continuation / sanitize / 総量予算の**どこで切れても** true。V3 §6 の「truncated=true なら全文と表示しない」の唯一のソース。
+- `MAX_COMPANY_FACTS_BYTES` を counted フィールド数 × `MAX_FACT_FIELD_BYTES` 未満に戻すな（sanitize が正当な capped facts を `Malformed` にする）。
+- `PartialEdinetFacts` にフィールドを足したら全 struct literal（csv 側 2 + xbrl 側 4）を追従させること（`..Default::default()` は使っていない）。
 
 ### 4.13 M13 — Daily Context merger + auto-ingest (2026-07-20)
 

@@ -14,8 +14,7 @@ use super::model_path::{
 };
 
 /// Official recommended GGUF listing (guidance only — never fetched by the app).
-pub const RECOMMENDED_MODEL_PAGE_URL: &str =
-    "https://huggingface.co/Qwen/Qwen2.5-7B-Instruct-GGUF";
+pub const RECOMMENDED_MODEL_PAGE_URL: &str = "https://huggingface.co/Qwen/Qwen2.5-7B-Instruct-GGUF";
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -143,9 +142,10 @@ fn ios_open_https(app: &AppHandle, url: &str) -> Result<(), String> {
 
 #[cfg(all(feature = "secure-vault", target_os = "ios"))]
 fn ios_open_https_on_main(url: &str) -> Result<(), String> {
+    use objc2::runtime::AnyObject;
     use objc2::MainThreadMarker;
-    use objc2_foundation::{NSString, NSURL};
-    use objc2_ui_kit::UIApplication;
+    use objc2_foundation::{NSDictionary, NSString, NSURL};
+    use objc2_ui_kit::{UIApplication, UIApplicationOpenExternalURLOptionsKey};
 
     let Some(mtm) = MainThreadMarker::new() else {
         return Err("ブラウザ起動はメインスレッド必須です。".into());
@@ -155,8 +155,13 @@ fn ios_open_https_on_main(url: &str) -> Result<(), String> {
         return Err("案内先 URL が不正です。".into());
     };
     let shared = UIApplication::sharedApplication(mtm);
-    if !shared.openURL(&ns_url) {
+    if !shared.canOpenURL(&ns_url) {
         return Err("Safari を開けませんでした。案内 URL を手動で開いてください。".into());
+    }
+    let options = NSDictionary::<UIApplicationOpenExternalURLOptionsKey, AnyObject>::new();
+    // Non-deprecated API; completion is optional (fire-and-forget from IPC).
+    unsafe {
+        shared.openURL_options_completionHandler(&ns_url, &options, None);
     }
     Ok(())
 }

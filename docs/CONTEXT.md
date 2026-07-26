@@ -12,6 +12,7 @@
 | `docs/HANDOFF.md` | 現在地、worktree、直近作業、volatile な進捗 |
 | `docs/CONTEXT.md`（本書） | 安定アーキテクチャ、所有権、正本への索引 |
 | `docs/architecture/INCIDENT_LEDGER.md` | 事故と絶対裁定 |
+| `docs/architecture/EDINET_LANE_DESIGN_V3.md` | EDINETレーン凍結解除の承認済み設計契約（V3＋V3.1＋V3.2） |
 | 実コード | タブ、IPC コマンド、schema、現在挙動の最終的正本 |
 | SPEC 群（`docs/SPEC_FOXTROT_UI.md` ほか） | 個別機能の設計契約 |
 | `docs/AUDIT_FINDINGS_2026-07-11.md` | findings の状態と解決記録 |
@@ -65,6 +66,7 @@ PKB（Personal Knowledge Base）は、完全オフラインを原則とする自
 | C++ search contract | `src/python/core/pipeline.py` / `src/cpp/search_engine.cpp` |
 | runtime parsers | `apps/desktop/src/lib/parseConsultResponse.ts` / `apps/desktop/src/lib/parseManifest.ts` |
 | incidents | `docs/architecture/INCIDENT_LEDGER.md` |
+| EDINETレーン設計（承認済み） | `docs/architecture/EDINET_LANE_DESIGN_V3.md` |
 | UI / Echo 等の設計契約 | `docs/SPEC_FOXTROT_UI.md` / `docs/SPEC_ECHO_GENESIS.md` ほか SPEC 群 |
 
 IPC コマンドの完全一覧や固定件数は複製しない。変更・監査時は必ず `src/python/engine_stdio.py` を読め。

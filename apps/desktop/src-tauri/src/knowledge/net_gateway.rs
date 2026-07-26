@@ -114,6 +114,9 @@ pub struct ResponseMeta {
     pub status: u16,
     pub content_type: Option<String>,
     pub content_encoding: Option<String>,
+    /// Declared `Content-Length` (advisory early-reject only; may be absent or
+    /// lie — byte caps are always enforced on measured totals).
+    pub content_length: Option<u64>,
 }
 
 /// Chunked response body seam. Production (`egress-live`) wraps
@@ -124,21 +127,34 @@ pub trait ResponseBody: Send {
 
 /// HTTP transport seam (STEP 5.C/5.E). Production (`egress-live`) wraps
 /// `reqwest::Client`; tests inject fakes with call-count instrumentation.
+///
+/// `request_deadline` is the **overall** budget for this GET (connect + headers
+/// + body lifetime as honored by the production client). Callers that stream
+/// the body themselves must still race their own absolute deadline against
+/// chunk/IO waits — this argument aligns the reqwest client timeout so a
+/// long archive download is not killed by a short fixed client default.
 pub trait HttpTransport: Send + Sync {
     type Body: ResponseBody;
-    fn get(&self, url: &str) -> impl Future<Output = Result<(ResponseMeta, Self::Body), GatewayError>> + Send;
+    fn get(
+        &self,
+        url: &str,
+        request_deadline: Duration,
+    ) -> impl Future<Output = Result<(ResponseMeta, Self::Body), GatewayError>> + Send;
 }
 
 /// Read a bounded body: stops (and drops the stream) the instant the running
-/// total would exceed `MAX_RESPONSE_BYTES`, never appending the offending chunk.
-pub async fn read_bounded_body<B: ResponseBody>(mut body: B) -> Result<Vec<u8>, GatewayError> {
+/// total would exceed `max_bytes`, never appending the offending chunk.
+pub async fn read_bounded_body_limit<B: ResponseBody>(
+    mut body: B,
+    max_bytes: usize,
+) -> Result<Vec<u8>, GatewayError> {
     let mut buf: Vec<u8> = Vec::new();
     loop {
         match body.next_chunk().await {
             None => break,
             Some(Err(e)) => return Err(e),
             Some(Ok(chunk)) => {
-                if buf.len().saturating_add(chunk.len()) > MAX_RESPONSE_BYTES {
+                if buf.len().saturating_add(chunk.len()) > max_bytes {
                     return Err(GatewayError::WireViolation);
                 }
                 buf.extend_from_slice(&chunk);
@@ -148,23 +164,26 @@ pub async fn read_bounded_body<B: ResponseBody>(mut body: B) -> Result<Vec<u8>, 
     Ok(buf)
 }
 
-/// Validate status/content-type/content-encoding BEFORE any body byte is read.
-pub fn validate_response_meta(meta: &ResponseMeta) -> Result<(), GatewayError> {
-    if meta.status != 200 {
-        return Err(GatewayError::StatusRejected);
-    }
-    let ct_ok = meta
-        .content_type
-        .as_deref()
-        .map(|ct| ct.trim_start().to_ascii_lowercase().starts_with("application/json"))
-        .unwrap_or(false);
-    if !ct_ok {
-        return Err(GatewayError::StatusRejected);
-    }
-    match meta.content_encoding.as_deref() {
-        None => Ok(()),
-        Some(enc) if enc.trim().eq_ignore_ascii_case("identity") => Ok(()),
-        Some(_) => Err(GatewayError::WireViolation),
+/// Read a bounded body capped at [`MAX_RESPONSE_BYTES`] (Wikipedia / default).
+pub async fn read_bounded_body<B: ResponseBody>(body: B) -> Result<Vec<u8>, GatewayError> {
+    read_bounded_body_limit(body, MAX_RESPONSE_BYTES).await
+}
+
+/// Race body-read against cancel/deadline (§1.2/1.5) with an explicit byte cap.
+pub async fn fetch_bounded_with_deadline_limit<B, C>(
+    body: B,
+    cancel: C,
+    deadline: Duration,
+    max_bytes: usize,
+) -> Result<Vec<u8>, GatewayError>
+where
+    B: ResponseBody,
+    C: Future<Output = ()>,
+{
+    tokio::select! {
+        _ = cancel => Err(GatewayError::Cancelled),
+        _ = tokio::time::sleep(deadline) => Err(GatewayError::Timeout),
+        result = read_bounded_body_limit(body, max_bytes) => result,
     }
 }
 
@@ -180,10 +199,30 @@ where
     B: ResponseBody,
     C: Future<Output = ()>,
 {
-    tokio::select! {
-        _ = cancel => Err(GatewayError::Cancelled),
-        _ = tokio::time::sleep(deadline) => Err(GatewayError::Timeout),
-        result = read_bounded_body(body) => result,
+    fetch_bounded_with_deadline_limit(body, cancel, deadline, MAX_RESPONSE_BYTES).await
+}
+
+/// Validate status/content-type/content-encoding BEFORE any body byte is read.
+pub fn validate_response_meta(meta: &ResponseMeta) -> Result<(), GatewayError> {
+    if meta.status != 200 {
+        return Err(GatewayError::StatusRejected);
+    }
+    let ct_ok = meta
+        .content_type
+        .as_deref()
+        .map(|ct| {
+            ct.trim_start()
+                .to_ascii_lowercase()
+                .starts_with("application/json")
+        })
+        .unwrap_or(false);
+    if !ct_ok {
+        return Err(GatewayError::StatusRejected);
+    }
+    match meta.content_encoding.as_deref() {
+        None => Ok(()),
+        Some(enc) if enc.trim().eq_ignore_ascii_case("identity") => Ok(()),
+        Some(_) => Err(GatewayError::WireViolation),
     }
 }
 
@@ -219,7 +258,8 @@ pub fn percent_encode_query_param(s: &str) -> String {
                 let hex_digits = "0123456789ABCDEF";
                 let hi = (other >> 4) as usize;
                 let lo = (other & 0x0f) as usize;
-                if let (Some(h), Some(l)) = (hex_digits.get(hi..hi + 1), hex_digits.get(lo..lo + 1)) {
+                if let (Some(h), Some(l)) = (hex_digits.get(hi..hi + 1), hex_digits.get(lo..lo + 1))
+                {
                     out.push_str(h);
                     out.push_str(l);
                 }
@@ -238,8 +278,12 @@ fn percent_decode(s: &str) -> Result<String, GatewayError> {
         if b == b'%' {
             let h1 = *bytes.get(i + 1).ok_or(GatewayError::UrlViolation)?;
             let h2 = *bytes.get(i + 2).ok_or(GatewayError::UrlViolation)?;
-            let hi = (h1 as char).to_digit(16).ok_or(GatewayError::UrlViolation)?;
-            let lo = (h2 as char).to_digit(16).ok_or(GatewayError::UrlViolation)?;
+            let hi = (h1 as char)
+                .to_digit(16)
+                .ok_or(GatewayError::UrlViolation)?;
+            let lo = (h2 as char)
+                .to_digit(16)
+                .ok_or(GatewayError::UrlViolation)?;
             let byte = u8::try_from(hi * 16 + lo).map_err(|_| GatewayError::UrlViolation)?;
             out.push(byte);
             i += 3;
@@ -266,11 +310,15 @@ pub fn build_request(query: &str) -> String {
 /// widen the template.
 pub fn validate_outbound_url(url: &str, expected_query: &str) -> Result<(), GatewayError> {
     let prefix = format!("https://{WIKI_HOST}{WIKI_PATH}?");
-    let rest = url.strip_prefix(&prefix).ok_or(GatewayError::UrlViolation)?;
+    let rest = url
+        .strip_prefix(&prefix)
+        .ok_or(GatewayError::UrlViolation)?;
     if rest.contains('#') || rest.contains('@') {
         return Err(GatewayError::UrlViolation);
     }
-    let expected_keys: BTreeSet<&str> = ["action", "list", "format", "srsearch"].into_iter().collect();
+    let expected_keys: BTreeSet<&str> = ["action", "list", "format", "srsearch"]
+        .into_iter()
+        .collect();
     let mut got_keys: BTreeSet<&str> = BTreeSet::new();
     let mut srsearch_val: Option<&str> = None;
     for pair in rest.split('&') {
@@ -367,7 +415,8 @@ pub struct SearchResult {
 /// adversarial JSON (deep nesting / type confusion / huge arrays) — every
 /// field access goes through `.get()`/`.and_then()`, never indexing.
 pub fn extract_results(body: &[u8]) -> Result<Vec<SearchResult>, GatewayError> {
-    let value: serde_json::Value = serde_json::from_slice(body).map_err(|_| GatewayError::Malformed)?;
+    let value: serde_json::Value =
+        serde_json::from_slice(body).map_err(|_| GatewayError::Malformed)?;
     let arr = value
         .get("query")
         .and_then(|q| q.get("search"))
@@ -404,7 +453,7 @@ where
 {
     let url = build_request(query);
     validate_outbound_url(&url, query)?;
-    let (meta, body) = transport.get(&url).await?;
+    let (meta, body) = transport.get(&url, deadline).await?;
     validate_response_meta(&meta)?;
     let raw = fetch_bounded_with_deadline(body, cancel, deadline).await?;
     extract_results(&raw)
@@ -470,8 +519,7 @@ mod live {
     use std::pin::Pin;
 
     use super::{
-        AsyncLookup, GatewayError, HttpTransport, ResponseBody, ResponseMeta,
-        SafeKnowledgeResolver,
+        AsyncLookup, GatewayError, HttpTransport, ResponseBody, ResponseMeta, SafeKnowledgeResolver,
     };
 
     /// Production DNS lookup via hickory-resolver (real network; egress-live only).
@@ -502,16 +550,14 @@ mod live {
         fn lookup(
             &self,
             host: String,
-        ) -> Pin<Box<dyn Future<Output = Result<Vec<SocketAddr>, GatewayError>> + Send + '_>> {
+        ) -> Pin<Box<dyn Future<Output = Result<Vec<SocketAddr>, GatewayError>> + Send + '_>>
+        {
             let inner = self.inner.clone();
             Box::pin(async move {
-                let response = inner
-                    .lookup_ip(host)
-                    .await
-                    .map_err(|e| {
-                        log::error!("dns: lookup failed: {e}");
-                        GatewayError::DnsLookupFailed
-                    })?;
+                let response = inner.lookup_ip(host).await.map_err(|e| {
+                    log::error!("dns: lookup failed: {e}");
+                    GatewayError::DnsLookupFailed
+                })?;
                 let mut addrs = Vec::new();
                 for ip in response.iter() {
                     addrs.push(SocketAddr::new(ip, 443));
@@ -540,7 +586,8 @@ mod live {
         fn lookup(
             &self,
             host: String,
-        ) -> Pin<Box<dyn Future<Output = Result<Vec<SocketAddr>, GatewayError>> + Send + '_>> {
+        ) -> Pin<Box<dyn Future<Output = Result<Vec<SocketAddr>, GatewayError>> + Send + '_>>
+        {
             Box::pin(async move {
                 // getaddrinfo is blocking — keep it off the async runtime.
                 let resolved = tokio::task::spawn_blocking(move || {
@@ -593,7 +640,10 @@ mod live {
                 .no_proxy()
                 .dns_resolver(dns)
                 .connect_timeout(std::time::Duration::from_secs(5))
-                .timeout(std::time::Duration::from_secs(15))
+                // No fixed client-level request timeout: each `get` applies the
+                // caller-supplied `request_deadline` so Wikipedia (short) and
+                // EDINET archive (up to 120s) share one transport without
+                // truncating legitimate large ZIP downloads at 15s.
                 .build()
                 .map_err(|_| GatewayError::WireViolation)?;
             Ok(Self { client })
@@ -609,6 +659,7 @@ mod live {
             match self.stream.chunk().await {
                 Ok(Some(bytes)) => Some(Ok(bytes.to_vec())),
                 Ok(None) => None,
+                Err(e) if e.is_timeout() => Some(Err(GatewayError::Timeout)),
                 Err(_) => Some(Err(GatewayError::WireViolation)),
             }
         }
@@ -617,10 +668,15 @@ mod live {
     impl HttpTransport for ReqwestTransport {
         type Body = ReqwestBody;
 
-        async fn get(&self, url: &str) -> Result<(ResponseMeta, Self::Body), GatewayError> {
+        async fn get(
+            &self,
+            url: &str,
+            request_deadline: std::time::Duration,
+        ) -> Result<(ResponseMeta, Self::Body), GatewayError> {
             let resp = self
                 .client
                 .get(url)
+                .timeout(request_deadline)
                 .header("Accept-Encoding", "identity")
                 .header(
                     "User-Agent",
@@ -628,7 +684,13 @@ mod live {
                 )
                 .send()
                 .await
-                .map_err(|_| GatewayError::WireViolation)?;
+                .map_err(|e| {
+                    if e.is_timeout() {
+                        GatewayError::Timeout
+                    } else {
+                        GatewayError::WireViolation
+                    }
+                })?;
             let status = resp.status().as_u16();
             let content_type = resp
                 .headers()
@@ -640,10 +702,16 @@ mod live {
                 .get(reqwest::header::CONTENT_ENCODING)
                 .and_then(|v| v.to_str().ok())
                 .map(str::to_string);
+            let content_length = resp
+                .headers()
+                .get(reqwest::header::CONTENT_LENGTH)
+                .and_then(|v| v.to_str().ok())
+                .and_then(|v| v.trim().parse::<u64>().ok());
             let meta = ResponseMeta {
                 status,
                 content_type,
                 content_encoding,
+                content_length,
             };
             Ok((meta, ReqwestBody { stream: resp }))
         }

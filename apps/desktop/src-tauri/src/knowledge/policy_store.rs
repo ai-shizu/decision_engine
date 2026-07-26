@@ -48,7 +48,7 @@ impl NetworkPolicyStore {
 
     /// Construct against an explicit data root (production: `user_data_root()`;
     /// tests: per-case temp dir — no env mutation).
-    fn from_root(root: PathBuf) -> Self {
+    pub(crate) fn from_root(root: PathBuf) -> Self {
         let policy = Self::load_from_disk(&root).unwrap_or(NetworkPolicy::Off);
         Self {
             inner: Mutex::new(policy),
@@ -111,7 +111,8 @@ impl NetworkPolicyStore {
             "schema": SCHEMA,
             "enabled": enabled,
         });
-        let serialized = serde_json::to_vec(&body).map_err(|_| "policy persist failed".to_string())?;
+        let serialized =
+            serde_json::to_vec(&body).map_err(|_| "policy persist failed".to_string())?;
         let tmp = path.with_extension("json.tmp");
         let _ = fs::remove_file(&tmp);
         {

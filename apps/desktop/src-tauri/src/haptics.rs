@@ -47,6 +47,9 @@ mod ios {
                 g.selectionChanged();
             }
             "impact" | "impact_medium" => {
+                // `feedbackGeneratorWithStyle:forView:` needs a UIView we do not
+                // own from this IPC path; keep style via deprecated initWithStyle.
+                #[allow(deprecated)]
                 let g = UIImpactFeedbackGenerator::initWithStyle(
                     UIImpactFeedbackGenerator::alloc(mtm),
                     UIImpactFeedbackStyle::Medium,
@@ -55,6 +58,7 @@ mod ios {
                 g.impactOccurred();
             }
             "impact_heavy" | "warning_heavy" => {
+                #[allow(deprecated)]
                 let g = UIImpactFeedbackGenerator::initWithStyle(
                     UIImpactFeedbackGenerator::alloc(mtm),
                     UIImpactFeedbackStyle::Heavy,

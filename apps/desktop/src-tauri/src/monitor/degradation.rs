@@ -117,11 +117,7 @@ mod tests {
     #[test]
     fn combine_takes_max_severity() {
         assert_eq!(
-            combine_degradation(
-                DegradationLevel::Nominal,
-                PressureClass::Normal,
-                0.5
-            ),
+            combine_degradation(DegradationLevel::Nominal, PressureClass::Normal, 0.5),
             DegradationLevel::Nominal
         );
         assert_eq!(
@@ -129,35 +125,19 @@ mod tests {
             DegradationLevel::Fair
         );
         assert_eq!(
-            combine_degradation(
-                DegradationLevel::Nominal,
-                PressureClass::Warn,
-                0.5
-            ),
+            combine_degradation(DegradationLevel::Nominal, PressureClass::Warn, 0.5),
             DegradationLevel::Fair
         );
         assert_eq!(
-            combine_degradation(
-                DegradationLevel::Nominal,
-                PressureClass::Normal,
-                0.9
-            ),
+            combine_degradation(DegradationLevel::Nominal, PressureClass::Normal, 0.9),
             DegradationLevel::Serious
         );
         assert_eq!(
-            combine_degradation(
-                DegradationLevel::Serious,
-                PressureClass::Critical,
-                0.5
-            ),
+            combine_degradation(DegradationLevel::Serious, PressureClass::Critical, 0.5),
             DegradationLevel::Critical
         );
         assert_eq!(
-            combine_degradation(
-                DegradationLevel::Fair,
-                PressureClass::Normal,
-                1.05
-            ),
+            combine_degradation(DegradationLevel::Fair, PressureClass::Normal, 1.05),
             DegradationLevel::Critical
         );
     }

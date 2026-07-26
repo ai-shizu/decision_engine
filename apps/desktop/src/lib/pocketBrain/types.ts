@@ -391,6 +391,60 @@ export interface CompanyFacts {
   source: string;
 }
 
+export type SubjectKey = `name:${string}` | `edinet:E${number}`;
+export type FactOrigin =
+  | "manual"
+  | "wikipedia"
+  | "edinet"
+  | "unknown_protected"
+  | "unknown";
+export type FactStorage = "session" | "vault" | "live";
+export interface FactCellWire {
+  field: string;
+  value: string;
+  origin: FactOrigin;
+  storage: FactStorage;
+  docId: string | null;
+  submittedAt: string | null;
+  fetchedAt: number | null;
+  revision: number;
+  schemaVersion: number;
+}
+export interface EdinetEnrichmentRequestV3 {
+  schemaVersion: 3;
+  subjectKey: SubjectKey;
+  subjectRevision: number;
+  subjectTransition:
+    | { kind: "rekey" | "switch"; from: SubjectKey; to: SubjectKey }
+    | null;
+  factCells: FactCellWire[] | null;
+  companyFacts: CompanyFacts | null;
+  edinetCode: string | null;
+  edinetDate: string | null;
+  filingText: string | null;
+}
+export interface EdinetEnrichmentResponseV3 {
+  schemaVersion: 3;
+  facts: CompanyFacts;
+  factCells: FactCellWire[];
+  subjectKey: SubjectKey;
+  subjectRevision: number;
+  fieldProvenance: Array<Omit<FactCellWire, "value" | "revision" | "schemaVersion">>;
+  fetch: "not_attempted" | "succeeded" | "network_failed" | "api_error" | "cancelled" | "memory_pressure";
+  extraction: "none" | "financials_only" | "narratives_only" | "both" | "parse_failed" | "cancelled";
+  discoveryCoverage: "not_run" | "window_complete" | "window_incomplete" | "pinned";
+  discoveryResult: "not_run" | "selected" | "no_eligible_in_window" | "identity_ambiguous";
+  factPersistence: "not_attempted" | "persisted" | "conflict" | "failed";
+  evidencePersistence: "not_attempted" | "saved_pending_embedding" | "ready" | "failed";
+  servedFrom: "live" | "cache" | "mixed" | "not_applicable";
+  freshness: {
+    selectedDocId: string | null;
+    submittedAt: string | null;
+    correctionAvailable: "yes" | "no" | "unknown";
+  };
+  warnings: Array<"vault_read_failed" | "vault_write_failed" | "soft_fallback">;
+}
+
 export interface SimGenParams {
   nCtx?: number;
   maxTokens?: number;
@@ -527,6 +581,7 @@ export const POCKET_BRAIN_COMMANDS = [
   "get_twin_identify_status",
   "generate_oracle_payload",
   "fetch_edinet_company_facts",
+  "enrich_company_facts_from_edinet",
   "start_interview_session",
   "review_es_draft",
   "consult_with_oracle_context",

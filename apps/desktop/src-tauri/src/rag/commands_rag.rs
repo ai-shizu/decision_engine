@@ -23,8 +23,8 @@ use super::prompt::{build_rag_prompt, RagContextRef};
 use crate::db::{
     KnowledgeChunkRow, KnowledgeSearchHit as DbHit, VaultErrorCode, VaultHandle, VaultStatus,
 };
-use crate::llm::hashed_embed::hashed_ngram_embed_384;
 use crate::llm::commands_consult::ensure_model_loaded;
+use crate::llm::hashed_embed::hashed_ngram_embed_384;
 use crate::llm::model_path::resolve_loadable_model_path;
 use crate::llm::params::{GenerationParams, LoadParams};
 use crate::llm::prompt_budget::fit_and_verify_prompt;
@@ -72,16 +72,20 @@ pub struct IngestKnowledgeResult {
     pub part_count: usize,
 }
 
+/// IPC row for a future `list_knowledge_sources` command (not yet registered).
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "snake_case")]
+#[allow(dead_code)]
 pub struct KnowledgeSourceRow {
     pub source_id: String,
     pub chunk_count: usize,
     pub created_at: i64,
 }
 
+/// IPC envelope for a future `list_knowledge_sources` command (not yet registered).
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "snake_case")]
+#[allow(dead_code)]
 pub struct ListKnowledgeSourcesResult {
     pub sources: Vec<KnowledgeSourceRow>,
 }
@@ -538,7 +542,8 @@ pub async fn ingest_company_knowledge(
     use crate::knowledge::edinet_client::{render_company_facts_block, sanitize_company_facts};
 
     // 外部由来テキストは常に sanitize（render_guard 規約）。
-    let facts = sanitize_company_facts(&facts).map_err(|e| format!("{e:?}").to_ascii_lowercase())?;
+    let facts =
+        sanitize_company_facts(&facts).map_err(|e| format!("{e:?}").to_ascii_lowercase())?;
 
     // 実知識が無いものは Company 空間に入れない（"（未取得）" チャンクで汚さない）。
     let has_knowledge = !facts.business_summary.trim().is_empty()
@@ -758,10 +763,7 @@ pub async fn ingest_line_history_path(
     filename: String,
 ) -> Result<IngestKnowledgeResult, String> {
     let rel = relative_path.trim().replace('\\', "/");
-    if rel.is_empty()
-        || rel.contains("..")
-        || rel.starts_with('/')
-        || !rel.starts_with("imports/")
+    if rel.is_empty() || rel.contains("..") || rel.starts_with('/') || !rel.starts_with("imports/")
     {
         log::error!("ingest_line_history_path: rejected relative_path");
         return Err(line_err("BAD_PATH"));
@@ -772,13 +774,10 @@ pub async fn ingest_line_history_path(
         return Err(line_err("BAD_SOURCE_ID"));
     }
 
-    let app_data = app
-        .path()
-        .app_data_dir()
-        .map_err(|e| {
-            log::error!("ingest_line_history_path: app_data_dir failed: {e}");
-            line_err("BAD_PATH")
-        })?;
+    let app_data = app.path().app_data_dir().map_err(|e| {
+        log::error!("ingest_line_history_path: app_data_dir failed: {e}");
+        line_err("BAD_PATH")
+    })?;
     let full = app_data.join(&rel);
     // Ensure resolved path stays inside app_data (no symlink escape).
     let app_canon = app_data.canonicalize().unwrap_or(app_data.clone());
@@ -917,9 +916,10 @@ pub async fn send_rag_chat(
             use_mmap: true,
         };
         let llm_load = llm.inner().clone();
-        if let Err(e) = tauri::async_runtime::spawn_blocking(move || llm_load.load(path, load_params))
-            .await
-            .map_err(|_| "llm load join failed".to_string())?
+        if let Err(e) =
+            tauri::async_runtime::spawn_blocking(move || llm_load.load(path, load_params))
+                .await
+                .map_err(|_| "llm load join failed".to_string())?
         {
             log::error!("send_rag_chat: auto-load failed: {e}");
             let _ = on_token.send(error_done_event(0, ERR_MODEL_NOT_LOADED.to_string()));
@@ -946,30 +946,28 @@ pub async fn send_rag_chat(
             context_limit,
             KnowledgeNamespace::All,
         )
-            .unwrap_or_default();
-            let refs: Vec<RagContextRef<'_>> = hits
-                .iter()
-                .map(|hit| {
-                    let relevance = if hit.recall_score.is_finite() && hit.recall_score > 0.0 {
-                        hit.recall_score.clamp(0.0, 1.0)
-                    } else if hit.distance.is_finite() {
-                        (1.0 / (1.0 + hit.distance)).clamp(0.0, 1.0)
-                    } else {
-                        0.5
-                    };
-                    RagContextRef {
-                        id: hit.id.as_str(),
-                        text: hit.text_content.as_str(),
-                        relevance,
-                        created_at: hit.created_at,
-                    }
-                })
-                .collect();
-            let rag_prompt = build_rag_prompt(&message_for_search, &refs);
+        .unwrap_or_default();
+        let refs: Vec<RagContextRef<'_>> = hits
+            .iter()
+            .map(|hit| {
+                let relevance = if hit.recall_score.is_finite() && hit.recall_score > 0.0 {
+                    hit.recall_score.clamp(0.0, 1.0)
+                } else if hit.distance.is_finite() {
+                    (1.0 / (1.0 + hit.distance)).clamp(0.0, 1.0)
+                } else {
+                    0.5
+                };
+                RagContextRef {
+                    id: hit.id.as_str(),
+                    text: hit.text_content.as_str(),
+                    relevance,
+                    created_at: hit.created_at,
+                }
+            })
+            .collect();
+        let rag_prompt = build_rag_prompt(&message_for_search, &refs);
         let prompt = match crate::llm::consult_context::load_mentor_context(&vault) {
-            Ok(mentor) => {
-                crate::llm::consult_context::append_mentor_sections(&rag_prompt, &mentor)
-            }
+            Ok(mentor) => crate::llm::consult_context::append_mentor_sections(&rag_prompt, &mentor),
             Err(_) => rag_prompt,
         };
 
@@ -1033,7 +1031,10 @@ mod tests {
 
     #[test]
     fn line_source_id_is_stable_for_reimport_of_same_file() {
-        assert_eq!(line_source_id("family_chat.txt"), line_source_id("family_chat.txt"));
+        assert_eq!(
+            line_source_id("family_chat.txt"),
+            line_source_id("family_chat.txt")
+        );
     }
 
     #[test]
@@ -1043,7 +1044,12 @@ mod tests {
         assert!(id.len() <= MAX_SOURCE_ID_BYTES);
         assert!(validate_source_id(&id).is_ok());
         // Must not have been truncated mid-codepoint (would panic on slice).
-        assert!(id.chars().all(|c| c == 'あ' || c == '-' || c == 'l' || c == 'i' || c == 'n' || c == 'e'));
+        assert!(id.chars().all(|c| c == 'あ'
+            || c == '-'
+            || c == 'l'
+            || c == 'i'
+            || c == 'n'
+            || c == 'e'));
     }
 
     #[test]
@@ -1098,16 +1104,12 @@ mod tests {
         assert!(chunks.len() >= 2);
 
         let mut calls = 0usize;
-        let (emb1, n1) = resolve_incremental_embeddings(
-            &chunks,
-            source_id,
-            &HashMap::new(),
-            |_| {
+        let (emb1, n1) =
+            resolve_incremental_embeddings(&chunks, source_id, &HashMap::new(), |_| {
                 calls += 1;
                 Ok(vec![0.1f32; 384])
-            },
-        )
-        .unwrap();
+            })
+            .unwrap();
         assert_eq!(n1, chunks.len());
         assert_eq!(calls, chunks.len());
 
@@ -1117,15 +1119,10 @@ mod tests {
         }
 
         calls = 0;
-        let (_emb2, n2) = resolve_incremental_embeddings(
-            &chunks,
-            source_id,
-            &prior,
-            |_| {
-                calls += 1;
-                Ok(vec![0.9f32; 384])
-            },
-        )
+        let (_emb2, n2) = resolve_incremental_embeddings(&chunks, source_id, &prior, |_| {
+            calls += 1;
+            Ok(vec![0.9f32; 384])
+        })
         .unwrap();
         assert_eq!(n2, 0, "second pass must reuse all embeddings");
         assert_eq!(calls, 0);
@@ -1135,16 +1132,16 @@ mod tests {
     fn incremental_position_shift_reuses_existing_bodies() {
         let source_id = "wiki-shift-test";
         let text1 = "## 概要\n不変本文です。\n\n## 沿革\n別の不変本文。";
-        let text2 = "## 新節\n新規だけ埋め込む。\n\n## 概要\n不変本文です。\n\n## 沿革\n別の不変本文。";
+        let text2 =
+            "## 新節\n新規だけ埋め込む。\n\n## 概要\n不変本文です。\n\n## 沿革\n別の不変本文。";
         let chunks1 = chunk_markdown(text1, source_id);
         let chunks2 = chunk_markdown(text2, source_id);
         assert!(chunks2.len() > chunks1.len());
 
         let mut prior = HashMap::new();
-        let (emb1, _) = resolve_incremental_embeddings(&chunks1, source_id, &prior, |_| {
-            Ok(vec![0.25f32; 384])
-        })
-        .unwrap();
+        let (emb1, _) =
+            resolve_incremental_embeddings(&chunks1, source_id, &prior, |_| Ok(vec![0.25f32; 384]))
+                .unwrap();
         for (chunk, emb) in chunks1.iter().zip(emb1.iter()) {
             prior.insert(chunk_content_hash(&chunk.text), emb.clone());
         }

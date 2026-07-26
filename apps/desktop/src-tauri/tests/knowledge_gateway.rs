@@ -183,18 +183,20 @@ async fn stream_chunked_overflow_rejected_before_second_chunk_grows_buffer() {
 
 #[test]
 fn identity_encoding_allowed_others_rejected() {
-    let ok_none = ResponseMeta { status: 200, content_type: Some("application/json".into()), content_encoding: None };
+    let ok_none = ResponseMeta { status: 200, content_type: Some("application/json".into()), content_encoding: None, content_length: None };
     assert!(validate_response_meta(&ok_none).is_ok());
     let ok_identity = ResponseMeta {
         status: 200,
         content_type: Some("application/json; charset=utf-8".into()),
         content_encoding: Some("identity".into()),
+        content_length: None,
     };
     assert!(validate_response_meta(&ok_identity).is_ok());
     let gzip = ResponseMeta {
         status: 200,
         content_type: Some("application/json".into()),
         content_encoding: Some("gzip".into()),
+        content_length: None,
     };
     assert_eq!(validate_response_meta(&gzip), Err(GatewayError::WireViolation));
 }
@@ -202,10 +204,10 @@ fn identity_encoding_allowed_others_rejected() {
 #[test]
 fn status_and_content_type_gate() {
     for status in [301, 302, 404, 500, 204, 206] {
-        let m = ResponseMeta { status, content_type: Some("application/json".into()), content_encoding: None };
+        let m = ResponseMeta { status, content_type: Some("application/json".into()), content_encoding: None, content_length: None };
         assert_eq!(validate_response_meta(&m), Err(GatewayError::StatusRejected));
     }
-    let html = ResponseMeta { status: 200, content_type: Some("text/html".into()), content_encoding: None };
+    let html = ResponseMeta { status: 200, content_type: Some("text/html".into()), content_encoding: None, content_length: None };
     assert_eq!(validate_response_meta(&html), Err(GatewayError::StatusRejected));
 }
 
@@ -340,12 +342,16 @@ impl ResponseBody for CountingBody {
 
 impl HttpTransport for CountingTransport {
     type Body = CountingBody;
-    fn get(&self, _url: &str) -> impl Future<Output = Result<(ResponseMeta, Self::Body), GatewayError>> + Send {
+    fn get(
+        &self,
+        _url: &str,
+        _request_deadline: std::time::Duration,
+    ) -> impl Future<Output = Result<(ResponseMeta, Self::Body), GatewayError>> + Send {
         self.calls.fetch_add(1, Ordering::SeqCst);
         let body = br#"{"query":{"search":[{"title":"T","snippet":"S"}]}}"#.to_vec();
         async move {
             Ok((
-                ResponseMeta { status: 200, content_type: Some("application/json".into()), content_encoding: None },
+                ResponseMeta { status: 200, content_type: Some("application/json".into()), content_encoding: None, content_length: None },
                 CountingBody(body, false),
             ))
         }
@@ -492,7 +498,7 @@ mod egress_wiring {
         })
         .expect("client build");
         let _url = build_request("rust");
-        let result = transport.get(&_url).await;
+        let result = transport.get(&_url, Duration::from_secs(5)).await;
         assert!(result.is_err(), "private IP must abort before HTTP success");
     }
 

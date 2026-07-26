@@ -4,6 +4,8 @@
 //! material, and `rusqlite::Connection` are created and used solely on this
 //! dedicated worker thread.
 
+#![allow(dead_code)]
+
 use std::{
     path::PathBuf,
     sync::{
@@ -20,21 +22,28 @@ use rusqlite::{Connection, Transaction, TransactionBehavior};
 use serde::Serialize;
 use tauri::ipc::Channel;
 
+#[cfg(feature = "egress-live")]
+use super::edinet_discovery_repo;
 use crate::ipc_contract::MAX_TEXT_BYTES;
+#[cfg(feature = "egress-live")]
+use crate::knowledge::edinet_client::EdinetDocumentMeta;
+#[cfg(feature = "egress-live")]
+use crate::knowledge::edinet_discovery::{CoverageRecord, DayCommit, ScanCursor};
 
 use super::{
     analytics_repo::{self, GapAnalysisRow, TensorProfileRow},
+    commitment_repo::{self, CommitmentRow},
     connection::{
         maintain_encrypted_database, open_encrypted_database, verify_encrypted_connection,
         VaultConnectionError,
     },
+    distortion_repo::{self, DistortionTagRow},
+    fact_repo,
     knowledge_repo::{self, KnowledgeChunkRow, KnowledgeSearchHit},
     migrations::{run_migrations, MigrationError},
-    distortion_repo::{self, DistortionTagRow},
-    purchase_repo::{self, PurchaseLineRow, PurchaseRow},
-    commitment_repo::{self, CommitmentRow},
     oracle_repo::{self, InterviewSessionRow, OracleRunRow, TwinRunRow},
-    psychometrics_repo::{self, PulseRunRow, ProbeStoreRow, RaschRunRow},
+    psychometrics_repo::{self, ProbeStoreRow, PulseRunRow, RaschRunRow},
+    purchase_repo::{self, PurchaseLineRow, PurchaseRow},
     repository::{
         self, ChatCreate, ChatRecord, MessageAppend, MessageCursor, MessageRecord, RepositoryError,
     },
@@ -49,11 +58,92 @@ const SHORT_OPERATION_TIMEOUT: Duration = Duration::from_secs(5);
 const DEFAULT_LIST_LIMIT: u32 = 50;
 const MAX_LIST_LIMIT: u32 = 200;
 const TITLE_MAX_BYTES: usize = 512;
+const FACT_SCHEMA_VERSION: i64 = 3;
+const MAX_SUBJECT_KEY_BYTES: usize = 512;
+const MAX_DOC_ID_BYTES: usize = 32;
+const MAX_DATETIME_BYTES: usize = 64;
+const MAX_FACT_FETCHED_AT: i64 = 4_102_444_800; // 2100-01-01T00:00:00Z
 pub(crate) const REPOSITORY_CONTENT_MAX_BYTES: usize = if MAX_TEXT_BYTES < 64 * 1024 {
     MAX_TEXT_BYTES
 } else {
     64 * 1024
 };
+
+fn valid_fact_datetime(value: &str) -> bool {
+    if value.len() > MAX_DATETIME_BYTES {
+        return false;
+    }
+    let bytes = value.as_bytes();
+    let valid_digits = |start: usize, end: usize| {
+        end <= bytes.len() && bytes[start..end].iter().all(u8::is_ascii_digit)
+    };
+    let (date_end, time_start) = if bytes.len() == 16 && bytes.get(10) == Some(&b' ') {
+        (10, 11)
+    } else if bytes.len() == 19 && bytes.get(10) == Some(&b' ') {
+        (10, 11)
+    } else {
+        return false;
+    };
+    if bytes.get(4) != Some(&b'-')
+        || bytes.get(7) != Some(&b'-')
+        || bytes.get(time_start + 2) != Some(&b':')
+    {
+        return false;
+    }
+    if bytes.len() == 19 && bytes.get(time_start + 5) != Some(&b':') {
+        return false;
+    }
+    if !valid_digits(0, 4)
+        || !valid_digits(5, 7)
+        || !valid_digits(8, 10)
+        || !valid_digits(time_start, time_start + 2)
+        || !valid_digits(time_start + 3, time_start + 5)
+    {
+        return false;
+    }
+    if bytes.len() == 19 && !valid_digits(time_start + 6, time_start + 8) {
+        return false;
+    }
+    let year = value[0..4].parse::<u32>().ok();
+    let month = value[5..7].parse::<u32>().ok();
+    let day = value[8..10].parse::<u32>().ok();
+    let hour = value[time_start..time_start + 2].parse::<u32>().ok();
+    let minute = value[time_start + 3..time_start + 5].parse::<u32>().ok();
+    let second = if bytes.len() == 19 {
+        value[time_start + 6..time_start + 8].parse::<u32>().ok()
+    } else {
+        Some(0)
+    };
+    let (Some(year), Some(month), Some(day), Some(hour), Some(minute), Some(second)) =
+        (year, month, day, hour, minute, second)
+    else {
+        return false;
+    };
+    if !(1..=12).contains(&month) || hour > 23 || minute > 59 || second > 59 {
+        return false;
+    }
+    let leap = year % 4 == 0 && (year % 100 != 0 || year % 400 == 0);
+    let days = match month {
+        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
+        4 | 6 | 9 | 11 => 30,
+        2 if leap => 29,
+        2 => 28,
+        _ => 0,
+    };
+    day >= 1 && day <= days && date_end == 10
+}
+
+fn valid_fact_doc_id(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= MAX_DOC_ID_BYTES
+        && value
+            .bytes()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, b'-' | b'_'))
+}
+
+fn valid_fact_fetched_at(value: i64) -> bool {
+    (0..=MAX_FACT_FETCHED_AT).contains(&value)
+}
 
 /// Public lifecycle state. No secret-bearing or filesystem detail is exposed.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
@@ -90,6 +180,7 @@ pub(crate) enum VaultErrorCode {
     InvalidInput,
     NotFound,
     Conflict,
+    IdentityAmbiguous,
     StorageFailed,
     /// The OS denied storage access (iOS Data Protection sealed the file while
     /// the device was locked). The worker has self-locked; re-authentication is
@@ -148,6 +239,21 @@ enum VaultReply {
     KnowledgeSearch(Result<Vec<KnowledgeSearchHit>, VaultErrorCode>),
     #[allow(dead_code)] // Path A incremental ingest (egress-live knowledge_research)
     KnowledgeListSource(Result<Vec<KnowledgeChunkRow>, VaultErrorCode>),
+    #[allow(dead_code)]
+    FactCells(Result<Vec<crate::knowledge::fact_merge::FactCellWire>, VaultErrorCode>),
+    #[allow(dead_code)]
+    FactCellsPersist(Result<i64, VaultErrorCode>),
+    FactCellsRekey(Result<i64, VaultErrorCode>),
+    #[cfg(feature = "egress-live")]
+    EdinetCoverage(Result<Option<CoverageRecord>, VaultErrorCode>),
+    #[cfg(feature = "egress-live")]
+    EdinetFilingsForDate(Result<Vec<EdinetDocumentMeta>, VaultErrorCode>),
+    #[cfg(feature = "egress-live")]
+    EdinetCommitDay(Result<(), VaultErrorCode>),
+    #[cfg(feature = "egress-live")]
+    EdinetCursor(Result<Option<ScanCursor>, VaultErrorCode>),
+    #[cfg(feature = "egress-live")]
+    EdinetSaveCursor(Result<(), VaultErrorCode>),
     GapAnalysisInsert(Result<(), VaultErrorCode>),
     GapAnalysisLatest(Result<Option<GapAnalysisRow>, VaultErrorCode>),
     TensorProfileInsert(Result<(), VaultErrorCode>),
@@ -225,6 +331,60 @@ enum VaultRequest {
     #[allow(dead_code)] // Path A incremental ingest (egress-live knowledge_research)
     KnowledgeListSource {
         source_id: String,
+        control: RequestControl,
+        reply: SyncSender<VaultReply>,
+    },
+    FactCells {
+        subject_key: String,
+        control: RequestControl,
+        reply: SyncSender<VaultReply>,
+    },
+    FactCellsPersist {
+        subject_key: String,
+        expected_revision: i64,
+        cells: Vec<crate::knowledge::fact_merge::FactCellWire>,
+        updated_at: i64,
+        control: RequestControl,
+        reply: SyncSender<VaultReply>,
+    },
+    FactCellsRekey {
+        from: String,
+        to: String,
+        expected_revision: i64,
+        cells: Vec<crate::knowledge::fact_merge::FactCellWire>,
+        updated_at: i64,
+        control: RequestControl,
+        reply: SyncSender<VaultReply>,
+    },
+    #[cfg(feature = "egress-live")]
+    EdinetCoverage {
+        subject_key: String,
+        date: String,
+        control: RequestControl,
+        reply: SyncSender<VaultReply>,
+    },
+    #[cfg(feature = "egress-live")]
+    EdinetFilingsForDate {
+        subject_key: String,
+        date: String,
+        control: RequestControl,
+        reply: SyncSender<VaultReply>,
+    },
+    #[cfg(feature = "egress-live")]
+    EdinetCommitDay {
+        day: DayCommit,
+        control: RequestControl,
+        reply: SyncSender<VaultReply>,
+    },
+    #[cfg(feature = "egress-live")]
+    EdinetCursor {
+        subject_key: String,
+        control: RequestControl,
+        reply: SyncSender<VaultReply>,
+    },
+    #[cfg(feature = "egress-live")]
+    EdinetSaveCursor {
+        cursor: ScanCursor,
         control: RequestControl,
         reply: SyncSender<VaultReply>,
     },
@@ -385,6 +545,35 @@ impl VaultHandle {
         }
 
         handle
+    }
+
+    #[cfg(all(test, feature = "egress-live", target_vendor = "apple"))]
+    pub(crate) fn spawn_test_unlocked() -> Result<Self, VaultErrorCode> {
+        let mut connection =
+            Connection::open_in_memory().map_err(|_| VaultErrorCode::StorageFailed)?;
+        run_migrations(&mut connection).map_err(|_| VaultErrorCode::StorageFailed)?;
+
+        let (sender, receiver) = mpsc::sync_channel(COMMAND_QUEUE_CAPACITY);
+        let status = Arc::new(Mutex::new(VaultStatus::Unlocked));
+        let handle = Self {
+            inner: Arc::new(VaultHandleInner {
+                sender: Mutex::new(Some(sender)),
+                status: Arc::clone(&status),
+            }),
+        };
+        thread::Builder::new()
+            .name("pkb-vault-worker-test".to_string())
+            .spawn(move || {
+                VaultWorker {
+                    database_path: PathBuf::new(),
+                    connection: Some(connection),
+                    status,
+                    event_sink: None,
+                }
+                .run(receiver);
+            })
+            .map_err(|_| VaultErrorCode::Unavailable)?;
+        Ok(handle)
     }
 
     pub(crate) fn unavailable() -> Self {
@@ -657,6 +846,185 @@ impl VaultHandle {
         }
     }
 
+    #[allow(dead_code)]
+    pub(crate) fn fact_cells(
+        &self,
+        subject_key: String,
+    ) -> Result<Vec<crate::knowledge::fact_merge::FactCellWire>, VaultErrorCode> {
+        let (reply, receiver) = mpsc::sync_channel(1);
+        let cancelled = Arc::new(AtomicBool::new(false));
+        let request = VaultRequest::FactCells {
+            subject_key,
+            control: RequestControl {
+                deadline: Instant::now() + SHORT_OPERATION_TIMEOUT,
+                cancelled: Arc::clone(&cancelled),
+            },
+            reply,
+        };
+        match self.submit(request, receiver, cancelled, SHORT_OPERATION_TIMEOUT)? {
+            VaultReply::FactCells(result) => result,
+            _ => Err(VaultErrorCode::Unavailable),
+        }
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn fact_cells_persist(
+        &self,
+        subject_key: String,
+        expected_revision: i64,
+        cells: Vec<crate::knowledge::fact_merge::FactCellWire>,
+        updated_at: i64,
+    ) -> Result<i64, VaultErrorCode> {
+        let (reply, receiver) = mpsc::sync_channel(1);
+        let cancelled = Arc::new(AtomicBool::new(false));
+        let request = VaultRequest::FactCellsPersist {
+            subject_key,
+            expected_revision,
+            cells,
+            updated_at,
+            control: RequestControl {
+                deadline: Instant::now() + SHORT_OPERATION_TIMEOUT,
+                cancelled: Arc::clone(&cancelled),
+            },
+            reply,
+        };
+        match self.submit(request, receiver, cancelled, SHORT_OPERATION_TIMEOUT)? {
+            VaultReply::FactCellsPersist(result) => result,
+            _ => Err(VaultErrorCode::Unavailable),
+        }
+    }
+
+    pub(crate) fn fact_cells_rekey(
+        &self,
+        from: String,
+        to: String,
+        expected_revision: i64,
+        cells: Vec<crate::knowledge::fact_merge::FactCellWire>,
+        updated_at: i64,
+    ) -> Result<i64, VaultErrorCode> {
+        let (reply, receiver) = mpsc::sync_channel(1);
+        let cancelled = Arc::new(AtomicBool::new(false));
+        let request = VaultRequest::FactCellsRekey {
+            from,
+            to,
+            expected_revision,
+            cells,
+            updated_at,
+            control: RequestControl {
+                deadline: Instant::now() + SHORT_OPERATION_TIMEOUT,
+                cancelled: Arc::clone(&cancelled),
+            },
+            reply,
+        };
+        match self.submit(request, receiver, cancelled, SHORT_OPERATION_TIMEOUT)? {
+            VaultReply::FactCellsRekey(result) => result,
+            _ => Err(VaultErrorCode::Unavailable),
+        }
+    }
+
+    #[cfg(feature = "egress-live")]
+    pub(crate) fn edinet_coverage(
+        &self,
+        subject_key: String,
+        date: String,
+    ) -> Result<Option<CoverageRecord>, VaultErrorCode> {
+        let (reply, receiver) = mpsc::sync_channel(1);
+        let cancelled = Arc::new(AtomicBool::new(false));
+        let request = VaultRequest::EdinetCoverage {
+            subject_key,
+            date,
+            control: RequestControl {
+                deadline: Instant::now() + SHORT_OPERATION_TIMEOUT,
+                cancelled: Arc::clone(&cancelled),
+            },
+            reply,
+        };
+        match self.submit(request, receiver, cancelled, SHORT_OPERATION_TIMEOUT)? {
+            VaultReply::EdinetCoverage(result) => result,
+            _ => Err(VaultErrorCode::Unavailable),
+        }
+    }
+
+    #[cfg(feature = "egress-live")]
+    pub(crate) fn edinet_filings_for_date(
+        &self,
+        subject_key: String,
+        date: String,
+    ) -> Result<Vec<EdinetDocumentMeta>, VaultErrorCode> {
+        let (reply, receiver) = mpsc::sync_channel(1);
+        let cancelled = Arc::new(AtomicBool::new(false));
+        let request = VaultRequest::EdinetFilingsForDate {
+            subject_key,
+            date,
+            control: RequestControl {
+                deadline: Instant::now() + SHORT_OPERATION_TIMEOUT,
+                cancelled: Arc::clone(&cancelled),
+            },
+            reply,
+        };
+        match self.submit(request, receiver, cancelled, SHORT_OPERATION_TIMEOUT)? {
+            VaultReply::EdinetFilingsForDate(result) => result,
+            _ => Err(VaultErrorCode::Unavailable),
+        }
+    }
+
+    #[cfg(feature = "egress-live")]
+    pub(crate) fn edinet_commit_day(&self, day: DayCommit) -> Result<(), VaultErrorCode> {
+        let (reply, receiver) = mpsc::sync_channel(1);
+        let cancelled = Arc::new(AtomicBool::new(false));
+        let request = VaultRequest::EdinetCommitDay {
+            day,
+            control: RequestControl {
+                deadline: Instant::now() + SHORT_OPERATION_TIMEOUT,
+                cancelled: Arc::clone(&cancelled),
+            },
+            reply,
+        };
+        match self.submit(request, receiver, cancelled, SHORT_OPERATION_TIMEOUT)? {
+            VaultReply::EdinetCommitDay(result) => result,
+            _ => Err(VaultErrorCode::Unavailable),
+        }
+    }
+
+    #[cfg(feature = "egress-live")]
+    pub(crate) fn edinet_cursor(
+        &self,
+        subject_key: String,
+    ) -> Result<Option<ScanCursor>, VaultErrorCode> {
+        let (reply, receiver) = mpsc::sync_channel(1);
+        let cancelled = Arc::new(AtomicBool::new(false));
+        let request = VaultRequest::EdinetCursor {
+            subject_key,
+            control: RequestControl {
+                deadline: Instant::now() + SHORT_OPERATION_TIMEOUT,
+                cancelled: Arc::clone(&cancelled),
+            },
+            reply,
+        };
+        match self.submit(request, receiver, cancelled, SHORT_OPERATION_TIMEOUT)? {
+            VaultReply::EdinetCursor(result) => result,
+            _ => Err(VaultErrorCode::Unavailable),
+        }
+    }
+
+    #[cfg(feature = "egress-live")]
+    pub(crate) fn edinet_save_cursor(&self, cursor: ScanCursor) -> Result<(), VaultErrorCode> {
+        let (reply, receiver) = mpsc::sync_channel(1);
+        let cancelled = Arc::new(AtomicBool::new(false));
+        let request = VaultRequest::EdinetSaveCursor {
+            cursor,
+            control: RequestControl {
+                deadline: Instant::now() + SHORT_OPERATION_TIMEOUT,
+                cancelled: Arc::clone(&cancelled),
+            },
+            reply,
+        };
+        match self.submit(request, receiver, cancelled, SHORT_OPERATION_TIMEOUT)? {
+            VaultReply::EdinetSaveCursor(result) => result,
+            _ => Err(VaultErrorCode::Unavailable),
+        }
+    }
+
     pub(crate) fn gap_analysis_insert(&self, row: GapAnalysisRow) -> Result<(), VaultErrorCode> {
         let (reply_sender, receiver) = mpsc::sync_channel(1);
         let cancelled = Arc::new(AtomicBool::new(false));
@@ -674,9 +1042,7 @@ impl VaultHandle {
         }
     }
 
-    pub(crate) fn gap_analysis_latest(
-        &self,
-    ) -> Result<Option<GapAnalysisRow>, VaultErrorCode> {
+    pub(crate) fn gap_analysis_latest(&self) -> Result<Option<GapAnalysisRow>, VaultErrorCode> {
         let (reply_sender, receiver) = mpsc::sync_channel(1);
         let cancelled = Arc::new(AtomicBool::new(false));
         let request = VaultRequest::GapAnalysisLatest {
@@ -712,9 +1078,7 @@ impl VaultHandle {
         }
     }
 
-    pub(crate) fn tensor_profile_latest(
-        &self,
-    ) -> Result<Option<TensorProfileRow>, VaultErrorCode> {
+    pub(crate) fn tensor_profile_latest(&self) -> Result<Option<TensorProfileRow>, VaultErrorCode> {
         let (reply_sender, receiver) = mpsc::sync_channel(1);
         let cancelled = Arc::new(AtomicBool::new(false));
         let request = VaultRequest::TensorProfileLatest {
@@ -1056,10 +1420,7 @@ impl VaultHandle {
         }
     }
 
-    pub(crate) fn commitment_upsert(
-        &self,
-        row: CommitmentRow,
-    ) -> Result<(), VaultErrorCode> {
+    pub(crate) fn commitment_upsert(&self, row: CommitmentRow) -> Result<(), VaultErrorCode> {
         let (reply_sender, receiver) = mpsc::sync_channel(1);
         let cancelled = Arc::new(AtomicBool::new(false));
         let request = VaultRequest::CommitmentUpsert {
@@ -1076,10 +1437,7 @@ impl VaultHandle {
         }
     }
 
-    pub(crate) fn commitment_list(
-        &self,
-        limit: u32,
-    ) -> Result<Vec<CommitmentRow>, VaultErrorCode> {
+    pub(crate) fn commitment_list(&self, limit: u32) -> Result<Vec<CommitmentRow>, VaultErrorCode> {
         let (reply_sender, receiver) = mpsc::sync_channel(1);
         let cancelled = Arc::new(AtomicBool::new(false));
         let request = VaultRequest::CommitmentList {
@@ -1096,9 +1454,7 @@ impl VaultHandle {
         }
     }
 
-    pub(crate) fn commitment_list_enabled(
-        &self,
-    ) -> Result<Vec<CommitmentRow>, VaultErrorCode> {
+    pub(crate) fn commitment_list_enabled(&self) -> Result<Vec<CommitmentRow>, VaultErrorCode> {
         let (reply_sender, receiver) = mpsc::sync_channel(1);
         let cancelled = Arc::new(AtomicBool::new(false));
         let request = VaultRequest::CommitmentListEnabled {
@@ -1134,7 +1490,6 @@ impl VaultHandle {
         }
     }
 }
-
 
 struct VaultWorker {
     database_path: PathBuf,
@@ -1268,6 +1623,116 @@ impl VaultWorker {
                         self.list_knowledge_source(source_id)
                     };
                     let _ = reply.send(VaultReply::KnowledgeListSource(result));
+                }
+                VaultRequest::FactCells {
+                    subject_key,
+                    control,
+                    reply,
+                } => {
+                    let result = if request_expired(&control) {
+                        Err(VaultErrorCode::Timeout)
+                    } else {
+                        self.list_fact_cells(subject_key)
+                    };
+                    let _ = reply.send(VaultReply::FactCells(result));
+                }
+                VaultRequest::FactCellsPersist {
+                    subject_key,
+                    expected_revision,
+                    cells,
+                    updated_at,
+                    control,
+                    reply,
+                } => {
+                    let result = if request_expired(&control) {
+                        Err(VaultErrorCode::Timeout)
+                    } else {
+                        self.persist_fact_cells(subject_key, expected_revision, cells, updated_at)
+                    };
+                    let _ = reply.send(VaultReply::FactCellsPersist(result));
+                }
+                VaultRequest::FactCellsRekey {
+                    from,
+                    to,
+                    expected_revision,
+                    cells,
+                    updated_at,
+                    control,
+                    reply,
+                } => {
+                    let result = if request_expired(&control) {
+                        Err(VaultErrorCode::Timeout)
+                    } else {
+                        self.rekey_fact_cells(from, to, expected_revision, cells, updated_at)
+                    };
+                    let _ = reply.send(VaultReply::FactCellsRekey(result));
+                }
+                #[cfg(feature = "egress-live")]
+                VaultRequest::EdinetCoverage {
+                    subject_key,
+                    date,
+                    control,
+                    reply,
+                } => {
+                    let result = if request_expired(&control) {
+                        Err(VaultErrorCode::Timeout)
+                    } else {
+                        self.edinet_coverage(subject_key, date)
+                    };
+                    let _ = reply.send(VaultReply::EdinetCoverage(result));
+                }
+                #[cfg(feature = "egress-live")]
+                VaultRequest::EdinetFilingsForDate {
+                    subject_key,
+                    date,
+                    control,
+                    reply,
+                } => {
+                    let result = if request_expired(&control) {
+                        Err(VaultErrorCode::Timeout)
+                    } else {
+                        self.edinet_filings_for_date(subject_key, date)
+                    };
+                    let _ = reply.send(VaultReply::EdinetFilingsForDate(result));
+                }
+                #[cfg(feature = "egress-live")]
+                VaultRequest::EdinetCommitDay {
+                    day,
+                    control,
+                    reply,
+                } => {
+                    let result = if request_expired(&control) {
+                        Err(VaultErrorCode::Timeout)
+                    } else {
+                        self.edinet_commit_day(day)
+                    };
+                    let _ = reply.send(VaultReply::EdinetCommitDay(result));
+                }
+                #[cfg(feature = "egress-live")]
+                VaultRequest::EdinetCursor {
+                    subject_key,
+                    control,
+                    reply,
+                } => {
+                    let result = if request_expired(&control) {
+                        Err(VaultErrorCode::Timeout)
+                    } else {
+                        self.edinet_cursor(subject_key)
+                    };
+                    let _ = reply.send(VaultReply::EdinetCursor(result));
+                }
+                #[cfg(feature = "egress-live")]
+                VaultRequest::EdinetSaveCursor {
+                    cursor,
+                    control,
+                    reply,
+                } => {
+                    let result = if request_expired(&control) {
+                        Err(VaultErrorCode::Timeout)
+                    } else {
+                        self.edinet_save_cursor(cursor)
+                    };
+                    let _ = reply.send(VaultReply::EdinetSaveCursor(result));
                 }
                 VaultRequest::GapAnalysisInsert {
                     row,
@@ -1433,11 +1898,7 @@ impl VaultWorker {
                     };
                     let _ = reply.send(VaultReply::InterviewSessionPut(result));
                 }
-                VaultRequest::InterviewSessionGet {
-                    id,
-                    control,
-                    reply,
-                } => {
+                VaultRequest::InterviewSessionGet { id, control, reply } => {
                     let result = if request_expired(&control) {
                         Err(VaultErrorCode::Timeout)
                     } else {
@@ -1531,10 +1992,7 @@ impl VaultWorker {
                     };
                     let _ = reply.send(VaultReply::CommitmentList(result));
                 }
-                VaultRequest::CommitmentListEnabled {
-                    control,
-                    reply,
-                } => {
+                VaultRequest::CommitmentListEnabled { control, reply } => {
                     let result = if request_expired(&control) {
                         Err(VaultErrorCode::Timeout)
                     } else {
@@ -1741,6 +2199,144 @@ impl VaultWorker {
         self.resolve_repository(outcome)
     }
 
+    fn list_fact_cells(
+        &mut self,
+        subject_key: String,
+    ) -> Result<Vec<crate::knowledge::fact_merge::FactCellWire>, VaultErrorCode> {
+        gate(snapshot_status(&self.status))?;
+        if subject_key.len() > MAX_SUBJECT_KEY_BYTES
+            || crate::knowledge::fact_merge::SubjectKey::try_from(subject_key.clone()).is_err()
+        {
+            return Err(VaultErrorCode::InvalidInput);
+        }
+        let outcome = self.read_repository(|connection| fact_repo::cells(connection, &subject_key));
+        self.resolve_repository(outcome)
+    }
+
+    fn persist_fact_cells(
+        &mut self,
+        subject_key: String,
+        expected_revision: i64,
+        cells: Vec<crate::knowledge::fact_merge::FactCellWire>,
+        updated_at: i64,
+    ) -> Result<i64, VaultErrorCode> {
+        gate(snapshot_status(&self.status))?;
+        if subject_key.trim().is_empty()
+            || subject_key.len() > MAX_SUBJECT_KEY_BYTES
+            || expected_revision < 0
+            || updated_at < 0
+            || crate::knowledge::fact_merge::SubjectKey::try_from(subject_key.clone()).is_err()
+            || cells.is_empty()
+        {
+            return Err(VaultErrorCode::InvalidInput);
+        }
+        let allowed = [
+            "company_name",
+            "edinet_code",
+            "doc_id",
+            "business_summary",
+            "business_risks",
+            "performance_summary",
+        ];
+        let mut seen = std::collections::BTreeSet::new();
+        if cells.iter().any(|cell| {
+            cell.schema_version != FACT_SCHEMA_VERSION
+                || !allowed.contains(&cell.field.as_str())
+                || !seen.insert(cell.field.clone())
+                || cell.value.len() > crate::knowledge::edinet_client::MAX_FACT_FIELD_BYTES
+                || cell
+                    .doc_id
+                    .as_deref()
+                    .is_some_and(|value| !valid_fact_doc_id(value))
+                || cell
+                    .submitted_at
+                    .as_deref()
+                    .is_some_and(|value| !valid_fact_datetime(value))
+                || cell
+                    .fetched_at
+                    .is_some_and(|value| !valid_fact_fetched_at(value))
+        }) {
+            return Err(VaultErrorCode::InvalidInput);
+        }
+        let total_bytes: usize = cells.iter().map(|cell| cell.value.len()).sum();
+        if total_bytes > crate::knowledge::edinet_client::MAX_COMPANY_FACTS_BYTES {
+            return Err(VaultErrorCode::InvalidInput);
+        }
+        let outcome = self.write_repository(|transaction| {
+            fact_repo::persist_cells(
+                transaction,
+                &subject_key,
+                expected_revision,
+                &cells,
+                updated_at,
+            )
+        });
+        self.resolve_repository(outcome)
+    }
+
+    fn rekey_fact_cells(
+        &mut self,
+        from: String,
+        to: String,
+        expected_revision: i64,
+        cells: Vec<crate::knowledge::fact_merge::FactCellWire>,
+        updated_at: i64,
+    ) -> Result<i64, VaultErrorCode> {
+        gate(snapshot_status(&self.status))?;
+        if from.len() > MAX_SUBJECT_KEY_BYTES
+            || to.len() > MAX_SUBJECT_KEY_BYTES
+            || crate::knowledge::fact_merge::SubjectKey::try_from(from.clone()).is_err()
+            || crate::knowledge::fact_merge::SubjectKey::try_from(to.clone()).is_err()
+            || from == to
+            || expected_revision < 0
+            || updated_at < 0
+            || cells.is_empty()
+        {
+            return Err(VaultErrorCode::InvalidInput);
+        }
+        let allowed = [
+            "company_name",
+            "edinet_code",
+            "doc_id",
+            "business_summary",
+            "business_risks",
+            "performance_summary",
+        ];
+        let mut seen = std::collections::BTreeSet::new();
+        if cells.iter().any(|cell| {
+            cell.schema_version != FACT_SCHEMA_VERSION
+                || !allowed.contains(&cell.field.as_str())
+                || !seen.insert(cell.field.clone())
+                || cell.value.len() > crate::knowledge::edinet_client::MAX_FACT_FIELD_BYTES
+                || cell
+                    .doc_id
+                    .as_deref()
+                    .is_some_and(|value| !valid_fact_doc_id(value))
+                || cell
+                    .submitted_at
+                    .as_deref()
+                    .is_some_and(|value| !valid_fact_datetime(value))
+                || cell
+                    .fetched_at
+                    .is_some_and(|value| !valid_fact_fetched_at(value))
+        }) || cells.iter().map(|cell| cell.value.len()).sum::<usize>()
+            > crate::knowledge::edinet_client::MAX_COMPANY_FACTS_BYTES
+        {
+            return Err(VaultErrorCode::InvalidInput);
+        }
+        let outcome = self.write_repository(|transaction| {
+            fact_repo::rekey_cells(
+                transaction,
+                &from,
+                &to,
+                expected_revision,
+                &cells,
+                updated_at,
+            )
+        });
+        self.resolve_repository(outcome)
+    }
+
     fn search_knowledge(
         &mut self,
         embedding: Vec<f32>,
@@ -1769,8 +2365,71 @@ impl VaultWorker {
         if source_id.contains('%') || source_id.contains('_') {
             return Err(VaultErrorCode::InvalidInput);
         }
+        let outcome = self.read_repository(|connection| {
+            knowledge_repo::list_source_chunks(connection, &source_id)
+        });
+        self.resolve_repository(outcome)
+    }
+
+    #[cfg(feature = "egress-live")]
+    fn edinet_coverage(
+        &mut self,
+        subject_key: String,
+        date: String,
+    ) -> Result<Option<CoverageRecord>, VaultErrorCode> {
+        gate(snapshot_status(&self.status))?;
+        validate_edinet_cache_key(&subject_key, Some(&date))?;
+        let outcome = self.read_repository(|connection| {
+            edinet_discovery_repo::coverage(connection, &subject_key, &date)
+        });
+        self.resolve_repository(outcome)
+    }
+
+    #[cfg(feature = "egress-live")]
+    fn edinet_filings_for_date(
+        &mut self,
+        subject_key: String,
+        date: String,
+    ) -> Result<Vec<EdinetDocumentMeta>, VaultErrorCode> {
+        gate(snapshot_status(&self.status))?;
+        validate_edinet_cache_key(&subject_key, Some(&date))?;
+        let outcome = self.read_repository(|connection| {
+            edinet_discovery_repo::filings_for_date(connection, &subject_key, &date)
+        });
+        self.resolve_repository(outcome)
+    }
+
+    #[cfg(feature = "egress-live")]
+    fn edinet_commit_day(&mut self, day: DayCommit) -> Result<(), VaultErrorCode> {
+        gate(snapshot_status(&self.status))?;
+        validate_edinet_cache_key(&day.coverage.subject_key, Some(&day.coverage.date))?;
+        if day.filings.len() > crate::knowledge::edinet_client::MAX_EDINET_LIST_CANDIDATES {
+            return Err(VaultErrorCode::InvalidInput);
+        }
         let outcome = self
-            .read_repository(|connection| knowledge_repo::list_source_chunks(connection, &source_id));
+            .write_repository(|transaction| edinet_discovery_repo::commit_day(transaction, &day));
+        self.resolve_repository(outcome)
+    }
+
+    #[cfg(feature = "egress-live")]
+    fn edinet_cursor(&mut self, subject_key: String) -> Result<Option<ScanCursor>, VaultErrorCode> {
+        gate(snapshot_status(&self.status))?;
+        validate_edinet_cache_key(&subject_key, None)?;
+        let outcome = self
+            .read_repository(|connection| edinet_discovery_repo::cursor(connection, &subject_key));
+        self.resolve_repository(outcome)
+    }
+
+    #[cfg(feature = "egress-live")]
+    fn edinet_save_cursor(&mut self, cursor: ScanCursor) -> Result<(), VaultErrorCode> {
+        gate(snapshot_status(&self.status))?;
+        validate_edinet_cache_key(&cursor.subject_key, Some(&cursor.anchor_date))?;
+        if let Some(next_date) = cursor.next_date.as_deref() {
+            validate_edinet_date(next_date)?;
+        }
+        let outcome = self.write_repository(|transaction| {
+            edinet_discovery_repo::save_cursor(transaction, &cursor)
+        });
         self.resolve_repository(outcome)
     }
 
@@ -1779,9 +2438,8 @@ impl VaultWorker {
         if row.payload_json.len() > MAX_TEXT_BYTES * 4 {
             return Err(VaultErrorCode::InvalidInput);
         }
-        let outcome = self.read_repository(|connection| {
-            analytics_repo::insert_gap_analysis(connection, &row)
-        });
+        let outcome = self
+            .read_repository(|connection| analytics_repo::insert_gap_analysis(connection, &row));
         self.resolve_repository(outcome)
     }
 
@@ -1797,9 +2455,8 @@ impl VaultWorker {
         if row.payload_json.len() > MAX_TEXT_BYTES * 2 {
             return Err(VaultErrorCode::InvalidInput);
         }
-        let outcome = self.read_repository(|connection| {
-            analytics_repo::insert_tensor_profile(connection, &row)
-        });
+        let outcome = self
+            .read_repository(|connection| analytics_repo::insert_tensor_profile(connection, &row));
         self.resolve_repository(outcome)
     }
 
@@ -1825,8 +2482,7 @@ impl VaultWorker {
 
     fn upsert_rasch_run(&mut self, row: RaschRunRow) -> Result<(), VaultErrorCode> {
         gate(snapshot_status(&self.status))?;
-        if row.posterior_json.len() > MAX_TEXT_BYTES * 2
-            || row.excluded_json.len() > MAX_TEXT_BYTES
+        if row.posterior_json.len() > MAX_TEXT_BYTES * 2 || row.excluded_json.len() > MAX_TEXT_BYTES
         {
             return Err(VaultErrorCode::InvalidInput);
         }
@@ -1885,15 +2541,14 @@ impl VaultWorker {
 
     fn latest_twin_run_payload(&mut self) -> Result<Option<String>, VaultErrorCode> {
         gate(snapshot_status(&self.status))?;
-        let outcome = self
-            .read_repository(|connection| oracle_repo::latest_twin_run_payload(connection));
+        let outcome =
+            self.read_repository(|connection| oracle_repo::latest_twin_run_payload(connection));
         self.resolve_repository(outcome)
     }
 
     fn insert_oracle_run(&mut self, row: OracleRunRow) -> Result<(), VaultErrorCode> {
         gate(snapshot_status(&self.status))?;
-        if row.payload_json.len() > MAX_TEXT_BYTES * 4
-            || row.provenance_json.len() > MAX_TEXT_BYTES
+        if row.payload_json.len() > MAX_TEXT_BYTES * 4 || row.provenance_json.len() > MAX_TEXT_BYTES
         {
             return Err(VaultErrorCode::InvalidInput);
         }
@@ -1904,8 +2559,7 @@ impl VaultWorker {
 
     fn latest_oracle_run(&mut self) -> Result<Option<OracleRunRow>, VaultErrorCode> {
         gate(snapshot_status(&self.status))?;
-        let outcome =
-            self.read_repository(|connection| oracle_repo::latest_oracle_run(connection));
+        let outcome = self.read_repository(|connection| oracle_repo::latest_oracle_run(connection));
         self.resolve_repository(outcome)
     }
 
@@ -1917,8 +2571,8 @@ impl VaultWorker {
         {
             return Err(VaultErrorCode::InvalidInput);
         }
-        let outcome = self
-            .read_repository(|connection| oracle_repo::put_interview_session(connection, &row));
+        let outcome =
+            self.read_repository(|connection| oracle_repo::put_interview_session(connection, &row));
         self.resolve_repository(outcome)
     }
 
@@ -1927,8 +2581,8 @@ impl VaultWorker {
         id: String,
     ) -> Result<Option<InterviewSessionRow>, VaultErrorCode> {
         gate(snapshot_status(&self.status))?;
-        let outcome = self
-            .read_repository(|connection| oracle_repo::get_interview_session(connection, &id));
+        let outcome =
+            self.read_repository(|connection| oracle_repo::get_interview_session(connection, &id));
         self.resolve_repository(outcome)
     }
 
@@ -1948,12 +2602,16 @@ impl VaultWorker {
                 return Err(VaultErrorCode::InvalidInput);
             }
         }
-        let outcome = self
-            .read_repository(|connection| distortion_repo::insert_distortion_tags(connection, &rows));
+        let outcome = self.read_repository(|connection| {
+            distortion_repo::insert_distortion_tags(connection, &rows)
+        });
         self.resolve_repository(outcome)
     }
 
-    fn list_distortion_tags(&mut self, limit: u32) -> Result<Vec<DistortionTagRow>, VaultErrorCode> {
+    fn list_distortion_tags(
+        &mut self,
+        limit: u32,
+    ) -> Result<Vec<DistortionTagRow>, VaultErrorCode> {
         gate(snapshot_status(&self.status))?;
         let lim = limit.clamp(1, 10_000);
         let outcome = self
@@ -1974,10 +2632,7 @@ impl VaultWorker {
             return Err(VaultErrorCode::InvalidInput);
         }
         for line in &lines {
-            if line.id.len() > 128
-                || line.purchase_id.len() > 128
-                || line.item_name.len() > 512
-            {
+            if line.id.len() > 128 || line.purchase_id.len() > 128 || line.item_name.len() > 512 {
                 return Err(VaultErrorCode::InvalidInput);
             }
         }
@@ -2002,21 +2657,14 @@ impl VaultWorker {
         self.resolve_repository(outcome)
     }
 
-    fn list_purchases_recent(
-        &mut self,
-        limit: u32,
-    ) -> Result<Vec<PurchaseRow>, VaultErrorCode> {
+    fn list_purchases_recent(&mut self, limit: u32) -> Result<Vec<PurchaseRow>, VaultErrorCode> {
         gate(snapshot_status(&self.status))?;
-        let outcome = self.read_repository(|connection| {
-            purchase_repo::list_purchases_recent(connection, limit)
-        });
+        let outcome = self
+            .read_repository(|connection| purchase_repo::list_purchases_recent(connection, limit));
         self.resolve_repository(outcome)
     }
 
-    fn upsert_commitment(
-        &mut self,
-        row: CommitmentRow,
-    ) -> Result<(), VaultErrorCode> {
+    fn upsert_commitment(&mut self, row: CommitmentRow) -> Result<(), VaultErrorCode> {
         gate(snapshot_status(&self.status))?;
         if row.id.len() > 128
             || row.condition_json.len() > MAX_TEXT_BYTES
@@ -2027,26 +2675,20 @@ impl VaultWorker {
         {
             return Err(VaultErrorCode::InvalidInput);
         }
-        let outcome = self.read_repository(|connection| {
-            commitment_repo::upsert_commitment(connection, &row)
-        });
+        let outcome =
+            self.read_repository(|connection| commitment_repo::upsert_commitment(connection, &row));
         self.resolve_repository(outcome)
     }
 
-    fn list_commitments(
-        &mut self,
-        limit: u32,
-    ) -> Result<Vec<CommitmentRow>, VaultErrorCode> {
+    fn list_commitments(&mut self, limit: u32) -> Result<Vec<CommitmentRow>, VaultErrorCode> {
         gate(snapshot_status(&self.status))?;
         let lim = limit.clamp(1, 1_000);
-        let outcome = self
-            .read_repository(|connection| commitment_repo::list_commitments(connection, lim));
+        let outcome =
+            self.read_repository(|connection| commitment_repo::list_commitments(connection, lim));
         self.resolve_repository(outcome)
     }
 
-    fn list_enabled_commitments(
-        &mut self,
-    ) -> Result<Vec<CommitmentRow>, VaultErrorCode> {
+    fn list_enabled_commitments(&mut self) -> Result<Vec<CommitmentRow>, VaultErrorCode> {
         gate(snapshot_status(&self.status))?;
         let outcome = self
             .read_repository(|connection| commitment_repo::list_enabled_commitments(connection));
@@ -2190,6 +2832,36 @@ fn validate_nonnegative(value: i64) -> Result<(), VaultErrorCode> {
     }
 }
 
+#[cfg(feature = "egress-live")]
+fn validate_edinet_cache_key(subject_key: &str, date: Option<&str>) -> Result<(), VaultErrorCode> {
+    if subject_key.trim().is_empty()
+        || subject_key.len() > 256
+        || (!subject_key.starts_with("edinet:") && !subject_key.starts_with("name:"))
+    {
+        return Err(VaultErrorCode::InvalidInput);
+    }
+    if let Some(date) = date {
+        validate_edinet_date(date)?;
+    }
+    Ok(())
+}
+
+#[cfg(feature = "egress-live")]
+fn validate_edinet_date(date: &str) -> Result<(), VaultErrorCode> {
+    let bytes = date.as_bytes();
+    if bytes.len() != 10
+        || bytes[4] != b'-'
+        || bytes[7] != b'-'
+        || bytes
+            .iter()
+            .enumerate()
+            .any(|(index, byte)| !matches!(index, 4 | 7) && !byte.is_ascii_digit())
+    {
+        return Err(VaultErrorCode::InvalidInput);
+    }
+    Ok(())
+}
+
 fn clamp_limit(limit: Option<u32>) -> u32 {
     limit.unwrap_or(DEFAULT_LIST_LIMIT).clamp(1, MAX_LIST_LIMIT)
 }
@@ -2198,6 +2870,7 @@ fn map_repository_error(error: RepositoryError) -> VaultErrorCode {
     match error {
         RepositoryError::NotFound => VaultErrorCode::NotFound,
         RepositoryError::Conflict => VaultErrorCode::Conflict,
+        RepositoryError::IdentityAmbiguous => VaultErrorCode::IdentityAmbiguous,
         RepositoryError::StorageFailed => VaultErrorCode::StorageFailed,
         // Reached only if a caller bypasses `resolve_repository`; that path
         // performs the self-lock. Kept exhaustive and fail-closed regardless.
@@ -2280,6 +2953,27 @@ mod tests {
 
     const CHAT_ID: &str = "00000000-0000-4000-8000-000000000001";
     const MESSAGE_ID: &str = "10000000-0000-4000-8000-000000000001";
+
+    #[test]
+    fn fact_datetime_accepts_valid_boundaries() {
+        assert!(valid_fact_datetime("2024-02-29 23:59"));
+        assert!(valid_fact_datetime("2100-01-01 00:00:00"));
+        assert!(!valid_fact_datetime("2024-02-30 00:00"));
+        assert!(!valid_fact_datetime("2024-99-99 00:00"));
+        assert!(!valid_fact_datetime("2024-01-01 24:00"));
+        assert!(!valid_fact_datetime("2024-01-01 00:60"));
+        assert!(!valid_fact_datetime("-"));
+        assert!(!valid_fact_datetime("999"));
+        assert!(!valid_fact_datetime("2024-01-01++++"));
+    }
+
+    #[test]
+    fn fetched_at_rejects_implausible_future_values() {
+        assert!(valid_fact_fetched_at(0));
+        assert!(valid_fact_fetched_at(MAX_FACT_FETCHED_AT));
+        assert!(!valid_fact_fetched_at(-1));
+        assert!(!valid_fact_fetched_at(i64::MAX));
+    }
 
     #[test]
     fn unavailable_handle_fails_closed() {

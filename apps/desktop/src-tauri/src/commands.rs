@@ -7,17 +7,15 @@ use tauri::State;
 
 use crate::engine::{EngineManager, IPC_MAX_REQUEST_LINE_BYTES};
 use crate::ipc_contract::{
-    CalendarAppleRequest, CalendarIcsRequest, ConsultRequest, EsViewRequest,
-    ImportClassifyRequest, ImportDocumentRequest, ImportLineBatchRequest,
-    ImportLineSingleRequest, KnowledgePolicySetRequest, KnowledgeResearchRequest,
-    LlmWarmRequest, NarrativeCompileRequest, ProbeAnswerRequest, ProbeDateRequest,
-    RecordLoadRequest, RecordSaveRequest, ScopeRequest, SettingsSaveFixedRequest,
-    TwinForecastRequest, ValidateRequest, IPC_REQUEST_ENVELOPE_HEADROOM_BYTES,
-    MAX_REQUEST_PARAMS_JSON_BYTES, MAX_TEXT_BYTES, REQUEST_PARAMS_JSON_HEADROOM_BYTES,
+    CalendarAppleRequest, CalendarIcsRequest, ConsultRequest, EsViewRequest, ImportClassifyRequest,
+    ImportDocumentRequest, ImportLineBatchRequest, ImportLineSingleRequest,
+    KnowledgePolicySetRequest, KnowledgeResearchRequest, LlmWarmRequest, NarrativeCompileRequest,
+    ProbeAnswerRequest, ProbeDateRequest, RecordLoadRequest, RecordSaveRequest, ScopeRequest,
+    SettingsSaveFixedRequest, TwinForecastRequest, ValidateRequest,
+    IPC_REQUEST_ENVELOPE_HEADROOM_BYTES, MAX_REQUEST_PARAMS_JSON_BYTES, MAX_TEXT_BYTES,
+    REQUEST_PARAMS_JSON_HEADROOM_BYTES,
 };
-use crate::knowledge::{
-    refuse_if_egress_unavailable, refuse_if_policy_off, NetworkPolicyStore,
-};
+use crate::knowledge::{refuse_if_egress_unavailable, refuse_if_policy_off, NetworkPolicyStore};
 
 // iOS/mobile on-device fallback for settings_run_profiler / tensor_rebuild
 // (M20 データ連携 — bug 3 root fix, moved from a frontend try/catch into
@@ -57,9 +55,7 @@ impl Write for CappedJsonSink {
     fn write(&mut self, buffer: &[u8]) -> io::Result<usize> {
         if buffer.len() > MAX_REQUEST_PARAMS_JSON_BYTES.saturating_sub(self.written) {
             self.exceeded = true;
-            return Err(io::Error::other(
-                "renderer request size limit exceeded",
-            ));
+            return Err(io::Error::other("renderer request size limit exceeded"));
         }
         self.written += buffer.len();
         Ok(buffer.len())
@@ -166,11 +162,7 @@ pub async fn es_view(
     request: Option<EsViewRequest>,
 ) -> Result<Value, String> {
     let req = request.unwrap_or(EsViewRequest { id: None });
-    let id = req
-        .id
-        .as_deref()
-        .map(str::trim)
-        .filter(|s| !s.is_empty());
+    let id = req.id.as_deref().map(str::trim).filter(|s| !s.is_empty());
     match id {
         Some(_) => invoke_request(manager, "es.view", req, None).await,
         None => invoke_empty(manager, "es.view").await,
@@ -343,7 +335,9 @@ async fn on_device_profile_rebuild(vault: State<'_, VaultHandle>) -> Result<(boo
     ensure_authoritative_tensor_profile(vault)
         .await
         .map_err(|e| {
-            log::error!("on_device_profile_rebuild: ensure_authoritative_tensor_profile failed: {e}");
+            log::error!(
+                "on_device_profile_rebuild: ensure_authoritative_tensor_profile failed: {e}"
+            );
             e
         })?;
     Ok((true, day_count))
@@ -441,9 +435,7 @@ pub async fn knowledge_fetch_pending(
 
 /// STEP 8: read persisted user consent for external research.
 #[tauri::command]
-pub async fn knowledge_policy_get(
-    store: State<'_, NetworkPolicyStore>,
-) -> Result<Value, String> {
+pub async fn knowledge_policy_get(store: State<'_, NetworkPolicyStore>) -> Result<Value, String> {
     Ok(serde_json::json!({
         "schema": "knowledge_policy.v1",
         "enabled": store.enabled(),
@@ -462,68 +454,53 @@ pub async fn knowledge_policy_set(
 }
 
 /// STEP 6/8: explicit external research. Requires consent (Live) AND egress-live build.
+///
+/// Signature is mutually exclusive by feature/target: cfg-gated *parameters* on a
+/// single `#[tauri::command]` break `generate_handler` (arg count mismatch).
+#[cfg(all(
+    feature = "pocket-brain",
+    feature = "secure-vault",
+    target_vendor = "apple"
+))]
 #[tauri::command]
 pub async fn knowledge_research(
     store: State<'_, NetworkPolicyStore>,
     request: KnowledgeResearchRequest,
-    #[cfg(all(
-        feature = "pocket-brain",
-        feature = "secure-vault",
-        target_vendor = "apple"
-    ))]
     app: tauri::AppHandle,
-    #[cfg(all(
-        feature = "pocket-brain",
-        feature = "secure-vault",
-        target_vendor = "apple"
-    ))]
     vault: State<'_, crate::db::VaultHandle>,
-    #[cfg(all(
-        feature = "pocket-brain",
-        feature = "secure-vault",
-        target_vendor = "apple"
-    ))]
     llm: State<'_, crate::llm::LlmHandle>,
 ) -> Result<Value, String> {
     request.validate()?;
     refuse_if_policy_off(store.get()).map_err(|e| e.to_string())?;
     refuse_if_egress_unavailable().map_err(|e| e.to_string())?;
 
-    #[cfg(all(
-        feature = "egress-live",
-        feature = "pocket-brain",
-        feature = "secure-vault",
-        target_vendor = "apple"
-    ))]
+    #[cfg(feature = "egress-live")]
     {
-        return knowledge_research_wiki_live(app, vault, llm, request).await;
+        knowledge_research_wiki_live(app, vault, llm, request).await
     }
-
-    #[cfg(not(all(
-        feature = "egress-live",
-        feature = "pocket-brain",
-        feature = "secure-vault",
-        target_vendor = "apple"
-    )))]
+    #[cfg(not(feature = "egress-live"))]
     {
-        #[cfg(all(
-            feature = "pocket-brain",
-            feature = "secure-vault",
-            target_vendor = "apple"
-        ))]
-        {
-            let _ = (app, vault, llm, request);
-        }
-        #[cfg(not(all(
-            feature = "pocket-brain",
-            feature = "secure-vault",
-            target_vendor = "apple"
-        )))]
-        {
-            let _ = request;
-        }
+        let _ = (app, vault, llm, request);
         Err("EGRESS_LIVE_NOT_READY".to_string())
     }
+}
+
+/// Default / non-Apple builds: same command name, two-arg signature only.
+#[cfg(not(all(
+    feature = "pocket-brain",
+    feature = "secure-vault",
+    target_vendor = "apple"
+)))]
+#[tauri::command]
+pub async fn knowledge_research(
+    store: State<'_, NetworkPolicyStore>,
+    request: KnowledgeResearchRequest,
+) -> Result<Value, String> {
+    request.validate()?;
+    refuse_if_policy_off(store.get()).map_err(|e| e.to_string())?;
+    refuse_if_egress_unavailable().map_err(|e| e.to_string())?;
+    let _ = request;
+    Err("EGRESS_LIVE_NOT_READY".to_string())
 }
 
 /// Wikipedia search → extract → sanitize → Company-namespace incremental ingest.
@@ -546,8 +523,8 @@ async fn knowledge_research_wiki_live(
 
     use crate::db::knowledge_namespace::{namespace_of, KnowledgeNamespace};
     use crate::knowledge::net_gateway::{
-        fetch_bounded_with_deadline, fetch_one, validate_response_meta, GatewayError, HttpTransport,
-        ReqwestTransport, MAX_TITLE_BYTES,
+        fetch_bounded_with_deadline, fetch_one, validate_response_meta, GatewayError,
+        HttpTransport, ReqwestTransport, MAX_TITLE_BYTES,
     };
     use crate::knowledge::render_guard::sanitize_external_text;
     use crate::knowledge::wiki_extract::{
@@ -565,11 +542,7 @@ async fn knowledge_research_wiki_live(
 
     let query = serde_json::to_value(&request)
         .ok()
-        .and_then(|v| {
-            v.get("query")
-                .and_then(|q| q.as_str())
-                .map(str::to_string)
-        })
+        .and_then(|v| v.get("query").and_then(|q| q.as_str()).map(str::to_string))
         .ok_or_else(|| "invalid query".to_string())?;
 
     let company_q = CompanyNameForWiki::from_company_name(&query).map_err(|e| {
@@ -603,7 +576,7 @@ async fn knowledge_research_wiki_live(
     ) -> Result<String, crate::knowledge::net_gateway::GatewayError> {
         let url = build_extract_request(title);
         validate_extract_url(&url, title)?;
-        let (meta, body) = transport.get(&url).await?;
+        let (meta, body) = transport.get(&url, deadline).await?;
         validate_response_meta(&meta)?;
         let raw = fetch_bounded_with_deadline(body, std::future::pending::<()>(), deadline).await?;
         extract_page_text(&raw)

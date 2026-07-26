@@ -8,7 +8,7 @@ use std::{error::Error, fmt};
 
 use rusqlite::{Connection, TransactionBehavior};
 
-pub(crate) const LATEST_SCHEMA_VERSION: i64 = 10;
+pub(crate) const LATEST_SCHEMA_VERSION: i64 = 11;
 
 /// Canonical embedding width for `knowledge_chunks.embedding` (M9 foundation).
 /// Matches the historical PKBVEC01 384-d space; a future 768-d migration would
@@ -216,6 +216,129 @@ ALTER TABLE interview_sessions ADD COLUMN artifact_json TEXT NOT NULL DEFAULT ''
 ALTER TABLE interview_sessions ADD COLUMN artifact_fingerprint TEXT NOT NULL DEFAULT '';
 "#;
 
+/// V11 — EDINET lane vault tables (DESIGN_V3 §5–§6). Additive; vec0 untouched.
+const MIGRATION_V11_SQL: &str = r#"
+CREATE TABLE company_fact_cells (
+    subject_key TEXT NOT NULL,
+    field TEXT NOT NULL,
+    value TEXT NOT NULL,
+    origin TEXT NOT NULL,
+    storage TEXT NOT NULL,
+    doc_id TEXT,
+    submitted_at TEXT,
+    fetched_at INTEGER,
+    revision INTEGER NOT NULL,
+    schema_version INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL,
+    PRIMARY KEY (subject_key, field)
+);
+
+CREATE TABLE subject_alias_candidate (
+    alias_key TEXT NOT NULL,
+    canonical_key TEXT NOT NULL,
+    created_at INTEGER NOT NULL,
+    PRIMARY KEY (alias_key, canonical_key)
+);
+
+CREATE TABLE company_doc_pointers (
+    subject_key TEXT NOT NULL PRIMARY KEY,
+    latest_selected_doc TEXT,
+    latest_selected_rev INTEGER NOT NULL DEFAULT 0,
+    rag_ready_doc TEXT,
+    rag_ready_rev INTEGER NOT NULL DEFAULT 0,
+    updated_at INTEGER NOT NULL
+);
+
+CREATE TABLE company_filing_index (
+    subject_key TEXT NOT NULL,
+    doc_id TEXT NOT NULL,
+    list_date TEXT NOT NULL,
+    edinet_code TEXT,
+    filer_name TEXT,
+    ordinance_code TEXT,
+    form_code TEXT,
+    doc_type_code TEXT,
+    period_start TEXT,
+    period_end TEXT,
+    submit_date_time TEXT,
+    parent_doc_id TEXT,
+    withdrawal_status TEXT,
+    doc_info_edit_status TEXT,
+    disclosure_status TEXT,
+    xbrl_flag TEXT,
+    csv_flag TEXT,
+    legal_status TEXT,
+    doc_description TEXT,
+    sec_code TEXT,
+    process_date_time TEXT,
+    indexed_at INTEGER NOT NULL,
+    PRIMARY KEY (subject_key, doc_id)
+);
+CREATE INDEX IF NOT EXISTS idx_filing_index_subject_date
+    ON company_filing_index(subject_key, list_date);
+
+CREATE TABLE edinet_list_coverage (
+    subject_key TEXT NOT NULL,
+    date TEXT NOT NULL,
+    status TEXT NOT NULL,
+    fetched_at INTEGER,
+    process_date_time TEXT,
+    error_class TEXT,
+    revalidate_after INTEGER,
+    PRIMARY KEY (subject_key, date)
+);
+
+CREATE TABLE edinet_scan_cursor (
+    subject_key TEXT NOT NULL PRIMARY KEY,
+    anchor_date TEXT NOT NULL,
+    window_days_back INTEGER NOT NULL,
+    next_date TEXT,
+    status TEXT NOT NULL,
+    updated_at INTEGER NOT NULL
+);
+
+CREATE TABLE knowledge_chunk_meta (
+    chunk_id TEXT NOT NULL PRIMARY KEY,
+    source_id TEXT NOT NULL,
+    subject_key TEXT,
+    doc_id TEXT,
+    revision INTEGER,
+    section_id TEXT,
+    concept TEXT,
+    period_start TEXT,
+    period_end TEXT,
+    unit TEXT,
+    submitted_at TEXT,
+    truncated INTEGER NOT NULL DEFAULT 0,
+    created_at INTEGER NOT NULL
+);
+
+CREATE TABLE edinet_evidence_pending (
+    id TEXT NOT NULL PRIMARY KEY,
+    subject_key TEXT NOT NULL,
+    revision INTEGER NOT NULL,
+    doc_id TEXT NOT NULL,
+    section_id TEXT,
+    concept TEXT,
+    text TEXT NOT NULL,
+    state TEXT NOT NULL,
+    claim_id TEXT,
+    claimed_at INTEGER,
+    claim_deadline INTEGER,
+    retry_count INTEGER NOT NULL DEFAULT 0,
+    submitted_at TEXT,
+    period_start TEXT,
+    period_end TEXT,
+    unit TEXT,
+    truncated INTEGER NOT NULL DEFAULT 0,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_evidence_pending_subject_rev
+    ON edinet_evidence_pending(subject_key, revision);
+CREATE INDEX IF NOT EXISTS idx_evidence_pending_state_deadline
+    ON edinet_evidence_pending(state, claim_deadline);
+"#;
 
 const READ_CHATS_COLUMNS_SQL: &str =
     "SELECT name, type, \"notnull\", pk FROM pragma_table_info('chats') ORDER BY cid;";
@@ -288,6 +411,11 @@ const MIGRATIONS: &[Migration] = &[
         version: 10,
         sql: MIGRATION_V10_SQL,
         verify: verify_v10_schema,
+    },
+    Migration {
+        version: 11,
+        sql: MIGRATION_V11_SQL,
+        verify: verify_v11_schema,
     },
 ];
 
@@ -673,7 +801,6 @@ fn verify_v8_schema(connection: &Connection) -> Result<(), MigrationError> {
     Ok(())
 }
 
-
 fn verify_v9_schema(connection: &Connection) -> Result<(), MigrationError> {
     verify_v8_schema(connection).map_err(|_| MigrationError::SchemaMismatch { version: 9 })?;
 
@@ -722,6 +849,179 @@ fn verify_v10_schema(connection: &Connection) -> Result<(), MigrationError> {
         ],
     ) {
         return Err(MigrationError::SchemaMismatch { version: 10 });
+    }
+    Ok(())
+}
+
+fn verify_v11_schema(connection: &Connection) -> Result<(), MigrationError> {
+    verify_v10_schema(connection).map_err(|_| MigrationError::SchemaMismatch { version: 11 })?;
+
+    let fact_cols = read_columns(
+        connection,
+        "SELECT name, type, \"notnull\", pk FROM pragma_table_info('company_fact_cells') ORDER BY cid;",
+    )
+    .map_err(|_| MigrationError::SchemaMismatch { version: 11 })?;
+    if !columns_match(
+        &fact_cols,
+        &[
+            ("subject_key", "TEXT", true, 1),
+            ("field", "TEXT", true, 2),
+            ("value", "TEXT", true, 0),
+            ("origin", "TEXT", true, 0),
+            ("storage", "TEXT", true, 0),
+            ("doc_id", "TEXT", false, 0),
+            ("submitted_at", "TEXT", false, 0),
+            ("fetched_at", "INTEGER", false, 0),
+            ("revision", "INTEGER", true, 0),
+            ("schema_version", "INTEGER", true, 0),
+            ("updated_at", "INTEGER", true, 0),
+        ],
+    ) {
+        return Err(MigrationError::SchemaMismatch { version: 11 });
+    }
+
+    let coverage_cols = read_columns(
+        connection,
+        "SELECT name, type, \"notnull\", pk FROM pragma_table_info('edinet_list_coverage') ORDER BY cid;",
+    )
+    .map_err(|_| MigrationError::SchemaMismatch { version: 11 })?;
+    if !columns_match(
+        &coverage_cols,
+        &[
+            ("subject_key", "TEXT", true, 1),
+            ("date", "TEXT", true, 2),
+            ("status", "TEXT", true, 0),
+            ("fetched_at", "INTEGER", false, 0),
+            ("process_date_time", "TEXT", false, 0),
+            ("error_class", "TEXT", false, 0),
+            ("revalidate_after", "INTEGER", false, 0),
+        ],
+    ) {
+        return Err(MigrationError::SchemaMismatch { version: 11 });
+    }
+
+    let cursor_cols = read_columns(
+        connection,
+        "SELECT name, type, \"notnull\", pk FROM pragma_table_info('edinet_scan_cursor') ORDER BY cid;",
+    )
+    .map_err(|_| MigrationError::SchemaMismatch { version: 11 })?;
+    if !columns_match(
+        &cursor_cols,
+        &[
+            ("subject_key", "TEXT", true, 1),
+            ("anchor_date", "TEXT", true, 0),
+            ("window_days_back", "INTEGER", true, 0),
+            ("next_date", "TEXT", false, 0),
+            ("status", "TEXT", true, 0),
+            ("updated_at", "INTEGER", true, 0),
+        ],
+    ) {
+        return Err(MigrationError::SchemaMismatch { version: 11 });
+    }
+
+    let filing_cols = read_columns(
+        connection,
+        "SELECT name, type, \"notnull\", pk FROM pragma_table_info('company_filing_index') ORDER BY cid;",
+    )
+    .map_err(|_| MigrationError::SchemaMismatch { version: 11 })?;
+    if !columns_match(
+        &filing_cols,
+        &[
+            ("subject_key", "TEXT", true, 1),
+            ("doc_id", "TEXT", true, 2),
+            ("list_date", "TEXT", true, 0),
+            ("edinet_code", "TEXT", false, 0),
+            ("filer_name", "TEXT", false, 0),
+            ("ordinance_code", "TEXT", false, 0),
+            ("form_code", "TEXT", false, 0),
+            ("doc_type_code", "TEXT", false, 0),
+            ("period_start", "TEXT", false, 0),
+            ("period_end", "TEXT", false, 0),
+            ("submit_date_time", "TEXT", false, 0),
+            ("parent_doc_id", "TEXT", false, 0),
+            ("withdrawal_status", "TEXT", false, 0),
+            ("doc_info_edit_status", "TEXT", false, 0),
+            ("disclosure_status", "TEXT", false, 0),
+            ("xbrl_flag", "TEXT", false, 0),
+            ("csv_flag", "TEXT", false, 0),
+            ("legal_status", "TEXT", false, 0),
+            ("doc_description", "TEXT", false, 0),
+            ("sec_code", "TEXT", false, 0),
+            ("process_date_time", "TEXT", false, 0),
+            ("indexed_at", "INTEGER", true, 0),
+        ],
+    ) {
+        return Err(MigrationError::SchemaMismatch { version: 11 });
+    }
+
+    for (table_sql, expected) in [
+        (
+            "SELECT name, type, \"notnull\", pk FROM pragma_table_info('subject_alias_candidate') ORDER BY cid;",
+            &[
+                ("alias_key", "TEXT", true, 1),
+                ("canonical_key", "TEXT", true, 2),
+                ("created_at", "INTEGER", true, 0),
+            ][..],
+        ),
+        (
+            "SELECT name, type, \"notnull\", pk FROM pragma_table_info('company_doc_pointers') ORDER BY cid;",
+            &[
+                ("subject_key", "TEXT", true, 1),
+                ("latest_selected_doc", "TEXT", false, 0),
+                ("latest_selected_rev", "INTEGER", true, 0),
+                ("rag_ready_doc", "TEXT", false, 0),
+                ("rag_ready_rev", "INTEGER", true, 0),
+                ("updated_at", "INTEGER", true, 0),
+            ][..],
+        ),
+        (
+            "SELECT name, type, \"notnull\", pk FROM pragma_table_info('knowledge_chunk_meta') ORDER BY cid;",
+            &[
+                ("chunk_id", "TEXT", true, 1),
+                ("source_id", "TEXT", true, 0),
+                ("subject_key", "TEXT", false, 0),
+                ("doc_id", "TEXT", false, 0),
+                ("revision", "INTEGER", false, 0),
+                ("section_id", "TEXT", false, 0),
+                ("concept", "TEXT", false, 0),
+                ("period_start", "TEXT", false, 0),
+                ("period_end", "TEXT", false, 0),
+                ("unit", "TEXT", false, 0),
+                ("submitted_at", "TEXT", false, 0),
+                ("truncated", "INTEGER", true, 0),
+                ("created_at", "INTEGER", true, 0),
+            ][..],
+        ),
+        (
+            "SELECT name, type, \"notnull\", pk FROM pragma_table_info('edinet_evidence_pending') ORDER BY cid;",
+            &[
+                ("id", "TEXT", true, 1),
+                ("subject_key", "TEXT", true, 0),
+                ("revision", "INTEGER", true, 0),
+                ("doc_id", "TEXT", true, 0),
+                ("section_id", "TEXT", false, 0),
+                ("concept", "TEXT", false, 0),
+                ("text", "TEXT", true, 0),
+                ("state", "TEXT", true, 0),
+                ("claim_id", "TEXT", false, 0),
+                ("claimed_at", "INTEGER", false, 0),
+                ("claim_deadline", "INTEGER", false, 0),
+                ("retry_count", "INTEGER", true, 0),
+                ("submitted_at", "TEXT", false, 0),
+                ("period_start", "TEXT", false, 0),
+                ("period_end", "TEXT", false, 0),
+                ("unit", "TEXT", false, 0),
+                ("truncated", "INTEGER", true, 0),
+                ("created_at", "INTEGER", true, 0),
+                ("updated_at", "INTEGER", true, 0),
+            ][..],
+        ),
+    ] {
+        let cols = read_columns(connection, table_sql)
+            .map_err(|_| MigrationError::SchemaMismatch { version: 11 })?;
+        if !columns_match(&cols, expected) {
+            return Err(MigrationError::SchemaMismatch { version: 11 });
+        }
     }
     Ok(())
 }
@@ -952,6 +1252,86 @@ mod tests {
             ("message-1", "chat-1", "user", "hello", 2_i64),
         )?;
 
+        Ok(())
+    }
+
+    #[test]
+    fn v11_frozen_tables_have_exact_column_contracts() -> Result<(), Box<dyn Error>> {
+        let mut connection = Connection::open_in_memory()?;
+        run_migrations(&mut connection)?;
+
+        for (query, expected_names) in [
+            (
+                "SELECT name, type, \"notnull\", pk FROM pragma_table_info('subject_alias_candidate') ORDER BY cid;",
+                &["alias_key", "canonical_key", "created_at"][..],
+            ),
+            (
+                "SELECT name, type, \"notnull\", pk FROM pragma_table_info('company_doc_pointers') ORDER BY cid;",
+                &[
+                    "subject_key",
+                    "latest_selected_doc",
+                    "latest_selected_rev",
+                    "rag_ready_doc",
+                    "rag_ready_rev",
+                    "updated_at",
+                ][..],
+            ),
+            (
+                "SELECT name, type, \"notnull\", pk FROM pragma_table_info('knowledge_chunk_meta') ORDER BY cid;",
+                &[
+                    "chunk_id",
+                    "source_id",
+                    "subject_key",
+                    "doc_id",
+                    "revision",
+                    "section_id",
+                    "concept",
+                    "period_start",
+                    "period_end",
+                    "unit",
+                    "submitted_at",
+                    "truncated",
+                    "created_at",
+                ][..],
+            ),
+            (
+                "SELECT name, type, \"notnull\", pk FROM pragma_table_info('edinet_evidence_pending') ORDER BY cid;",
+                &[
+                    "id",
+                    "subject_key",
+                    "revision",
+                    "doc_id",
+                    "section_id",
+                    "concept",
+                    "text",
+                    "state",
+                    "claim_id",
+                    "claimed_at",
+                    "claim_deadline",
+                    "retry_count",
+                    "submitted_at",
+                    "period_start",
+                    "period_end",
+                    "unit",
+                    "truncated",
+                    "created_at",
+                    "updated_at",
+                ][..],
+            ),
+        ] {
+            let actual = read_columns(&connection, query)?;
+            let names = actual
+                .iter()
+                .map(|column| column.name.as_str())
+                .collect::<Vec<_>>();
+            assert_eq!(names, expected_names);
+        }
+
+        connection.execute_batch("ALTER TABLE knowledge_chunk_meta ADD COLUMN unexpected TEXT;")?;
+        assert_eq!(
+            verify_v11_schema(&connection),
+            Err(MigrationError::SchemaMismatch { version: 11 })
+        );
         Ok(())
     }
 

@@ -26,7 +26,9 @@ const HEX_DIGITS: &[u8; 16] = b"0123456789abcdef";
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum VaultConnectionError {
     SecureVault(SecureVaultError),
-    InvalidKeyLength { actual: usize },
+    InvalidKeyLength {
+        actual: usize,
+    },
     OpenFailed,
     KeyApplicationFailed,
     SchemaVerificationFailed,
@@ -315,7 +317,8 @@ mod tests {
                 "CREATE TABLE phase1b_probe(value TEXT NOT NULL);\
                  INSERT INTO phase1b_probe(value) VALUES ('encrypted-marker');",
             )?;
-            let mode: String = connection.query_row("PRAGMA journal_mode;", [], |row| row.get(0))?;
+            let mode: String =
+                connection.query_row("PRAGMA journal_mode;", [], |row| row.get(0))?;
             assert_eq!(mode.to_ascii_lowercase(), "wal");
             maintain_encrypted_database(&connection);
         }

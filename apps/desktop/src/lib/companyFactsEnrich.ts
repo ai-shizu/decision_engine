@@ -5,7 +5,12 @@
 //! Never bind external_research_id into interview_sim / discussion prompts.
 //! EDINET codes are resolved from company name (no manual code UI).
 
-import type { CompanyFacts } from "./pocketBrain/types";
+import type {
+  CompanyFacts,
+  EdinetEnrichmentResponseV3,
+  FactCellWire,
+  SubjectKey,
+} from "./pocketBrain/types";
 import type { KnowledgeResearchReceipt } from "./parseEngineResponse";
 import { deriveProvenance, provenanceChipText } from "./researchUiReducer";
 
@@ -48,6 +53,32 @@ export function mergeCompanyFactsPreferFilled(
     businessRisks: pick(base.businessRisks, incoming.businessRisks),
     performanceSummary: pick(base.performanceSummary, incoming.performanceSummary),
     source: nextSource.trim() || base.source || "injected",
+  };
+}
+
+export interface EnrichmentSnapshot {
+  factCells: FactCellWire[];
+  subjectKey: SubjectKey;
+  subjectRevision: number;
+}
+
+/** Adopt the authoritative V3 snapshot without discarding provenance or CAS state. */
+export function applyEnrichment(
+  response: EdinetEnrichmentResponseV3,
+): { facts: CompanyFacts; snapshot: EnrichmentSnapshot } {
+  if (response.schemaVersion !== 3) {
+    throw new Error("unsupported EDINET enrichment schema");
+  }
+  if (response.factCells.some((cell) => cell.schemaVersion !== 3)) {
+    throw new Error("invalid EDINET fact cell schema");
+  }
+  return {
+    facts: response.facts,
+    snapshot: {
+      factCells: response.factCells,
+      subjectKey: response.subjectKey,
+      subjectRevision: response.subjectRevision,
+    },
   };
 }
 
@@ -98,12 +129,13 @@ export interface CompanyFactsEnrichDeps {
   fetchEdinetByName?: (args: {
     companyName: string;
     edinetDate: string;
-  }) => Promise<CompanyFacts>;
+  }) => Promise<EdinetEnrichmentResponseV3>;
   todayIso: () => string;
 }
 
 export interface CompanyFactsEnrichResult {
   facts: CompanyFacts;
+  enrichmentSnapshot?: EnrichmentSnapshot;
   provenanceLabel: string | null;
   attemptedNet: boolean;
 }
@@ -198,14 +230,16 @@ export async function enrichCompanyFacts(
   // EDINET: company-name auto lookup (fills edinetCode + facts behind the scenes).
   if (deps.fetchEdinetByName) {
     try {
-      const edinet = await deps.fetchEdinetByName({
+      const response = await deps.fetchEdinetByName({
         companyName: name,
         edinetDate: deps.todayIso(),
       });
-      next = mergeCompanyFactsPreferFilled(next, edinet);
-      if (!provenanceLabel && edinet.source) {
-        provenanceLabel = `🔗 EDINET (${edinet.source})`;
+      const applied = applyEnrichment(response);
+      next = applied.facts;
+      if (!provenanceLabel && applied.facts.source) {
+        provenanceLabel = `🔗 EDINET (${applied.facts.source})`;
       }
+      return { facts: next, provenanceLabel, attemptedNet, enrichmentSnapshot: applied.snapshot };
     } catch (err) {
       // eslint-disable-next-line no-console -- intentional diagnostic
       console.error("[companyFactsEnrich] edinet lane failed:", err);

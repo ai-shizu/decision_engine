@@ -1,4 +1,6 @@
 fn main() {
+    // Fail-closed: exit 1 unless this target proves IP sockets are denied.
+    // Unsupported targets compile but must never look like a successful probe.
     if !native_ip_sockets_are_denied() {
         std::process::exit(1);
     }
@@ -216,4 +218,10 @@ fn native_ip_sockets_are_denied() -> bool {
         );
     }
     denied
+}
+
+/// iOS / other targets: binary must compile, but must not report a successful probe.
+#[cfg(not(any(windows, target_os = "linux", target_os = "macos")))]
+fn native_ip_sockets_are_denied() -> bool {
+    false
 }

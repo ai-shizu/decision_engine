@@ -25,6 +25,7 @@ pub(crate) struct KnowledgeChunkRow {
 
 /// One KNN hit returned to IPC / hybrid recall.
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub(crate) struct KnowledgeSearchHit {
     pub id: String,
     pub text_content: String,
@@ -106,7 +107,11 @@ pub(crate) fn search_chunks(
     let k = if namespace == KnowledgeNamespace::All {
         i64::from(limit)
     } else {
-        i64::from(limit.saturating_mul(NAMESPACE_OVERFETCH_FACTOR).min(MAX_KNN_K))
+        i64::from(
+            limit
+                .saturating_mul(NAMESPACE_OVERFETCH_FACTOR)
+                .min(MAX_KNN_K),
+        )
     };
     let mut statement = connection
         .prepare(
@@ -227,40 +232,51 @@ mod tests {
         // Near-identical embeddings so KNN returns both; filter decides.
         insert_chunk(&connection, "line-talk::0001", "LINE personal", 0.91)?;
         insert_chunk(&connection, "edinet-E1::0001", "EDINET company", 0.90)?;
-        insert_chunk(&connection, "daily-2026-07-20::0000", "daily personal", 0.89)?;
+        insert_chunk(
+            &connection,
+            "daily-2026-07-20::0000",
+            "daily personal",
+            0.89,
+        )?;
         insert_chunk(&connection, "company-acme::0000", "company lane", 0.88)?;
 
         let q = emb(0.91);
         let company = search_chunks(&connection, &q, 10, KnowledgeNamespace::Company)?;
         assert!(
-            company.iter().all(|h| knowledge_namespace::matches(
-                KnowledgeNamespace::Company,
-                &h.id
-            )),
+            company
+                .iter()
+                .all(|h| knowledge_namespace::matches(KnowledgeNamespace::Company, &h.id)),
             "Company lane must not include personal ids: {:?}",
             company.iter().map(|h| &h.id).collect::<Vec<_>>()
         );
         assert!(
-            company.iter().any(|h| h.id.starts_with("edinet-") || h.id.starts_with("company-")),
+            company
+                .iter()
+                .any(|h| h.id.starts_with("edinet-") || h.id.starts_with("company-")),
             "expected at least one company hit"
         );
 
         let personal = search_chunks(&connection, &q, 10, KnowledgeNamespace::Personal)?;
         assert!(
-            personal.iter().all(|h| knowledge_namespace::matches(
-                KnowledgeNamespace::Personal,
-                &h.id
-            )),
+            personal
+                .iter()
+                .all(|h| knowledge_namespace::matches(KnowledgeNamespace::Personal, &h.id)),
             "Personal lane must not include company ids: {:?}",
             personal.iter().map(|h| &h.id).collect::<Vec<_>>()
         );
         assert!(
-            !personal.iter().any(|h| h.id.starts_with("edinet-") || h.id.starts_with("company-")),
+            !personal
+                .iter()
+                .any(|h| h.id.starts_with("edinet-") || h.id.starts_with("company-")),
             "personal must exclude company"
         );
 
         let all = search_chunks(&connection, &q, 10, KnowledgeNamespace::All)?;
-        assert!(all.len() >= 2, "All should return mixed hits, got {}", all.len());
+        assert!(
+            all.len() >= 2,
+            "All should return mixed hits, got {}",
+            all.len()
+        );
         Ok(())
     }
 

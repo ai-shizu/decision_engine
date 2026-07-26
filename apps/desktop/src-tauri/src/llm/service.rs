@@ -11,7 +11,7 @@
 
 use std::num::NonZeroU32;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, AtomicU64, AtomicU8, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicU8, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
 use std::thread;
 use std::time::Duration;
@@ -78,6 +78,13 @@ const LLM_LOAD_TIMEOUT: Duration = Duration::from_secs(60);
 /// idle/per-token timeout — token progress still streams over the `tokens`
 /// Channel throughout; this only bounds the terminal completion signal.
 const LLM_GENERATE_TIMEOUT: Duration = Duration::from_secs(180);
+const EDINET_COORDINATOR_TIMEOUT: Duration = Duration::from_secs(30);
+pub const EDINET_MIN_START_HEADROOM_BYTES: u64 = 256 * 1024 * 1024;
+pub const EDINET_CANCEL_HEADROOM_BYTES: u64 = 128 * 1024 * 1024;
+#[cfg_attr(not(target_os = "ios"), allow(dead_code))]
+pub const ADMISSION_BACKGROUND: u32 = 1 << 0;
+pub const ADMISSION_MEMORY_PRESSURE: u32 = 1 << 1;
+pub const ADMISSION_THERMAL_PRESSURE: u32 = 1 << 2;
 
 /// Stable role boundary for free-form generation. Callers assemble rich RAG /
 /// interview context inside the user message; this system message supplies the
@@ -178,6 +185,10 @@ pub struct LlmMemoryGovernor {
     purge_requested: AtomicBool,
     /// Progressive degradation ladder (Nominal→Critical). Updated lock-free.
     degradation: AtomicU8,
+    admission_bits: AtomicU32,
+    edinet_gate_closed: AtomicBool,
+    edinet_acquire_epoch: AtomicU64,
+    edinet_parked_epoch: AtomicU64,
 }
 
 impl LlmMemoryGovernor {
@@ -187,6 +198,10 @@ impl LlmMemoryGovernor {
             purge_epoch: AtomicU64::new(0),
             purge_requested: AtomicBool::new(false),
             degradation: AtomicU8::new(DegradationLevel::Nominal.as_u8()),
+            admission_bits: AtomicU32::new(0),
+            edinet_gate_closed: AtomicBool::new(false),
+            edinet_acquire_epoch: AtomicU64::new(0),
+            edinet_parked_epoch: AtomicU64::new(0),
         }
     }
 
@@ -209,10 +224,38 @@ impl LlmMemoryGovernor {
     /// Sync ladder rung from the thermal / pressure monitor (lock-free).
     pub fn set_degradation(&self, level: DegradationLevel) {
         self.degradation.store(level.as_u8(), Ordering::SeqCst);
+        self.set_admission_bit(
+            ADMISSION_THERMAL_PRESSURE,
+            level >= DegradationLevel::Serious,
+        );
+        self.set_admission_bit(
+            ADMISSION_MEMORY_PRESSURE,
+            level >= DegradationLevel::Critical,
+        );
     }
 
     pub fn degradation(&self) -> DegradationLevel {
         DegradationLevel::from_u8(self.degradation.load(Ordering::SeqCst))
+    }
+
+    pub fn set_admission_bit(&self, bit: u32, restricted: bool) {
+        if restricted {
+            self.admission_bits.fetch_or(bit, Ordering::SeqCst);
+        } else {
+            self.admission_bits.fetch_and(!bit, Ordering::SeqCst);
+        }
+        if restricted {
+            self.request_cancel();
+        }
+    }
+
+    pub fn admission_bits(&self) -> u32 {
+        self.admission_bits.load(Ordering::SeqCst)
+    }
+
+    #[cfg_attr(not(target_os = "ios"), allow(dead_code))]
+    pub fn set_background_restricted(&self, restricted: bool) {
+        self.set_admission_bit(ADMISSION_BACKGROUND, restricted);
     }
 
     fn cancel_epoch(&self) -> u64 {
@@ -537,6 +580,48 @@ enum LlmCommand {
     RegisterEvents {
         channel: Channel<LlmLifecycleEvent>,
     },
+    Barrier {
+        reply: mpsc::SyncSender<()>,
+    },
+    Park {
+        epoch: u64,
+        reply: mpsc::SyncSender<Result<(), String>>,
+    },
+    Unpark {
+        epoch: u64,
+    },
+}
+
+struct EdinetJobGuardInner {
+    tx: Arc<Mutex<mpsc::SyncSender<LlmCommand>>>,
+    governor: Arc<LlmMemoryGovernor>,
+    epoch: u64,
+    monitor: Arc<MemoryMonitor>,
+}
+
+impl Drop for EdinetJobGuardInner {
+    fn drop(&mut self) {
+        if let Ok(tx) = self.tx.lock() {
+            let _ = tx.try_send(LlmCommand::Unpark { epoch: self.epoch });
+        }
+        self.governor
+            .edinet_gate_closed
+            .store(false, Ordering::SeqCst);
+        self.monitor.set_phase(MemPhase::Idle);
+    }
+}
+
+#[derive(Clone)]
+pub struct EdinetJobGuard(Arc<EdinetJobGuardInner>);
+
+impl EdinetJobGuard {
+    pub fn is_cancelled(&self) -> bool {
+        self.0.governor.admission_bits() != 0
+    }
+
+    pub fn set_phase(&self, phase: MemPhase) {
+        self.0.monitor.set_phase(phase);
+    }
 }
 
 /// Send + Sync handle placed in Tauri `State`.
@@ -545,6 +630,7 @@ pub struct LlmHandle {
     tx: Arc<Mutex<mpsc::SyncSender<LlmCommand>>>,
     governor: Arc<LlmMemoryGovernor>,
     startup_error: Option<Arc<str>>,
+    monitor: Arc<MemoryMonitor>,
 }
 
 impl LlmHandle {
@@ -558,7 +644,10 @@ impl LlmHandle {
         let governor_worker = Arc::clone(&governor);
         thread::Builder::new()
             .name("pocket-brain-llm".into())
-            .spawn(move || worker_loop(rx, governor_worker, monitor, startup_tx))
+            .spawn({
+                let worker_monitor = Arc::clone(&monitor);
+                move || worker_loop(rx, governor_worker, worker_monitor, startup_tx)
+            })
             .map_err(|error| format!("llm worker spawn failed: {error}"))?;
         startup_rx
             .recv()
@@ -567,6 +656,7 @@ impl LlmHandle {
             tx: Arc::new(Mutex::new(tx)),
             governor,
             startup_error: None,
+            monitor,
         })
     }
 
@@ -580,6 +670,7 @@ impl LlmHandle {
             tx: Arc::new(Mutex::new(tx)),
             governor: Arc::new(LlmMemoryGovernor::new()),
             startup_error: Some(Arc::<str>::from(error)),
+            monitor: Arc::new(MemoryMonitor::new()),
         }
     }
 
@@ -587,15 +678,114 @@ impl LlmHandle {
         if let Some(error) = self.startup_error.as_deref() {
             return Err(format!("llm worker unavailable: {error}"));
         }
-        let tx = self
-            .tx
-            .lock()
-            .map_err(|_| "llm tx poisoned".to_string())?;
+        let tx = self.tx.lock().map_err(|_| "llm tx poisoned".to_string())?;
         match tx.try_send(command) {
             Ok(()) => Ok(()),
             Err(mpsc::TrySendError::Full(_)) => Err("llm worker queue full".into()),
             Err(mpsc::TrySendError::Disconnected(_)) => Err("llm worker gone".into()),
         }
+    }
+
+    fn ensure_llm_heavy_admitted(&self) -> Result<(), String> {
+        if self.governor.edinet_gate_closed.load(Ordering::SeqCst) {
+            return Err("llm heavy job deferred while EDINET is active".into());
+        }
+        Ok(())
+    }
+
+    fn enqueue_heavy(&self, command: LlmCommand) -> Result<(), String> {
+        if let Some(error) = self.startup_error.as_deref() {
+            return Err(format!("llm worker unavailable: {error}"));
+        }
+        let tx = self
+            .tx
+            .lock()
+            .map_err(|_| "llm tx poisoned".to_string())?;
+        self.ensure_llm_heavy_admitted()?;
+        match tx.try_send(command) {
+            Ok(()) => Ok(()),
+            Err(mpsc::TrySendError::Full(_)) => Err("llm worker queue full".into()),
+            Err(mpsc::TrySendError::Disconnected(_)) => Err("llm worker gone".into()),
+        }
+    }
+
+    pub fn acquire_edinet_job(&self) -> Result<EdinetJobGuard, String> {
+        self.acquire_edinet_job_with_headroom(crate::monitor::os_proc_available_memory_bytes)
+    }
+
+    fn acquire_edinet_job_with_headroom<F>(&self, headroom: F) -> Result<EdinetJobGuard, String>
+    where
+        F: Fn() -> Option<u64>,
+    {
+        if self.governor.admission_bits() != 0 {
+            return Err("edinet admission restricted".into());
+        }
+        let available = headroom().ok_or_else(|| "edinet headroom unavailable".to_string())?;
+        if available < EDINET_MIN_START_HEADROOM_BYTES {
+            return Err("edinet insufficient headroom".into());
+        }
+        if self
+            .governor
+            .edinet_gate_closed
+            .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+            .is_err()
+        {
+            return Err("edinet job already active".into());
+        }
+        let epoch = self
+            .governor
+            .edinet_acquire_epoch
+            .fetch_add(1, Ordering::SeqCst)
+            .saturating_add(1);
+        let fail = |message: String| {
+            if let Ok(tx) = self.tx.lock() {
+                let _ = tx.try_send(LlmCommand::Unpark { epoch });
+            }
+            self.governor
+                .edinet_gate_closed
+                .store(false, Ordering::SeqCst);
+            Err(message)
+        };
+
+        self.governor.request_cancel();
+        let (barrier_reply, barrier_ack) = mpsc::sync_channel(1);
+        if let Err(error) = self.enqueue(LlmCommand::Barrier {
+            reply: barrier_reply,
+        }) {
+            return fail(error);
+        }
+        if barrier_ack
+            .recv_timeout(EDINET_COORDINATOR_TIMEOUT)
+            .is_err()
+        {
+            return fail("edinet barrier timed out".into());
+        }
+
+        self.governor.request_purge();
+        let (park_reply, park_ack) = mpsc::sync_channel(1);
+        if let Err(error) = self.enqueue(LlmCommand::Park {
+            epoch,
+            reply: park_reply,
+        }) {
+            return fail(error);
+        }
+        match park_ack.recv_timeout(EDINET_COORDINATOR_TIMEOUT) {
+            Ok(Ok(())) => {}
+            Ok(Err(error)) => return fail(error),
+            Err(_) => return fail("edinet park timed out".into()),
+        }
+        if self.governor.admission_bits() != 0 {
+            return fail("edinet admission changed while acquiring".into());
+        }
+        if headroom().unwrap_or(0) < EDINET_CANCEL_HEADROOM_BYTES {
+            return fail("edinet headroom collapsed while acquiring".into());
+        }
+        Ok(EdinetJobGuard(Arc::new(EdinetJobGuardInner {
+            tx: Arc::clone(&self.tx),
+            governor: Arc::clone(&self.governor),
+            epoch,
+            monitor: Arc::clone(&self.monitor),
+        })))
     }
 
     /// Clone of the lock-free governor, to hand to the iOS lifecycle observer.
@@ -615,7 +805,7 @@ impl LlmHandle {
         let model_path_display = model_path.display().to_string();
         let (reply, ack) = mpsc::sync_channel(1);
         let purge_epoch = self.governor.purge_epoch();
-        self.enqueue(LlmCommand::Load {
+        self.enqueue_heavy(LlmCommand::Load {
             model_path,
             params,
             purge_epoch,
@@ -654,7 +844,7 @@ impl LlmHandle {
         let task_id_for_log = task_id.clone();
         let max_tokens_for_log = params.max_tokens;
         let (completion, ack) = oneshot::channel();
-        self.enqueue(LlmCommand::Generate {
+        self.enqueue_heavy(LlmCommand::Generate {
             params,
             task_id,
             tokens,
@@ -752,7 +942,7 @@ impl LlmHandle {
             ));
         }
         let (reply, ack) = mpsc::sync_channel(1);
-        self.enqueue(LlmCommand::Embed { text, n_ctx, reply })?;
+        self.enqueue_heavy(LlmCommand::Embed { text, n_ctx, reply })?;
         ack.recv()
             .map_err(|_| "llm worker dropped reply".to_string())?
     }
@@ -778,6 +968,7 @@ fn worker_loop(
     let mut model: Option<Arc<LlamaModel>> = None;
     let mut events: Option<Channel<LlmLifecycleEvent>> = None;
     let mut last_degradation_emit = DegradationLevel::Nominal;
+    let mut parked_epoch = 0_u64;
 
     loop {
         // Commit any pending purge FIRST — including after a generation the
@@ -900,6 +1091,28 @@ fn worker_loop(
             }
             LlmCommand::RegisterEvents { channel } => {
                 events = Some(channel);
+            }
+            LlmCommand::Barrier { reply } => {
+                let _ = reply.send(());
+            }
+            LlmCommand::Park { epoch, reply } => {
+                commit_pending_purge(&governor, &mut model, &monitor, events.as_ref());
+                let result = if model.is_some() {
+                    Err("llm purge was not committed".into())
+                } else if epoch <= parked_epoch {
+                    Err("stale edinet park epoch".into())
+                } else {
+                    parked_epoch = epoch;
+                    governor.edinet_parked_epoch.store(epoch, Ordering::SeqCst);
+                    Ok(())
+                };
+                let _ = reply.send(result);
+            }
+            LlmCommand::Unpark { epoch } => {
+                if epoch == parked_epoch {
+                    parked_epoch = 0;
+                    governor.edinet_parked_epoch.store(0, Ordering::SeqCst);
+                }
             }
         }
     }
@@ -1263,6 +1476,7 @@ mod tests {
                 tx: Arc::new(Mutex::new(tx)),
                 governor: Arc::new(LlmMemoryGovernor::new()),
                 startup_error: None,
+                monitor: Arc::new(MemoryMonitor::new()),
             },
             rx,
         )
@@ -1301,6 +1515,7 @@ mod tests {
             tx: Arc::new(Mutex::new(tx)),
             governor: Arc::new(LlmMemoryGovernor::new()),
             startup_error: None,
+            monitor: Arc::new(MemoryMonitor::new()),
         };
         let first = Channel::new(|_| Ok(()));
         assert!(handle.register_events(first).is_ok());
@@ -1319,6 +1534,74 @@ mod tests {
             handle.register_events(channel),
             Err("llm worker unavailable: backend unavailable".into())
         );
+    }
+
+    fn coordinator_test_handle() -> (LlmHandle, thread::JoinHandle<()>) {
+        let (handle, rx) = disconnected_test_handle();
+        let governor = handle.governor();
+        let worker = thread::spawn(move || {
+            while let Ok(command) = rx.recv() {
+                match command {
+                    LlmCommand::Barrier { reply } => {
+                        let _ = reply.send(());
+                    }
+                    LlmCommand::Park { epoch, reply } => {
+                        let _ = governor.take_purge();
+                        governor.edinet_parked_epoch.store(epoch, Ordering::SeqCst);
+                        let _ = reply.send(Ok(()));
+                    }
+                    LlmCommand::Unpark { epoch } => {
+                        if governor.edinet_parked_epoch.load(Ordering::SeqCst) == epoch {
+                            governor.edinet_parked_epoch.store(0, Ordering::SeqCst);
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        });
+        (handle, worker)
+    }
+
+    #[test]
+    fn edinet_guard_closes_heavy_gate_and_unparks_on_last_drop() {
+        let (handle, worker) = coordinator_test_handle();
+        let guard = handle
+            .acquire_edinet_job_with_headroom(|| Some(EDINET_MIN_START_HEADROOM_BYTES))
+            .expect("acquire");
+        let clone = guard.clone();
+        assert!(handle.ensure_llm_heavy_admitted().is_err());
+        assert_ne!(
+            handle.governor.edinet_parked_epoch.load(Ordering::SeqCst),
+            0
+        );
+        drop(guard);
+        assert!(handle.ensure_llm_heavy_admitted().is_err());
+        drop(clone);
+        for _ in 0..100 {
+            if handle.governor.edinet_parked_epoch.load(Ordering::SeqCst) == 0 {
+                break;
+            }
+            thread::yield_now();
+        }
+        assert!(handle.ensure_llm_heavy_admitted().is_ok());
+        drop(handle);
+        worker.join().expect("worker");
+    }
+
+    #[test]
+    fn edinet_admission_and_headroom_fail_closed() {
+        let (handle, worker) = coordinator_test_handle();
+        handle.governor.set_background_restricted(true);
+        assert!(handle
+            .acquire_edinet_job_with_headroom(|| Some(EDINET_MIN_START_HEADROOM_BYTES))
+            .is_err());
+        handle.governor.set_background_restricted(false);
+        assert!(handle
+            .acquire_edinet_job_with_headroom(|| Some(EDINET_MIN_START_HEADROOM_BYTES - 1))
+            .is_err());
+        assert!(handle.acquire_edinet_job_with_headroom(|| None).is_err());
+        drop(handle);
+        worker.join().expect("worker");
     }
 
     #[tokio::test]

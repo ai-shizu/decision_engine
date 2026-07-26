@@ -73,13 +73,18 @@ impl ResponseBody for CountingBody {
 impl HttpTransport for CountingTransport {
     type Body = CountingBody;
 
-    async fn get(&self, _url: &str) -> Result<(ResponseMeta, Self::Body), GatewayError> {
+    async fn get(
+        &self,
+        _url: &str,
+        _request_deadline: std::time::Duration,
+    ) -> Result<(ResponseMeta, Self::Body), GatewayError> {
         self.calls.fetch_add(1, Ordering::SeqCst);
         Ok((
             ResponseMeta {
                 status: 200,
                 content_type: Some("application/json".into()),
                 content_encoding: Some("identity".into()),
+                content_length: None,
             },
             CountingBody {
                 data: Some(self.body.clone()),
