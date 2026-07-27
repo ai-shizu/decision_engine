@@ -173,6 +173,128 @@ impl EventLog {
     }
 }
 
+/// Business-rule refusal categories worth recording under an active stimulus
+/// (Commander's ruling, 2026-07-27; SPEC §12/§9.2 extension).
+///
+/// Deliberately NARROW. The ruling draws a hard line: "有効なintentだが
+/// ビジネスルールで拒否された" (a well-formed intent refused by a business
+/// rule), never a malformed structure or a typed error on the wire. Unknown
+/// entity references (`UnknownSku`/`UnknownProject`/`UnknownOffer`/
+/// `UnknownPosition`), out-of-range amounts, and unknown facilities are
+/// excluded on purpose — those are fat-fingered or adversarial input, not the
+/// "repeatedly attempting something the game state does not allow under
+/// pressure" signal the ruling is after. Lane numbers elsewhere in this crate
+/// are frozen forever (BXS-I-13); this enum follows the same discipline —
+/// append only, never renumber, never reuse a retired discriminant.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+#[repr(u8)]
+pub enum RefusalReason {
+    InsufficientCash = 0,
+    RepayExceedsOutstanding = 1,
+    ProjectNotActive = 2,
+    OfferNotOpen = 3,
+    PositionNotOpen = 4,
+    WriteOffExceedsCarryingValue = 5,
+}
+
+pub const REFUSAL_LOG_CAPACITY: usize = 256;
+
+/// One recorded refusal. Never a "decision" in the BXS-I-01 sense — nothing
+/// in authoritative state moved, so this type carries no `state_digest` and
+/// is never replayed. It exists purely as an additional behavioural
+/// observation: attempting something disallowed while under an active
+/// stimulus is itself signal for the pressure/escalation lanes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RefusalEvent {
+    pub seq: u64,
+    pub tick: u32,
+    pub intent: ActionIntent,
+    pub reason: RefusalReason,
+    /// The stimulus active when the refusal occurred. Callers only record
+    /// here when at least one stimulus is active (the ruling's scope
+    /// condition), but this stays `Option` — the shape-based attribution in
+    /// `stimulus::attribute` can legitimately find no specific match even
+    /// while a crisis window claims the leftover, and a non-crisis active
+    /// stimulus whose shape does not match this intent at all yields `None`
+    /// honestly rather than a fabricated reference.
+    pub stimulus: Option<StimulusRef>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RefusalLogError {
+    LogFull,
+    SeqExhausted,
+    Config(RingConfigError),
+}
+
+/// Append-only, reject-on-full, seq-monotonic — identical discipline to
+/// [`EventLog`] and for the same reason (第八律): a refusal that happened is a
+/// fact about the session, and silently dropping it under load would starve
+/// exactly the pressure/escalation signal this log exists to preserve.
+#[derive(Debug, Clone)]
+pub struct RefusalLog {
+    ring: FixedRing<RefusalEvent>,
+    next_seq: u64,
+}
+
+impl RefusalLog {
+    pub fn new() -> Result<Self, RefusalLogError> {
+        let ring = FixedRing::new(REFUSAL_LOG_CAPACITY).map_err(RefusalLogError::Config)?;
+        Ok(Self { ring, next_seq: 0 })
+    }
+
+    pub fn record(
+        &mut self,
+        tick: u32,
+        intent: ActionIntent,
+        reason: RefusalReason,
+        stimulus: Option<StimulusRef>,
+    ) -> Result<u64, RefusalLogError> {
+        let seq = self.next_seq;
+        let next = seq.checked_add(1).ok_or(RefusalLogError::SeqExhausted)?;
+        let event = RefusalEvent {
+            seq,
+            tick,
+            intent,
+            reason,
+            stimulus,
+        };
+        self.ring
+            .try_push(event)
+            .map_err(|_| RefusalLogError::LogFull)?;
+        self.next_seq = next;
+        Ok(seq)
+    }
+
+    /// Explicit Settle-time flush (vault persistence is a Phase 5 concern —
+    /// this log's wire shape is deliberately independent of `DecisionBatch`
+    /// until that schema is designed).
+    pub fn drain_for_flush(&mut self) -> Vec<RefusalEvent> {
+        self.ring.drain_all()
+    }
+
+    pub fn records(&self) -> impl Iterator<Item = &RefusalEvent> {
+        self.ring.iter()
+    }
+
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.ring.len()
+    }
+
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.ring.is_empty()
+    }
+
+    #[must_use]
+    pub fn is_full(&self) -> bool {
+        self.ring.is_full()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -277,6 +399,81 @@ mod tests {
         let back: Result<DecisionEvent, _> = serde_json::from_str(&tampered);
         assert!(back.is_err(), "unknown field must hard-fail, not be ignored");
         let clean: Result<DecisionEvent, _> = serde_json::from_str(&json);
+        assert!(matches!(clean, Ok(e2) if e2 == ev));
+    }
+
+    #[test]
+    fn refusal_reason_ids_frozen() {
+        assert_eq!(RefusalReason::InsufficientCash as u8, 0);
+        assert_eq!(RefusalReason::RepayExceedsOutstanding as u8, 1);
+        assert_eq!(RefusalReason::ProjectNotActive as u8, 2);
+        assert_eq!(RefusalReason::OfferNotOpen as u8, 3);
+        assert_eq!(RefusalReason::PositionNotOpen as u8, 4);
+        assert_eq!(RefusalReason::WriteOffExceedsCarryingValue as u8, 5);
+    }
+
+    #[test]
+    fn refusal_log_assigns_monotonic_seq_and_rejects_when_full() {
+        let mut log = ok(RefusalLog::new());
+        for expected in 0..8u64 {
+            let seq = ok(log.record(
+                expected as u32,
+                ActionIntent::Invest {
+                    project_id: 0,
+                    amount_minor: 1,
+                },
+                RefusalReason::InsufficientCash,
+                None,
+            ));
+            assert_eq!(seq, expected);
+        }
+        assert_eq!(log.len(), 8);
+        for i in 8..REFUSAL_LOG_CAPACITY as u32 {
+            let _ = ok(log.record(
+                i,
+                ActionIntent::Abstain,
+                RefusalReason::OfferNotOpen,
+                None,
+            ));
+        }
+        assert!(log.is_full());
+        let before_seq = log.len() as u64;
+        assert!(matches!(
+            log.record(9_999, ActionIntent::Abstain, RefusalReason::OfferNotOpen, None),
+            Err(RefusalLogError::LogFull)
+        ));
+        assert_eq!(log.len() as u64, before_seq, "a rejected push must not grow the ring");
+        let drained = log.drain_for_flush();
+        assert_eq!(drained.len(), REFUSAL_LOG_CAPACITY);
+        assert!(matches!(drained.first(), Some(RefusalEvent { seq: 0, .. })));
+        assert!(log.is_empty());
+    }
+
+    #[test]
+    fn refusal_wire_shape_is_camel_case_and_strict() {
+        let ev = RefusalEvent {
+            seq: 4,
+            tick: 9,
+            intent: ActionIntent::Repay {
+                facility: 0,
+                amount_minor: 10,
+            },
+            reason: RefusalReason::RepayExceedsOutstanding,
+            stimulus: Some(StimulusRef {
+                kind: StimulusKind::CrisisCountdown,
+                stimulus_seq: 2,
+                params_digest: [9; 8],
+            }),
+        };
+        let json = match serde_json::to_string(&ev) {
+            Ok(s) => s,
+            Err(e) => unreachable!("serialize failed: {e}"),
+        };
+        assert!(json.contains("\"repay_exceeds_outstanding\""));
+        assert!(json.contains("\"stimulusSeq\""));
+        let tampered = json.replacen("{\"seq\":4", "{\"seq\":4,\"extra\":1", 1);
+        assert!(serde_json::from_str::<RefusalEvent>(&tampered).is_err());
+        let clean: Result<RefusalEvent, _> = serde_json::from_str(&json);
         assert!(matches!(clean, Ok(e2) if e2 == ev));
     }
 }

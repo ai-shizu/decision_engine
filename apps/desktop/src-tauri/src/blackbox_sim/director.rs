@@ -33,14 +33,16 @@ use super::action::{
     apply_plans, checked_amount, execute_intent, transfer, ActionContext, ActionPlan, CompileError,
     Execution, SimBooks,
 };
-use super::firm::{FirmEffect, OfferStatus};
+use super::bias::PricingTrial;
+use super::firm::{FirmEffect, FirmError, OfferStatus};
 use super::fsm::{advance, FailureReason, FsmError, SessionEvent, SessionState, TurnPhase};
 use super::genesis::{build_campaign_genesis, CampaignGenesis, GenesisError, GenesisRequest};
 use super::market::{MarketError, MarketKernel, MarketTickView};
-use super::oracle::reference_valuation;
+use super::oracle::{pricing_optimality_gap, reference_valuation};
 use super::persist::{
     DecisionBatch, DecisionSink, FlushReceipt, SinkError, BLACKBOX_LOG_SCHEMA_V1,
 };
+use super::ring::{FixedRing, RingConfigError};
 use super::settle::{close_period, operate_tick, PeriodClose, SettleError, TickResult, TICKS_PER_QUARTER};
 use super::snapshot::{digest_state, GenerationStore, SnapshotError, StateDigest};
 use super::stimulus::{
@@ -49,7 +51,10 @@ use super::stimulus::{
     is_control_forecast_turn, is_disposition_turn, is_gamble_turn, is_sunk_cost_turn,
     PlantedStimulus, StimulusError, StimulusLedger, StimulusParams, StimulusView,
 };
-use super::telemetry::{ActionIntent, DecisionEvent, DecisionRecord, EventLog, TelemetryError};
+use super::telemetry::{
+    ActionIntent, DecisionEvent, DecisionRecord, EventLog, RefusalLog, RefusalLogError,
+    RefusalReason, TelemetryError,
+};
 use super::ledger::{AccountCode, Balances, TxKind};
 
 /// Turns in a full campaign: four quarters.
@@ -64,8 +69,10 @@ pub enum DirectorError {
     Settle(SettleError),
     Snapshot(SnapshotError),
     Telemetry(TelemetryError),
+    Refusal(RefusalLogError),
     Stimulus(StimulusError),
     Sink(SinkError),
+    Ring(RingConfigError),
     /// The caller asked for a phase action the session is not in. Phases are
     /// not advisory.
     WrongPhase {
@@ -98,8 +105,39 @@ from_error!(CompileError, Compile);
 from_error!(SettleError, Settle);
 from_error!(SnapshotError, Snapshot);
 from_error!(TelemetryError, Telemetry);
+from_error!(RefusalLogError, Refusal);
 from_error!(StimulusError, Stimulus);
 from_error!(SinkError, Sink);
+from_error!(RingConfigError, Ring);
+
+/// Narrow the compiler's full refusal vocabulary down to the ruling's scope:
+/// a well-formed intent that a business rule turned away. Deliberately NOT a
+/// catch-all — `AmountOutOfRange`, `InvalidForecastInterval`,
+/// `UnknownFacility`, `PriceOutOfRange`, `OrderOutOfRange`, and every
+/// `Unknown*`/`RegistryFull`/`InventoryShort`/`OrderTooLarge` firm error stay
+/// unclassified (`None`) on purpose: those are shape or existence problems,
+/// not "the world said no", and logging them would let a fat-fingered UI or
+/// an adversarial fuzz script pollute the pressure/escalation signal this log
+/// exists to protect.
+fn classify_refusal(err: &CompileError) -> Option<RefusalReason> {
+    match err {
+        CompileError::InsufficientCash { .. } => Some(RefusalReason::InsufficientCash),
+        CompileError::RepayExceedsOutstanding { .. } => {
+            Some(RefusalReason::RepayExceedsOutstanding)
+        }
+        CompileError::WriteOffExceedsCarryingValue { .. } => {
+            Some(RefusalReason::WriteOffExceedsCarryingValue)
+        }
+        CompileError::Firm(FirmError::ProjectNotActive { .. }) => {
+            Some(RefusalReason::ProjectNotActive)
+        }
+        CompileError::Firm(FirmError::OfferNotOpen { .. }) => Some(RefusalReason::OfferNotOpen),
+        CompileError::Firm(FirmError::PositionNotOpen { .. }) => {
+            Some(RefusalReason::PositionNotOpen)
+        }
+        _ => None,
+    }
+}
 
 /// One entry of the replay log. Everything needed to reproduce the world, and
 /// nothing that would make reproduction depend on the player's hardware.
@@ -151,6 +189,18 @@ pub struct Session {
     planted_project: Option<u32>,
     /// How many answer-key rows a sink has already acknowledged.
     stimuli_flushed: usize,
+    /// Valid-but-business-rule-refused attempts made while at least one
+    /// stimulus was active this turn (Commander's ruling, 2026-07-27). A
+    /// malformed or type-level refusal never reaches this log — see
+    /// `classify_refusal`.
+    refusals: RefusalLog,
+    /// Lane 5 feed (BXS-I-20 companion for pricing): one `PricingTrial` per
+    /// successful `SetPrice`, built at decision time because — unlike the
+    /// other five lanes — there is no planted `StimulusRef` to mine it back
+    /// out of the decision log afterward. Derived data, not a record, so it
+    /// uses the evicting policy (BXS-W-03): losing the oldest sample under
+    /// pathological replay is acceptable, silently faking one is not.
+    pricing_trials: FixedRing<PricingTrial>,
 }
 
 impl Session {
@@ -181,6 +231,8 @@ impl Session {
             active: Vec::with_capacity(4),
             planted_project: None,
             stimuli_flushed: 0,
+            refusals: RefusalLog::new()?,
+            pricing_trials: FixedRing::new(CAMPAIGN_TICKS as usize)?,
         })
     }
 
@@ -281,6 +333,32 @@ impl Session {
     /// and it must reach the vault without passing through a view model.
     pub(super) fn stimuli(&self) -> &StimulusLedger {
         &self.stimuli
+    }
+
+    /// Valid-but-refused attempts recorded under an active stimulus.
+    /// Crate-internal for the same reason as `stimuli()`: this feeds the
+    /// estimator (Phase 4), not the UI. Exercised today only by the
+    /// PHANTOM-BOT calibration suite (`calibration.rs`); Phase 5 wires a
+    /// live end-of-campaign call into `bias::estimate_profile`.
+    #[allow(dead_code)]
+    pub(super) fn refusals(&self) -> &RefusalLog {
+        &self.refusals
+    }
+
+    /// The decision log, read-only. Crate-internal for the same reason as
+    /// `stimuli()`: this feeds the estimator (Phase 4), not the UI. See
+    /// `refusals()` for why this is presently `#[allow(dead_code)]`.
+    #[allow(dead_code)]
+    pub(super) fn events(&self) -> impl Iterator<Item = &DecisionEvent> {
+        self.events.records()
+    }
+
+    /// Lane 5 feed: one sample per successful `SetPrice`. Crate-internal for
+    /// the same reason as `stimuli()`. See `refusals()` for why this is
+    /// presently `#[allow(dead_code)]`.
+    #[allow(dead_code)]
+    pub(super) fn pricing_trials(&self) -> impl Iterator<Item = &PricingTrial> {
+        self.pricing_trials.iter()
     }
 
     /// Plant the fixed cadence's probes for this turn.
@@ -444,8 +522,41 @@ impl Session {
         // The digest is taken BEFORE the decision: it anchors the state the
         // player was actually looking at when they chose.
         let state_digest = self.state_digest()?;
-        // Execute first — a refusal must not consume the turn or reach a log.
-        let execution = execute_intent(intent, &ctx, &mut self.books)?;
+        // Execute first — a refusal must not consume the turn or reach the
+        // decision log. It MAY reach the refusal log, but only narrowly: see
+        // `classify_refusal` for the line the ruling draws.
+        let execution = match execute_intent(intent, &ctx, &mut self.books) {
+            Ok(exec) => exec,
+            Err(err) => {
+                if !self.active.is_empty() {
+                    if let Some(reason) = classify_refusal(&err) {
+                        let stimulus = attribute(intent, &self.active);
+                        // Best-effort: a full refusal log must not mask the
+                        // original compile error the caller is expecting.
+                        let _ = self.refusals.record(ctx.market.tick, intent, reason, stimulus);
+                    }
+                }
+                return Err(err.into());
+            }
+        };
+        // Lane 5: score the price the player just chose against the
+        // profit-maximising one on the identical curve, before the decision
+        // record is written. Best-effort — an oracle failure (e.g. an
+        // unrecognised SKU) must not unwind an otherwise-successful
+        // `SetPrice`; it only costs that one turn's sample.
+        if let ActionIntent::SetPrice { sku, tick_price } = intent {
+            if let Ok(gap) = pricing_optimality_gap(self.kernel(), &ctx, sku, tick_price) {
+                let under_pressure = self
+                    .active
+                    .iter()
+                    .any(|p| matches!(p.params, StimulusParams::CrisisCountdown { .. }));
+                self.pricing_trials.evicting_push(PricingTrial {
+                    under_pressure,
+                    gap_minor: gap.gap_minor,
+                    optimal_profit_minor: gap.optimal_profit_minor,
+                });
+            }
+        }
         // Attribution happens only after the act succeeded: a refused intent
         // answered no probe, and crediting one would put a response in the
         // record that the world never saw.
@@ -1057,6 +1168,62 @@ mod tests {
     }
 
     #[test]
+    fn every_set_price_leaves_a_pricing_trial_and_the_gap_is_never_negative() {
+        let s = run_scripted(CAMPAIGN_TICKS, |_| None);
+        let set_price_attempts = s
+            .events()
+            .filter(|e| matches!(e.action, ActionIntent::SetPrice { .. }))
+            .count();
+        let trials: Vec<&PricingTrial> = s.pricing_trials().collect();
+        assert_eq!(
+            trials.len(),
+            set_price_attempts,
+            "one lane-5 sample per successful SetPrice, no more, no fewer"
+        );
+        assert!(!trials.is_empty(), "the script never priced anything");
+        for t in &trials {
+            assert!(t.gap_minor >= 0, "the optimum must never lose to the chosen price");
+        }
+    }
+
+    #[test]
+    fn a_pricing_trial_under_an_active_crisis_is_flagged_under_pressure() {
+        // Drive turns until a CrisisCountdown is planted, then price into it.
+        use crate::blackbox_sim::telemetry::StimulusKind;
+        let mut s = ok(Session::start(request()));
+        let mut saw_pressured_trial = false;
+        for turn in 0..CAMPAIGN_TICKS {
+            ok(s.observe());
+            let under_crisis = s
+                .stimulus_views()
+                .iter()
+                .any(|v| v.kind == StimulusKind::CrisisCountdown);
+            let intent = ActionIntent::SetPrice {
+                sku: 0,
+                tick_price: 7_500,
+            };
+            if s.submit(intent, None).is_err() {
+                ok(s.submit_timeout_default());
+            } else if under_crisis {
+                saw_pressured_trial = true;
+            }
+            ok(s.execute());
+            ok(s.settle());
+            ok(s.report());
+            let _ = turn;
+        }
+        assert!(saw_pressured_trial, "the script never priced during a crisis window");
+        assert!(
+            s.pricing_trials().any(|t| t.under_pressure),
+            "at least one lane-5 sample must carry the pressure flag"
+        );
+        assert!(
+            s.pricing_trials().any(|t| !t.under_pressure),
+            "at least one lane-5 sample must be unflagged, for contrast"
+        );
+    }
+
+    #[test]
     fn planting_preserves_every_accounting_invariant() {
         let s = run_responsive(CAMPAIGN_TICKS);
         assert!(s.books().balances.verify_zero_sum().is_ok(), "BXS-I-02");
@@ -1218,6 +1385,90 @@ mod tests {
                 ..
             })
         ));
+    }
+
+    /// Repaying a facility with nothing outstanding is always
+    /// `RepayExceedsOutstanding`, independent of which probe is on the table,
+    /// which makes it a clean vehicle for testing the refusal-log gate itself.
+    fn repay_nonexistent_debt(s: &mut Session) -> Result<Execution, DirectorError> {
+        s.submit(
+            ActionIntent::Repay {
+                facility: 0,
+                amount_minor: 1,
+            },
+            None,
+        )
+    }
+
+    /// Plant a deterministic, minimal probe directly into `active` — the
+    /// director's own planting cadence is RNG-gated (an offer may or may not
+    /// materialise on any given gamble turn), so exercising the refusal-log
+    /// GATE itself must not depend on that luck.
+    fn force_active_stimulus(s: &mut Session) {
+        let planted = ok(s
+            .stimuli
+            .plant(0, StimulusParams::ForecastElicitation { reference_minor: 0 }));
+        s.active.push(planted);
+    }
+
+    #[test]
+    fn a_business_rule_refusal_under_an_active_stimulus_is_logged() {
+        let mut s = ok(Session::start(request()));
+        ok(s.observe());
+        force_active_stimulus(&mut s);
+        let before = s.refusals().len();
+        assert!(matches!(
+            repay_nonexistent_debt(&mut s),
+            Err(DirectorError::Compile(CompileError::RepayExceedsOutstanding { .. }))
+        ));
+        assert_eq!(s.refusals().len(), before + 1, "refusal must be logged");
+        let logged = s
+            .refusals()
+            .records()
+            .last()
+            .unwrap_or_else(|| unreachable!("just recorded one"));
+        assert_eq!(logged.reason, RefusalReason::RepayExceedsOutstanding);
+    }
+
+    #[test]
+    fn a_business_rule_refusal_with_no_active_stimulus_is_not_logged() {
+        let mut s = ok(Session::start(request()));
+        ok(s.observe());
+        // Whatever the turn's own RNG-gated cadence happened to plant, force
+        // the no-stimulus condition explicitly so this test does not depend
+        // on the genesis seed's luck.
+        s.active.clear();
+        let before = s.refusals().len();
+        assert!(matches!(
+            repay_nonexistent_debt(&mut s),
+            Err(DirectorError::Compile(CompileError::RepayExceedsOutstanding { .. }))
+        ));
+        assert_eq!(s.refusals().len(), before, "no active stimulus, no log entry");
+    }
+
+    #[test]
+    fn a_malformed_or_unknown_entity_refusal_is_never_logged() {
+        let mut s = ok(Session::start(request()));
+        ok(s.observe());
+        force_active_stimulus(&mut s);
+        let before = s.refusals().len();
+        assert!(s
+            .submit(
+                ActionIntent::Borrow {
+                    facility: 0,
+                    amount_minor: -5,
+                },
+                None
+            )
+            .is_err());
+        assert!(s
+            .submit(ActionIntent::AcceptOffer { offer_id: 9_999 }, None)
+            .is_err());
+        assert_eq!(
+            s.refusals().len(),
+            before,
+            "AmountOutOfRange and UnknownOffer are shape/existence errors, not business rules"
+        );
     }
 
     #[test]

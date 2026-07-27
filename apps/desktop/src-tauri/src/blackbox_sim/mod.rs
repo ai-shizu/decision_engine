@@ -33,6 +33,15 @@ pub mod money;
 pub mod normal;
 pub mod oracle;
 pub mod persist;
+// PHANTOM-BOT and the calibration suite are test-only (SPEC §12): neither the
+// bot nor its known-answer harness has any production runtime role, and
+// `CalibrationCertificate::test_only()` (bias.rs) is itself `#[cfg(test)]`
+// `pub(crate)` — the calibration module needs that crate-internal reach,
+// which an external `tests/*.rs` integration crate could never see.
+#[cfg(test)]
+pub mod phantom_bot;
+#[cfg(test)]
+pub mod calibration;
 pub mod ring;
 pub mod rng;
 pub mod settle;

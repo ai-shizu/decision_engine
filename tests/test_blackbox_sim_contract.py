@@ -25,6 +25,12 @@ Four guard families, all read-only (sandbox-safe):
    the vault v12 lane must stay append-only (eighth law). All three are the
    quiet kind: adding a field, adding a trait method or reaching for `UPDATE`
    compiles, passes, and silently dismantles the instrument.
+6. Phase 4 fixture-blindness guard (SPEC §12 / BXS-I-23) — `bias.rs` (the
+   estimator) and `phantom_bot.rs` (the calibration BOT) must never import
+   each other; `calibration.rs` is the ONE file allowed to import both. A
+   BOT tuned to what the estimator expects makes calibration tautological
+   rather than a real recovery test — this guard keeps that impossible by
+   construction, not by review discipline.
 """
 from __future__ import annotations
 
@@ -78,6 +84,14 @@ REQUIRED_SPEC_MARKERS = [
     "BXS-W-17",
     "BXS-W-18",
     "## 21. Phase 3 as-built",
+    # Phase 4: the six-lane estimator and the PHANTOM-BOT calibration suite.
+    "BXS-I-23",
+    "BXS-I-24",
+    "BXS-I-25",
+    "BXS-W-19",
+    "BXS-W-20",
+    "BXS-W-21",
+    "## 22. Phase 4 as-built",
 ]
 
 
@@ -312,6 +326,76 @@ def test_the_vault_record_lane_is_append_only() -> None:
     unguarded = re.findall(r"INSERT INTO (blackbox_decisions|blackbox_stimuli)", text)
     assert not unguarded, (
         f"record inserts must be `INSERT OR IGNORE` so a retry is a no-op: {unguarded}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# 6. Phase 4 fixture-blindness guard
+# ---------------------------------------------------------------------------
+
+
+def test_bias_and_phantom_bot_never_import_each_other() -> None:
+    """BXS-I-23 / SPEC §12: the estimator (`bias.rs`) and the calibration
+    BOT (`phantom_bot.rs`) must have zero import edges between them in
+    either direction. `calibration.rs` is the one file allowed to import
+    both — that is where recovery is actually checked. A BOT written
+    against the estimator's own constants (or an estimator quietly special
+    -cased for the BOT's outputs) would make every calibration test
+    tautological; this guard makes that impossible to introduce silently."""
+    bias_text = (SIM_DIR / "bias.rs").read_text(encoding="utf-8")
+    bot_text = (SIM_DIR / "phantom_bot.rs").read_text(encoding="utf-8")
+    # Scoped to actual `use` edges (not doc comments describing the wall
+    # itself, which legitimately name the other module by name).
+    assert re.search(r"^use\s+\S*phantom_bot", bias_text, re.MULTILINE) is None, (
+        "wall breached (BXS-I-23): bias.rs imports phantom_bot"
+    )
+    assert re.search(r"^use\s+\S*\bbias\b", bot_text, re.MULTILINE) is None, (
+        "wall breached (BXS-I-23): phantom_bot.rs imports bias"
+    )
+    calibration_text = (SIM_DIR / "calibration.rs").read_text(encoding="utf-8")
+    assert "bias::" in calibration_text or "use crate::blackbox_sim::bias" in calibration_text, (
+        "calibration.rs must be the file that actually imports bias.rs"
+    )
+    assert "phantom_bot::" in calibration_text or "use crate::blackbox_sim::phantom_bot" in calibration_text, (
+        "calibration.rs must be the file that actually imports phantom_bot.rs"
+    )
+
+
+def test_calibration_certificate_has_no_production_constructor() -> None:
+    """BXS-I-24 / SPEC §11: `CalibrationCertificate` must stay uninstantiable
+    outside tests (Commander's Option-A ruling, 2026-07-27) — no `#[cfg(test)]`
+    workaround that leaks a constructor into a non-test path, and no second
+    constructor added elsewhere that bypasses `test_only()`'s gate."""
+    text = (SIM_DIR / "bias.rs").read_text(encoding="utf-8")
+    block = re.search(r"impl CalibrationCertificate \{(.*?)\n\}", text, re.DOTALL)
+    assert block is not None, "CalibrationCertificate impl block not found in bias.rs"
+    body = block.group(1)
+    fns = re.findall(r"pub(?:\(crate\))?\s+fn (\w+)", body)
+    assert fns == ["test_only"], (
+        f"CalibrationCertificate must expose exactly one, test-gated constructor: {fns}"
+    )
+    assert "#[cfg(test)]\n    pub(crate) fn test_only" in text, (
+        "test_only() must be #[cfg(test)]-gated, not reachable from production"
+    )
+
+
+def test_refusal_classifier_is_an_allowlist_not_a_catchall() -> None:
+    """BXS-I-25: the Commander's refusal-telemetry ruling (2026-07-27) scoped
+    logging to "valid intent, business-rule refused, under an active
+    stimulus" — not every `CompileError`. `classify_refusal` must stay a
+    `Some(..) => ...` allowlist ending in a `_ => None` catch-none, so a
+    newly added `CompileError` variant defaults to unlogged rather than
+    silently joining the escalation/pressure signal."""
+    text = (SIM_DIR / "director.rs").read_text(encoding="utf-8")
+    block = re.search(
+        r"fn classify_refusal\(err: &CompileError\) -> Option<RefusalReason> \{(.*?)\n\}",
+        text,
+        re.DOTALL,
+    )
+    assert block is not None, "classify_refusal not found in director.rs"
+    body = block.group(1)
+    assert re.search(r"_\s*=>\s*None", body), (
+        "classify_refusal must end in a `_ => None` catch-none (BXS-I-25)"
     )
 
 

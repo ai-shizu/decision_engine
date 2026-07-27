@@ -219,7 +219,14 @@ fn require_cash(balances: &Balances, needed_minor: i64) -> Result<(), CompileErr
 /// Procurement cost of one unit: the market commodity price scaled by the
 /// product line's frozen multiplier. This is the single channel through which
 /// the SDE reaches the income statement.
-fn unit_cost_minor(commodity_price_minor: i64, multiplier_micro: i64) -> Result<i64, CompileError> {
+///
+/// `pub(super)`: Phase 4's lane-5 oracle (`oracle::pricing_optimality_gap`)
+/// needs the identical cost figure the compiler itself charges, so the
+/// optimum it solves for is priced on the same curve the player faces — a
+/// second cost formula living in `oracle.rs` would silently drift from this
+/// one and corrupt the pressure-degradation measurement without ever
+/// tripping a test.
+pub(super) fn unit_cost_minor(commodity_price_minor: i64, multiplier_micro: i64) -> Result<i64, CompileError> {
     let num = i128::from(commodity_price_minor)
         .checked_mul(i128::from(multiplier_micro))
         .ok_or(CompileError::Money(MoneyError::Overflow))?;

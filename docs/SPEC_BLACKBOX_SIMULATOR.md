@@ -296,6 +296,9 @@ Director が `DOM_STIMULI` ストリームで**自然なゲームイベントと
 | BXS-I-20 | 刺激の**封緘パラメータ**（参照真値 / `delta_micro` / `good_state` / `sunk_minor` / `required_cash_minor` / arm 割付）は公開ビュー `StimulusView` に載らない。被験者に「測っている値」が見えた時点でそれは測定ではない（壁 W-a）| `director::tests::published_views_carry_no_answer_key` + `test_blackbox_sim_contract.py::test_published_stimulus_view_names_no_sealed_field` |
 | BXS-I-21 | 永続化ポート `DecisionSink` は**送出専用**。メソッドはちょうど 1 本（`persist`）で、読み取り経路が型として存在しない（壁 W-b を規律ではなく形状で担保）| `director::tests::a_sink_can_only_be_written_to` + `test_blackbox_sim_contract.py::test_the_sink_port_is_write_only` |
 | BXS-I-22 | vault v12 の記録 2 表（`blackbox_decisions` / `blackbox_stimuli`）は append-only: 書き込みは `INSERT OR IGNORE` のみ、`UPDATE`/`DELETE` の対象にならない。再 flush は冪等な no-op（第八律）| `db::blackbox_repo::tests::reflushing_the_same_records_cannot_duplicate_history` + `test_blackbox_sim_contract.py::test_the_vault_record_lane_is_append_only` |
+| BXS-I-23 | fixture-blindness（§12）: `bias.rs`（推定器）と `phantom_bot.rs`（校正 BOT）は互いに import しない。両方を import してよいのは `calibration.rs` 1 ファイルのみ。BOT が推定器の定数に合わせて書かれた瞬間、校正は同語反復になる | `test_blackbox_sim_contract.py::test_bias_and_phantom_bot_never_import_each_other` |
+| BXS-I-24 | `CalibrationCertificate` は production 構築経路を持たない。唯一のコンストラクタ `test_only()` は `#[cfg(test)]` のまま（選択肢 A 裁定、2026-07-27）。校正 suite が全軸 GREEN を返しても、この一線を跨いで証明書を鋳造する経路はコード上存在しない — `calibration.rs` 自体も `#[cfg(test)]` でしか到達できない | `bias::tests::a_passing_calibration_run_does_not_by_itself_mint_a_certificate` + `test_blackbox_sim_contract.py::test_calibration_certificate_has_no_production_constructor` |
+| BXS-I-25 | 拒否テレメトリの記録範囲は許可リスト（裁定、2026-07-27）: 「有効な形式の intent が、アクティブな刺激下で、業務ルールにより拒否された」場合のみ `RefusalLog` へ記録する。`classify_refusal` は `_ => None` で終わる allowlist であり、型・形式エラー（`InvalidForecastInterval` 等）は既定で無記録に留まる | `director::tests::a_business_rule_refusal_with_no_active_stimulus_is_not_logged` + `test_blackbox_sim_contract.py::test_refusal_classifier_is_an_allowlist_not_a_catchall` |
 
 ### 罠（予測。W-nn は実装より先に読め）
 
@@ -317,6 +320,9 @@ Director が `DOM_STIMULI` ストリームで**自然なゲームイベントと
 - **BXS-W-17:** 固定容量レジストリ（オファー 8 / プロジェクト 8）に刺激を植え続けると、キャンペーン中盤で**本人の行為が `RegistryFull` で拒否される** — 実測で踏んだ。正しい修理は容量拡大でも記録の削除でもなく、**終端状態（`Accepted`/`Declined`/`Completed`/`Abandoned`）のスロットだけを回収すること**。レジストリは現在の操業資源であって記録ではない。記録は `StimulusLedger` と決定ログに append-only で残り続ける — 資源の回収と記録の削除を同一視した瞬間に第八律違反になる。
 - **BXS-W-18:** flush の**部分成功を成功として扱うな**。ack が送出件数と一致しない限りリングは消さず、刺激台帳の watermark も進めない（「失敗 = まだ」であって「失敗 = 諦め」ではない）。ここを緩めると、vault が一時的に落ちていた区間の決定だけが欠測し、しかも欠測は静かなので推定器は「その期間は何もしなかった」と読む。
 - **BXS-W-10:** モジュールを `mod.rs` に宣言し忘れると、そのファイルはコンパイルすらされないまま `cargo test` が GREEN を報告する（テストは「0 tests」として静かに素通りする）。Phase 0→1 の引き継ぎで実際に 4 ファイルが未検証のまま「完遂」扱いされていた。新規ファイルを足したら、テスト件数が**増えたこと**を実測で確認しろ（LAW-22）。
+- **BXS-W-19（実測で踏んだ）:** PHANTOM-BOT が複数の刺激に「毎ターン 1 つだけ」応答する設計では、**固定カデンツの衝突ターンでの優先順位**が校正結果を静かに決める。`GAMBLE_PERIOD=4,phase=1` と `SUNK_PERIOD=6,phase=3` は 12 tick ごとに衝突し、しかもサンクの出現順アームは常に同じ側（`WithSunk`）に当たる — ギャンブル優先の実装は、何キャンペーン積んでもレーン 4 の片アームを恒久的に 0 件へ飢えさせる（乱数の問題ではなくスケジュールの数論的性質なので、プーリングでは直らない）。処分効果（レーン 1）も同様に、BOT がポジションを一度も開かなければ `DispositionWindow` 自体が一切プラントされない。優先順位は各カデンツの mod-LCM 衝突集合を実際に列挙し、**どのレーンも両アームに使える割り当てが残ること**を確認してから固定しろ。
+- **BXS-W-20（実測で踏んだ）:** レーン 3（過信）の「意図的に外す」区間予測で `lo_minor < 0` を生成すると、`ActionCompiler` は `InvalidForecastInterval` で**丸ごと拒否**する。拒否された submission は `DecisionEvent` にならないため、`extract_forecast_trials` からは的中/外れのどちらでもなく**存在しなかったことになる** — 「意図的な外れ」のつもりが「観測の消失」になり、回収率を静かに半減させる（実測: 宣言 40% に対し回収 17.6%）。ずらした区間の下限は事前に非負が保証される構成にしろ（事後の `.max(0)` clamp は下記 BXS-W-21 の別の症状を生む）。
+- **BXS-W-21（実測で踏んだ）:** ある推定レーンの「意図的な逸脱」の大きさを、**別レーンの比率の分母と無関係な量**（例: 固定定数、あるいはプレイヤー側の値 `pulled`）で作ると、その別レーンの平均に無制限の分散を持つ外れ値として漏れ出す。レーン 3 の過信オフセットをレーン 2 の分母 `anchor − reference` と無関係なスケールで組んだところ、`ANCHOR_DELTA_LATTICE` の最小デルタを引いたトライアルだけ比率が爆発し、たった数件のプールでレーン 2 の平均を大きく押し流した（符号をどれだけ丁寧に乱数化してもここは救えない — 偏りではなく分散の問題だから）。逸脱の大きさは**隣接レーンが実際に割る分母と同じ量に比例**させ、寄与を符号だけが確率的な有界量に固定しろ。
 
 ## 17. フェーズ分割（各フェーズ着工時に FLR 着工宣言 → HARD STOP）
 
@@ -326,7 +332,7 @@ Director が `DOM_STIMULI` ストリームで**自然なゲームイベントと
 | P1（裁定拡大） | det_math + 市場カーネル + Genesis + leak-guard + **ActionCompiler（壁 W-d パイプライン）+ 相互依存テスト** | golden digest 釘付け（3 環境 bit 一致は CI 整備後）・leak guard GREEN・二重実行 bit 同一・会計不変条件の毎 tick 検証 |
 | **P2（完）** | **FirmState** + 決算ループ（CF 整合）+ snapshot/replay + Director 前段 | replay digest 恒等 property・CF 整合・世代 pointer 結合 — 全て GREEN（§20.3） |
 | P3 | Director + 刺激 + vault v12 永続化 | §16.3 pointer 結合・append-only 契約 |
-| P4 | 推定器 + PHANTOM-BOT 校正 suite | 既知解回収率下限 GREEN（CI 常設） |
+| **P4（完）** | 推定器 6 レーン + PHANTOM-BOT 校正 suite | 既知解回収率下限 GREEN — 全 6 軸実測（§22.3） |
 | P5 | IPC + Coliseum アリーナ FE + フレーバ層 | FE parser 鏡像・tests-runtime Harness・数値発明ガード |
 | P6 | profile bridge + 憲法 as-built 追記・§0 表更新 | 二重ゲート（校正 GREEN + 裁定）確認後のみ |
 
@@ -443,5 +449,61 @@ Director が `DOM_STIMULI` ストリームで**自然なゲームイベントと
 - **3 環境 bit 一致は依然未達**（P1 からの持ち越し。CI 整備待ち）。
 - **Tauri command 層への配線は未着手。** `VaultDecisionSink` は本モジュールのテストで端から端まで動いているが、production の呼び出し元は P5 の射程。`db/mod.rs` の `#[allow(dead_code)]` はそのための一時措置であり、command が着地したら外す。
 - **スナップショットからの復元は依然未実装**（P2 からの持ち越し）。v12 は決定ログと刺激台帳を持つが、`Generation` ペイロードの逆直列化経路は未着手。
-- **拒否された intent はテレメトリに残らない**（P2 からの持ち越しの裁定事項）。Phase 3 で帰属機構が入ったため、「刺激に対して繰り返し弾かれた」を記録する価値は上がった。P4 の推定器設計と併せて裁定を仰ぐ。
-- 推定器・PHANTOM-BOT 校正・IPC・FE は未着手（P4 以降）。
+- **拒否された intent はテレメトリに残らない**（P2 からの持ち越しの裁定事項）— **P4 で裁定・実装済み。** §22 参照（`RefusalLog` / BXS-I-25）。
+- IPC・FE・フレーバ層は未着手（P5 以降）。
+
+## 22. Phase 4 as-built（2026-07-27）
+
+### 22.1 裁定記録（2026-07-27・指揮官、founding directive に追加）
+
+Phase 4 着工にあたり指揮官から 2 件の裁定を得た。§0 の裁定台帳と同じ扱いとしてここに記録する。
+
+- **R-5（拒否テレメトリの記録範囲）:** 「刺激の配賦下における業務ルール拒否（有効な形式だがリソース不足や条件不整合で弾かれた試行）」に限り、専用のフラグ付きイベントとして決定ログに記録する。プレイヤーがプレッシャー下・刺激の誘引下で「不可能な行動を連続して試みる」行動パターン自体が、レーン 4（エスカレーション）とレーン 5（プレッシャー下劣化）の測定に価値の高いシグナルであるため。不正な構造・型エラーの試行はログを汚染させない — 実装は `classify_refusal` の allowlist（BXS-I-25）。
+- **R-6（校正証明書、選択肢 A 採用）:** `CalibrationCertificate` の型レベル封印（uninstantiable）を完全維持し、`#[cfg(test)]` 等の迂回路も作らない。P4 の校正 suite は真値と応答のペアから推定器の回収率（6 軸）を測定し、テストランナーに GREEN/RED を返す「検証装置」としてのみ機能する。証明書の鋳造は行わない（実装は BXS-I-24）。
+
+### 22.2 射程と実装
+
+- **P4-A `oracle.rs` 拡張 — レーン 5 のオラクル:** `pricing_optimality_gap(kernel, ctx, sku, chosen_price)` が `settle.rs` の線形需要モデルから利益最大化価格を整数演算のみで導出する（`PricingOptimum { optimal_price_minor, optimal_profit_minor, actual_profit_minor, gap_minor }`）。連続最適解の周囲 2 点 + 価格域の両端を整数評価して比較する閉形式であり、反復ソルバーではない。`action::unit_cost_minor` を `pub(super)` に開放し、同じ原価式を共有する（別式で近似すると、レーン 5 が「別の宇宙の正解」と比較することになる — P3-A の `reference_valuation` と同じ理由）。
+- **P4-B `telemetry.rs` 拡張 — 拒否テレメトリ:** `RefusalReason`（enum, 判別値固定）+ `RefusalEvent` + `RefusalLog`（上限固定・append-only・満杯 reject）。R-5 裁定の実装。決定ログ（`EventLog`）とは別レーンであり、記録と分析の分離（第五律）を保つ。
+- **P4-C `director.rs` 配線:** `classify_refusal(CompileError) -> Option<RefusalReason>` は許可リスト（BXS-I-25）。`submit_inner` が `execute_intent` の失敗時にこれを呼び、アクティブな刺激がある場合のみ `Session.refusals` へ記録する。`Session` に `pricing_trials: FixedRing<PricingTrial>` を追加し、`SetPrice` が成功するたび `pricing_optimality_gap` を呼んでレーン 5 のサンプルを都度記録する — レーン 5 だけは固定カデンツの刺激参照を持たないため、他の 5 レーンのように決定ログから事後に掘り出す経路がない。
+- **P4-D `bias.rs` — 6 レーン推定器:** 各レーンは「決定ログ + 刺激台帳 + オラクル別表」だけを読む純関数（`extract_*_trials` → レーン関数）。レーン 0（損失回避）は 9 点の固定格子上でのグリッド探索・同点は小さい側（決定論 MLE、§4.15 の確立形）。レーン 1（処分効果）・4（エスカレーション）は率の差、レーン 2（アンカリング）は比率の平均、レーン 3（過信）は区間外れ率、レーン 5（プレッシャー下劣化）は最適性ギャップの群間差。`estimate_profile` が複数キャンペーンのトライアルをプールしてから 6 レーンをまとめて評価する（レーン 1・5 は単一キャンペーンでは `min_n` に届かないことがある — §12 のプーリング規定）。
+- **P4-E `phantom_bot.rs` — fixture-blind BOT（新規、`#[cfg(test)]`）:** `PhantomBotConfig` が 6 レーン分の真値パラメータを持つ。`decide()` は毎ターン、公開 `StimulusView` と自前の `PhiloxStream`（推定器と独立したドメイン分離ストリーム）だけから 1 つの `ActionIntent` を選ぶ。アンカリング/過信/価格付けの真値比較には `oracle::reference_valuation` / `pricing_optimality_gap` を呼ぶ — これは Director 自身が刺激をプラントする際に行う L2 内部読み取りと同じ特権であり、壁 W-a の新たな侵犯ではない（公開しているのは `ActionIntent` という同じ閉じた語彙のみ、壁 W-d）。`bias.rs` は一切 import しない（BXS-I-23）。
+- **P4-F `calibration.rs` — 既知解校正 suite（新規、`#[cfg(test)]`）:** `bias` と `phantom_bot` の両方を import できる唯一のファイル。各レーンについて既知の真値を持つ BOT で `CAMPAIGNS_PER_BOT=10` キャンペーンをプレイし、`estimate_profile` の回収値が許容帯に入ることを確認する。証明書は鋳造しない（R-6 / BXS-I-24 — `a_passing_calibration_run_does_not_by_itself_mint_a_certificate` が全 6 レーン GREEN の直後でもこれを確認する）。
+
+### 22.3 回収率下限（実測・§12 のゲート値）
+
+| lane | 軸 | 判定方式 | 許容誤差 |
+|---|---|---|---|
+| 0 | `loss_aversion` | 完全一致（格子上のλは決定論 MLE で一意に決まる） | 0（exact） |
+| 1 | `disposition_effect` | 宣言ギャップとの絶対誤差 | ±150,000 micro |
+| 2 | `anchoring` | 宣言 pull との絶対誤差（0 / 0.5 / 1.0 の 3 点） | ±20,000〜40,000 micro |
+| 3 | `overconfidence` | 宣言外れ率との絶対誤差 + 隣接レーン非汚染チェック | ±150,000 micro |
+| 4 | `escalation_commitment` | 宣言バイアスとの絶対誤差 + 符号 | ±200,000 micro |
+| 5 | `pressure_degradation` | 符号のみ（真の最適解の tick 間ドリフトにより厳密値は定義できない） | 符号一致 + 無反応 BOT で ±300,000 micro 以内 |
+
+`min_n` はレーンごとに固定（`MIN_N_LOSS_AVERSION=12` 等、§10 表に同じ）。全テストは `CAMPAIGNS_PER_BOT=10` キャンペーンのプールでこの下限を満たすことを併せて確認する。
+
+### 22.4 掟（新設・Phase 5 以降も拘束する）
+
+1. **BOT の優先順位は固定カデンツの衝突集合を数論的に検算してから決めよ。** 「賭けを先に処理する」のような自然な順序が、特定のレーンの片アームを恒久的に飢えさせることがある（BXS-W-19）。プーリングは乱数由来の分散は均すが、スケジュールの構造的な衝突は均さない。
+2. **推定レーンの「意図的な逸脱」は、行為が拒否されないことを構成的に保証せよ。** 事後の値クランプは「観測されたが外れた」ではなく「観測が消えた」を生み、回収率を静かに下げる（BXS-W-20）。
+3. **ある逸脱の大きさは、それを読む比率の分母と同じ量に比例させよ。** 分母と無関係な大きさは、符号をどれだけ乱数化しても分散で近隣レーンに漏れ出す（BXS-W-21）。
+4. **回収率下限は「完全回収」を要求するな。** 雑音耐性こそが検定力の定義であり、下限を 100% に強化した瞬間、次に本物のバイアスが乗ったときの検定力を失う（§12）。
+5. **証明書の型的封印は、校正が GREEN になっても緩めるな。** 実装が「動く」ことと指揮官の裁定は別のゲートであり、二重ゲートの片方を通っただけでもう片方を省略するコードを書くな（R-6 / BXS-I-24）。
+
+### 22.5 検証ログ（実測）
+
+| ゲート | 実測結果 |
+|---|---|
+| `cargo test --features blackbox-sim --lib blackbox_sim::` | 200 passed / 0 failed（P3 の 165 → +35: bias 推定器・phantom_bot・calibration・refusal telemetry・lane 5 配線） |
+| `cargo test --features blackbox-sim`（lib 全体 + 全 integration crate） | 412 passed / 0 failed（lib）+ 10 passed（`blackbox_sim_interop`）+ 既存 crate 群、全 GREEN |
+| `cargo clippy --lib --features blackbox-sim -- -D warnings`（`blackbox_sim` 由来分のみ） | 0 件（他モジュールの既存指摘とは独立に確認） |
+| `cargo check --features blackbox-sim --target aarch64-apple-darwin` | GREEN |
+| `pytest tests/test_blackbox_sim_contract.py` | 14 passed（P3 の 11 → +3: fixture-blindness 走査 / 証明書封印検査 / 拒否 allowlist 検査） |
+
+### 22.6 未実施・次フェーズへの申告
+
+- **3 環境 bit 一致は依然未達**（P1 からの持ち越し。CI 整備待ち）。
+- **Tauri command 層・FE・フレーバ層は未着手**（P5 の射程）。校正 suite は `#[cfg(test)]` のみに存在し、production からは推定器そのものが呼ばれていない — `Session::refusals()` / `events()` / `pricing_trials()` は現状 `#[allow(dead_code)]`（P5 で `estimate_profile` への実配線を行うまでの一時措置）。
+- **6D 射影の重み定数は依然未凍結**（Phase 6 の射程、§11 二重ゲートの片方のみ通過した状態）。
+- **スナップショットからの復元は依然未実装**（P2 からの持ち越し）。
