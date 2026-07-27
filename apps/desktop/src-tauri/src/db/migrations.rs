@@ -8,7 +8,7 @@ use std::{error::Error, fmt};
 
 use rusqlite::{Connection, TransactionBehavior};
 
-pub(crate) const LATEST_SCHEMA_VERSION: i64 = 11;
+pub(crate) const LATEST_SCHEMA_VERSION: i64 = 12;
 
 /// Canonical embedding width for `knowledge_chunks.embedding` (M9 foundation).
 /// Matches the historical PKBVEC01 384-d space; a future 768-d migration would
@@ -340,6 +340,76 @@ CREATE INDEX IF NOT EXISTS idx_evidence_pending_state_deadline
     ON edinet_evidence_pending(state, claim_deadline);
 "#;
 
+/// V12 — BLACKBOX SIMULATOR record lanes (docs/SPEC_BLACKBOX_SIMULATOR.md §11).
+/// Additive; vec0 untouched.
+///
+/// Three tables, one per kind of thing the simulator produces:
+///
+/// - `blackbox_campaigns` — one row per campaign, keyed by the Genesis
+///   fingerprint. Note what is absent: the campaign *seed*. The seed
+///   regenerates the world's true parameters, so storing it beside the
+///   analysis would put the answer key one join away from anything that reads
+///   this lane (wall W-a).
+/// - `blackbox_decisions` — the append-only decision log (第八律). `seq` is
+///   assigned by the engine and is unique within a campaign; the primary key
+///   makes a replayed flush idempotent instead of duplicating history.
+/// - `blackbox_stimuli` — the answer key the estimators join against. Carries
+///   `params_digest` so the pointer/payload binding survives the round trip
+///   (SPEC §16.3): a row whose parameters no longer hash to the digest the
+///   decision recorded is a corrupted measurement, not a hint.
+///
+/// `channel` is stamped on every decision row and exists to keep wall W-c
+/// mechanical: gap_analysis selects by channel, and simulator behaviour is
+/// behaviour under a controlled instrument, not life. There is no free-text
+/// column anywhere in this migration, so PII cannot land here by construction.
+const MIGRATION_V12_SQL: &str = r#"
+CREATE TABLE blackbox_campaigns (
+    campaign_fingerprint BLOB NOT NULL PRIMARY KEY,
+    schema_version TEXT NOT NULL,
+    scenario_id INTEGER NOT NULL,
+    difficulty INTEGER NOT NULL,
+    campaign_index INTEGER NOT NULL,
+    created_date TEXT NOT NULL,
+    started_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+);
+
+CREATE TABLE blackbox_decisions (
+    campaign_fingerprint BLOB NOT NULL,
+    seq INTEGER NOT NULL,
+    tick INTEGER NOT NULL,
+    phase INTEGER NOT NULL,
+    action_kind INTEGER NOT NULL,
+    action_json TEXT NOT NULL,
+    stimulus_seq INTEGER,
+    stimulus_kind INTEGER,
+    stimulus_digest BLOB,
+    latency_ms INTEGER,
+    forced_default INTEGER NOT NULL,
+    state_digest BLOB NOT NULL,
+    channel TEXT NOT NULL,
+    persisted_at INTEGER NOT NULL,
+    PRIMARY KEY (campaign_fingerprint, seq),
+    FOREIGN KEY (campaign_fingerprint)
+        REFERENCES blackbox_campaigns(campaign_fingerprint) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_blackbox_decisions_stimulus
+    ON blackbox_decisions(campaign_fingerprint, stimulus_seq);
+
+CREATE TABLE blackbox_stimuli (
+    campaign_fingerprint BLOB NOT NULL,
+    stimulus_seq INTEGER NOT NULL,
+    tick INTEGER NOT NULL,
+    kind INTEGER NOT NULL,
+    params_json TEXT NOT NULL,
+    params_digest BLOB NOT NULL,
+    persisted_at INTEGER NOT NULL,
+    PRIMARY KEY (campaign_fingerprint, stimulus_seq),
+    FOREIGN KEY (campaign_fingerprint)
+        REFERENCES blackbox_campaigns(campaign_fingerprint) ON DELETE CASCADE
+);
+"#;
+
 const READ_CHATS_COLUMNS_SQL: &str =
     "SELECT name, type, \"notnull\", pk FROM pragma_table_info('chats') ORDER BY cid;";
 const READ_MESSAGES_COLUMNS_SQL: &str =
@@ -416,6 +486,11 @@ const MIGRATIONS: &[Migration] = &[
         version: 11,
         sql: MIGRATION_V11_SQL,
         verify: verify_v11_schema,
+    },
+    Migration {
+        version: 12,
+        sql: MIGRATION_V12_SQL,
+        verify: verify_v12_schema,
     },
 ];
 
@@ -1026,6 +1101,68 @@ fn verify_v11_schema(connection: &Connection) -> Result<(), MigrationError> {
     Ok(())
 }
 
+/// Exact column contracts, matching the v11 discipline: extra columns are a
+/// mismatch, not a tolerated addition. These tables are the substrate of a
+/// measurement instrument, and a stray column is exactly how an unreviewed
+/// free-text field would arrive (SPEC §9.2 forbids one outright).
+fn verify_v12_schema(connection: &Connection) -> Result<(), MigrationError> {
+    verify_v11_schema(connection).map_err(|_| MigrationError::SchemaMismatch { version: 12 })?;
+
+    for (table_sql, expected) in [
+        (
+            "SELECT name, type, \"notnull\", pk FROM pragma_table_info('blackbox_campaigns') ORDER BY cid;",
+            &[
+                ("campaign_fingerprint", "BLOB", true, 1),
+                ("schema_version", "TEXT", true, 0),
+                ("scenario_id", "INTEGER", true, 0),
+                ("difficulty", "INTEGER", true, 0),
+                ("campaign_index", "INTEGER", true, 0),
+                ("created_date", "TEXT", true, 0),
+                ("started_at", "INTEGER", true, 0),
+                ("updated_at", "INTEGER", true, 0),
+            ][..],
+        ),
+        (
+            "SELECT name, type, \"notnull\", pk FROM pragma_table_info('blackbox_decisions') ORDER BY cid;",
+            &[
+                ("campaign_fingerprint", "BLOB", true, 1),
+                ("seq", "INTEGER", true, 2),
+                ("tick", "INTEGER", true, 0),
+                ("phase", "INTEGER", true, 0),
+                ("action_kind", "INTEGER", true, 0),
+                ("action_json", "TEXT", true, 0),
+                ("stimulus_seq", "INTEGER", false, 0),
+                ("stimulus_kind", "INTEGER", false, 0),
+                ("stimulus_digest", "BLOB", false, 0),
+                ("latency_ms", "INTEGER", false, 0),
+                ("forced_default", "INTEGER", true, 0),
+                ("state_digest", "BLOB", true, 0),
+                ("channel", "TEXT", true, 0),
+                ("persisted_at", "INTEGER", true, 0),
+            ][..],
+        ),
+        (
+            "SELECT name, type, \"notnull\", pk FROM pragma_table_info('blackbox_stimuli') ORDER BY cid;",
+            &[
+                ("campaign_fingerprint", "BLOB", true, 1),
+                ("stimulus_seq", "INTEGER", true, 2),
+                ("tick", "INTEGER", true, 0),
+                ("kind", "INTEGER", true, 0),
+                ("params_json", "TEXT", true, 0),
+                ("params_digest", "BLOB", true, 0),
+                ("persisted_at", "INTEGER", true, 0),
+            ][..],
+        ),
+    ] {
+        let cols = read_columns(connection, table_sql)
+            .map_err(|_| MigrationError::SchemaMismatch { version: 12 })?;
+        if !columns_match(&cols, expected) {
+            return Err(MigrationError::SchemaMismatch { version: 12 });
+        }
+    }
+    Ok(())
+}
+
 fn verify_v5_schema(connection: &Connection) -> Result<(), MigrationError> {
     verify_v4_schema(connection).map_err(|_| MigrationError::SchemaMismatch { version: 5 })?;
 
@@ -1252,6 +1389,65 @@ mod tests {
             ("message-1", "chat-1", "user", "hello", 2_i64),
         )?;
 
+        Ok(())
+    }
+
+    #[test]
+    fn v12_blackbox_lane_is_exact_append_only_and_pii_free(
+    ) -> Result<(), Box<dyn Error>> {
+        let mut connection = Connection::open_in_memory()?;
+        run_migrations(&mut connection)?;
+        assert_eq!(read_user_version(&connection)?, 12);
+
+        // The decision log is keyed so a replayed flush cannot duplicate
+        // history: re-inserting the same (campaign, seq) must conflict.
+        connection.execute(
+            "INSERT INTO blackbox_campaigns VALUES (X'AA', 'blackbox_log.v1', 3, 0, 1, '2026-07-27', 1, 1);",
+            [],
+        )?;
+        let insert = "INSERT INTO blackbox_decisions VALUES \
+             (X'AA', 0, 1, 1, 12, '{}', NULL, NULL, NULL, NULL, 0, X'BB', 'blackbox_sim', 1);";
+        connection.execute(insert, [])?;
+        assert!(
+            connection.execute(insert, []).is_err(),
+            "the same decision must not be storable twice"
+        );
+
+        // A decision cannot exist without its campaign.
+        assert!(
+            connection
+                .execute(
+                    "INSERT INTO blackbox_decisions VALUES \
+                     (X'CC', 0, 1, 1, 12, '{}', NULL, NULL, NULL, NULL, 0, X'BB', 'blackbox_sim', 1);",
+                    [],
+                )
+                .is_err(),
+            "orphan decisions must be refused"
+        );
+
+        // No free-text columns beyond the two explicitly-typed JSON payloads
+        // and the channel tag (SPEC §9.2: PII cannot exist by construction).
+        let cols = read_columns(
+            &connection,
+            "SELECT name, type, \"notnull\", pk FROM pragma_table_info('blackbox_decisions') ORDER BY cid;",
+        )?;
+        let text_columns: Vec<&str> = cols
+            .iter()
+            .filter(|c| c.data_type == "TEXT")
+            .map(|c| c.name.as_str())
+            .collect();
+        assert_eq!(
+            text_columns,
+            vec!["action_json", "channel"],
+            "a new free-text column appeared in the record lane"
+        );
+
+        // An extra column is a mismatch, not a tolerated addition.
+        connection.execute("ALTER TABLE blackbox_stimuli ADD COLUMN note TEXT;", [])?;
+        assert!(matches!(
+            verify_v12_schema(&connection),
+            Err(MigrationError::SchemaMismatch { version: 12 })
+        ));
         Ok(())
     }
 

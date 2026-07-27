@@ -179,13 +179,28 @@
 ## 品質ゲート — テストが通るまで、実装完了と言うな
 
 python -m py_compile <変更した .py 全部>
-python tests\test_calendar_sync.py        # ALL PASS 必須
-python tests\test_apple_calendar_sync.py  # ALL PASS 必須
-python tests\test_gap_analysis.py         # ALL PASS 必須
-python tests\test_integration.py          # ALL PASS 必須
-python tests\ui_smoke.py                  # ALL PASS 必須
-npx tsc --noEmit                          # (apps/desktop, フロント変更時)
-cargo check                               # (src-tauri, Rust 変更時。paths.rs を触ったら
-                                          #  --target aarch64-apple-darwin でも確認)
+python -m pytest tests/test_calendar_sync.py -q        # ALL PASS 必須
+python -m pytest tests/test_apple_calendar_sync.py -q  # ALL PASS 必須 (下記 既知の非密封 1 件を除く)
+python -m pytest tests/test_gap_analysis.py -q         # ALL PASS 必須
+python -m pytest tests/test_integration.py -q          # ALL PASS 必須
+python -m pytest tests/test_ui_smoke.py -q             # ALL PASS 必須
+npx tsc --noEmit                                       # (apps/desktop, フロント変更時)
+cargo check                                            # (src-tauri, Rust 変更時。paths.rs を触ったら
+                                                       #  --target aarch64-apple-darwin でも確認)
 
-エラーが出たら自分で直せ。「たぶん動く」「環境の問題」で完了報告することを禁止する。
+**必ず `python -m pytest` で起動しろ (2026-07-27 修正)。** これらは pytest モジュールであり
+`__main__` ブロックを持たない。`python tests/test_gap_analysis.py` と直接実行すると
+**何も実行せず exit 0 を返す** — 空虚な GREEN で品質ゲートが形骸化する
+(test_integration.py 冒頭に「`__main__` 直接実行は廃止」と明記済み)。
+`tests/ui_smoke.py` は `tests/test_ui_smoke.py` に改名済み。旧名は存在しない。
+
+### 既知の失敗 (触るな・自分のせいだと思うな)
+
+- `test_integration.py::test_custom_theme_frontend_contract_static` — 未着手 FE 機能の
+  静的契約。裁定によりスルー維持 (隔離された既知負債)。
+- `test_apple_calendar_sync.py::test_find_calendar_databases_custom_path` — テスト側の
+  非密封性。`find_calendar_databases` が実機の `~/Library/Group Containers/` 配下の
+  実 Calendar.sqlitedb を拾うため、Apple カレンダーのデータがあるマシンでは常に落ちる
+  (CI の素な環境では通る)。別タスクとして起票済み: `docs/TASK_APPLE_CALENDAR_TEST_HERMETICITY.md`。
+
+上記 2 件を除き、エラーが出たら自分で直せ。「たぶん動く」「環境の問題」で完了報告することを禁止する。

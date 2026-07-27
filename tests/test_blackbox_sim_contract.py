@@ -1,0 +1,332 @@
+# -*- coding: utf-8 -*-
+"""BLACKBOX SIMULATOR structural contracts (docs/SPEC_BLACKBOX_SIMULATOR.md).
+
+Four guard families, all read-only (sandbox-safe):
+
+1. SPEC structural contract — the design document keeps the skeleton other
+   artifacts reference (§19.2 discipline: structure is a contract).
+2. Cross-language determinism anchor (BXS-I-06) — a stdlib-only Python
+   mirror of Philox4x32-10 must reproduce the Random123 published
+   known-answer vectors. The Rust side asserts the same vectors in
+   `blackbox_sim/rng.rs`; both sides agreeing with the published constants
+   is the PKBVEC01-style mutual pin.
+3. Isolation-wall guards (BXS-I-11 / BXS-W-02) — the simulator core must
+   not import profile/vault/LLM machinery (wall W-b: the game never reads
+   the profile), and must not call libm transcendentals (float policy,
+   SPEC §3.3). String scan includes comments deliberately (the same posture
+   as the constitution's reqwest scan).
+4. Compilation-reachability and totality guards (BXS-W-10 / BXS-I-18) — every
+   source file must actually be declared in `mod.rs`, and every account must
+   appear in the cash-flow section map. Both failures are silent in Rust:
+   the first reports GREEN while skipping a file, the second only bites once
+   someone replaces an exhaustive match with a wildcard.
+5. Phase 3 record-lane guards — the published stimulus view must not name a
+   sealed field (wall W-a), the sink port must stay write-only (wall W-b), and
+   the vault v12 lane must stay append-only (eighth law). All three are the
+   quiet kind: adding a field, adding a trait method or reaching for `UPDATE`
+   compiles, passes, and silently dismantles the instrument.
+"""
+from __future__ import annotations
+
+import re
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+SPEC = ROOT / "docs" / "SPEC_BLACKBOX_SIMULATOR.md"
+TAURI_SRC = ROOT / "apps" / "desktop" / "src-tauri" / "src"
+SIM_DIR = TAURI_SRC / "blackbox_sim"
+DB_DIR = TAURI_SRC / "db"
+
+# ---------------------------------------------------------------------------
+# 1. SPEC structural contract
+# ---------------------------------------------------------------------------
+
+REQUIRED_SPEC_MARKERS = [
+    "## 0. 権威と裁定要請",
+    "## 2. 三層アーキテクチャと隔離壁",
+    "壁 W-a",
+    "壁 W-b",
+    "壁 W-c",
+    "壁 W-d",
+    "Philox4x32-10",
+    "## 7. ゲーム FSM",
+    "## 12. 校正 — PHANTOM-BOT 既知解ゲート",
+    "BXS-I-01",
+    "BXS-I-11",
+    "BXS-W-03",
+    "blackbox_profile.v1",
+    "uncalibrated-instrument",
+    # Phase 1: wall W-d made concrete, plus the traps that phase actually hit.
+    "BXS-I-15",
+    "BXS-I-16",
+    "BXS-W-08",
+    "BXS-W-10",
+    "## 19. Phase 1 as-built",
+    # Phase 2: FirmState, the settle loop, snapshots and the turn driver.
+    "BXS-I-17",
+    "BXS-I-18",
+    "BXS-I-19",
+    "BXS-W-11",
+    "BXS-W-12",
+    "BXS-W-14",
+    "## 20. Phase 2 as-built",
+    # Phase 3: stimulus planting, the sink port and the vault v12 record lane.
+    "BXS-I-20",
+    "BXS-I-21",
+    "BXS-I-22",
+    "BXS-W-16",
+    "BXS-W-17",
+    "BXS-W-18",
+    "## 21. Phase 3 as-built",
+]
+
+
+def test_spec_document_structure() -> None:
+    assert SPEC.exists(), "SPEC_BLACKBOX_SIMULATOR.md missing"
+    text = SPEC.read_text(encoding="utf-8")
+    missing = [m for m in REQUIRED_SPEC_MARKERS if m not in text]
+    assert not missing, f"SPEC skeleton markers missing: {missing}"
+
+
+# ---------------------------------------------------------------------------
+# 2. Philox4x32-10 cross-language anchor (stdlib only — no numpy)
+# ---------------------------------------------------------------------------
+
+_M0 = 0xD2511F53
+_M1 = 0xCD9E8D57
+_W0 = 0x9E3779B9
+_W1 = 0xBB67AE85
+_MASK = 0xFFFFFFFF
+
+
+def _round(ctr: tuple[int, int, int, int], key: tuple[int, int]) -> tuple[int, int, int, int]:
+    x0, x1, x2, x3 = ctr
+    k0, k1 = key
+    p0 = _M0 * x0
+    p1 = _M1 * x2
+    hi0, lo0 = (p0 >> 32) & _MASK, p0 & _MASK
+    hi1, lo1 = (p1 >> 32) & _MASK, p1 & _MASK
+    return ((hi1 ^ x1 ^ k0) & _MASK, lo1, (hi0 ^ x3 ^ k1) & _MASK, lo0)
+
+
+def philox4x32_10(ctr: tuple[int, int, int, int], key: tuple[int, int]) -> tuple[int, int, int, int]:
+    c, k = ctr, key
+    for r in range(10):
+        c = _round(c, k)
+        if r < 9:
+            k = ((k[0] + _W0) & _MASK, (k[1] + _W1) & _MASK)
+    return c
+
+
+def test_philox_known_answer_vectors() -> None:
+    # Random123 published KAT vectors — identical constants are asserted by
+    # blackbox_sim/rng.rs (mutual cross-language pin, BXS-I-06).
+    assert philox4x32_10((0, 0, 0, 0), (0, 0)) == (
+        0x6627E8D5,
+        0xE169C58D,
+        0xBC57AC4C,
+        0x9B00DBD8,
+    )
+    assert philox4x32_10(
+        (0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF), (0xFFFFFFFF, 0xFFFFFFFF)
+    ) == (0x408F276D, 0x41C83B0E, 0xA20BC7C6, 0x6D5451FD)
+    assert philox4x32_10(
+        (0x243F6A88, 0x85A308D3, 0x13198A2E, 0x03707344), (0xA4093822, 0x299F31D0)
+    ) == (0xD16CFE09, 0x94FDCCEB, 0x5001E420, 0x24126EA1)
+
+
+# ---------------------------------------------------------------------------
+# 3. Isolation-wall guards over the Rust sources
+# ---------------------------------------------------------------------------
+
+# Wall W-b (BXS-I-11): the simulator core must be structurally unable to read
+# profile/vault/LLM state. Includes comments on purpose.
+FORBIDDEN_IMPORT_TOKENS = [
+    "use crate::analytics",
+    "use crate::db",
+    "use crate::llm",
+    "use crate::coliseum",
+    "use crate::rag",
+    "use crate::knowledge",
+    "VaultHandle",
+]
+
+# Float policy (SPEC §3.3 / BXS-W-02): libm transcendentals drift across
+# platforms; only +,−,×,÷,sqrt and in-crate det_exp/det_ln are allowed.
+FORBIDDEN_LIBM_TOKENS = [
+    ".exp(",
+    ".exp2(",
+    ".exp_m1(",
+    ".ln(",
+    ".ln_1p(",
+    ".log(",
+    ".log2(",
+    ".log10(",
+    ".sin(",
+    ".cos(",
+    ".tan(",
+    ".powf(",
+    ".powi(",
+]
+
+REQUIRED_LINT_DENIES = [
+    "clippy::unwrap_used",
+    "clippy::expect_used",
+    "clippy::panic",
+    "clippy::indexing_slicing",
+    "clippy::string_slice",
+]
+
+
+def _sim_sources() -> list[Path]:
+    assert SIM_DIR.exists(), "blackbox_sim module directory missing"
+    files = sorted(SIM_DIR.glob("*.rs"))
+    assert files, "blackbox_sim module has no Rust sources"
+    return files
+
+
+def test_no_profile_dependency() -> None:
+    offenders: list[str] = []
+    for path in _sim_sources():
+        text = path.read_text(encoding="utf-8")
+        for token in FORBIDDEN_IMPORT_TOKENS:
+            if token in text:
+                offenders.append(f"{path.name}: {token}")
+    assert not offenders, f"wall W-b breached (BXS-I-11): {offenders}"
+
+
+def test_no_libm_transcendentals() -> None:
+    offenders: list[str] = []
+    for path in _sim_sources():
+        text = path.read_text(encoding="utf-8")
+        for token in FORBIDDEN_LIBM_TOKENS:
+            if token in text:
+                offenders.append(f"{path.name}: {token}")
+    assert not offenders, f"float policy breached (BXS-W-02): {offenders}"
+
+
+def test_zero_panic_lint_header_present() -> None:
+    mod_rs = SIM_DIR / "mod.rs"
+    assert mod_rs.exists(), "blackbox_sim/mod.rs missing"
+    text = mod_rs.read_text(encoding="utf-8")
+    missing = [lint for lint in REQUIRED_LINT_DENIES if lint not in text]
+    assert not missing, f"Zero Panic deny header incomplete: {missing}"
+
+
+def test_every_module_is_declared() -> None:
+    """BXS-W-10: a file absent from mod.rs is never compiled, and `cargo test`
+    reports GREEN while silently skipping it. Four Phase 0 files reached the
+    Phase 1 handoff in exactly that state. This is the structural stop."""
+    mod_rs = SIM_DIR / "mod.rs"
+    declarations = mod_rs.read_text(encoding="utf-8")
+    undeclared = [
+        path.name
+        for path in _sim_sources()
+        if path.name != "mod.rs" and f"pub mod {path.stem};" not in declarations
+    ]
+    assert not undeclared, (
+        f"blackbox_sim modules exist on disk but are never compiled: {undeclared}"
+    )
+
+
+def test_every_account_is_classified_for_cash_flow() -> None:
+    """BXS-I-18: the cash-flow identity is a theorem only while the account →
+    section map is total. Rust's exhaustive match enforces this at compile
+    time; this guard states the same contract across files, so it still holds
+    if someone reaches for a wildcard arm."""
+    ledger = (SIM_DIR / "ledger.rs").read_text(encoding="utf-8")
+    settle = (SIM_DIR / "settle.rs").read_text(encoding="utf-8")
+    block = re.search(r"pub enum AccountCode \{(.*?)\n\}", ledger, re.DOTALL)
+    assert block is not None, "AccountCode enum not found in ledger.rs"
+    accounts = re.findall(r"^\s*([A-Z]\w*)\s*=\s*\d+,", block.group(1), re.MULTILINE)
+    assert len(accounts) >= 20, f"AccountCode parse looks wrong: {accounts}"
+    unclassified = [a for a in accounts if f"AccountCode::{a}" not in settle]
+    assert not unclassified, (
+        f"accounts missing from the cash-flow section map (BXS-I-18): {unclassified}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# 5. Phase 3 record-lane guards
+# ---------------------------------------------------------------------------
+
+# Wall W-a (BXS-I-20): these name the answer key. A stimulus is only a
+# measurement while the subject cannot see the value being measured against,
+# so `StimulusView` — the one type that reaches the UI and the LLM — must not
+# carry any of them. Adding such a field compiles and reads like a feature.
+SEALED_STIMULUS_FIELDS = [
+    "reference_minor",
+    "delta_micro",
+    "good_state",
+    "sunk_minor",
+    "required_cash_minor",
+    "arm",
+]
+
+
+def test_published_stimulus_view_names_no_sealed_field() -> None:
+    text = (SIM_DIR / "stimulus.rs").read_text(encoding="utf-8")
+    block = re.search(r"pub struct StimulusView \{(.*?)\n\}", text, re.DOTALL)
+    assert block is not None, "StimulusView struct not found in stimulus.rs"
+    body = block.group(1)
+    leaked = [field for field in SEALED_STIMULUS_FIELDS if field in body]
+    assert not leaked, f"wall W-a breached — sealed fields published (BXS-I-20): {leaked}"
+
+
+def test_the_sink_port_is_write_only() -> None:
+    """BXS-I-21: wall W-b holds by the shape of the port, not by good manners.
+    `DecisionSink` has exactly one method and it takes a batch and returns a
+    receipt. The moment a read method appears the simulator can consult the
+    vault, and the game starts reading the profile it is supposed to measure."""
+    text = (SIM_DIR / "persist.rs").read_text(encoding="utf-8")
+    block = re.search(r"pub trait DecisionSink \{(.*?)\n\}", text, re.DOTALL)
+    assert block is not None, "DecisionSink trait not found in persist.rs"
+    methods = re.findall(r"\bfn (\w+)", block.group(1))
+    assert methods == ["persist"], (
+        f"the sink port must stay write-only (BXS-I-21); found methods: {methods}"
+    )
+
+
+def test_the_vault_record_lane_is_append_only() -> None:
+    """Eighth law / BXS-I-22: a record already written is not the repository's
+    to revise. Re-flushing after a crash must be a no-op, which is why every
+    write to the two record tables is `INSERT OR IGNORE` and why neither table
+    is ever the target of an UPDATE or a DELETE."""
+    repo = DB_DIR / "blackbox_repo.rs"
+    assert repo.exists(), "db/blackbox_repo.rs missing"
+    text = repo.read_text(encoding="utf-8")
+
+    record_tables = ("blackbox_decisions", "blackbox_stimuli")
+    mutations = [
+        line.strip()
+        for line in text.splitlines()
+        if re.search(r"\b(UPDATE|DELETE FROM)\b", line)
+        and any(table in line for table in record_tables)
+    ]
+    assert not mutations, f"records are not editable (BXS-I-22): {mutations}"
+
+    inserts = re.findall(r"INSERT(?: OR IGNORE)? INTO (blackbox_\w+)", text)
+    assert set(record_tables).issubset(set(inserts)), (
+        f"expected inserts into both record tables, found: {inserts}"
+    )
+    unguarded = re.findall(r"INSERT INTO (blackbox_decisions|blackbox_stimuli)", text)
+    assert not unguarded, (
+        f"record inserts must be `INSERT OR IGNORE` so a retry is a no-op: {unguarded}"
+    )
+
+
+def test_vault_v12_stores_no_campaign_seed() -> None:
+    """Wall W-a again, at rest. The Genesis seed regenerates every true value in
+    the campaign, so persisting it would put the answer key inside the same
+    database the analysis lane reads. The campaign row keys on the fingerprint,
+    which identifies a campaign without being able to reconstruct it."""
+    text = (DB_DIR / "migrations.rs").read_text(encoding="utf-8")
+    assert "pub(crate) const LATEST_SCHEMA_VERSION: i64 = 12;" in text, (
+        "vault v12 is not the latest schema version"
+    )
+    block = re.search(r"CREATE TABLE blackbox_campaigns \((.*?)\n\);", text, re.DOTALL)
+    assert block is not None, "blackbox_campaigns DDL not found in migrations.rs"
+    columns = re.findall(r"^\s*(\w+)\s+\w+", block.group(1), re.MULTILINE)
+    assert "campaign_fingerprint" in columns, f"fingerprint column missing: {columns}"
+    seedy = [column for column in columns if "seed" in column.lower()]
+    assert not seedy, f"wall W-a breached at rest — seed persisted: {seedy}"

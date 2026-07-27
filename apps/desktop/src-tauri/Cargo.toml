@@ -82,6 +82,11 @@ egress-live = ["dep:hickory-resolver", "dep:rustls", "dep:hyper-rustls", "dep:to
 # M4 on-device LLM scaffold. Enables the optional llama-cpp-2 dep (requires cmake
 # + C++ toolchain). Never enable on default/release desktop builds.
 pocket-brain = ["llama-cpp-2", "libc"]
+# BLACKBOX SIMULATOR core (docs/SPEC_BLACKBOX_SIMULATOR.md). Pure-std module,
+# zero new dependencies. Keep off default builds until the arena ships. Enabling
+# it alongside secure-vault additionally compiles the vault v12 record lane
+# (db/blackbox_repo.rs); the simulator itself never depends on secure-vault.
+blackbox-sim = []
 # M3 Phase 0+: SQLCipher + typed objc2 Keychain link gate. Keep off default
 # builds. All Apple bindings live in one objc2 type system; do not reintroduce
 # security-framework alongside them (docs/m3_action_plan.md §4.2.1).

@@ -35,6 +35,15 @@ mod haptics;
 #[cfg(feature = "pocket-brain")]
 mod coliseum;
 
+// BLACKBOX SIMULATOR — deterministic finance-sim core
+// (docs/SPEC_BLACKBOX_SIMULATOR.md). As of Phase 3 this carries the market
+// kernel, the operating model, the turn driver and stimulus planting; command
+// registration and FE wiring land in later adjudicated phases. Zero extra
+// dependencies; default builds are byte-identical.
+#[cfg(feature = "blackbox-sim")]
+#[doc(hidden)]
+pub mod blackbox_sim;
+
 #[cfg(all(feature = "secure-vault", target_vendor = "apple"))]
 mod analytics;
 

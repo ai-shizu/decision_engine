@@ -13,6 +13,15 @@ mod keychain_probe;
 // and UIKit does not exist on macOS (docs/m3_action_plan.md §0, §8).
 #[cfg(target_vendor = "apple")]
 mod analytics_repo;
+// Vault v12 record lane. Needs both worlds, so it is gated on both features;
+// the dependency points db -> blackbox_sim and never the other way (wall W-b).
+//
+// `dead_code` is allowed because the production caller is the Tauri command
+// layer, which SPEC §15 schedules for Phase 5. The lane is exercised end to end
+// by this module's own tests today; the allow comes off when the commands land.
+#[cfg(all(target_vendor = "apple", feature = "blackbox-sim"))]
+#[allow(dead_code)]
+pub(crate) mod blackbox_repo;
 #[cfg(target_vendor = "apple")]
 mod commitment_repo;
 #[cfg(target_vendor = "apple")]
