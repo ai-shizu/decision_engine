@@ -337,7 +337,15 @@ Director が `DOM_STIMULI` ストリームで**自然なゲームイベントと
 | **P5-A（完・backend-first）** | IPC command 層 + vault 永続化配線（FE・フレーバ層は裁定によりこの回は非射程） | `cargo test --features blackbox-sim` 全 GREEN・`pytest tests/test_blackbox_sim_contract.py` 全 GREEN（§23.5） |
 | **P5-B（完・FE / 固定テンプレート）** | Coliseum BLACKBOX アリーナ FE（フレーバ層は依然非射程） | `npm run test:boundary` GREEN・`tsc --noEmit` GREEN・契約テスト GREEN（§24.5） |
 | **P6-A（完・2026-07-28）** | bias 6-lane profile bridge: vault v13 + R-8 書込ゲート + live write + R-9 三出口 + BXS-I-26 | 両 feature 構成 GREEN・`pytest tests/`・`npm run test:boundary`・BXS-I-26 契約（§25） |
-| **P6-B（未着手）** | 6D 射影の重み凍結 | 校正データ取得後 ∧ `CalibrationCertificate` 裁定（LAW-19 / BXS-I-24） |
+| **P6-B（無期限凍結・2026-07-28 指揮官裁定 R-11）** | 6D 射影の重み凍結 | **凍結解除の前提＝実人間の校正データ取得（物理的前提）。** それまで着工しない。解除時も `CalibrationCertificate` 裁定が別途必要（LAW-19 / BXS-I-24） |
+
+### R-11（2026-07-28）— Phase 6-B 無期限凍結
+
+Phase 6-A の封緘（`ad9a240`）をもって、**Phase 6-B は Pending として無期限凍結**する。
+
+- **凍結の理由:** 6D 射影の重みは、実人間の校正データが存在しない限り**推測でしか置けない**。存在しない真値を定数として凍結することは LAW-19 の直接違反であり、「動く推定器があること」は重みの根拠にならない（バイアス 6 レーンの校正 GREEN が裏書きするのはバイアス座標系だけである）。
+- **凍結中の不変条件:** `CalibrationCertificate` の封印は**絶対不可侵**。production constructor を置かない（BXS-I-24 / `test_calibration_certificate_has_no_production_constructor`）。到達可能な唯一の射影は `uncalibrated_projection()` の全 N/A + `calibration="uncalibrated-instrument"` のまま。`blackbox_profiles` 系スキーマに 6D 列を追加しない（v13 の CHECK と契約テストが at rest で拒否する）。
+- **解除条件:** 実人間の校正データ取得（物理的前提）**∧** 指揮官裁定。片方だけでは開けない。工数や実装の準備完了は解除条件では**ない**。
 
 ## 18. Phase 0 as-built（2026-07-27）
 

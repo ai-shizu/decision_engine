@@ -2101,7 +2101,7 @@ latest commit **後**にだけ `_prune_retrieval_manifests` を実行する。
 
 — 初代リードアーキテクト Fable（2026-07-27 移譲）
 
-## 20. Target Golf — THE BLACKBOX SIMULATOR (`docs/SPEC_BLACKBOX_SIMULATOR.md`。Phase 0〜5-B 完遂 / Phase 6-A step1–7 封緘（6-B 未着手）/ フレーバ層 未着手)
+## 20. Target Golf — THE BLACKBOX SIMULATOR (`docs/SPEC_BLACKBOX_SIMULATOR.md`。Phase 0〜5-B 完遂 / Phase 6-A step1–7 封緘（6-B は R-11 により無期限凍結）/ フレーバ層 未着手)
 
 本節は Target Golf の設計規律と as-built の両方の要約を持つ。**正本は `docs/SPEC_BLACKBOX_SIMULATOR.md`**（§0 裁定台帳・§16 不変条件/罠台帳 `BXS-I-nn`/`BXS-W-nn`・§18〜24 各フェーズ as-built）。オフライン金融シミュレータでありながら、真の目的はプレイヤーの意思決定から損失回避・処分効果・アンカリング・過信・エスカレーション・プレッシャー下劣化の 6 バイアスを決定論的に抽出する計器である（Echo と並ぶ第二の「決定論的観測器」）。既定ビルド非包含（feature `blackbox-sim`）。
 
@@ -2115,7 +2115,7 @@ latest commit **後**にだけ `_prune_retrieval_manifests` を実行する。
 | P5-A | 完遂（backend-first） | IPC command 層（`blackbox_arena/`）+ vault 永続化配線（SPEC §23） |
 | P5-B | 完遂（FE / 固定テンプレート） | Coliseum BLACKBOX Arena FE（SPEC §24）。フレーバ層は非射程 |
 | P6-A | 完遂（step1–7 / 封緘） | bridge + vault v13 + R-8 + live write + R-9 三出口 + BXS-I-26。証明書封印は維持（LAW-19） |
-| P6-B | 未着手 | 6D 射影の重み凍結（校正データ取得後） |
+| P6-B | **無期限凍結（Pending・R-11 / 2026-07-28）** | 6D 射影の重み凍結。解除は**実人間の校正データ取得（物理的前提）∧ 指揮官裁定**の二要素。`CalibrationCertificate` の封印は凍結中**絶対不可侵**（SPEC §17 R-11 / BXS-I-24） |
 
 Phase 4（校正 suite 実装）で踏んだ、他の決定論計測器にも一般化するハマりどころ（詳細は SPEC §16 の BXS-W-19〜21）:
 
