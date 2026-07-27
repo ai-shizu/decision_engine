@@ -193,7 +193,9 @@ impl TryFrom<String> for SubjectKey {
             "edinet"
                 if key.len() == 6
                     && key.starts_with('E')
-                    && key[1..].chars().all(|c| c.is_ascii_digit()) =>
+                    && key
+                        .get(1..)
+                        .is_some_and(|rest| rest.chars().all(|c| c.is_ascii_digit())) =>
             {
                 Ok(Self::Edinet(key.to_string()))
             }

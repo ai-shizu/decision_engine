@@ -1289,7 +1289,9 @@ pub fn acquisition_from_document_meta_with_body(
 fn is_edinet_code(value: &str) -> bool {
     value.len() == 6
         && value.starts_with('E')
-        && value[1..].bytes().all(|byte| byte.is_ascii_digit())
+        && value
+            .get(1..)
+            .is_some_and(|rest| rest.bytes().all(|byte| byte.is_ascii_digit()))
 }
 
 fn is_submitted_at(value: &str) -> bool {
@@ -1304,7 +1306,11 @@ fn is_submitted_at(value: &str) -> bool {
     {
         return false;
     }
-    let digits = |start: usize, end: usize| bytes[start..end].iter().all(u8::is_ascii_digit);
+    let digits = |start: usize, end: usize| {
+        bytes
+            .get(start..end)
+            .is_some_and(|range| range.iter().all(u8::is_ascii_digit))
+    };
     if !digits(0, 4)
         || !digits(5, 7)
         || !digits(8, 10)
@@ -1314,13 +1320,13 @@ fn is_submitted_at(value: &str) -> bool {
     {
         return false;
     }
-    let year = value[0..4].parse::<i32>().ok();
-    let month = value[5..7].parse::<u32>().ok();
-    let day = value[8..10].parse::<u32>().ok();
-    let hour = value[11..13].parse::<u32>().ok();
-    let minute = value[14..16].parse::<u32>().ok();
+    let year = value.get(0..4).and_then(|s| s.parse::<i32>().ok());
+    let month = value.get(5..7).and_then(|s| s.parse::<u32>().ok());
+    let day = value.get(8..10).and_then(|s| s.parse::<u32>().ok());
+    let hour = value.get(11..13).and_then(|s| s.parse::<u32>().ok());
+    let minute = value.get(14..16).and_then(|s| s.parse::<u32>().ok());
     let second = if has_seconds {
-        value[17..19].parse::<u32>().ok()
+        value.get(17..19).and_then(|s| s.parse::<u32>().ok())
     } else {
         Some(0)
     };
