@@ -8,6 +8,7 @@ import {
   type CompanyFactsEnrichDeps,
 } from "../src/lib/companyFactsEnrich";
 import { emptyCompanyFacts } from "../src/lib/interviewStage";
+import type { CompanyFacts, EdinetEnrichmentResponseV3 } from "../src/lib/pocketBrain/types";
 
 type TestFn = () => void | Promise<void>;
 const tests: { name: string; fn: TestFn }[] = [];
@@ -18,6 +19,31 @@ function test(name: string, fn: TestFn): void {
 
 function assertOk(condition: boolean, message: string): void {
   if (!condition) throw new Error(message);
+}
+
+/** Minimal V3 envelope so mocks match CompanyFactsEnrichDeps.fetchEdinetByName. */
+function stubEdinetV3(facts: CompanyFacts): EdinetEnrichmentResponseV3 {
+  return {
+    schemaVersion: 3,
+    facts,
+    factCells: [],
+    subjectKey: `name:${facts.companyName}`,
+    subjectRevision: 0,
+    fieldProvenance: [],
+    fetch: "succeeded",
+    extraction: "both",
+    discoveryCoverage: "pinned",
+    discoveryResult: "selected",
+    factPersistence: "not_attempted",
+    evidencePersistence: "not_attempted",
+    servedFrom: "live",
+    freshness: {
+      selectedDocId: null,
+      submittedAt: null,
+      correctionAvailable: "unknown",
+    },
+    warnings: [],
+  };
 }
 
 test("E-01 query builder", () => {
@@ -109,12 +135,14 @@ test("E-06 enrich: policy on runs research then edinet-by-name", async () => {
       fetchEdinetByName: async (args) => {
         edinetCalled = true;
         assertOk(args.companyName === "公開企業", "name passed");
-        return emptyCompanyFacts({
-          companyName: "公開企業",
-          edinetCode: "E02144",
-          businessSummary: "EDINET概要",
-          source: "edinet_list",
-        });
+        return stubEdinetV3(
+          emptyCompanyFacts({
+            companyName: "公開企業",
+            edinetCode: "E02144",
+            businessSummary: "EDINET概要",
+            source: "edinet_list",
+          }),
+        );
       },
       todayIso: () => "2026-07-18",
     },
@@ -190,11 +218,13 @@ test("E-10 wikipedia and vault lanes receive different queries", async () => {
       },
       fetchEdinetByName: async (args) => {
         edinetName = args.companyName;
-        return emptyCompanyFacts({
-          companyName: "公開企業",
-          edinetCode: "E02144",
-          source: "edinet_list",
-        });
+        return stubEdinetV3(
+          emptyCompanyFacts({
+            companyName: "公開企業",
+            edinetCode: "E02144",
+            source: "edinet_list",
+          }),
+        );
       },
       todayIso: () => "2026-07-18",
     },

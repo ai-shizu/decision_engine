@@ -2101,9 +2101,9 @@ latest commit **後**にだけ `_prune_retrieval_manifests` を実行する。
 
 — 初代リードアーキテクト Fable（2026-07-27 移譲）
 
-## 20. Target Golf — THE BLACKBOX SIMULATOR (`docs/SPEC_BLACKBOX_SIMULATOR.md`。Phase 0〜5-A 完遂 / Phase 5-B(Coliseum FE+フレーバ)・Phase 6(profile bridge) 未着手)
+## 20. Target Golf — THE BLACKBOX SIMULATOR (`docs/SPEC_BLACKBOX_SIMULATOR.md`。Phase 0〜5-B 完遂 / Phase 6(profile bridge)・フレーバ層 未着手)
 
-本節は Target Golf の設計規律と as-built の両方の要約を持つ。**正本は `docs/SPEC_BLACKBOX_SIMULATOR.md`**（§0 裁定台帳・§16 不変条件/罠台帳 `BXS-I-nn`/`BXS-W-nn`・§18〜22 各フェーズ as-built）。オフライン金融シミュレータでありながら、真の目的はプレイヤーの意思決定から損失回避・処分効果・アンカリング・過信・エスカレーション・プレッシャー下劣化の 6 バイアスを決定論的に抽出する計器である（Echo と並ぶ第二の「決定論的観測器」）。既定ビルド非包含（feature `blackbox-sim`）。
+本節は Target Golf の設計規律と as-built の両方の要約を持つ。**正本は `docs/SPEC_BLACKBOX_SIMULATOR.md`**（§0 裁定台帳・§16 不変条件/罠台帳 `BXS-I-nn`/`BXS-W-nn`・§18〜24 各フェーズ as-built）。オフライン金融シミュレータでありながら、真の目的はプレイヤーの意思決定から損失回避・処分効果・アンカリング・過信・エスカレーション・プレッシャー下劣化の 6 バイアスを決定論的に抽出する計器である（Echo と並ぶ第二の「決定論的観測器」）。既定ビルド非包含（feature `blackbox-sim`）。
 
 | Phase | 状態 | 正本 |
 |---|---|---|
@@ -2113,7 +2113,7 @@ latest commit **後**にだけ `_prune_retrieval_manifests` を実行する。
 | P3 | 完遂 | Director・刺激プランティング・vault v12 永続化（SPEC §21） |
 | P4 | 完遂 | 推定器 6 レーン + PHANTOM-BOT 校正 suite（SPEC §22） |
 | P5-A | 完遂（backend-first） | IPC command 層（`blackbox_arena/`）+ vault 永続化配線（SPEC §23） |
-| P5-B | 未着手 | Coliseum アリーナ FE + フレーバ層（follow-up 裁定待ち） |
+| P5-B | 完遂（FE / 固定テンプレート） | Coliseum BLACKBOX Arena FE（SPEC §24）。フレーバ層は非射程 |
 | P6 | 未着手 | profile bridge（二重ゲート: 校正 GREEN ∧ 指揮官裁定） |
 
 Phase 4（校正 suite 実装）で踏んだ、他の決定論計測器にも一般化するハマりどころ（詳細は SPEC §16 の BXS-W-19〜21）:
@@ -2127,3 +2127,9 @@ Phase 5-A（IPC command 層・vault 永続化配線）で踏んだ、他のワ�
 
 5. **借用トレイト（`&Transaction` 等）でスレッド境界を越えようとするな。境界のこちら側で owned データへ複製し、あちら側で初めて借用を作る「owned-clone リレー」を対称に設計せよ。** `DecisionSink` は「送出専用・1 メソッドのみ」という**形状**で壁を担保する型だが、この形状のままシムワーカースレッドから vault ワーカースレッドへ `&Transaction` を持ち越すことはできない（ライフタイムはスレッドを跨げない）。正しい設計は「シムワーカー側で `DecisionBatch` を owned `Vec` に複製 → 別スレッドへブロッキング送信 → あちら側で初めて `Transaction` を開いて書く」という 3 段リレーであり、これは「ack が一致するまでリング未消去」という送出側の契約をスレッド境界を挟んでも保つ。
 6. **0-index の tick から「境界を跨いだ回数」を逆算するときは、最大値ではなく件数で数えよ。** `market.rs` の tick は 0-index（第 1 区間は `0..N-1`）であるため、「区間が何回閉じたか」を `max_tick / N` で計算すると常に 1 だけ少なく出る（`N-1` 個目の tick で区間が閉じても `(N-1)/N == 0`）。1 tick に 1 件が対応する record の**件数**で割れば `N/N == 1` と正しく出る。エラーは出ず、正当な「直後の再開要求」だけが `NotFound` 系に落ちる — 自作の単体テストを書く過程でしか捕まらない典型例（実測: `blackbox_arena::handle::load_generation` の世代可用性判定）。
+
+Phase 5-B（Coliseum BLACKBOX Arena FE）で踏んだ、他の「計測器付きゲーム」FE にも一般化するハマりどころ（詳細は SPEC §24.3）:
+
+7. **対象 ID を持つ操作語彙があるなら、観測 DTO にその ID を選ぶための帳簿/状態ビューを同送せよ。** 市場ティックと刺激だけ返して「完全にプレイ可能」と宣言すると、UI は `ContinueProject` / `ClosePosition` 等を出せず、推定レーンが静かに餓死する。エラーは出ない。
+8. **限界値定数（価格上限・注文上限・キャンペーン長）を FE にハードコードするな。観測と一緒に同送し、ビルダはそれだけを読め。** 数値発明ガードは LLM フレーバ層だけの話ではない — FE の intent ビルダが同じ罪を犯す。
+9. **凍結オーバーレイはシェル全体ではなくアリーナ単位で掛けよ。** 同一シェルに新アリーナを足すとき、既存の COMING SOON ラッパが外側のまま残ると新機能ごと操作不能になる。

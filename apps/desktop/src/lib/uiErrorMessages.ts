@@ -152,6 +152,24 @@ export const UI_ERROR_SPECS = {
       "GDエージェントの応答結果を確認できませんでした。現在の状態を確認し、必要な場合だけ再実行してください。",
     retryPolicy: "verify-first",
   },
+  /** BLACKBOX Arena — business-rule refusal (retry-safe: draft and resubmit). */
+  BXS_ARENA_REJECTED: {
+    message:
+      "その操作は業務ルールにより拒否されました。金額・在庫・対象IDを確認してもう一度実行してください。",
+    retryPolicy: "retry-safe",
+  },
+  /** BLACKBOX Arena — wrong phase / missing campaign / exhausted. */
+  BXS_ARENA_STATE: {
+    message:
+      "キャンペーンの状態と操作が一致しません。現在の状態を確認し、必要な場合だけ再実行してください。",
+    retryPolicy: "verify-first",
+  },
+  /** BLACKBOX Arena — unavailable / internal / unknown. */
+  BXS_ARENA_FAULT: {
+    message:
+      "シミュレータの応答結果を確認できませんでした。現在の状態を確認し、必要な場合だけ再実行してください。",
+    retryPolicy: "verify-first",
+  },
 } as const satisfies Record<string, UiErrorSpec>;
 
 export type UiErrorCode = keyof typeof UI_ERROR_SPECS;

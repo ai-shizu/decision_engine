@@ -208,6 +208,8 @@ def test_08_tauri_invoke_has_closed_frontend_owners() -> None:
         Path("apps/desktop/src/lib/pocketBrain/api.ts"),
         Path("apps/desktop/src/lib/pocketBrain/invoke.ts"),
         Path("apps/desktop/src/lib/sim.ts"),
+        # Phase 5-B BLACKBOX Arena IPC owner.
+        Path("apps/desktop/src/lib/blackboxArena.ts"),
     ]
     assert sorted(owners) == sorted(expected)
 

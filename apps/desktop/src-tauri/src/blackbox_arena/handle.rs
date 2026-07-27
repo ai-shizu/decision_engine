@@ -27,11 +27,10 @@ use std::time::Duration;
 
 use crate::blackbox_sim::director::{DirectorError, Session};
 use crate::blackbox_sim::genesis::GenesisRequest;
-use crate::blackbox_sim::ledger::AccountCode;
 use crate::blackbox_sim::persist::{FlushReceipt, NullSink};
 use crate::blackbox_sim::telemetry::ActionIntent;
 
-use super::view::{map_director_error, AdvanceView, ObservationView, SimUiErrorCode};
+use super::view::{map_director_error, AdvanceView, ArenaLimitsView, BooksView, ObservationView, SimUiErrorCode};
 
 #[cfg(all(feature = "secure-vault", target_vendor = "apple"))]
 use std::sync::Mutex;
@@ -113,7 +112,8 @@ fn observation_view(campaign_id: &str, session: &Session) -> Result<ObservationV
         turns_completed: session.turns_completed(),
         market,
         stimuli: session.stimulus_views(),
-        cash_minor: session.books().balances.balance_minor(AccountCode::Cash),
+        books: BooksView::from_books(session.books()),
+        limits: ArenaLimitsView::current(),
         state: session.state(),
     })
 }

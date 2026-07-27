@@ -334,7 +334,8 @@ Director が `DOM_STIMULI` ストリームで**自然なゲームイベントと
 | P3 | Director + 刺激 + vault v12 永続化 | §16.3 pointer 結合・append-only 契約 |
 | **P4（完）** | 推定器 6 レーン + PHANTOM-BOT 校正 suite | 既知解回収率下限 GREEN — 全 6 軸実測（§22.3） |
 | **P5-A（完・backend-first）** | IPC command 層 + vault 永続化配線（FE・フレーバ層は裁定によりこの回は非射程） | `cargo test --features blackbox-sim` 全 GREEN・`pytest tests/test_blackbox_sim_contract.py` 全 GREEN（§23.5） |
-| P5-B（未着手） | Coliseum アリーナ FE + フレーバ層（§14） | FE parser 鏡像・tests-runtime Harness・数値発明ガード |
+| **P5-B（完・FE / 固定テンプレート）** | Coliseum BLACKBOX アリーナ FE（フレーバ層は依然非射程） | `npm run test:boundary` GREEN・`tsc --noEmit` GREEN・契約テスト GREEN（§24.5） |
+| P6（未着手） | profile bridge（二重ゲート） | 校正 GREEN ∧ 指揮官裁定 |
 | P6 | profile bridge + 憲法 as-built 追記・§0 表更新 | 二重ゲート（校正 GREEN + 裁定）確認後のみ |
 
 ## 18. Phase 0 as-built（2026-07-27）
@@ -551,7 +552,43 @@ Phase 4 完遂の正式承認・コミット指示（`feat(blackbox_sim): comple
 
 ### 23.5 未実施・次フェーズへの申告
 
-- **Coliseum BLACKBOX アリーナ FE・LLM フレーバ層（§14）は完全未着手**（follow-up 裁定の射程、§17 の P5-B）。
+- **Coliseum BLACKBOX アリーナ FE** は §24 で完遂。**LLM フレーバ層（§14）は依然未着手**（固定テンプレートのみでプレイ可能）。
 - **`bias::estimate_profile` の production 配線・`blackbox_profile.v1` 書き込みは依然未着手**（§11 二重ゲートの片方＝校正 GREEN のみ通過。裁定は P6 まで得られていない）。`Session` の 3 アクセサは `#[allow(dead_code)]` のまま。
 - **3 環境 bit 一致は依然未達**（P1 からの持ち越し。CI 整備待ち）。
 - **スナップショットからの復元は依然未実装**（P2 からの持ち越し。`bxs_load_generation` は replay 経由の再構築であり、スナップショットのデシリアライズではない）。
+
+## 24. Phase 5-B as-built（2026-07-28・Coliseum BLACKBOX Arena FE）
+
+### 24.1 裁定記録（2026-07-28・指揮官）
+
+- **マウント:** `ColiseumRoot` をアリーナ選択シェルに再構成し、`.gd-frozen` 3 層を GD 枝の内側へ移設。BLACKBOX は同じシェル配下でライブ描画（R-4 準拠）。
+- **再開:** v1 はプロセス内 1 セッションのみ。`bxs_load_generation` は FE 未結線（6 本中 5 本を結線）。
+- **フレーバ層:** 依然非射程。固定日本語テンプレート + 返却数値のみ。
+
+### 24.2 射程と実装
+
+- **`ObservationView` 最小拡張（`blackbox_arena/view.rs`）:** `BooksView`（SKU / active projects / open offers / open positions + cash/debt）と `ArenaLimitsView`（価格・注文・金額・SKU・キャンペーン tick 上限を同送）を追加。重複していた top-level `cash_minor` は `books.cash_minor` に一本化（BXS-I-20）。`blackbox_sim` は無改造 — 公開 accessor のみ使用。壁 W-a: 帳簿はプレイヤー自身の帰結のみ。
+- **FE IPC:** `lib/parseBlackboxArena.ts`（exact-key 鏡像）+ `lib/blackboxArena.ts`（唯一の `invoke<unknown>` owner）+ `lib/blackboxIntent.ts`（12 種ワイヤビルダ、timeout-default 構築経路なし）+ `lib/blackboxArenaReducer.ts`（純 reducer）。
+- **UI:** `BlackboxArena.tsx` コンテナ + Setup / MarketRail / BooksPanel / StimulusDeck / CommandConsole / TurnLog。`latency_ms` は観測描画完了→EXECUTE の `performance.now()` 差分。待機中も入力は `disabled` にしない（`BUS BUSY` アンビエント）。
+- **エラー:** `BXS_ARENA_REJECTED` / `BXS_ARENA_STATE` / `BXS_ARENA_FAULT` の固定文言キー。
+
+### 24.3 掟（新設）
+
+1. **「プレイ可能」は市場観測だけでは足りない。対象 ID を持つ intent があるなら、その ID を選ぶための帳簿ビューを同送せよ。** `ObservationView` が cash/market/stimuli だけだと `ContinueProject` / `ClosePosition` / `AcceptOffer` 等が対象を選べず、推定器レーンが静かに餓死する（lane 1 / 3 / 4）。
+2. **限界値定数を FE にハードコードするな。観測と一緒に `ArenaLimitsView` を同送し、ビルダはそれだけを読め。** 数値発明ガードはフレーバ層（§14）と同型の FE 側拘束である。
+3. **凍結オーバーレイは「アリーナ単位」で掛けよ。シェル全体を凍らせると、同じシェル配下の新アリーナまで操作不能になる。** GD COMING SOON は GD 枝に閉じ、BLACKBOX は外に出す。
+
+### 24.4 検証ログ
+
+| ゲート | 結果 |
+|---|---|
+| `cargo check/test --features blackbox-sim` (+ `secure-vault`) | GREEN |
+| `npx tsc --noEmit`（apps/desktop） | GREEN |
+| `npm run test:boundary` | GREEN（`blackbox_arena_boundary` 8 本含む） |
+| `pytest tests/test_blackbox_sim_contract.py` | GREEN（FE ガード追加） |
+
+### 24.5 未実施・次フェーズへの申告
+
+- **LLM フレーバ層（§14）** — 未着手。
+- **`bxs_load_generation` FE 結線 / 保存キャンペーン一覧** — 再開 UX は follow-up。
+- **`estimate_profile` production 配線** — P6。

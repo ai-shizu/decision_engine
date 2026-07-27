@@ -9,12 +9,17 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::blackbox_sim::action::Execution;
-use crate::blackbox_sim::director::{DirectorError, TurnReport};
+use crate::blackbox_sim::action::{Execution, SimBooks, MAX_ACTION_AMOUNT_MINOR};
+use crate::blackbox_sim::director::{DirectorError, TurnReport, CAMPAIGN_TICKS};
+use crate::blackbox_sim::firm::{
+    OfferKind, OfferStatus, ProjectStatus, MAX_OFFERS, MAX_ORDER_UNITS, MAX_PRICE_MINOR,
+    MAX_PROJECTS, MIN_PRICE_MINOR,
+};
 use crate::blackbox_sim::fsm::SessionState;
-use crate::blackbox_sim::genesis::Difficulty;
+use crate::blackbox_sim::genesis::{Difficulty, MAX_SKUS};
+use crate::blackbox_sim::ledger::AccountCode;
 use crate::blackbox_sim::market::MarketTickView;
-use crate::blackbox_sim::settle::{CashFlowStatement, PeriodClose};
+use crate::blackbox_sim::settle::{CashFlowStatement, PeriodClose, TICKS_PER_QUARTER};
 use crate::blackbox_sim::stimulus::StimulusView;
 
 /// Wire-level difficulty. `blackbox_sim::genesis::Difficulty` deliberately
@@ -51,7 +56,172 @@ pub(crate) struct StartCampaignRequest {
     pub created_date: String,
 }
 
-/// The market + probes the player is looking at this turn.
+/// One SKU line from the player's books (wall W-a: the player's own prices
+/// and inventory — never Genesis reference values).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct SkuLineView {
+    pub sku: u8,
+    pub unit_price_minor: i64,
+    pub inventory_units: u32,
+    pub inventory_value_minor: i64,
+}
+
+/// An active project the player can continue or abandon.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct ProjectLineView {
+    pub id: u32,
+    pub committed_minor: i64,
+    pub continue_count: u32,
+}
+
+/// Wire twin of `OfferKind` so the FE never imports `blackbox_sim` types.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum OfferKindView {
+    Insurance,
+    Expansion,
+}
+
+impl From<OfferKind> for OfferKindView {
+    fn from(kind: OfferKind) -> Self {
+        match kind {
+            OfferKind::Insurance => OfferKindView::Insurance,
+            OfferKind::Expansion => OfferKindView::Expansion,
+        }
+    }
+}
+
+/// An open offer the player can accept or decline.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct OfferLineView {
+    pub id: u32,
+    pub kind: OfferKindView,
+    pub cost_minor: i64,
+}
+
+/// An open position the player can close.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct PositionLineView {
+    pub id: u32,
+    pub instrument: u8,
+    pub notional_minor: i64,
+    pub entry_index_centi: i64,
+}
+
+/// Player-facing books snapshot. Built exclusively from `SimBooks` (the
+/// player's own ledger and firm state) — Genesis truth is unreachable
+/// (wall W-a; same argument as `TurnReport`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct BooksView {
+    pub cash_minor: i64,
+    pub inventory_value_minor: i64,
+    pub senior_debt_minor: i64,
+    pub mezzanine_debt_minor: i64,
+    pub skus: Vec<SkuLineView>,
+    pub projects: Vec<ProjectLineView>,
+    pub offers: Vec<OfferLineView>,
+    pub positions: Vec<PositionLineView>,
+}
+
+impl BooksView {
+    pub(crate) fn from_books(books: &SimBooks) -> Self {
+        let firm = &books.firm;
+        let skus = firm
+            .skus()
+            .map(|(sku, state)| SkuLineView {
+                sku,
+                unit_price_minor: state.unit_price_minor,
+                inventory_units: state.inventory_units,
+                inventory_value_minor: state.inventory_value_minor,
+            })
+            .collect();
+
+        // FirmState keeps projects/offers private; probe fixed-capacity slots
+        // via the public accessors. Unknown/empty slots are skipped — inventing
+        // a zeroed line would fabricate books the player does not hold.
+        let mut projects = Vec::new();
+        for id in 0..u32::try_from(MAX_PROJECTS).unwrap_or(0) {
+            if let Ok(project) = firm.project(id) {
+                if project.status == ProjectStatus::Active {
+                    projects.push(ProjectLineView {
+                        id,
+                        committed_minor: project.committed_minor,
+                        continue_count: project.continue_count,
+                    });
+                }
+            }
+        }
+
+        let mut offers = Vec::new();
+        for id in 0..u32::try_from(MAX_OFFERS).unwrap_or(0) {
+            if let Ok(offer) = firm.offer(id) {
+                if offer.status == OfferStatus::Open {
+                    offers.push(OfferLineView {
+                        id,
+                        kind: offer.kind.into(),
+                        cost_minor: offer.cost_minor,
+                    });
+                }
+            }
+        }
+
+        let positions = firm
+            .open_positions()
+            .map(|(id, position)| PositionLineView {
+                id,
+                instrument: position.instrument,
+                notional_minor: position.notional_minor,
+                entry_index_centi: position.entry_index_centi,
+            })
+            .collect();
+
+        Self {
+            cash_minor: books.balances.balance_minor(AccountCode::Cash),
+            inventory_value_minor: firm.inventory_value_minor(),
+            senior_debt_minor: books.balances.balance_minor(AccountCode::SeniorDebt),
+            mezzanine_debt_minor: books.balances.balance_minor(AccountCode::MezzanineDebt),
+            skus,
+            projects,
+            offers,
+            positions,
+        }
+    }
+}
+
+/// Action bounds co-shipped with every observation so the FE never hardcodes
+/// `MIN_PRICE_MINOR` / `CAMPAIGN_TICKS` etc. (numeric-invention guard).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct ArenaLimitsView {
+    pub min_price_minor: i64,
+    pub max_price_minor: i64,
+    pub max_order_units: u32,
+    pub max_action_amount_minor: i64,
+    pub max_skus: u32,
+    pub campaign_ticks: u32,
+    pub ticks_per_quarter: u32,
+}
+
+impl ArenaLimitsView {
+    pub(crate) const fn current() -> Self {
+        Self {
+            min_price_minor: MIN_PRICE_MINOR,
+            max_price_minor: MAX_PRICE_MINOR,
+            max_order_units: MAX_ORDER_UNITS,
+            max_action_amount_minor: MAX_ACTION_AMOUNT_MINOR,
+            max_skus: MAX_SKUS as u32,
+            campaign_ticks: CAMPAIGN_TICKS,
+            ticks_per_quarter: TICKS_PER_QUARTER,
+        }
+    }
+}
+
+/// The market + probes + books the player is looking at this turn.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct ObservationView {
@@ -59,7 +229,8 @@ pub(crate) struct ObservationView {
     pub turns_completed: u32,
     pub market: MarketTickView,
     pub stimuli: Vec<StimulusView>,
-    pub cash_minor: i64,
+    pub books: BooksView,
+    pub limits: ArenaLimitsView,
     pub state: SessionState,
 }
 

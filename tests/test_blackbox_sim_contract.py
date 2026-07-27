@@ -107,6 +107,10 @@ REQUIRED_SPEC_MARKERS = [
     "## 23. Phase 5 as-built",
     "blackbox_arena",
     "CollectingSink",
+    # Phase 5-B: Coliseum BLACKBOX Arena FE + BooksView/ArenaLimitsView DTO expansion.
+    "## 24. Phase 5-B as-built",
+    "BooksView",
+    "ArenaLimitsView",
 ]
 
 
@@ -571,3 +575,113 @@ def test_estimator_double_gate_has_no_production_caller() -> None:
             f"{filename}: estimator call site(s) at line(s) {early} sit outside "
             f"#[cfg(test)] mod tests (starts at line {mod_start_line})"
         )
+
+
+# ---------------------------------------------------------------------------
+# 8. Phase 5-B frontend guards
+# ---------------------------------------------------------------------------
+
+FRONTEND_SRC = ROOT / "apps" / "desktop" / "src"
+BXS_INVOKE_OWNER = FRONTEND_SRC / "lib" / "blackboxArena.ts"
+BXS_FE_GLOBS = (
+    FRONTEND_SRC / "lib" / "parseBlackboxArena.ts",
+    FRONTEND_SRC / "lib" / "blackboxArena.ts",
+    FRONTEND_SRC / "lib" / "blackboxIntent.ts",
+    FRONTEND_SRC / "lib" / "blackboxArenaReducer.ts",
+    FRONTEND_SRC / "lib" / "blackboxDraftIntent.ts",
+    FRONTEND_SRC / "lib" / "blackboxUiError.ts",
+    FRONTEND_SRC / "components" / "consult" / "coliseum" / "BlackboxArena.tsx",
+    FRONTEND_SRC / "components" / "consult" / "coliseum" / "BlackboxSetupPanel.tsx",
+    FRONTEND_SRC / "components" / "consult" / "coliseum" / "BlackboxMarketRail.tsx",
+    FRONTEND_SRC / "components" / "consult" / "coliseum" / "BlackboxBooksPanel.tsx",
+    FRONTEND_SRC / "components" / "consult" / "coliseum" / "BlackboxStimulusDeck.tsx",
+    FRONTEND_SRC / "components" / "consult" / "coliseum" / "BlackboxCommandConsole.tsx",
+    FRONTEND_SRC / "components" / "consult" / "coliseum" / "BlackboxTurnLog.tsx",
+)
+
+BXS_FE_FORBIDDEN = [
+    r"\bfetch\s*\(",
+    r"\blocalStorage\b",
+    r"\bMath\.random\b",
+    r"\bDate\.now\b",
+    r"\sas any\b",
+    r"dangerouslySetInnerHTML",
+]
+
+# Numeric bounds must come from ArenaLimitsView, never FE literals matching
+# firm::MAX_PRICE_MINOR / action::MAX_ACTION_AMOUNT_MINOR etc.
+BXS_LIMIT_LITERALS = [
+    r"\b10_000_000\b",
+    r"\b10000000\b",
+    r"\b1_000_000_000_000\b",
+    r"\b1000000000000\b",
+]
+
+
+def test_bxs_invoke_owned_only_by_blackbox_arena_ts() -> None:
+    """bxs_* invoke calls may live only in lib/blackboxArena.ts (closed owner)."""
+    assert BXS_INVOKE_OWNER.is_file(), "lib/blackboxArena.ts missing"
+    offenders: list[str] = []
+    for path in FRONTEND_SRC.rglob("*"):
+        if path.suffix not in {".ts", ".tsx"}:
+            continue
+        if path.resolve() == BXS_INVOKE_OWNER.resolve():
+            continue
+        text = path.read_text(encoding="utf-8")
+        if re.search(r'invoke\s*<[^>]*>\s*\(\s*"bxs_', text) or re.search(
+            r'"bxs_(start_campaign|get_view|submit_decision|advance|abort|load_generation)"',
+            text,
+        ):
+            # Type/command name mentions in parsers/docs are fine; only invoke owners matter.
+            if "invoke" in text and "bxs_" in text:
+                if re.search(r"\binvoke\s*<", text) and "bxs_" in text:
+                    offenders.append(path.relative_to(ROOT).as_posix())
+    assert not offenders, f"bxs_ invoke escaped blackboxArena.ts: {offenders}"
+
+
+def test_blackbox_fe_has_no_forbidden_tokens() -> None:
+    missing = [p.as_posix() for p in BXS_FE_GLOBS if not p.is_file()]
+    assert not missing, f"BLACKBOX FE files missing: {missing}"
+    for path in BXS_FE_GLOBS:
+        text = path.read_text(encoding="utf-8")
+        for pattern in BXS_FE_FORBIDDEN:
+            assert re.search(pattern, text) is None, f"{path.name}: forbidden {pattern}"
+
+
+def test_blackbox_fe_has_no_forced_default_builder() -> None:
+    """Director-only timeout default must not be constructible on the FE."""
+    pattern = re.compile(r"forced_default|ForcedDefault|buildForcedDefault")
+    for path in BXS_FE_GLOBS:
+        text = path.read_text(encoding="utf-8")
+        # Strip block and line comments so documentation may name the ban.
+        stripped = re.sub(r"/\*.*?\*/", "", text, flags=re.S)
+        stripped = re.sub(r"//.*?$", "", stripped, flags=re.M)
+        assert pattern.search(stripped) is None, (
+            f"{path.name}: timeout-default intent must not appear in FE code"
+        )
+
+
+def test_blackbox_fe_does_not_hardcode_arena_limits() -> None:
+    """Limits constants are co-shipped on ObservationView — FE must not invent them."""
+    # Boundary tests may mention the published numbers as fixtures; production
+    # FE modules under src/ must not.
+    for path in BXS_FE_GLOBS:
+        if path.name.endswith(".test.ts"):
+            continue
+        text = path.read_text(encoding="utf-8")
+        for pattern in BXS_LIMIT_LITERALS:
+            assert re.search(pattern, text) is None, (
+                f"{path.name}: hardcoded limit literal {pattern}"
+            )
+
+
+def test_observation_view_ships_books_and_limits() -> None:
+    view_text = (ARENA_DIR / "view.rs").read_text(encoding="utf-8")
+    assert "struct BooksView" in view_text
+    assert "struct ArenaLimitsView" in view_text
+    assert "pub books: BooksView" in view_text
+    assert "pub limits: ArenaLimitsView" in view_text
+    assert "cash_minor: i64" not in view_text.split("struct ObservationView")[1].split("}")[0], (
+        "ObservationView must not keep a duplicate cash_minor beside books"
+    )
+    assert 'rename_all = "camelCase"' in view_text

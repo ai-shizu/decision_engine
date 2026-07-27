@@ -37,6 +37,7 @@ const RETRY_SAFE: UiErrorCode[] = [
   "INTERVIEW_FALLBACK_THINKING",
   "INTERVIEW_FALLBACK_MODEL_COLD",
   "INTERVIEW_FALLBACK_TOO_LONG",
+  "BXS_ARENA_REJECTED",
 ];
 
 const VERIFY_FIRST: UiErrorCode[] = [
@@ -59,11 +60,13 @@ const VERIFY_FIRST: UiErrorCode[] = [
   "PROFILER_RUN",
   "GD_ARENA",
   "INTERVIEW_FALLBACK_VAULT_LOCKED",
+  "BXS_ARENA_STATE",
+  "BXS_ARENA_FAULT",
 ];
 
-test("T-01 exact 29 keys", () => {
+test("T-01 exact 32 keys", () => {
   const keys = Object.keys(UI_ERROR_SPECS).sort();
-  assertEqual(keys.length, 29, "key count");
+  assertEqual(keys.length, 32, "key count");
   const expected = [...RETRY_SAFE, ...VERIFY_FIRST].sort();
   assertEqual(JSON.stringify(keys), JSON.stringify(expected), "key set");
 });
