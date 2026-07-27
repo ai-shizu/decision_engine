@@ -16,11 +16,9 @@ mod analytics_repo;
 // Vault v12 record lane. Needs both worlds, so it is gated on both features;
 // the dependency points db -> blackbox_sim and never the other way (wall W-b).
 //
-// `dead_code` is allowed because the production caller is the Tauri command
-// layer, which SPEC §15 schedules for Phase 5. The lane is exercised end to end
-// by this module's own tests today; the allow comes off when the commands land.
+// Phase 5 wires the real production caller: `db::worker`'s `blackbox_flush`/
+// `blackbox_load_campaign` (via `blackbox_arena::handle`'s worker thread).
 #[cfg(all(target_vendor = "apple", feature = "blackbox-sim"))]
-#[allow(dead_code)]
 pub(crate) mod blackbox_repo;
 #[cfg(target_vendor = "apple")]
 mod commitment_repo;

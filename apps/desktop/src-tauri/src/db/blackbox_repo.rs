@@ -27,12 +27,13 @@
 //! second, different version of history overwrite the first — hence IGNORE
 //! rather than REPLACE.
 
-use rusqlite::{params, Transaction};
+use rusqlite::{params, Connection, OptionalExtension, Transaction};
 
-use crate::blackbox_sim::persist::{
-    DecisionBatch, DecisionSink, FlushReceipt, SinkError, BLACKBOX_LOG_SCHEMA_V1,
-};
-use crate::blackbox_sim::telemetry::DecisionEvent;
+use crate::blackbox_sim::director::LoggedDecision;
+use crate::blackbox_sim::persist::{DecisionBatch, FlushReceipt, BLACKBOX_LOG_SCHEMA_V1};
+#[cfg(test)]
+use crate::blackbox_sim::persist::{DecisionSink, SinkError};
+use crate::blackbox_sim::telemetry::{ActionIntent, DecisionEvent};
 
 /// Wall W-c: gap_analysis selects by channel, and simulator behaviour is
 /// behaviour under a controlled instrument, not a life resource allocation.
@@ -218,17 +219,101 @@ pub(crate) fn persist_batch(
     })
 }
 
+/// A campaign row plus the one field it doesn't carry on its own
+/// (`created_date`, needed to rebuild a `GenesisRequest`).
+#[derive(Debug, Clone)]
+pub(crate) struct LoadedCampaign {
+    pub campaign: CampaignRow,
+    pub created_date: String,
+}
+
+/// Resume-path loader (Phase 5, SPEC §15's `bxs_load_generation`).
+///
+/// Per this module's own header and `persist.rs`'s module doc: this is
+/// deliberately a free function the *caller* runs, never a method on
+/// `DecisionSink` — the simulator itself has no name for this module and no
+/// way to call it. Read-only; never touches `blackbox_decisions`/
+/// `blackbox_stimuli` beyond a plain `SELECT`.
+///
+/// Reconstructs `LoggedDecision`s straight from `action_json` — the same
+/// representation `persist_batch` wrote them in — ordered by `seq` so the
+/// replay driver in `blackbox_sim::director::replay_session` sees decisions
+/// in the order they actually happened.
+pub(crate) fn load_campaign_and_decisions(
+    connection: &Connection,
+    fingerprint: [u8; 32],
+) -> Result<Option<(LoadedCampaign, Vec<LoggedDecision>)>, BlackboxRepoError> {
+    let campaign: Option<(u32, u8, u32, String)> = connection
+        .query_row(
+            "SELECT scenario_id, difficulty, campaign_index, created_date \
+             FROM blackbox_campaigns WHERE campaign_fingerprint = ?1",
+            params![&fingerprint[..]],
+            |row| {
+                Ok((
+                    row.get::<_, u32>(0)?,
+                    row.get::<_, u8>(1)?,
+                    row.get::<_, u32>(2)?,
+                    row.get::<_, String>(3)?,
+                ))
+            },
+        )
+        .optional()
+        .map_err(|_| BlackboxRepoError::Storage)?;
+    let Some((scenario_id, difficulty, campaign_index, created_date)) = campaign else {
+        return Ok(None);
+    };
+    let loaded = LoadedCampaign {
+        campaign: CampaignRow {
+            fingerprint,
+            scenario_id,
+            difficulty,
+            campaign_index,
+        },
+        created_date,
+    };
+
+    let mut statement = connection
+        .prepare(
+            "SELECT tick, action_json FROM blackbox_decisions \
+             WHERE campaign_fingerprint = ?1 ORDER BY seq ASC",
+        )
+        .map_err(|_| BlackboxRepoError::Storage)?;
+    let rows = statement
+        .query_map(params![&fingerprint[..]], |row| {
+            Ok((row.get::<_, u32>(0)?, row.get::<_, String>(1)?))
+        })
+        .map_err(|_| BlackboxRepoError::Storage)?;
+    let mut decisions = Vec::new();
+    for row in rows {
+        let (tick, action_json) = row.map_err(|_| BlackboxRepoError::Storage)?;
+        let intent: ActionIntent =
+            serde_json::from_str(&action_json).map_err(|_| BlackboxRepoError::Serialization)?;
+        decisions.push(LoggedDecision { tick, intent });
+    }
+    Ok(Some((loaded, decisions)))
+}
+
 /// Binds a live transaction to the simulator's write-only port.
 ///
 /// Short-lived by design: it borrows the transaction, so it cannot outlive the
 /// unit of work and cannot be stashed somewhere that would let the simulator
 /// keep a handle on the database.
+///
+/// `#[cfg(test)]` only: it requires `Session` and the `Transaction` on the
+/// same call stack, which is true in this file's own integration tests but
+/// never true in production — there, `Session` lives on the sim worker
+/// thread and the transaction lives on the vault worker thread. The
+/// production path (Phase 5, `blackbox_arena::handle`) calls
+/// `upsert_campaign`/`persist_batch` directly from inside `db::worker`'s own
+/// `write_repository` transaction instead of going through this adapter.
+#[cfg(test)]
 pub(crate) struct VaultDecisionSink<'a, 'conn> {
     transaction: &'a Transaction<'conn>,
     campaign: CampaignRow,
     now: i64,
 }
 
+#[cfg(test)]
 impl<'a, 'conn> VaultDecisionSink<'a, 'conn> {
     pub(crate) fn new(
         transaction: &'a Transaction<'conn>,
@@ -243,6 +328,7 @@ impl<'a, 'conn> VaultDecisionSink<'a, 'conn> {
     }
 }
 
+#[cfg(test)]
 impl DecisionSink for VaultDecisionSink<'_, '_> {
     fn persist(&mut self, batch: &DecisionBatch<'_>) -> Result<FlushReceipt, SinkError> {
         match persist_batch(self.transaction, &self.campaign, batch, self.now) {

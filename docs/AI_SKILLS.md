@@ -2101,7 +2101,7 @@ latest commit **後**にだけ `_prune_retrieval_manifests` を実行する。
 
 — 初代リードアーキテクト Fable（2026-07-27 移譲）
 
-## 20. Target Golf — THE BLACKBOX SIMULATOR (`docs/SPEC_BLACKBOX_SIMULATOR.md`。Phase 0〜4 完遂 / Phase 5(IPC+FE)・Phase 6(profile bridge) 未着手)
+## 20. Target Golf — THE BLACKBOX SIMULATOR (`docs/SPEC_BLACKBOX_SIMULATOR.md`。Phase 0〜5-A 完遂 / Phase 5-B(Coliseum FE+フレーバ)・Phase 6(profile bridge) 未着手)
 
 本節は Target Golf の設計規律と as-built の両方の要約を持つ。**正本は `docs/SPEC_BLACKBOX_SIMULATOR.md`**（§0 裁定台帳・§16 不変条件/罠台帳 `BXS-I-nn`/`BXS-W-nn`・§18〜22 各フェーズ as-built）。オフライン金融シミュレータでありながら、真の目的はプレイヤーの意思決定から損失回避・処分効果・アンカリング・過信・エスカレーション・プレッシャー下劣化の 6 バイアスを決定論的に抽出する計器である（Echo と並ぶ第二の「決定論的観測器」）。既定ビルド非包含（feature `blackbox-sim`）。
 
@@ -2112,7 +2112,8 @@ latest commit **後**にだけ `_prune_retrieval_manifests` を実行する。
 | P2 | 完遂 | FirmState・決算ループ（CF 整合）・snapshot/replay（SPEC §20） |
 | P3 | 完遂 | Director・刺激プランティング・vault v12 永続化（SPEC §21） |
 | P4 | 完遂 | 推定器 6 レーン + PHANTOM-BOT 校正 suite（SPEC §22） |
-| P5 | 未着手 | IPC + Coliseum アリーナ FE + フレーバ層 |
+| P5-A | 完遂（backend-first） | IPC command 層（`blackbox_arena/`）+ vault 永続化配線（SPEC §23） |
+| P5-B | 未着手 | Coliseum アリーナ FE + フレーバ層（follow-up 裁定待ち） |
 | P6 | 未着手 | profile bridge（二重ゲート: 校正 GREEN ∧ 指揮官裁定） |
 
 Phase 4（校正 suite 実装）で踏んだ、他の決定論計測器にも一般化するハマりどころ（詳細は SPEC §16 の BXS-W-19〜21）:
@@ -2121,3 +2122,8 @@ Phase 4（校正 suite 実装）で踏んだ、他の決定論計測器にも一
 2. **推定器の「意図的に外させる」合成入力は、対象の業務ルールに拒否されないことを構成の時点で保証せよ（BXS-W-20）。** 値の生成後に `.max(0)` 等でクランプすると、そのクランプが原因で action compiler が入力自体を拒否し（例: 区間の下限が負）、観測が「外れた」ではなく「存在しなかった」ことになる。回収率が宣言値の半分以下まで静かに劣化した実例（宣言 40% → 回収 17.6%）。
 3. **ある推定レーンの合成逸脱の大きさは、それを読む別レーンの比率が実際に割る分母と同じ量に比例させよ（BXS-W-21）。** 分母と無関係な大きさ（固定定数や別の変数由来のスケール）を使うと、対象レーンの比率が分母の小さいサンプルで爆発し、少数の外れ値が近隣レーンの平均を丸ごと押し流す。符号をどれだけ丁寧に乱数化してもこれは偏りの問題ではなく分散の問題なので直らない — 直すのは「大きさ」の作り方であって「符号」の作り方ではない。
 4. **`CalibrationCertificate` のような型的封印は、校正が全軸 GREEN になっても指揮官裁定なしに緩めるな。** 「動く」ことと「裁定された」ことは別のゲートである（R-6 / BXS-I-24）。テストで封印そのものを直接検証せよ（「GREEN の直後でも証明書が存在しないこと」を毎回確認する）。
+
+Phase 5-A（IPC command 層・vault 永続化配線）で踏んだ、他のワーカースレッド間連携にも一般化するハマりどころ（詳細は SPEC §23.3）:
+
+5. **借用トレイト（`&Transaction` 等）でスレッド境界を越えようとするな。境界のこちら側で owned データへ複製し、あちら側で初めて借用を作る「owned-clone リレー」を対称に設計せよ。** `DecisionSink` は「送出専用・1 メソッドのみ」という**形状**で壁を担保する型だが、この形状のままシムワーカースレッドから vault ワーカースレッドへ `&Transaction` を持ち越すことはできない（ライフタイムはスレッドを跨げない）。正しい設計は「シムワーカー側で `DecisionBatch` を owned `Vec` に複製 → 別スレッドへブロッキング送信 → あちら側で初めて `Transaction` を開いて書く」という 3 段リレーであり、これは「ack が一致するまでリング未消去」という送出側の契約をスレッド境界を挟んでも保つ。
+6. **0-index の tick から「境界を跨いだ回数」を逆算するときは、最大値ではなく件数で数えよ。** `market.rs` の tick は 0-index（第 1 区間は `0..N-1`）であるため、「区間が何回閉じたか」を `max_tick / N` で計算すると常に 1 だけ少なく出る（`N-1` 個目の tick で区間が閉じても `(N-1)/N == 0`）。1 tick に 1 件が対応する record の**件数**で割れば `N/N == 1` と正しく出る。エラーは出ず、正当な「直後の再開要求」だけが `NotFound` 系に落ちる — 自作の単体テストを書く過程でしか捕まらない典型例（実測: `blackbox_arena::handle::load_generation` の世代可用性判定）。

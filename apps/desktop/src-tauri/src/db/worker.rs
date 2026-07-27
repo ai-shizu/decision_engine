@@ -30,6 +30,17 @@ use crate::knowledge::edinet_client::EdinetDocumentMeta;
 #[cfg(feature = "egress-live")]
 use crate::knowledge::edinet_discovery::{CoverageRecord, DayCommit, ScanCursor};
 
+#[cfg(feature = "blackbox-sim")]
+use crate::blackbox_sim::director::LoggedDecision;
+#[cfg(feature = "blackbox-sim")]
+use crate::blackbox_sim::persist::FlushReceipt;
+#[cfg(feature = "blackbox-sim")]
+use crate::blackbox_sim::stimulus::PlantedStimulus;
+#[cfg(feature = "blackbox-sim")]
+use crate::blackbox_sim::telemetry::DecisionEvent;
+#[cfg(feature = "blackbox-sim")]
+use super::blackbox_repo::{self, CampaignRow, LoadedCampaign};
+
 use super::{
     analytics_repo::{self, GapAnalysisRow, TensorProfileRow},
     commitment_repo::{self, CommitmentRow},
@@ -256,6 +267,10 @@ enum VaultReply {
     EdinetSaveCursor(Result<(), VaultErrorCode>),
     GapAnalysisInsert(Result<(), VaultErrorCode>),
     GapAnalysisLatest(Result<Option<GapAnalysisRow>, VaultErrorCode>),
+    #[cfg(feature = "blackbox-sim")]
+    BlackboxFlush(Result<FlushReceipt, VaultErrorCode>),
+    #[cfg(feature = "blackbox-sim")]
+    BlackboxLoadCampaign(Result<Option<(LoadedCampaign, Vec<LoggedDecision>)>, VaultErrorCode>),
     TensorProfileInsert(Result<(), VaultErrorCode>),
     TensorProfileLatest(Result<Option<TensorProfileRow>, VaultErrorCode>),
     PulseRunInsert(Result<(), VaultErrorCode>),
@@ -394,6 +409,22 @@ enum VaultRequest {
         reply: SyncSender<VaultReply>,
     },
     GapAnalysisLatest {
+        control: RequestControl,
+        reply: SyncSender<VaultReply>,
+    },
+    #[cfg(feature = "blackbox-sim")]
+    BlackboxFlush {
+        campaign: CampaignRow,
+        created_date: String,
+        events: Vec<DecisionEvent>,
+        stimuli: Vec<PlantedStimulus>,
+        now: i64,
+        control: RequestControl,
+        reply: SyncSender<VaultReply>,
+    },
+    #[cfg(feature = "blackbox-sim")]
+    BlackboxLoadCampaign {
+        fingerprint: [u8; 32],
         control: RequestControl,
         reply: SyncSender<VaultReply>,
     },
@@ -547,7 +578,11 @@ impl VaultHandle {
         handle
     }
 
-    #[cfg(all(test, feature = "egress-live", target_vendor = "apple"))]
+    #[cfg(all(
+        test,
+        any(feature = "egress-live", feature = "blackbox-sim"),
+        target_vendor = "apple"
+    ))]
     pub(crate) fn spawn_test_unlocked() -> Result<Self, VaultErrorCode> {
         let mut connection =
             Connection::open_in_memory().map_err(|_| VaultErrorCode::StorageFailed)?;
@@ -1054,6 +1089,61 @@ impl VaultHandle {
         };
         match self.submit(request, receiver, cancelled, SHORT_OPERATION_TIMEOUT)? {
             VaultReply::GapAnalysisLatest(result) => result,
+            _ => Err(VaultErrorCode::Unavailable),
+        }
+    }
+
+    /// One IMMEDIATE transaction: `upsert_campaign` then `persist_batch`
+    /// (`blackbox_arena::CollectingSink` calls this synchronously from the
+    /// sim worker thread; see that module's header for why persistence must
+    /// round-trip rather than fire-and-forget).
+    #[cfg(feature = "blackbox-sim")]
+    pub(crate) fn blackbox_flush(
+        &self,
+        campaign: CampaignRow,
+        created_date: String,
+        events: Vec<DecisionEvent>,
+        stimuli: Vec<PlantedStimulus>,
+        now: i64,
+    ) -> Result<FlushReceipt, VaultErrorCode> {
+        let (reply_sender, receiver) = mpsc::sync_channel(1);
+        let cancelled = Arc::new(AtomicBool::new(false));
+        let request = VaultRequest::BlackboxFlush {
+            campaign,
+            created_date,
+            events,
+            stimuli,
+            now,
+            control: RequestControl {
+                deadline: Instant::now() + SHORT_OPERATION_TIMEOUT,
+                cancelled: Arc::clone(&cancelled),
+            },
+            reply: reply_sender,
+        };
+        match self.submit(request, receiver, cancelled, SHORT_OPERATION_TIMEOUT)? {
+            VaultReply::BlackboxFlush(result) => result,
+            _ => Err(VaultErrorCode::Unavailable),
+        }
+    }
+
+    /// Read path for `bxs_load_generation`'s resume flow.
+    #[cfg(feature = "blackbox-sim")]
+    pub(crate) fn blackbox_load_campaign(
+        &self,
+        fingerprint: [u8; 32],
+    ) -> Result<Option<(LoadedCampaign, Vec<LoggedDecision>)>, VaultErrorCode> {
+        let (reply_sender, receiver) = mpsc::sync_channel(1);
+        let cancelled = Arc::new(AtomicBool::new(false));
+        let request = VaultRequest::BlackboxLoadCampaign {
+            fingerprint,
+            control: RequestControl {
+                deadline: Instant::now() + SHORT_OPERATION_TIMEOUT,
+                cancelled: Arc::clone(&cancelled),
+            },
+            reply: reply_sender,
+        };
+        match self.submit(request, receiver, cancelled, SHORT_OPERATION_TIMEOUT)? {
+            VaultReply::BlackboxLoadCampaign(result) => result,
             _ => Err(VaultErrorCode::Unavailable),
         }
     }
@@ -1754,6 +1844,36 @@ impl VaultWorker {
                     };
                     let _ = reply.send(VaultReply::GapAnalysisLatest(result));
                 }
+                #[cfg(feature = "blackbox-sim")]
+                VaultRequest::BlackboxFlush {
+                    campaign,
+                    created_date,
+                    events,
+                    stimuli,
+                    now,
+                    control,
+                    reply,
+                } => {
+                    let result = if request_expired(&control) {
+                        Err(VaultErrorCode::Timeout)
+                    } else {
+                        self.blackbox_flush_impl(campaign, created_date, events, stimuli, now)
+                    };
+                    let _ = reply.send(VaultReply::BlackboxFlush(result));
+                }
+                #[cfg(feature = "blackbox-sim")]
+                VaultRequest::BlackboxLoadCampaign {
+                    fingerprint,
+                    control,
+                    reply,
+                } => {
+                    let result = if request_expired(&control) {
+                        Err(VaultErrorCode::Timeout)
+                    } else {
+                        self.blackbox_load_campaign_impl(fingerprint)
+                    };
+                    let _ = reply.send(VaultReply::BlackboxLoadCampaign(result));
+                }
                 VaultRequest::TensorProfileInsert {
                     row,
                     control,
@@ -2450,6 +2570,44 @@ impl VaultWorker {
         self.resolve_repository(outcome)
     }
 
+    #[cfg(feature = "blackbox-sim")]
+    fn blackbox_flush_impl(
+        &mut self,
+        campaign: CampaignRow,
+        created_date: String,
+        events: Vec<DecisionEvent>,
+        stimuli: Vec<PlantedStimulus>,
+        now: i64,
+    ) -> Result<FlushReceipt, VaultErrorCode> {
+        gate(snapshot_status(&self.status))?;
+        let outcome = self.write_repository(|transaction| {
+            blackbox_repo::upsert_campaign(transaction, &campaign, &created_date, now)
+                .map_err(map_blackbox_repo_error)?;
+            let batch = crate::blackbox_sim::persist::DecisionBatch {
+                schema: crate::blackbox_sim::persist::BLACKBOX_LOG_SCHEMA_V1,
+                campaign_fingerprint: campaign.fingerprint,
+                events: &events,
+                stimuli: &stimuli,
+            };
+            blackbox_repo::persist_batch(transaction, &campaign, &batch, now)
+                .map_err(map_blackbox_repo_error)
+        });
+        self.resolve_repository(outcome)
+    }
+
+    #[cfg(feature = "blackbox-sim")]
+    fn blackbox_load_campaign_impl(
+        &mut self,
+        fingerprint: [u8; 32],
+    ) -> Result<Option<(LoadedCampaign, Vec<LoggedDecision>)>, VaultErrorCode> {
+        gate(snapshot_status(&self.status))?;
+        let outcome = self.read_repository(|connection| {
+            blackbox_repo::load_campaign_and_decisions(connection, fingerprint)
+                .map_err(map_blackbox_repo_error)
+        });
+        self.resolve_repository(outcome)
+    }
+
     fn insert_tensor_profile(&mut self, row: TensorProfileRow) -> Result<(), VaultErrorCode> {
         gate(snapshot_status(&self.status))?;
         if row.payload_json.len() > MAX_TEXT_BYTES * 2 {
@@ -2864,6 +3022,23 @@ fn validate_edinet_date(date: &str) -> Result<(), VaultErrorCode> {
 
 fn clamp_limit(limit: Option<u32>) -> u32 {
     limit.unwrap_or(DEFAULT_LIST_LIMIT).clamp(1, MAX_LIST_LIMIT)
+}
+
+/// `BlackboxRepoError` has no `DataProtection` variant of its own — the
+/// underlying `rusqlite::Error` is already collapsed to `Storage` inside
+/// `blackbox_repo.rs` before it reaches here, so a genuine iOS Data-Protection
+/// seal on this particular write path surfaces as an ordinary `StorageFailed`
+/// rather than triggering `resolve_repository`'s self-lock. Pre-existing
+/// characteristic of the Phase 3 write path, not a Phase 5 regression; a
+/// future pass could thread `is_data_protection_error` through
+/// `blackbox_repo.rs` if that distinction turns out to matter for this lane.
+#[cfg(feature = "blackbox-sim")]
+fn map_blackbox_repo_error(error: blackbox_repo::BlackboxRepoError) -> RepositoryError {
+    match error {
+        blackbox_repo::BlackboxRepoError::Storage
+        | blackbox_repo::BlackboxRepoError::Serialization => RepositoryError::StorageFailed,
+        blackbox_repo::BlackboxRepoError::BindingBroken { .. } => RepositoryError::Conflict,
+    }
 }
 
 fn map_repository_error(error: RepositoryError) -> VaultErrorCode {

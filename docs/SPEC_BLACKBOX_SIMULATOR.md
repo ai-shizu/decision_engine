@@ -333,7 +333,8 @@ Director が `DOM_STIMULI` ストリームで**自然なゲームイベントと
 | **P2（完）** | **FirmState** + 決算ループ（CF 整合）+ snapshot/replay + Director 前段 | replay digest 恒等 property・CF 整合・世代 pointer 結合 — 全て GREEN（§20.3） |
 | P3 | Director + 刺激 + vault v12 永続化 | §16.3 pointer 結合・append-only 契約 |
 | **P4（完）** | 推定器 6 レーン + PHANTOM-BOT 校正 suite | 既知解回収率下限 GREEN — 全 6 軸実測（§22.3） |
-| P5 | IPC + Coliseum アリーナ FE + フレーバ層 | FE parser 鏡像・tests-runtime Harness・数値発明ガード |
+| **P5-A（完・backend-first）** | IPC command 層 + vault 永続化配線（FE・フレーバ層は裁定によりこの回は非射程） | `cargo test --features blackbox-sim` 全 GREEN・`pytest tests/test_blackbox_sim_contract.py` 全 GREEN（§23.5） |
+| P5-B（未着手） | Coliseum アリーナ FE + フレーバ層（§14） | FE parser 鏡像・tests-runtime Harness・数値発明ガード |
 | P6 | profile bridge + 憲法 as-built 追記・§0 表更新 | 二重ゲート（校正 GREEN + 裁定）確認後のみ |
 
 ## 18. Phase 0 as-built（2026-07-27）
@@ -507,3 +508,50 @@ Phase 4 着工にあたり指揮官から 2 件の裁定を得た。§0 の裁�
 - **Tauri command 層・FE・フレーバ層は未着手**（P5 の射程）。校正 suite は `#[cfg(test)]` のみに存在し、production からは推定器そのものが呼ばれていない — `Session::refusals()` / `events()` / `pricing_trials()` は現状 `#[allow(dead_code)]`（P5 で `estimate_profile` への実配線を行うまでの一時措置）。
 - **6D 射影の重み定数は依然未凍結**（Phase 6 の射程、§11 二重ゲートの片方のみ通過した状態）。
 - **スナップショットからの復元は依然未実装**（P2 からの持ち越し）。
+
+**訂正（P5 着工時）:** 上記 2 点目の「P5 で `estimate_profile` への実配線を行うまでの一時措置」という見立ては、P5 着工時の指揮官裁定で更新された。P5 は明示的に **backend-first**（IPC command 層 + 永続化配線のみ）に絞られ、`estimate_profile` の production 配線と `Session` 推定器アクセサの解放は **P6 に据え置かれた**（§11 の二重ゲートは校正 GREEN と裁定の両方が要る一方、P5 完了時点ではまだ裁定を得ていない）。詳細は §23 as-built を参照。
+
+## 23. Phase 5 as-built（2026-07-27・backend slice のみ）
+
+### 23.1 裁定記録（2026-07-27・指揮官、射程確認）
+
+Phase 4 完遂の正式承認・コミット指示（`feat(blackbox_sim): complete Phase 4 ...`）に続き、指揮官から Phase 5 着工許可と射程確認を得た。§0 の裁定台帳と同じ扱いとしてここに記録する。
+
+- **射程は backend-first に確定:** SPEC §15 の 6 Tauri command + `VaultDecisionSink` の production 配線のみ。`apps/desktop/src/`（FE）は本フェーズでは無改造 — Coliseum BLACKBOX アリーナ UI は follow-up 裁定の射程。
+- **LLM フレーバ層（§14）は明示的に非射程（延期ではなく今回の対象外）:** `FlavorRequest`/`flavor_guard` は本フェーズで一切実装しない。シミュレータは固定テンプレート文言のみで完全にプレイ可能な状態を保つ。
+- **`bias::estimate_profile` の production 配線は明示的に非射程（延期ではなく別フェーズの管轄）:** §11 は「校正 GREEN ∧裁定」の二重ゲートを P6 に割り当てている。本フェーズは決定・刺激データの永続化配線（vault への書き込み経路）を対象とし、推定器ブリッジそのものには一切触れない。`Session::events()` / `refusals()` / `pricing_trials()` は P4 と同じく `#[allow(dead_code)]` のまま — 校正 suite（`#[cfg(test)]`）以外に呼び出し元を作らない。
+
+### 23.2 射程と実装
+
+- **新モジュール `blackbox_arena/`（`mod.rs` / `view.rs` / `handle.rs` / `commands.rs`）:** `blackbox_sim` と `db` の**両方**を import してよい 1 つ目の新規ファイル群（`db/blackbox_repo.rs` に続く 2 例目。fixture-blindness の `calibration.rs` と同じ「両側を跨いでよい 1 箇所」パターン）。`blackbox_sim` 自体は本フェーズで新規 import ゼロ・BXS-I-11 のゼロ import 走査は無改造のまま GREEN。`lib.rs` に `#[cfg(feature = "blackbox-sim")] mod blackbox_arena;` を追加。
+- **`BlackboxSimHandle`（`handle.rs`）— 専用ワーカースレッド（SPEC §13 準拠、`db::worker::VaultHandle` と同型）:** `HashMap<String, Session>`（`campaign_id` = fingerprint の hex エンコード、`hex::encode`/`decode` は既存依存を再利用・新規依存ゼロ）を単一スレッド上で排他所有する。`SimRequest::{Start, GetView, SubmitDecision, Advance, Abort, LoadGeneration}` は `SyncSender<SimReply>` を伴うメッセージパッシング（`VaultRequest`/`VaultReply` と同一の idiom）。`secure-vault`/Apple が無いビルドでも `BlackboxSimHandle::spawn()` は無条件に構築可能（「バックエンド無しでもプレイ可能」が固い要求のため）— vault 能力は `attach_vault` で後付けし、`Arc<Mutex<Option<VaultHandle>>>` として保持する。
+- **`view.rs` — FE 向け DTO 群:** `ArenaDifficulty`（`blackbox_sim::genesis::Difficulty` が `Serialize` のみ持つため、`Deserialize` 可能な閉じた双子として新設。`blackbox_sim` 自体には新規 derive を足さない）、`StartCampaignRequest`（`#[serde(deny_unknown_fields, rename_all = "camelCase")]`）、`ObservationView` / `DecisionOutcomeView` / `PeriodCloseView` / `AdvanceView`（すべて BXS-I-20 の最小表示集合規律を継承 — 封緘パラメータを一切含まない）、`SimUiErrorCode`（境界を跨ぐ唯一の閉じたエラー型。詳細な `DirectorError`/`SinkError`/`VaultErrorCode` は `eprintln!` でサーバ側に残してから畳む — 2026-07-24 のコンテキスト予算教訓と同じ「生エラーを握り潰すな」規律）。
+- **`commands.rs` — 6 個の `#[tauri::command]`:** `bxs_start_campaign` / `bxs_get_view` / `bxs_submit_decision` / `bxs_advance` / `bxs_abort` / `bxs_load_generation`。全て `async fn` + `State<'_, BlackboxSimHandle>` + `spawn_blocking`（`analytics::commands` と同型）。`BlackboxSimHandle` が vault 能力を内部に持つため、command 側は `State<'_, VaultHandle>` を別途要求しない（`secure-vault` の有無でシグネチャが割れるのを避ける設計）。
+- **永続化の配線先の変更（計画からの是正）:** 当初計画は `VaultDecisionSink`（`&Transaction` を borrow する既存の型）をそのまま production から呼ぶ想定だったが、`Session` はシムワーカースレッド、`Transaction` は vault ワーカースレッドに存在し、両者が同一コールスタックに乗ることは production では起こらない。実装は代わりに **owned-clone リレー**を採用: シムワーカー側で新設の `CollectingSink`（`DecisionSink` 実装、`persist()` 内で `DecisionBatch` を owned `Vec` へ複製し、`VaultHandle::blackbox_flush` を呼んで vault ワーカースレッドへブロッキング送信、そこで初めて `Transaction` を開いて `blackbox_repo::upsert_campaign` → `persist_batch` を実行し、結果を `flush_to` の呼び出し元へ送り返す）でスレッド境界を越える。`VaultDecisionSink` 自体は「`Session` と `Transaction` が同一コールスタックに乗る」場合にのみ有効な型として意味を保つため **`#[cfg(test)]` に限定**し、ドキュメントコメントを production 非経路である旨に更新した（既存の `db::blackbox_repo` テストからは変更なく呼べる）。
+- **`db/worker.rs` の拡張:** `VaultRequest::BlackboxFlush { campaign, created_date, events, stimuli, now, reply }` / `VaultReply::BlackboxFlush(...)` を追加（`gap_analysis_insert` と同一 idiom）。ディスパッチ腕は 1 トランザクション内で `upsert_campaign` → `persist_batch` をコミットする。`VaultHandle::blackbox_flush(&self, ..., now: i64)` は `CollectingSink::persist()` が `SystemTime::now()` から生成した壁時計を運ぶだけで、シミュレーション入力には一切ならない（BXS-I-01 と同じ理由でシムワーカー内部は壁時計を読まない設計を維持）。
+- **再開経路 `bxs_load_generation`:** `db/blackbox_repo.rs` に新設した読み取り専用ヘルパ `load_campaign_and_decisions`（`DecisionSink` へのメソッド追加ではない — `persist.rs` 冒頭のコメントが明示する「読み取りが要るなら sink にメソッドを足すな、別ローダーを書け」を踏襲）が fingerprint からキャンペーン行 + 決定ログ全件を読み出し、`replay_session` で要求された世代境界まで再生する。
+- **`db/mod.rs` から `blackbox_repo` の `#[allow(dead_code)]` を撤去**（本フェーズで実呼び出し元 `blackbox_arena`/`db::worker` を得た）。`Session::events()` / `refusals()` / `pricing_trials()` の 3 アクセサは §23.1 の裁定どおり無改造（`#[allow(dead_code)]` のまま）。
+
+### 23.3 掟（新設・実測で踏んだ）
+
+1. **世代境界の可用性判定は「観測数」で数えよ。「最大 tick 値」で数えるな。** `market.rs::step()` は 0-index の tick を返す（第 1 四半期は tick 0〜12）ため、「四半期が閉じた後の最大 tick / TICKS_PER_QUARTER」は 12/13=0 となり、**閉じたばかりの世代 0 自体が「存在しない」と誤判定される** — off-by-one がエラーを出さずに正当な再開要求を `GenerationNotFound` へ落とす。決定ログの**件数**（1 tick = 1 決定、`ForcedDefault` が欠落を埋めるため常に成立）で割れば、13/13=1 となり正しく判定できる。この実装ミスは `blackbox_arena::handle` の単体テスト（下記 §23.5）を書く過程で実測発見・修正した — production コードを書いた直後の自作テストが「一度も検証されていない仮定」を洗い出した実例。
+2. **借用トレイトでワーカースレッド境界を越えるときは、owned-clone リレーを対称に設計せよ。** `DecisionSink` は意図的に「送出専用・1 メソッドのみ」という**形状**で壁 W-b を担保している（BXS-I-21）。この形状を production の別スレッドまで持ち越そうとして `&Transaction` を跨がせるのは筋が悪い（ライフタイムがスレッドを跨げない）。正しい設計は「境界のこちら側で owned データへ複製し、あちら側で初めて借用を作る」— `CollectingSink` → `VaultHandle::blackbox_flush` → vault ワーカー内の `Transaction` という 3 段リレーは、`flush_to` の「ack が一致するまでリング未消去」という契約（BXS-W-18）をスレッド境界を挟んでも保ったまま満たす。
+3. **「まだ vault に一度もフラッシュされていないキャンペーン」と「要求された世代がまだ存在しない」は別のエラーであり、混同するとデバッグ時間を溶かす。** `start()` はキャンペーン行を vault へ即座に登録しない（best-effort 登録は flush 時のみ、§13 のコメントどおり）。したがって 1 四半期も閉じていないキャンペーンへの `bxs_load_generation` は `CampaignNotFound`（vault に行自体が無い）であり、`GenerationNotFound`（行はあるが要求世代が無い）ではない。テストを書く際にこの 2 つを取り違えると「バグを直したはずなのに別のケースで落ちる」を繰り返す（§23.5 の実測で 2 パターンとも踏んだ）。
+
+### 23.4 検証ログ（実測）
+
+| ゲート | 実測結果 |
+|---|---|
+| `cargo test --features blackbox-sim --lib` | 415 passed / 0 failed（P4 の 412 → +3: `blackbox_arena::handle::tests` の非 vault 系列） |
+| `cargo test --features blackbox-sim,secure-vault --lib` | 534 passed / 0 failed（`blackbox_arena::handle::tests::with_vault` 系列 5 本を含む） |
+| `cargo test --features blackbox-sim,secure-vault,pocket-brain`（lib 全体 + 全 integration crate + doc-test） | 737 passed（lib）+ 全 integration crate（`blackbox_sim_interop` 10 本含む）+ doc-test 8 本、全 GREEN |
+| `cargo check --features blackbox-sim` / `,secure-vault` / `,secure-vault,pocket-brain` / 既定（feature 無し） | 全 GREEN（`blackbox_arena`/`db` 由来の新規 warning ゼロ） |
+| `cargo clippy --all-targets --features blackbox-sim,secure-vault,pocket-brain` | `knowledge/` 系のテストコードに既存の pre-existing lint 債務 280 件（`fact_merge.rs`/`edinet_*.rs` 等、`--all-targets` でのみ露出・本フェーズの変更と無関係。`blackbox_arena`/`db/worker.rs`/`db/blackbox_repo.rs` 由来の error は 0 件と個別確認済み） |
+| `pytest tests/test_blackbox_sim_contract.py` | 17 passed（P4 の 14 → +3: §7 「Phase 5 IPC boundary guards」— dual-import 走査 / 閉じた request 型走査 / 推定器二重ゲート回帰ガード） |
+
+### 23.5 未実施・次フェーズへの申告
+
+- **Coliseum BLACKBOX アリーナ FE・LLM フレーバ層（§14）は完全未着手**（follow-up 裁定の射程、§17 の P5-B）。
+- **`bias::estimate_profile` の production 配線・`blackbox_profile.v1` 書き込みは依然未着手**（§11 二重ゲートの片方＝校正 GREEN のみ通過。裁定は P6 まで得られていない）。`Session` の 3 アクセサは `#[allow(dead_code)]` のまま。
+- **3 環境 bit 一致は依然未達**（P1 からの持ち越し。CI 整備待ち）。
+- **スナップショットからの復元は依然未実装**（P2 からの持ち越し。`bxs_load_generation` は replay 経由の再構築であり、スナップショットのデシリアライズではない）。

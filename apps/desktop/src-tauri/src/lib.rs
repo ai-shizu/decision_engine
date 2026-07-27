@@ -44,6 +44,13 @@ mod coliseum;
 #[doc(hidden)]
 pub mod blackbox_sim;
 
+// Phase 5: Tauri command layer + dedicated sim worker thread wiring the
+// above core to production (docs/SPEC_BLACKBOX_SIMULATOR.md §15). The only
+// module besides `db::blackbox_repo` allowed to import both `blackbox_sim`
+// and `db` (see `blackbox_arena::handle`'s module header).
+#[cfg(feature = "blackbox-sim")]
+mod blackbox_arena;
+
 #[cfg(all(feature = "secure-vault", target_vendor = "apple"))]
 mod analytics;
 
@@ -145,6 +152,13 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .manage(Arc::clone(&engine))
         .manage(NetworkPolicyStore::new());
+
+    // BLACKBOX SIMULATOR sim worker: always constructible (play with no
+    // back-end is a hard requirement), independent of `secure-vault`/Apple.
+    // The vault capability, when the build has one, is attached below inside
+    // `.setup()` once the vault itself exists.
+    #[cfg(feature = "blackbox-sim")]
+    let builder = builder.manage(blackbox_arena::handle::BlackboxSimHandle::spawn());
 
     // M4 pocket-brain: spawn the LLM worker + memory monitor and register them in
     // State. Entirely feature-gated — the default desktop build is byte-identical.
@@ -416,6 +430,18 @@ pub fn run() {
             commands_db::vault_messages_list,
             #[cfg(all(feature = "secure-vault", target_vendor = "apple"))]
             commands_db::vault_events,
+            #[cfg(feature = "blackbox-sim")]
+            blackbox_arena::commands::bxs_start_campaign,
+            #[cfg(feature = "blackbox-sim")]
+            blackbox_arena::commands::bxs_get_view,
+            #[cfg(feature = "blackbox-sim")]
+            blackbox_arena::commands::bxs_submit_decision,
+            #[cfg(feature = "blackbox-sim")]
+            blackbox_arena::commands::bxs_advance,
+            #[cfg(feature = "blackbox-sim")]
+            blackbox_arena::commands::bxs_abort,
+            #[cfg(feature = "blackbox-sim")]
+            blackbox_arena::commands::bxs_load_generation,
         ])
         .setup(move |app| {
             #[cfg(all(feature = "secure-vault", target_vendor = "apple"))]
@@ -442,6 +468,14 @@ pub fn run() {
                 // Tauri State (docs/m3_action_plan.md §0, §8 Lifecycle row).
                 #[cfg(target_os = "ios")]
                 let vault_for_lifecycle = vault.clone();
+                // BLACKBOX SIMULATOR: hand the sim worker a copy of the vault
+                // capability so its settle-time flush can reach storage. Best
+                // effort by construction — `unavailable()` vaults clone and
+                // attach the same as a real one, and every flush already
+                // tolerates a non-`Unlocked` vault via `VaultErrorCode`.
+                #[cfg(feature = "blackbox-sim")]
+                app.state::<blackbox_arena::handle::BlackboxSimHandle>()
+                    .attach_vault(vault.clone());
                 if !app.manage(vault) {
                     return Err(
                         std::io::Error::other("secure vault state registration failed").into(),
