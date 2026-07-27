@@ -1330,6 +1330,7 @@ fn note_download_soft_fail(
     error: &EdinetError,
     only_network_failures: &mut bool,
     only_api_failures: &mut bool,
+    extraction_failed: &mut bool,
 ) {
     match error {
         EdinetError::Gateway(crate::knowledge::net_gateway::GatewayError::Cancelled)
@@ -1342,6 +1343,9 @@ fn note_download_soft_fail(
         | EdinetError::ApiKeyMissing => {
             *only_network_failures = false;
         }
+        // STEP_12_DESIGN.md 決定表 #10-#12: 構造系リジェクト（サイズ上限・ZIP不正・
+        // 非対応形式）はダウンロード段で検知されても extraction 系の失敗であり、
+        // 両側成果ゼロなら fetch=succeeded + extraction=parse_failed に写像する。
         EdinetError::TooLarge
         | EdinetError::InvalidZip
         | EdinetError::UnsupportedArchive
@@ -1349,10 +1353,12 @@ fn note_download_soft_fail(
         | EdinetError::InvalidArgument => {
             *only_network_failures = false;
             *only_api_failures = false;
+            *extraction_failed = true;
         }
         _ => {
             *only_network_failures = false;
             *only_api_failures = false;
+            *extraction_failed = true;
         }
     }
 }
@@ -1523,7 +1529,12 @@ async fn run_edinet_zip_pipeline<T: crate::knowledge::net_gateway::HttpTransport
                 interrupted = true;
             }
             Err(error) => {
-                note_download_soft_fail(&error, &mut only_network_failures, &mut only_api_failures);
+                note_download_soft_fail(
+                    &error,
+                    &mut only_network_failures,
+                    &mut only_api_failures,
+                    &mut extraction_failed,
+                );
             }
         }
     }
@@ -1595,7 +1606,12 @@ async fn run_edinet_zip_pipeline<T: crate::knowledge::net_gateway::HttpTransport
                 interrupted = true;
             }
             Err(error) => {
-                note_download_soft_fail(&error, &mut only_network_failures, &mut only_api_failures);
+                note_download_soft_fail(
+                    &error,
+                    &mut only_network_failures,
+                    &mut only_api_failures,
+                    &mut extraction_failed,
+                );
             }
         }
     }
@@ -3633,16 +3649,18 @@ mod edinet_step1_fallback_contract_tests {
 mod edinet_step12_outer_fallback_tests {
     use super::{
         enrich_company_facts_from_edinet_core, fallback_enrichment_response,
-        identity_mismatch_response, resolve_failure, DiscoveryCoverage, DiscoveryResult,
-        EdinetEnrichmentRequestV3, EdinetWarningCode, ExtractionStatus, FactPersistence,
-        FetchStatus, ResolvedEdinetAcquisition, ServedFrom, Tristate,
+        identity_mismatch_response, persistence_response, resolve_failure, wires_from_cells,
+        DiscoveryCoverage, DiscoveryResult, EdinetEnrichmentRequestV3, EdinetWarningCode,
+        ExtractionStatus, FactPersistence, FetchStatus, ResolvedEdinetAcquisition, ServedFrom,
+        Tristate,
     };
     use crate::db::VaultHandle;
     use crate::knowledge::edinet_client::{
         sanitize_company_facts, CompanyFacts, EdinetFactAcquisition, EdinetFieldAcquisition,
     };
     use crate::knowledge::fact_merge::{
-        protected_cells_from_company_facts, FactCells, SubjectKey,
+        cells_from_edinet_acquisition, merge_fact_cells, protected_cells_from_company_facts,
+        FactCells, SubjectKey,
     };
     use crate::knowledge::NetworkPolicyStore;
     use crate::llm::LlmHandle;
@@ -3883,6 +3901,179 @@ mod edinet_step12_outer_fallback_tests {
             .contains(&EdinetWarningCode::SoftFallback));
     }
 
+    fn resolved_with_full_acquisition() -> ResolvedEdinetAcquisition {
+        let acquisition = EdinetFactAcquisition::new(
+            CompanyFacts {
+                company_name: "トヨタ自動車".into(),
+                edinet_code: "E02144".into(),
+                doc_id: "S100TEST1".into(),
+                business_summary: "EDINET側事業".into(),
+                business_risks: "EDINET側リスク".into(),
+                performance_summary: "EDINET側業績".into(),
+                source: "edinet_zip".into(),
+            },
+            "S100TEST1".into(),
+            "2024-06-25 15:00".into(),
+            "E02144".into(),
+            EdinetFieldAcquisition {
+                business_summary: true,
+                business_risks: true,
+                performance_summary: true,
+            },
+        )
+        .unwrap_or_else(|e| panic!("acq: {e:?}"));
+        ResolvedEdinetAcquisition {
+            acquisition,
+            coverage: DiscoveryCoverage::WindowComplete,
+            result: DiscoveryResult::Selected,
+            served_from: ServedFrom::Live,
+            correction_available: Tristate::No,
+            fetch: FetchStatus::Succeeded,
+            extraction: ExtractionStatus::Both,
+        }
+    }
+
+    /// STEP_12_DESIGN.md 決定表 #10-#16: outer は inner の (fetch, extraction) を
+    /// 無加工転記し、facts は常に base、persistence は not_attempted + SoftFallback。
+    #[test]
+    fn decision_table_rows_transcribe_exact_tuples() {
+        let rows: [(&str, FetchStatus, ExtractionStatus); 4] = [
+            // #10-#13 両側成果ゼロの構造系/parse系
+            (
+                "edinet_parse_failed",
+                FetchStatus::Succeeded,
+                ExtractionStatus::ParseFailed,
+            ),
+            // #14 memory pressure
+            (
+                "edinet_cancelled",
+                FetchStatus::MemoryPressure,
+                ExtractionStatus::Cancelled,
+            ),
+            // #15 acquire 失敗（purge 未完了 / headroom）
+            (
+                "edinet insufficient headroom",
+                FetchStatus::MemoryPressure,
+                ExtractionStatus::None,
+            ),
+            // #16 cancel / background / job deadline
+            (
+                "edinet_cancelled",
+                FetchStatus::Cancelled,
+                ExtractionStatus::Cancelled,
+            ),
+        ];
+        let (facts, base) = named_base_cells();
+        for (message, fetch, extraction) in rows {
+            let mut failure = resolve_failure(message, fetch);
+            failure.extraction = extraction;
+            let subject = SubjectKey::try_from("edinet:E02144".to_string())
+                .unwrap_or_else(|e| panic!("key: {e:?}"));
+            let response = fallback_enrichment_response(&base, 7, subject, &failure, &[]);
+            assert_eq!(response.fetch, fetch, "row {message}");
+            assert_eq!(response.extraction, extraction, "row {message}");
+            assert_eq!(
+                response.fact_persistence,
+                FactPersistence::NotAttempted,
+                "row {message}"
+            );
+            assert!(response.warnings.contains(&EdinetWarningCode::SoftFallback));
+            assert_eq!(response.facts.business_summary, facts.business_summary);
+            assert_eq!(response.facts.business_risks, facts.business_risks);
+            assert_eq!(response.subject_revision, 7);
+        }
+    }
+
+    /// 決定表 #17: Vault 書込失敗 → failed + VaultWriteFailed + merged（旧 revision）。
+    /// 「保存済みと表示しない」= revision 据え置き + failed が実装形。
+    #[test]
+    fn vault_write_failure_returns_merged_with_old_revision() {
+        let (facts, base) = named_base_cells();
+        let resolved = resolved_with_full_acquisition();
+        let merged = merge_fact_cells(&base, &cells_from_edinet_acquisition(&resolved.acquisition));
+        let vault = VaultHandle::unavailable();
+        let subject = SubjectKey::try_from("edinet:E02144".to_string())
+            .unwrap_or_else(|e| panic!("key: {e:?}"));
+        let response = persistence_response(
+            &vault,
+            subject,
+            4,
+            FactPersistence::Failed,
+            &merged,
+            &resolved,
+            wires_from_cells(&merged, 4),
+            &[],
+        );
+        assert_eq!(response.fact_persistence, FactPersistence::Failed);
+        assert!(response.warnings.contains(&EdinetWarningCode::VaultWriteFailed));
+        assert_eq!(response.subject_revision, 4);
+        // merged: EDINET 由来の新規フィールドは画面用に返る
+        assert_eq!(response.facts.performance_summary, "EDINET側業績");
+        // base の保護フィールド（wiki 由来の非空）は EDINET に上書きされない
+        assert_eq!(response.facts.business_summary, facts.business_summary);
+        assert_eq!(response.fetch, FetchStatus::Succeeded);
+        assert_eq!(response.extraction, ExtractionStatus::Both);
+    }
+
+    /// 決定表 #17b: 保存成功後の read-back 失敗 → persisted のまま +
+    /// revision+1 の wires（= CAS で書いた内容そのもの）+ VaultReadFailed。
+    #[test]
+    fn persisted_readback_failure_keeps_persisted_with_bumped_revision() {
+        let (_, base) = named_base_cells();
+        let resolved = resolved_with_full_acquisition();
+        let merged = merge_fact_cells(&base, &cells_from_edinet_acquisition(&resolved.acquisition));
+        let vault = VaultHandle::unavailable();
+        let subject = SubjectKey::try_from("edinet:E02144".to_string())
+            .unwrap_or_else(|e| panic!("key: {e:?}"));
+        let response = persistence_response(
+            &vault,
+            subject,
+            4,
+            FactPersistence::Persisted,
+            &merged,
+            &resolved,
+            wires_from_cells(&merged, 4),
+            &[],
+        );
+        assert_eq!(response.fact_persistence, FactPersistence::Persisted);
+        assert!(response.warnings.contains(&EdinetWarningCode::VaultReadFailed));
+        assert!(!response.warnings.contains(&EdinetWarningCode::VaultWriteFailed));
+        assert_eq!(response.subject_revision, 5);
+        assert!(response
+            .fact_cells
+            .iter()
+            .all(|cell| cell.revision == 5));
+        assert_eq!(response.facts.performance_summary, "EDINET側業績");
+    }
+
+    /// 決定表 #17c: Conflict 応答時の read-back 失敗 → conflict のまま +
+    /// 手元の既知 wires + VaultReadFailed（Conflict は FE 再試行制御に必要）。
+    #[test]
+    fn conflict_readback_failure_returns_known_wires() {
+        let (facts, base) = named_base_cells();
+        let resolved = resolved_with_full_acquisition();
+        let merged = merge_fact_cells(&base, &cells_from_edinet_acquisition(&resolved.acquisition));
+        let vault = VaultHandle::unavailable();
+        let subject = SubjectKey::try_from("edinet:E02144".to_string())
+            .unwrap_or_else(|e| panic!("key: {e:?}"));
+        let response = persistence_response(
+            &vault,
+            subject,
+            4,
+            FactPersistence::Conflict,
+            &merged,
+            &resolved,
+            wires_from_cells(&merged, 4),
+            &[],
+        );
+        assert_eq!(response.fact_persistence, FactPersistence::Conflict);
+        assert!(response.warnings.contains(&EdinetWarningCode::VaultReadFailed));
+        assert_eq!(response.subject_revision, 4);
+        // Conflict + read 不能では EDINET 側の値も base も知り得る限りで返す
+        assert_eq!(response.facts.business_summary, facts.business_summary);
+        assert_eq!(response.fetch, FetchStatus::NotAttempted);
+        assert_eq!(response.extraction, ExtractionStatus::None);
+    }
 }
 
 /// Step 11 — ZIP pipeline orchestration (fake transport; no live network).
@@ -3993,6 +4184,19 @@ mod edinet_step11_zip_pipeline_tests {
                         },
                     ));
                 }
+                if fail == Some("too_large_type1") && kind == "1" {
+                    return Ok((
+                        ResponseMeta {
+                            status: 200,
+                            content_type: Some("application/octet-stream".into()),
+                            content_encoding: Some("identity".into()),
+                            content_length: Some(MAX_EDINET_ARCHIVE_BYTES + 1),
+                        },
+                        ChunkBody {
+                            data: Some(vec![0x50, 0x4b, 0x03, 0x04]),
+                        },
+                    ));
+                }
                 let body = payload.unwrap_or_else(|| vec![0x50, 0x4b, 0x03, 0x04]);
                 Ok((
                     ResponseMeta {
@@ -4016,6 +4220,61 @@ mod edinet_step11_zip_pipeline_tests {
             zw.finish().expect("finish");
         }
         std::fs::read(&path).expect("read")
+    }
+
+    fn zip_with_stored_entry(name: &str, bytes: &[u8]) -> Vec<u8> {
+        use std::io::Write as _;
+        let dir = tempfile::tempdir().expect("temp");
+        let path = dir.path().join("one.zip");
+        {
+            let file = std::fs::File::create(&path).expect("create");
+            let mut zw = zip::ZipWriter::new(file);
+            let opts = zip::write::SimpleFileOptions::default()
+                .compression_method(zip::CompressionMethod::Stored);
+            zw.start_file(name, opts).expect("start");
+            zw.write_all(bytes).expect("write");
+            zw.finish().expect("finish");
+        }
+        std::fs::read(&path).expect("read")
+    }
+
+    /// type=1 fixture: 有効な PublicDoc Inline XBRL（BusinessRisksTextBlock 1件）。
+    fn narrative_zip_bytes() -> Vec<u8> {
+        const IX: &str = "http://www.xbrl.org/2013/inlineXBRL";
+        const JPCRP_COR: &str =
+            "http://disclosure.edinet-fsa.go.jp/taxonomy/jpcrp/2023-12-01/jpcrp_cor";
+        let xml = format!(
+            r#"<?xml version="1.0"?>
+<html xmlns:ix="{IX}" xmlns:jpcrp_cor="{JPCRP_COR}">
+<ix:nonNumeric name="jpcrp_cor:BusinessRisksTextBlock">ZIPリスク本文</ix:nonNumeric>
+</html>"#
+        );
+        zip_with_stored_entry("XBRL/PublicDoc/0001_ixbrl.htm", xml.as_bytes())
+    }
+
+    /// 決定表 #11 fixture: ZIP magic は通るが EOCD が無い不正アーカイブ。
+    fn corrupt_zip_bytes() -> Vec<u8> {
+        let mut bytes = vec![0x50, 0x4b, 0x03, 0x04];
+        bytes.extend(std::iter::repeat(0xA5).take(96));
+        bytes
+    }
+
+    /// 決定表 #12 fixture: UTF-16LE BOM を持たない（UTF-8 の）type=5 CSV entry。
+    fn utf8_csv_zip_bytes() -> Vec<u8> {
+        zip_with_stored_entry(
+            "XBRL_TO_CSV/sample.csv",
+            "要素ID\t項目名\r\n".as_bytes(),
+        )
+    }
+
+    /// 決定表 #13 fixture: encoding は正しいがヘッダー検証に失敗する TSV。
+    fn bad_header_utf16_csv_zip_bytes() -> Vec<u8> {
+        let tsv = "列A\t列B\r\n\"x\"\t\"y\"\r\n";
+        let mut payload = vec![0xFF, 0xFE];
+        for unit in tsv.encode_utf16() {
+            payload.extend_from_slice(&unit.to_le_bytes());
+        }
+        zip_with_stored_entry("XBRL_TO_CSV/sample.csv", &payload)
     }
 
     fn selection(csv_flag: &str) -> YuhoSelection {
@@ -4220,6 +4479,131 @@ mod edinet_step11_zip_pipeline_tests {
         .await;
         assert!(outcome.interrupted);
         assert_eq!(outcome.fetch, FetchStatus::MemoryPressure);
+        drop(guard);
+        drop(handle);
+        worker.join().expect("worker");
+    }
+
+    /// STEP_12_DESIGN.md 決定表 #10-#13 共通の assert:
+    /// 両側成果ゼロ + 構造/parse 失敗 → fetch=succeeded, extraction=parse_failed。
+    async fn assert_row_succeeded_parse_failed(
+        transport: RecordingTransport,
+        csv_flag: &str,
+        row: &str,
+    ) {
+        let temp = tempfile::tempdir().expect("temp");
+        let (handle, worker) = edinet_coordinator_test_handle();
+        let guard = handle
+            .acquire_edinet_job_with_headroom(|| Some(EDINET_MIN_START_HEADROOM_BYTES))
+            .expect("acquire");
+        let selected = selection(csv_flag);
+        let outcome = run_edinet_zip_pipeline(
+            &transport,
+            &selected,
+            "test-key",
+            temp.path(),
+            &guard,
+        )
+        .await;
+        assert!(!outcome.interrupted, "row {row}");
+        assert!(outcome.extraction_failed, "row {row}");
+        assert_eq!(outcome.fetch, FetchStatus::Succeeded, "row {row}");
+        let (acq, _, _) = acquisition_from_selected_with_partials(
+            &selected,
+            outcome.financials.as_ref(),
+            outcome.narratives.as_ref(),
+        )
+        .expect("acq");
+        let extraction =
+            extraction_status_from_zip(&acq, outcome.interrupted, outcome.extraction_failed);
+        assert_eq!(extraction, ExtractionStatus::ParseFailed, "row {row}");
+        let leftover: Vec<_> = std::fs::read_dir(temp.path())
+            .expect("read temp")
+            .filter_map(|e| e.ok())
+            .collect();
+        assert!(leftover.is_empty(), "row {row}: temp must be clean");
+        drop(guard);
+        drop(handle);
+        worker.join().expect("worker");
+    }
+
+    /// 決定表 #10: DL レベルの上限超過（Content-Length > cap、両側成果ゼロ）。
+    #[tokio::test]
+    async fn row10_download_too_large_yields_succeeded_parse_failed() {
+        let _lock = archive_test_lock();
+        let transport = RecordingTransport::with_fail(Vec::new(), "too_large_type1");
+        assert_row_succeeded_parse_failed(transport, "0", "#10").await;
+    }
+
+    /// 決定表 #11: magic は通るが EOCD の無い不正 ZIP（extract 段で InvalidZip）。
+    #[tokio::test]
+    async fn row11_invalid_zip_yields_succeeded_parse_failed() {
+        let _lock = archive_test_lock();
+        let transport = RecordingTransport::new(vec![corrupt_zip_bytes()]);
+        assert_row_succeeded_parse_failed(transport, "0", "#11").await;
+    }
+
+    /// 決定表 #12: type=5 が UTF-16LE でない（UnsupportedEncoding）。
+    #[tokio::test]
+    async fn row12_unsupported_encoding_yields_succeeded_parse_failed() {
+        let _lock = archive_test_lock();
+        let transport =
+            RecordingTransport::new(vec![utf8_csv_zip_bytes(), minimal_zip_bytes()]);
+        assert_row_succeeded_parse_failed(transport, "1", "#12").await;
+    }
+
+    /// 決定表 #13: TSV ヘッダー検証失敗（hard Parse）。
+    #[tokio::test]
+    async fn row13_bad_tsv_header_yields_succeeded_parse_failed() {
+        let _lock = archive_test_lock();
+        let transport =
+            RecordingTransport::new(vec![bad_header_utf16_csv_zip_bytes(), minimal_zip_bytes()]);
+        assert_row_succeeded_parse_failed(transport, "1", "#13").await;
+    }
+
+    /// 決定表 #13b: 片側（type=5）構造失敗でも type=1 の成果は捨てない →
+    /// narratives_only + succeeded。「片方失敗で全部捨て」の禁止を固定する。
+    #[tokio::test]
+    async fn row13b_partial_keeps_narratives_when_type5_rejected() {
+        let _lock = archive_test_lock();
+        // payload[0] は type=5 呼出で消費される（too_large モードにより破棄）。
+        // narrative fixture は2要素目として type=1 に届ける。
+        let transport = RecordingTransport::with_fail(
+            vec![Vec::new(), narrative_zip_bytes()],
+            "too_large",
+        );
+        let temp = tempfile::tempdir().expect("temp");
+        let (handle, worker) = edinet_coordinator_test_handle();
+        let guard = handle
+            .acquire_edinet_job_with_headroom(|| Some(EDINET_MIN_START_HEADROOM_BYTES))
+            .expect("acquire");
+        let selected = selection("1");
+        let outcome = run_edinet_zip_pipeline(
+            &transport,
+            &selected,
+            "test-key",
+            temp.path(),
+            &guard,
+        )
+        .await;
+        assert_eq!(transport.call_types(), vec!["5".to_string(), "1".to_string()]);
+        assert!(!outcome.interrupted);
+        assert_eq!(outcome.fetch, FetchStatus::Succeeded);
+        let narrative_count = outcome
+            .narratives
+            .as_ref()
+            .map(|partial| partial.narratives.len())
+            .unwrap_or(0);
+        assert_eq!(narrative_count, 1, "type=1 narrative must survive");
+        let (acq, _, _) = acquisition_from_selected_with_partials(
+            &selected,
+            outcome.financials.as_ref(),
+            outcome.narratives.as_ref(),
+        )
+        .expect("acq");
+        let extraction =
+            extraction_status_from_zip(&acq, outcome.interrupted, outcome.extraction_failed);
+        assert_eq!(extraction, ExtractionStatus::NarrativesOnly);
         drop(guard);
         drop(handle);
         worker.join().expect("worker");
