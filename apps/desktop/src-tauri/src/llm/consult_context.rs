@@ -47,9 +47,11 @@ pub struct MentorContextSections {
     pub gap_block: String,
     pub oracle_block: String,
     pub tensor_block: String,
+    pub blackbox_block: String,
     pub gap_available: bool,
     pub oracle_available: bool,
     pub tensor_available: bool,
+    pub blackbox_available: bool,
     pub gap_run_id: Option<String>,
     pub oracle_run_id: Option<String>,
     pub tensor_run_id: Option<String>,
@@ -194,6 +196,31 @@ pub fn load_mentor_context(vault: &VaultHandle) -> Result<MentorContextSections,
         }
     }
 
+    #[cfg(feature = "blackbox-sim")]
+    {
+        use crate::db::blackbox_profile_outlet::{
+            format_consult_block, BlackboxOutletSnapshot,
+        };
+        match vault.blackbox_latest_profile().map_err(map_vault)? {
+            Some(loaded) => {
+                let snap = BlackboxOutletSnapshot::from_loaded(loaded);
+                sections.blackbox_block = format_consult_block(&snap);
+                sections.blackbox_available = true;
+            }
+            None => {
+                sections.blackbox_block =
+                    format_consult_block(&BlackboxOutletSnapshot::absent());
+                sections.blackbox_available = false;
+            }
+        }
+    }
+    #[cfg(not(feature = "blackbox-sim"))]
+    {
+        sections.blackbox_block =
+            "（BLACKBOX: 本ビルド非包含 — バイアス計器を推測で埋めない）\n".into();
+        sections.blackbox_available = false;
+    }
+
     Ok(sections)
 }
 
@@ -258,6 +285,8 @@ pub fn build_consult_with_oracle_prompt(
     out.push_str(&mentor.gap_block);
     out.push_str("\n## Tensorプロファイル（決定論・Vault）\n");
     out.push_str(&mentor.tensor_block);
+    out.push_str("\n## BLACKBOXバイアス計器（決定論・Vault・校正前）\n");
+    out.push_str(&mentor.blackbox_block);
     out.push_str("\n## Oracle予測（決定論・Vault）\n");
     out.push_str(&mentor.oracle_block);
     if !rag_block.is_empty() {
@@ -284,6 +313,8 @@ pub fn append_mentor_sections(base_prompt: &str, mentor: &MentorContextSections)
         out.push_str(&mentor.gap_block);
         out.push_str("\n## Tensorプロファイル（決定論・Vault）\n");
         out.push_str(&mentor.tensor_block);
+        out.push_str("\n## BLACKBOXバイアス計器（決定論・Vault・校正前）\n");
+        out.push_str(&mentor.blackbox_block);
         out.push_str("\n## Oracle予測（決定論・Vault）\n");
         out.push_str(&mentor.oracle_block);
         out.push('\n');
@@ -294,6 +325,8 @@ pub fn append_mentor_sections(base_prompt: &str, mentor: &MentorContextSections)
         out.push_str(&mentor.gap_block);
         out.push_str("\n## Tensorプロファイル（決定論・Vault）\n");
         out.push_str(&mentor.tensor_block);
+        out.push_str("\n## BLACKBOXバイアス計器（決定論・Vault・校正前）\n");
+        out.push_str(&mentor.blackbox_block);
         out.push_str("\n## Oracle予測（決定論・Vault）\n");
         out.push_str(&mentor.oracle_block);
     }
@@ -311,15 +344,18 @@ mod tests {
             gap_block: "gap-line\n".into(),
             oracle_block: "oracle-line\n".into(),
             tensor_block: "tensor-line\n".into(),
+            blackbox_block: "blackbox-line\n".into(),
             ..Default::default()
         };
         let p = append_mentor_sections(base, &mentor);
         let g = p.find("主観×客観ギャップ").unwrap();
         let t = p.find("Tensorプロファイル").unwrap();
+        let b = p.find("BLACKBOXバイアス計器").unwrap();
         let u = p.find("ユーザーの質問").unwrap();
-        assert!(g < t && t < u);
+        assert!(g < t && t < b && b < u);
         assert!(p.contains("gap-line"));
         assert!(p.contains("tensor-line"));
+        assert!(p.contains("blackbox-line"));
     }
 
     fn profile(pairs: &[(&str, &str)]) -> BTreeMap<String, String> {

@@ -324,7 +324,12 @@ def test_the_vault_record_lane_is_append_only() -> None:
     """Eighth law / BXS-I-22: a record already written is not the repository's
     to revise. Re-flushing after a crash must be a no-op, which is why every
     write to the two record tables is `INSERT OR IGNORE` and why neither table
-    is ever the target of an UPDATE or a DELETE."""
+    is ever the target of an UPDATE or a DELETE.
+
+    Scope note: the v13 *profile* lane uses `INSERT OR REPLACE` intentionally
+    (snapshot semantics for a derived estimate). This guard scans only the
+    record tables (`blackbox_decisions` / `blackbox_stimuli`); the profile
+    lane is out of scope here."""
     repo = DB_DIR / "blackbox_repo.rs"
     assert repo.exists(), "db/blackbox_repo.rs missing"
     text = repo.read_text(encoding="utf-8")
@@ -424,8 +429,8 @@ def test_vault_v12_stores_no_campaign_seed() -> None:
     database the analysis lane reads. The campaign row keys on the fingerprint,
     which identifies a campaign without being able to reconstruct it."""
     text = (DB_DIR / "migrations.rs").read_text(encoding="utf-8")
-    assert "pub(crate) const LATEST_SCHEMA_VERSION: i64 = 12;" in text, (
-        "vault v12 is not the latest schema version"
+    assert "pub(crate) const LATEST_SCHEMA_VERSION: i64 = 13;" in text, (
+        "the schema head moved without updating this contract"
     )
     block = re.search(r"CREATE TABLE blackbox_campaigns \((.*?)\n\);", text, re.DOTALL)
     assert block is not None, "blackbox_campaigns DDL not found in migrations.rs"
@@ -433,6 +438,33 @@ def test_vault_v12_stores_no_campaign_seed() -> None:
     assert "campaign_fingerprint" in columns, f"fingerprint column missing: {columns}"
     seedy = [column for column in columns if "seed" in column.lower()]
     assert not seedy, f"wall W-a breached at rest — seed persisted: {seedy}"
+
+
+def test_vault_v13_profile_lane_seals_the_certificate_at_rest() -> None:
+    """LAW-19 / R-7 at rest. The `CalibrationCertificate` type seal keeps a
+    calibrated profile un-constructible; the v13 DDL must keep it unstorable
+    too, so a future writer cannot route around the type system by inserting
+    a row that claims calibration. The same DDL must expose no 6D projection
+    column: the projection stays all N/A until calibration data exists, and a
+    `score_*` column would be exactly the place an invented number lands."""
+    text = (DB_DIR / "migrations.rs").read_text(encoding="utf-8")
+    block = re.search(r"CREATE TABLE blackbox_profiles \((.*?)\n\);", text, re.DOTALL)
+    assert block is not None, "blackbox_profiles DDL not found in migrations.rs"
+    body = block.group(1)
+    assert "CHECK (calibration = 'uncalibrated-instrument')" in body, (
+        "the profile lane must pin the uncalibrated marker (LAW-19 / R-7)"
+    )
+    assert "CHECK (schema_version = 'blackbox_profile.v1')" in body, (
+        "the profile lane must pin its schema literal"
+    )
+
+    forbidden = ("score", "projection", "tensor", "6d", "dimension", "certificate")
+    for table in ("blackbox_profiles", "blackbox_profile_lanes", "blackbox_profile_sources"):
+        table_block = re.search(rf"CREATE TABLE {table} \((.*?)\n\);", text, re.DOTALL)
+        assert table_block is not None, f"{table} DDL not found in migrations.rs"
+        columns = re.findall(r"^\s*(\w+)\s+(?:BLOB|TEXT|INTEGER)", table_block.group(1), re.MULTILINE)
+        leaked = [c for c in columns if any(n in c.lower() for n in forbidden)]
+        assert not leaked, f"{table} exposes a 6D/certificate surface (R-7): {leaked}"
 
 
 # ---------------------------------------------------------------------------
@@ -538,14 +570,31 @@ def test_estimator_double_gate_has_no_production_caller() -> None:
     uncallable from outside `blackbox_sim/` at compile time; this guard
     checks the source directly so a visibility relaxation does not silently
     widen the gate, and additionally checks that every in-module call site
-    sits inside blackbox_sim's own `#[cfg(test)] mod tests` block."""
+    sits inside blackbox_sim's own `#[cfg(test)] mod tests` block.
+
+    R-8 carve-out: `blackbox_arena` may expose a command-layer
+    `estimate_profile` method that is shape-gated by
+    `blackbox-profile-write` and must never call `bias::estimate_profile`
+    or the Session accessors directly (it goes through `bridge::estimate_pooled`).
+    """
+    # Arena command surface is the R-8 gate, not a bias::estimate_profile caller.
+    arena_allow = {"blackbox_arena/handle.rs", "blackbox_arena/commands.rs"}
     outside_offenders = []
     for path in sorted(TAURI_SRC.rglob("*.rs")):
         if "blackbox_sim" in path.parts:
             continue
+        rel = path.relative_to(TAURI_SRC).as_posix()
         text = path.read_text(encoding="utf-8")
+        if rel in arena_allow:
+            # Still forbid Session accessor / bias estimator leaks through the gate.
+            if re.search(
+                r"\.events\(\)|\.refusals\(\)|\.pricing_trials\(\)|bias::estimate_profile",
+                text,
+            ):
+                outside_offenders.append(rel)
+            continue
         if ESTIMATOR_CALL_SITE_RE.search(text) or re.search(r"\bestimate_profile\(", text):
-            outside_offenders.append(path.relative_to(TAURI_SRC).as_posix())
+            outside_offenders.append(rel)
     assert not outside_offenders, (
         f"estimator double-gate breached — production caller outside blackbox_sim/: {outside_offenders}"
     )
@@ -685,3 +734,327 @@ def test_observation_view_ships_books_and_limits() -> None:
         "ObservationView must not keep a duplicate cash_minor beside books"
     )
     assert 'rename_all = "camelCase"' in view_text
+
+
+# ---------------------------------------------------------------------------
+# 9. Phase 6-A / R-8 profile-write two-factor gate
+# ---------------------------------------------------------------------------
+
+CARGO_TOML = TAURI_SRC.parent / "Cargo.toml"
+CI_WRITE_GATE = ROOT / ".github" / "workflows" / "blackbox-profile-write-gate.yml"
+PROFILE_WRITE_NOT_READY = "BLACKBOX_PROFILE_WRITE_NOT_READY"
+
+
+def test_blackbox_profile_write_is_not_a_default_feature() -> None:
+    """R-8: blackbox-profile-write must never ride along on default builds."""
+    text = CARGO_TOML.read_text(encoding="utf-8")
+    # Isolate the [features] table.
+    features = re.search(r"\[features\](.*?)(\n\[|\Z)", text, re.S)
+    assert features is not None, "[features] table missing from Cargo.toml"
+    body = features.group(1)
+    assert re.search(
+        r'^blackbox-profile-write\s*=\s*\["blackbox-sim"\]', body, re.M
+    ), "blackbox-profile-write must depend on blackbox-sim"
+    default = re.search(r"^default\s*=\s*\[(.*?)\]", body, re.M | re.S)
+    if default is not None:
+        assert "blackbox-profile-write" not in default.group(1), (
+            "blackbox-profile-write must not be in default features"
+        )
+
+
+def test_insert_profile_call_sites_are_write_gated() -> None:
+    """R-8 shape defence: insert_profile is defined only under the write feature."""
+    repo = (DB_DIR / "blackbox_repo.rs").read_text(encoding="utf-8")
+    assert re.search(
+        r'#\[cfg\(feature = "blackbox-profile-write"\)\]\s*\n'
+        r"pub\(crate\) fn insert_profile",
+        repo,
+    ), 'insert_profile must be #[cfg(feature = "blackbox-profile-write")]'
+    # No production call expression may exist outside a write-gated region.
+    # Doc comments / string mentions are ignored — shape defence is about
+    # callable sites, not prose.
+    call_re = re.compile(r"\binsert_profile\s*\(")
+    for path in sorted(TAURI_SRC.rglob("*.rs")):
+        if path.name == "blackbox_repo.rs":
+            continue
+        text = path.read_text(encoding="utf-8")
+        if not call_re.search(text):
+            continue
+        lines = text.splitlines()
+        for i, line in enumerate(lines):
+            stripped = line.lstrip()
+            if stripped.startswith("//"):
+                continue
+            if not call_re.search(line):
+                continue
+            window = "\n".join(lines[max(0, i - 30) : i + 1])
+            assert 'feature = "blackbox-profile-write"' in window, (
+                f"{path.relative_to(TAURI_SRC).as_posix()}:{i + 1}: "
+                "insert_profile call lacks write-feature cfg in preceding window"
+            )
+
+
+def test_ci_calibration_job_is_required_predecessor_of_write_build() -> None:
+    """R-8 factor B: write-gated CI job must `needs: calibration`."""
+    assert CI_WRITE_GATE.is_file(), f"missing {CI_WRITE_GATE}"
+    text = CI_WRITE_GATE.read_text(encoding="utf-8")
+    assert "blackbox_sim::calibration" in text, "calibration job must run the suite"
+    assert "needs: calibration" in text, "write-gated job must depend on calibration"
+    assert "blackbox-profile-write" in text
+    # C-1: `--lib` pins a single result line; refuse the tail-of-binaries trap.
+    assert "--lib" in text
+    assert 'RESULT_LINES' in text or 'test "$RESULT_LINES" -eq 1' in text
+    # Lower-bound guard against empty-green: the workflow itself encodes >= 14.
+    assert "-ge 14" in text or "PASSED" in text
+
+
+def test_profile_write_not_ready_error_code_is_defined() -> None:
+    """Non-flag builds refuse with a stable wire code (EGRESS_LIVE_NOT_READY twin)."""
+    view = (ARENA_DIR / "view.rs").read_text(encoding="utf-8")
+    assert PROFILE_WRITE_NOT_READY in view, (
+        f"SimUiErrorCode must rename to {PROFILE_WRITE_NOT_READY}"
+    )
+    assert "BlackboxProfileWriteNotReady" in view
+    fe = (FRONTEND_SRC / "lib" / "parseBlackboxArena.ts").read_text(encoding="utf-8")
+    assert PROFILE_WRITE_NOT_READY in fe
+
+
+# ---------------------------------------------------------------------------
+# 10. Phase 6-A / R-9 outlets + BXS-I-26 non-recirculation
+# ---------------------------------------------------------------------------
+
+BXS_I26_MARKERS = (
+    "LoadedProfile",
+    "BlackboxOutletSnapshot",
+    "get_latest_profile",
+    "format_consult_block",
+    "bxs_latest_profile",
+    "blackbox_profile_outlet",
+)
+
+# Legal R-9 outlets (+ vault read plumbing). Everything else is deny.
+BXS_I26_ALLOWLIST = {
+    "db/blackbox_repo.rs",
+    "db/blackbox_profile_outlet.rs",
+    "db/worker.rs",
+    "db/mod.rs",
+    "db/migrations.rs",
+    "llm/consult_context.rs",
+    "llm/commands_sim.rs",
+    "blackbox_arena/commands.rs",
+    "lib.rs",
+}
+
+# G-1: mentor-band carriers. Touching these without review = contract RED.
+# Allowlist is the four legal consumers of the mentor bundle (consult /
+# debrief / rag-consult) plus the module that defines the fields/helpers.
+BXS_I26_MENTOR_MARKERS = (
+    "blackbox_block",
+    "blackbox_available",
+    "append_mentor_sections",
+    "load_mentor_context",
+)
+BXS_I26_MENTOR_ALLOWLIST = {
+    "llm/consult_context.rs",
+    "llm/commands_consult.rs",
+    "llm/commands_sim.rs",
+    "rag/commands_rag.rs",
+}
+
+BXS_I26_BLACKBOX_SECTION_CALLEES = {
+    "build_static_prefix",
+    "_consult_interview_sim",
+    "_consult_gd_sim",
+}
+
+
+def test_bxs_i26_profile_types_stay_off_deny_surfaces() -> None:
+    """BXS-I-26: interview discussion / GD / es_review / sim core / arena handle
+    must not grow a private profile reader. Allowlisted R-9 outlets only."""
+    py_core = ROOT / "src" / "python" / "core"
+    es_path = py_core / "es_manager.py"
+    if es_path.is_file():
+        text = es_path.read_text(encoding="utf-8")
+        for marker in BXS_I26_MARKERS:
+            assert marker not in text, f"es_manager.py must not mention {marker}"
+
+    offenders: list[str] = []
+    for path in sorted(TAURI_SRC.rglob("*.rs")):
+        rel = path.relative_to(TAURI_SRC).as_posix()
+        if rel in BXS_I26_ALLOWLIST:
+            continue
+        text = path.read_text(encoding="utf-8")
+        if rel.startswith("blackbox_sim/"):
+            for marker in (
+                "get_latest_profile",
+                "BlackboxOutletSnapshot",
+                "format_consult_block",
+                "blackbox_profile_outlet",
+            ):
+                if marker in text:
+                    offenders.append(f"{rel}:{marker}")
+            continue
+        for marker in BXS_I26_MARKERS:
+            if marker in text:
+                offenders.append(f"{rel}:{marker}")
+    assert not offenders, f"BXS-I-26 breached — profile outlet leak: {offenders}"
+
+
+def test_bxs_i26_mentor_band_consumers_are_allowlisted() -> None:
+    """G-1: blackbox_block / mentor helpers may only appear in the four legal
+    mentor-band files. A new `append_mentor_sections` caller is contract RED
+    even if it never names LoadedProfile."""
+    offenders: list[str] = []
+    for path in sorted(TAURI_SRC.rglob("*.rs")):
+        rel = path.relative_to(TAURI_SRC).as_posix()
+        if rel in BXS_I26_MENTOR_ALLOWLIST:
+            continue
+        text = path.read_text(encoding="utf-8")
+        for marker in BXS_I26_MENTOR_MARKERS:
+            if marker in text:
+                offenders.append(f"{rel}:{marker}")
+    assert not offenders, (
+        f"BXS-I-26 mentor-band leak (new consumer needs review): {offenders}"
+    )
+    for required in BXS_I26_MENTOR_ALLOWLIST:
+        assert (TAURI_SRC / required).is_file(), f"missing mentor allowlist file {required}"
+
+
+def test_bxs_i26_commands_sim_blackbox_only_inside_is_debrief() -> None:
+    """G-1: every `blackbox_block` use in commands_sim.rs must sit inside an
+    `if is_debrief { ... }` arm — never the live-interview else branch."""
+    text = (TAURI_SRC / "llm" / "commands_sim.rs").read_text(encoding="utf-8")
+    assert "blackbox_block" in text
+
+    def brace_spans_for(predicate_src: str) -> list[tuple[int, int]]:
+        spans: list[tuple[int, int]] = []
+        for m in re.finditer(re.escape(predicate_src), text):
+            # Find the `{` that opens this if-arm.
+            i = m.end()
+            while i < len(text) and text[i] != "{":
+                i += 1
+            if i >= len(text):
+                continue
+            depth = 0
+            for j in range(i, len(text)):
+                if text[j] == "{":
+                    depth += 1
+                elif text[j] == "}":
+                    depth -= 1
+                    if depth == 0:
+                        spans.append((i, j + 1))
+                        break
+        return spans
+
+    debrief_spans = brace_spans_for("if is_debrief")
+    assert debrief_spans, "expected at least one `if is_debrief` block"
+    for m in re.finditer(r"blackbox_block", text):
+        pos = m.start()
+        assert any(start <= pos < end for start, end in debrief_spans), (
+            f"blackbox_block at offset {pos} is outside every is_debrief block"
+        )
+
+
+def _python_method_callers(source: str, needle: str) -> set[str]:
+    """Return the set of `def name` methods that contain `needle` in their body.
+
+    Indent-based: a method at class indent (4 spaces) owns subsequent lines
+    until the next def at the same indent. Mirrors the awk enumeration used
+    in the step-6 audit (G-2).
+    """
+    callers: set[str] = set()
+    current: str | None = None
+    for line in source.splitlines():
+        def_match = re.match(r"^    def (\w+)\(", line)
+        if def_match:
+            current = def_match.group(1)
+            continue
+        if current is not None and needle in line:
+            callers.add(current)
+    return callers
+
+
+def _python_method_body(source: str, method: str) -> str:
+    lines = source.splitlines()
+    start = None
+    for i, line in enumerate(lines):
+        if re.match(rf"^    def {re.escape(method)}\(", line):
+            start = i
+            break
+    assert start is not None, f"method {method} not found"
+    body: list[str] = []
+    for line in lines[start + 1 :]:
+        if re.match(r"^    def \w+\(", line):
+            break
+        body.append(line)
+    return "\n".join(body)
+
+
+def test_bxs_i26_python_blackbox_section_callers_are_structural() -> None:
+    """G-2: every `_blackbox_section()` call must live in the legal callee set;
+    `_consult_es_review` must not call `build_static_prefix`."""
+    ce = (ROOT / "src" / "python" / "core" / "consultation_engine.py").read_text(
+        encoding="utf-8"
+    )
+    callers = _python_method_callers(ce, "_blackbox_section()")
+    assert callers == BXS_I26_BLACKBOX_SECTION_CALLEES, (
+        f"_blackbox_section() callers={sorted(callers)} "
+        f"expected={sorted(BXS_I26_BLACKBOX_SECTION_CALLEES)}"
+    )
+    es_body = _python_method_body(ce, "_consult_es_review")
+    assert "build_static_prefix" not in es_body, (
+        "_consult_es_review must not call build_static_prefix"
+    )
+    assert "_blackbox_section()" not in es_body, (
+        "_consult_es_review must not call _blackbox_section()"
+    )
+
+
+def test_bxs_i26_handle_does_not_feed_profile_into_session() -> None:
+    """W-b / BXS-I-26: arena handle may estimate/write, but must not pass a
+    LoadedProfile into Session::start / difficulty / stimulus selection."""
+    text = (ARENA_DIR / "handle.rs").read_text(encoding="utf-8")
+    for marker in (
+        "LoadedProfile",
+        "BlackboxOutletSnapshot",
+        "get_latest_profile",
+        "format_consult_block",
+        "BlackboxProfileView",
+        "blackbox_profile_outlet",
+        "blackbox_block",
+        "append_mentor_sections",
+        "load_mentor_context",
+    ):
+        assert marker not in text, f"handle.rs must not reference {marker}"
+    assert "Session::start" in text
+
+
+def test_r9_outlets_go_through_single_accessor() -> None:
+    """R-9 shape: consult/講評/UI format via outlet module; SQL only in repo."""
+    outlet = (DB_DIR / "blackbox_profile_outlet.rs").read_text(encoding="utf-8")
+    # Formatter must not open SQL (doc references to get_latest_profile are OK).
+    code_lines = [
+        ln
+        for ln in outlet.splitlines()
+        if ln.strip() and not ln.lstrip().startswith("//") and not ln.lstrip().startswith("//!")
+    ]
+    code = "\n".join(code_lines)
+    assert "SELECT " not in code
+    assert ".query" not in code
+    assert "format_consult_block" in outlet
+    assert "未測定" in outlet
+    consult = (TAURI_SRC / "llm" / "consult_context.rs").read_text(encoding="utf-8")
+    assert "format_consult_block" in consult
+    assert "blackbox_latest_profile" in consult
+    commands = (ARENA_DIR / "commands.rs").read_text(encoding="utf-8")
+    assert "bxs_latest_profile" in commands
+    assert "list_profiles" in (DB_DIR / "blackbox_repo.rs").read_text(encoding="utf-8")
+    panel = FRONTEND_SRC / "components" / "consult" / "BlackboxProfilePanel.tsx"
+    assert panel.is_file()
+    arena = (
+        FRONTEND_SRC / "components" / "consult" / "coliseum" / "BlackboxArena.tsx"
+    ).read_text(encoding="utf-8")
+    assert "bxs_latest_profile" not in arena
+    assert "BlackboxProfilePanel" not in arena
+    owner = (FRONTEND_SRC / "lib" / "blackboxArena.ts").read_text(encoding="utf-8")
+    assert "bxs_latest_profile" in owner

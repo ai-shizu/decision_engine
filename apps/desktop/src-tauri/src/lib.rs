@@ -442,6 +442,20 @@ pub fn run() {
             blackbox_arena::commands::bxs_abort,
             #[cfg(feature = "blackbox-sim")]
             blackbox_arena::commands::bxs_load_generation,
+            #[cfg(feature = "blackbox-sim")]
+            blackbox_arena::commands::bxs_estimate_profile,
+            #[cfg(all(
+                feature = "blackbox-sim",
+                feature = "secure-vault",
+                target_vendor = "apple"
+            ))]
+            blackbox_arena::commands::bxs_latest_profile,
+            #[cfg(all(
+                feature = "blackbox-sim",
+                feature = "secure-vault",
+                target_vendor = "apple"
+            ))]
+            blackbox_arena::commands::bxs_list_profiles,
         ])
         .setup(move |app| {
             #[cfg(all(feature = "secure-vault", target_vendor = "apple"))]

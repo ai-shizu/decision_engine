@@ -20,6 +20,8 @@ mod analytics_repo;
 // `blackbox_load_campaign` (via `blackbox_arena::handle`'s worker thread).
 #[cfg(all(target_vendor = "apple", feature = "blackbox-sim"))]
 pub(crate) mod blackbox_repo;
+#[cfg(all(target_vendor = "apple", feature = "blackbox-sim"))]
+pub(crate) mod blackbox_profile_outlet;
 #[cfg(target_vendor = "apple")]
 mod commitment_repo;
 #[cfg(target_vendor = "apple")]

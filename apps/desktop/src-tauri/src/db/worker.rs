@@ -66,6 +66,15 @@ pub(crate) const VAULT_DATABASE_FILENAME: &str = "vault.sqlite3";
 const COMMAND_QUEUE_CAPACITY: usize = 8;
 const UNLOCK_TIMEOUT: Duration = Duration::from_secs(120);
 const SHORT_OPERATION_TIMEOUT: Duration = Duration::from_secs(5);
+/// Profile estimate deadline (R-1).
+///
+/// Measured (2026-07-28, debug): one sealed-campaign Decide-time replay is
+/// ~2–3 ms; 32 campaigns double-replayed (compose + estimate_pooled) ≈ 0.16 s.
+/// 15 s ≈ 100× headroom — enough for CI jitter, short enough that a hung
+/// estimate cannot pin the single-threaded vault queue past every other
+/// request's 5 s deadline (incl. iOS background lock).
+#[cfg(all(feature = "blackbox-sim", feature = "blackbox-profile-write"))]
+const BLACKBOX_ESTIMATE_TIMEOUT: Duration = Duration::from_secs(15);
 const DEFAULT_LIST_LIMIT: u32 = 50;
 const MAX_LIST_LIMIT: u32 = 200;
 const TITLE_MAX_BYTES: usize = 512;
@@ -88,9 +97,9 @@ fn valid_fact_datetime(value: &str) -> bool {
     let valid_digits = |start: usize, end: usize| {
         end <= bytes.len() && bytes[start..end].iter().all(u8::is_ascii_digit)
     };
-    let (date_end, time_start) = if bytes.len() == 16 && bytes.get(10) == Some(&b' ') {
-        (10, 11)
-    } else if bytes.len() == 19 && bytes.get(10) == Some(&b' ') {
+    let (date_end, time_start) = if (bytes.len() == 16 || bytes.len() == 19)
+        && bytes.get(10) == Some(&b' ')
+    {
         (10, 11)
     } else {
         return false;
@@ -271,6 +280,14 @@ enum VaultReply {
     BlackboxFlush(Result<FlushReceipt, VaultErrorCode>),
     #[cfg(feature = "blackbox-sim")]
     BlackboxLoadCampaign(Result<Option<(LoadedCampaign, Vec<LoggedDecision>)>, VaultErrorCode>),
+    #[cfg(all(feature = "blackbox-sim", feature = "blackbox-profile-write"))]
+    BlackboxEstimateAndPersist(Result<[u8; 8], VaultErrorCode>),
+    #[cfg(feature = "blackbox-sim")]
+    BlackboxLatestProfile(
+        Result<Option<blackbox_repo::LoadedProfile>, VaultErrorCode>,
+    ),
+    #[cfg(feature = "blackbox-sim")]
+    BlackboxListProfiles(Result<Vec<blackbox_repo::ProfileMeta>, VaultErrorCode>),
     TensorProfileInsert(Result<(), VaultErrorCode>),
     TensorProfileLatest(Result<Option<TensorProfileRow>, VaultErrorCode>),
     PulseRunInsert(Result<(), VaultErrorCode>),
@@ -425,6 +442,22 @@ enum VaultRequest {
     #[cfg(feature = "blackbox-sim")]
     BlackboxLoadCampaign {
         fingerprint: [u8; 32],
+        control: RequestControl,
+        reply: SyncSender<VaultReply>,
+    },
+    #[cfg(all(feature = "blackbox-sim", feature = "blackbox-profile-write"))]
+    BlackboxEstimateAndPersist {
+        now: i64,
+        control: RequestControl,
+        reply: SyncSender<VaultReply>,
+    },
+    #[cfg(feature = "blackbox-sim")]
+    BlackboxLatestProfile {
+        control: RequestControl,
+        reply: SyncSender<VaultReply>,
+    },
+    #[cfg(feature = "blackbox-sim")]
+    BlackboxListProfiles {
         control: RequestControl,
         reply: SyncSender<VaultReply>,
     },
@@ -1144,6 +1177,69 @@ impl VaultHandle {
         };
         match self.submit(request, receiver, cancelled, SHORT_OPERATION_TIMEOUT)? {
             VaultReply::BlackboxLoadCampaign(result) => result,
+            _ => Err(VaultErrorCode::Unavailable),
+        }
+    }
+
+    /// Phase 6-A step 5 / R-8: seal-filter vault campaigns, estimate, persist.
+    /// Returns the written `pool_digest`. Empty sealed pool → `Unavailable`.
+    #[cfg(all(feature = "blackbox-sim", feature = "blackbox-profile-write"))]
+    pub(crate) fn blackbox_estimate_and_persist(
+        &self,
+        now: i64,
+    ) -> Result<[u8; 8], VaultErrorCode> {
+        let (reply_sender, receiver) = mpsc::sync_channel(1);
+        let cancelled = Arc::new(AtomicBool::new(false));
+        let request = VaultRequest::BlackboxEstimateAndPersist {
+            now,
+            control: RequestControl {
+                deadline: Instant::now() + BLACKBOX_ESTIMATE_TIMEOUT,
+                cancelled: Arc::clone(&cancelled),
+            },
+            reply: reply_sender,
+        };
+        match self.submit(request, receiver, cancelled, BLACKBOX_ESTIMATE_TIMEOUT)? {
+            VaultReply::BlackboxEstimateAndPersist(result) => result,
+            _ => Err(VaultErrorCode::Unavailable),
+        }
+    }
+
+    /// Read path for profile-lane tests / step 6 outlets (R-9).
+    #[cfg(feature = "blackbox-sim")]
+    pub(crate) fn blackbox_latest_profile(
+        &self,
+    ) -> Result<Option<blackbox_repo::LoadedProfile>, VaultErrorCode> {
+        let (reply_sender, receiver) = mpsc::sync_channel(1);
+        let cancelled = Arc::new(AtomicBool::new(false));
+        let request = VaultRequest::BlackboxLatestProfile {
+            control: RequestControl {
+                deadline: Instant::now() + SHORT_OPERATION_TIMEOUT,
+                cancelled: Arc::clone(&cancelled),
+            },
+            reply: reply_sender,
+        };
+        match self.submit(request, receiver, cancelled, SHORT_OPERATION_TIMEOUT)? {
+            VaultReply::BlackboxLatestProfile(result) => result,
+            _ => Err(VaultErrorCode::Unavailable),
+        }
+    }
+
+    /// PROFILE UI listing (R-9) — metadata only via [`blackbox_repo::list_profiles`].
+    #[cfg(feature = "blackbox-sim")]
+    pub(crate) fn blackbox_list_profiles(
+        &self,
+    ) -> Result<Vec<blackbox_repo::ProfileMeta>, VaultErrorCode> {
+        let (reply_sender, receiver) = mpsc::sync_channel(1);
+        let cancelled = Arc::new(AtomicBool::new(false));
+        let request = VaultRequest::BlackboxListProfiles {
+            control: RequestControl {
+                deadline: Instant::now() + SHORT_OPERATION_TIMEOUT,
+                cancelled: Arc::clone(&cancelled),
+            },
+            reply: reply_sender,
+        };
+        match self.submit(request, receiver, cancelled, SHORT_OPERATION_TIMEOUT)? {
+            VaultReply::BlackboxListProfiles(result) => result,
             _ => Err(VaultErrorCode::Unavailable),
         }
     }
@@ -1874,6 +1970,37 @@ impl VaultWorker {
                     };
                     let _ = reply.send(VaultReply::BlackboxLoadCampaign(result));
                 }
+                #[cfg(all(feature = "blackbox-sim", feature = "blackbox-profile-write"))]
+                VaultRequest::BlackboxEstimateAndPersist {
+                    now,
+                    control,
+                    reply,
+                } => {
+                    let result = if request_expired(&control) {
+                        Err(VaultErrorCode::Timeout)
+                    } else {
+                        self.blackbox_estimate_and_persist_impl(now)
+                    };
+                    let _ = reply.send(VaultReply::BlackboxEstimateAndPersist(result));
+                }
+                #[cfg(feature = "blackbox-sim")]
+                VaultRequest::BlackboxLatestProfile { control, reply } => {
+                    let result = if request_expired(&control) {
+                        Err(VaultErrorCode::Timeout)
+                    } else {
+                        self.blackbox_latest_profile_impl()
+                    };
+                    let _ = reply.send(VaultReply::BlackboxLatestProfile(result));
+                }
+                #[cfg(feature = "blackbox-sim")]
+                VaultRequest::BlackboxListProfiles { control, reply } => {
+                    let result = if request_expired(&control) {
+                        Err(VaultErrorCode::Timeout)
+                    } else {
+                        self.blackbox_list_profiles_impl()
+                    };
+                    let _ = reply.send(VaultReply::BlackboxListProfiles(result));
+                }
                 VaultRequest::TensorProfileInsert {
                     row,
                     control,
@@ -2566,7 +2693,7 @@ impl VaultWorker {
     fn latest_gap_analysis(&mut self) -> Result<Option<GapAnalysisRow>, VaultErrorCode> {
         gate(snapshot_status(&self.status))?;
         let outcome =
-            self.read_repository(|connection| analytics_repo::latest_gap_analysis(connection));
+            self.read_repository(analytics_repo::latest_gap_analysis);
         self.resolve_repository(outcome)
     }
 
@@ -2608,6 +2735,43 @@ impl VaultWorker {
         self.resolve_repository(outcome)
     }
 
+    /// One IMMEDIATE transaction: compose sealed pool → estimate → insert.
+    /// `Err` drops the transaction (rollback); only `Ok` commits (M-2).
+    #[cfg(all(feature = "blackbox-sim", feature = "blackbox-profile-write"))]
+    fn blackbox_estimate_and_persist_impl(
+        &mut self,
+        now: i64,
+    ) -> Result<[u8; 8], VaultErrorCode> {
+        gate(snapshot_status(&self.status))?;
+        let outcome = self.write_repository(|transaction| {
+            blackbox_repo::estimate_and_insert_profile(transaction, now)
+                .map_err(map_profile_write_error)
+        });
+        self.resolve_repository(outcome)
+    }
+
+    #[cfg(feature = "blackbox-sim")]
+    fn blackbox_latest_profile_impl(
+        &mut self,
+    ) -> Result<Option<blackbox_repo::LoadedProfile>, VaultErrorCode> {
+        gate(snapshot_status(&self.status))?;
+        let outcome = self.read_repository(|connection| {
+            blackbox_repo::get_latest_profile(connection).map_err(map_blackbox_repo_error)
+        });
+        self.resolve_repository(outcome)
+    }
+
+    #[cfg(feature = "blackbox-sim")]
+    fn blackbox_list_profiles_impl(
+        &mut self,
+    ) -> Result<Vec<blackbox_repo::ProfileMeta>, VaultErrorCode> {
+        gate(snapshot_status(&self.status))?;
+        let outcome = self.read_repository(|connection| {
+            blackbox_repo::list_profiles(connection).map_err(map_blackbox_repo_error)
+        });
+        self.resolve_repository(outcome)
+    }
+
     fn insert_tensor_profile(&mut self, row: TensorProfileRow) -> Result<(), VaultErrorCode> {
         gate(snapshot_status(&self.status))?;
         if row.payload_json.len() > MAX_TEXT_BYTES * 2 {
@@ -2621,7 +2785,7 @@ impl VaultWorker {
     fn latest_tensor_profile(&mut self) -> Result<Option<TensorProfileRow>, VaultErrorCode> {
         gate(snapshot_status(&self.status))?;
         let outcome =
-            self.read_repository(|connection| analytics_repo::latest_tensor_profile(connection));
+            self.read_repository(analytics_repo::latest_tensor_profile);
         self.resolve_repository(outcome)
     }
 
@@ -2652,14 +2816,14 @@ impl VaultWorker {
     fn latest_rasch_run(&mut self) -> Result<Option<RaschRunRow>, VaultErrorCode> {
         gate(snapshot_status(&self.status))?;
         let outcome =
-            self.read_repository(|connection| psychometrics_repo::latest_rasch_run(connection));
+            self.read_repository(psychometrics_repo::latest_rasch_run);
         self.resolve_repository(outcome)
     }
 
     fn get_probe_store(&mut self) -> Result<Option<ProbeStoreRow>, VaultErrorCode> {
         gate(snapshot_status(&self.status))?;
         let outcome =
-            self.read_repository(|connection| psychometrics_repo::get_probe_store(connection));
+            self.read_repository(psychometrics_repo::get_probe_store);
         self.resolve_repository(outcome)
     }
 
@@ -2676,7 +2840,7 @@ impl VaultWorker {
     fn latest_pulse_run(&mut self) -> Result<Option<PulseRunRow>, VaultErrorCode> {
         gate(snapshot_status(&self.status))?;
         let outcome =
-            self.read_repository(|connection| psychometrics_repo::latest_pulse_run(connection));
+            self.read_repository(psychometrics_repo::latest_pulse_run);
         self.resolve_repository(outcome)
     }
 
@@ -2700,7 +2864,7 @@ impl VaultWorker {
     fn latest_twin_run_payload(&mut self) -> Result<Option<String>, VaultErrorCode> {
         gate(snapshot_status(&self.status))?;
         let outcome =
-            self.read_repository(|connection| oracle_repo::latest_twin_run_payload(connection));
+            self.read_repository(oracle_repo::latest_twin_run_payload);
         self.resolve_repository(outcome)
     }
 
@@ -2717,7 +2881,7 @@ impl VaultWorker {
 
     fn latest_oracle_run(&mut self) -> Result<Option<OracleRunRow>, VaultErrorCode> {
         gate(snapshot_status(&self.status))?;
-        let outcome = self.read_repository(|connection| oracle_repo::latest_oracle_run(connection));
+        let outcome = self.read_repository(oracle_repo::latest_oracle_run);
         self.resolve_repository(outcome)
     }
 
@@ -2848,8 +3012,7 @@ impl VaultWorker {
 
     fn list_enabled_commitments(&mut self) -> Result<Vec<CommitmentRow>, VaultErrorCode> {
         gate(snapshot_status(&self.status))?;
-        let outcome = self
-            .read_repository(|connection| commitment_repo::list_enabled_commitments(connection));
+        let outcome = self.read_repository(commitment_repo::list_enabled_commitments);
         self.resolve_repository(outcome)
     }
 
@@ -3036,8 +3199,26 @@ fn clamp_limit(limit: Option<u32>) -> u32 {
 fn map_blackbox_repo_error(error: blackbox_repo::BlackboxRepoError) -> RepositoryError {
     match error {
         blackbox_repo::BlackboxRepoError::Storage
-        | blackbox_repo::BlackboxRepoError::Serialization => RepositoryError::StorageFailed,
-        blackbox_repo::BlackboxRepoError::BindingBroken { .. } => RepositoryError::Conflict,
+        | blackbox_repo::BlackboxRepoError::Serialization
+        | blackbox_repo::BlackboxRepoError::CorruptRow => RepositoryError::StorageFailed,
+        blackbox_repo::BlackboxRepoError::BindingBroken { .. }
+        | blackbox_repo::BlackboxRepoError::InvalidProfile => RepositoryError::Conflict,
+        #[cfg(feature = "blackbox-profile-write")]
+        blackbox_repo::BlackboxRepoError::MissingCampaign => RepositoryError::Conflict,
+    }
+}
+
+/// Map the live write-path error. EmptyPool becomes `NotFound` so the handle
+/// can surface `Unavailable` (never a silent Ok). Fingerprint / replay faults
+/// are `Conflict` (fail closed, not retried as environmental).
+#[cfg(all(feature = "blackbox-sim", feature = "blackbox-profile-write"))]
+fn map_profile_write_error(error: blackbox_repo::ProfileWriteError) -> RepositoryError {
+    match error {
+        blackbox_repo::ProfileWriteError::EmptyPool => RepositoryError::NotFound,
+        blackbox_repo::ProfileWriteError::FingerprintMismatch
+        | blackbox_repo::ProfileWriteError::CorruptRow
+        | blackbox_repo::ProfileWriteError::Bridge(_) => RepositoryError::Conflict,
+        blackbox_repo::ProfileWriteError::Repo(inner) => map_blackbox_repo_error(inner),
     }
 }
 

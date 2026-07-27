@@ -3338,6 +3338,48 @@ button.secondary {
   margin-bottom: 20px;
 }
 
+/* R-9: BLACKBOX bias instrument on PROFILE */
+.blackbox-profile-panel {
+  margin-bottom: 20px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border, rgba(128, 128, 128, 0.25));
+}
+
+.blackbox-profile-panel-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.blackbox-profile-authority {
+  font-size: 0.9rem;
+  opacity: 0.85;
+}
+
+.blackbox-profile-meta {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(10rem, 1fr));
+  gap: 8px 16px;
+}
+
+.blackbox-profile-meta dt {
+  font-size: 0.75rem;
+  opacity: 0.7;
+}
+
+.blackbox-profile-lanes {
+  list-style: none;
+  padding: 0;
+  margin: 8px 0 0;
+  display: grid;
+  gap: 6px;
+}
+
+.blackbox-profile-error {
+  color: tomato;
+}
+
 .twin-identify-badge {
   display: inline;
   margin-top: 6px;

@@ -608,6 +608,58 @@ impl BlackboxSimHandle {
             reply,
         })
     }
+
+    /// R-8 two-factor write gate. Signature identical across builds.
+    ///
+    /// - Without `blackbox-profile-write`: refuse with
+    ///   [`SimUiErrorCode::BlackboxProfileWriteNotReady`].
+    /// - With the flag + vault: seal-filter campaigns, `estimate_pooled`,
+    ///   `insert_profile` in one vault transaction. Empty sealed pool →
+    ///   [`SimUiErrorCode::Unavailable`] (never silent Ok / no-op).
+    pub(crate) fn estimate_profile(&self) -> Result<(), SimUiErrorCode> {
+        #[cfg(not(feature = "blackbox-profile-write"))]
+        {
+            let _ = self;
+            Err(SimUiErrorCode::BlackboxProfileWriteNotReady)
+        }
+        #[cfg(all(
+            feature = "blackbox-profile-write",
+            feature = "secure-vault",
+            target_vendor = "apple"
+        ))]
+        {
+            let vault = self
+                .inner
+                .vault
+                .lock()
+                .ok()
+                .and_then(|guard| guard.clone())
+                .ok_or(SimUiErrorCode::Unavailable)?;
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs() as i64)
+                .unwrap_or(0);
+            match vault.blackbox_estimate_and_persist(now) {
+                Ok(_) => Ok(()),
+                Err(VaultErrorCode::NotFound) | Err(VaultErrorCode::Unavailable) => {
+                    Err(SimUiErrorCode::Unavailable)
+                }
+                Err(VaultErrorCode::Timeout)
+                | Err(VaultErrorCode::Busy)
+                | Err(VaultErrorCode::Locked)
+                | Err(VaultErrorCode::StorageFailed) => Err(SimUiErrorCode::Unavailable),
+                Err(_) => Err(SimUiErrorCode::InternalFault),
+            }
+        }
+        #[cfg(all(
+            feature = "blackbox-profile-write",
+            not(all(feature = "secure-vault", target_vendor = "apple"))
+        ))]
+        {
+            let _ = self;
+            Err(SimUiErrorCode::Unavailable)
+        }
+    }
 }
 
 #[cfg(test)]
@@ -822,6 +874,53 @@ mod tests {
             assert_eq!(
                 sim.load_generation(campaign_id, 0),
                 Err(SimUiErrorCode::Unavailable)
+            );
+        }
+
+        fn play_to_seal(sim: &BlackboxSimHandle, campaign_id: &str) {
+            for _ in 0..crate::blackbox_sim::director::CAMPAIGN_TICKS {
+                let _ = ok(sim.submit_decision(
+                    campaign_id.to_string(),
+                    ActionIntent::Abstain,
+                    None,
+                ));
+                let advanced = ok(sim.advance(campaign_id.to_string()));
+                if matches!(advanced.state, SessionState::Sealed) {
+                    break;
+                }
+            }
+        }
+
+        #[cfg(feature = "blackbox-profile-write")]
+        #[test]
+        fn estimate_profile_persists_from_sealed_vault_campaigns() {
+            let (sim, vault) = attached_sim();
+            let view = ok(sim.start_campaign(request()));
+            let campaign_id = view.campaign_id.clone();
+            play_to_seal(&sim, &campaign_id);
+            ok(sim.estimate_profile());
+            let loaded = ok(vault.blackbox_latest_profile());
+            assert!(
+                loaded.is_some(),
+                "live write must leave a profile row"
+            );
+        }
+
+        #[cfg(not(feature = "blackbox-profile-write"))]
+        #[test]
+        fn estimate_profile_refuses_without_write_feature_and_writes_nothing() {
+            let (sim, vault) = attached_sim();
+            let view = ok(sim.start_campaign(request()));
+            let campaign_id = view.campaign_id.clone();
+            play_to_seal(&sim, &campaign_id);
+            assert_eq!(
+                sim.estimate_profile(),
+                Err(SimUiErrorCode::BlackboxProfileWriteNotReady)
+            );
+            let latest = ok(vault.blackbox_latest_profile());
+            assert!(
+                latest.is_none(),
+                "flag-off must not leave a profile row"
             );
         }
     }

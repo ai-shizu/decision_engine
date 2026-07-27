@@ -893,6 +893,21 @@ class ConsultationEngine:
         return render_oracle_consult(payload)
 
     @staticmethod
+    def _blackbox_section() -> str:
+        """BLACKBOX バイアス計器 (R-9)。Python 経路は Vault に接続しないため、
+        常に「未測定」として穏当に縮退する — 沈黙の 0 埋めは禁止。数値の権威は
+        Tauri/`consult_context` 側の get_latest_profile 出口のみ。
+        """
+        return (
+            "instrument: blackbox_sim\n"
+            "calibration: uncalibrated-instrument\n"
+            "authority: uncalibrated-instrument (no-llm-authority twin)\n"
+            "これは校正前の計測器による暫定値である。確定した性格として扱うな。\n"
+            "pooled_campaigns: 0\n"
+            "（BLACKBOX: この経路では Vault 未接続 — 全レーン未測定。数値を推測で埋めるな）"
+        )
+
+    @staticmethod
     def _future_context_section(days_ahead: int = 30) -> str:
         from .calendar_manager import format_future_context, load_future_events
         events = load_future_events(days_ahead=days_ahead)
@@ -920,6 +935,9 @@ class ConsultationEngine:
 
 # Echo: 物理量に基づく客観的分析 (認知リソース状態・結合行列・介入候補)
 {self._oracle_section()}
+
+# BLACKBOX バイアス計器 (校正前・暫定 — Vault 経路は Tauri 側)
+{self._blackbox_section()}
 
 """
 
@@ -1380,7 +1398,10 @@ class ConsultationEngine:
 {self._gap_section()}
 
 # Echo: 物理量に基づく客観的分析 (認知リソース状態・結合行列・介入候補)
-{self._oracle_section()}"""
+{self._oracle_section()}
+
+# BLACKBOX バイアス計器 (講評専用・校正前)
+{self._blackbox_section()}"""
             answer = self._generate_redacted(
                 state["system"], eval_prompt, on_token=on_token)
             from .consultation_log import append_consultation
@@ -1626,7 +1647,10 @@ class ConsultationEngine:
 {self._gap_section()}
 
 # Echo: 物理量に基づく客観的分析 (認知リソース状態・結合行列・介入候補)
-{self._oracle_section()}"""
+{self._oracle_section()}
+
+# BLACKBOX バイアス計器 (講評専用・校正前)
+{self._blackbox_section()}"""
             answer = self._generate_redacted(
                 state["system"], eval_prompt, on_token=on_token)
             from .consultation_log import append_consultation

@@ -131,6 +131,7 @@ export const SIM_UI_ERROR_CODES = [
   "generation_not_found",
   "unavailable",
   "internal_fault",
+  "BLACKBOX_PROFILE_WRITE_NOT_READY",
 ] as const;
 export type KnownSimUiErrorCode = (typeof SIM_UI_ERROR_CODES)[number];
 export type SimUiErrorCode = KnownSimUiErrorCode | "unknown";

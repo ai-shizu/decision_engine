@@ -1,0 +1,99 @@
+# R-8 two-factor AND gate for blackbox profile writes (Phase 6-A).
+#
+# Factor A = Cargo feature `blackbox-profile-write` (build flag / commander ruling).
+# Factor B = PHANTOM-BOT calibration suite GREEN in CI (this workflow's first job).
+#
+# A write-gated build/test job MUST list `needs: calibration` so a RED or
+# silently-empty calibration run cannot unlock the writer. Do not collapse
+# these into a single job: the dependency edge is the audit trail.
+#
+# Grounding: docs/SPEC_BLACKBOX_SIMULATOR.md §11 / R-8; mirrors E0b egress-live.
+#
+# C-1: calibration MUST use `--lib` so there is exactly one `test result:` line.
+# Without it, cargo also runs binary crates (0 passed each); `tail -n1` then
+# reads 0 and the job is permanently RED — factor B never unlocks write-gated.
+#
+# C-2: after Step 5, `insert_profile` is reachable from production via
+# `estimate_and_insert_profile`. The write-gated never-used check MUST include
+# `insert_profile` (and `MissingCampaign`) so an unwired writer cannot stay green.
+
+name: blackbox-profile-write-gate
+
+on:
+  pull_request:
+  push:
+    branches: [main, master]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  # Factor B: known-answer calibration must actually execute (≥14 tests =
+  # 6 lanes × ≥2 + certificate seal check). A SKIP/0-test "green" is refused.
+  calibration:
+    runs-on: macos-14
+    defaults:
+      run:
+        working-directory: apps/desktop/src-tauri
+    steps:
+      - uses: actions/checkout@v4
+      - name: PHANTOM-BOT calibration suite (factor B)
+        run: |
+          set -euo pipefail
+          # R-8 factor B: calibration GREEN is a required predecessor of any
+          # blackbox-profile-write build. `--lib` pins a single result line
+          # (C-1); without it binary crates append `0 passed` and tail lies.
+          OUT="$(mktemp)"
+          cargo test --features blackbox-sim,secure-vault --lib \
+            blackbox_sim::calibration -- --nocapture 2>&1 | tee "$OUT"
+          RESULT_LINES="$(grep -c 'test result: ok\.' "$OUT" || true)"
+          test "$RESULT_LINES" -eq 1
+          PASSED="$(grep -E 'test result: ok\. [0-9]+ passed' "$OUT" \
+            | sed -E 's/.*ok\. ([0-9]+) passed.*/\1/')"
+          test -n "$PASSED"
+          test "$PASSED" -ge 14
+
+  # Factor A ∧ Factor B: only runs after calibration succeeds.
+  write-gated:
+    needs: calibration
+    runs-on: macos-14
+    defaults:
+      run:
+        working-directory: apps/desktop/src-tauri
+    steps:
+      - uses: actions/checkout@v4
+      - name: Write-gated lib tests (factor A after B)
+        run: |
+          set -euo pipefail
+          cargo test --features blackbox-sim,secure-vault,blackbox-profile-write --lib
+      - name: Write-gated build — profile-lane never-used guard
+        run: |
+          set -euo pipefail
+          # C-2 re-armed (Step 5): writer must be reachable from production.
+          # A resurrected `#[allow(dead_code)]` / `#[used]` stub must fail CI.
+          cargo build --features blackbox-sim,secure-vault,blackbox-profile-write --lib 2>&1 \
+            | tee /tmp/bxs-write-build.log
+          MATCHES="$(grep -E 'never used' /tmp/bxs-write-build.log \
+            | grep -Ei 'blackbox_repo|insert_profile|MissingCampaign|get_latest_profile|list_profiles' || true)"
+          test -z "$MATCHES"
+
+  # Control: default (no write flag) stays green and the writer is absent.
+  write-absent:
+    runs-on: macos-14
+    defaults:
+      run:
+        working-directory: apps/desktop/src-tauri
+    steps:
+      - uses: actions/checkout@v4
+      - name: Default feature set (no blackbox-profile-write)
+        run: |
+          set -euo pipefail
+          cargo test --features blackbox-sim,secure-vault --lib
+          cargo build --features blackbox-sim,secure-vault --lib 2>&1 \
+            | tee /tmp/bxs-default-build.log
+          # M-1 / C-2: writer is cfg'd out; reads keep allow+Step-5/6 comments.
+          # MissingCampaign is feature-gated with the writer (no warn).
+          MATCHES="$(grep -E 'never used' /tmp/bxs-default-build.log \
+            | grep -Ei 'blackbox_repo|insert_profile|MissingCampaign|get_latest_profile|list_profiles' || true)"
+          test -z "$MATCHES"

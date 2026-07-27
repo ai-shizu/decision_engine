@@ -87,6 +87,11 @@ pocket-brain = ["llama-cpp-2", "libc"]
 # it alongside secure-vault additionally compiles the vault v12 record lane
 # (db/blackbox_repo.rs); the simulator itself never depends on secure-vault.
 blackbox-sim = []
+# Phase 6-A / R-8: second factor of the profile-write AND gate (build flag).
+# Depends on blackbox-sim so the feature is meaningless alone. NEVER add to
+# default — mirrors egress-live. CI runs the PHANTOM-BOT calibration suite as
+# a required predecessor job before any job that enables this flag.
+blackbox-profile-write = ["blackbox-sim"]
 # M3 Phase 0+: SQLCipher + typed objc2 Keychain link gate. Keep off default
 # builds. All Apple bindings live in one objc2 type system; do not reintroduce
 # security-framework alongside them (docs/m3_action_plan.md §4.2.1).

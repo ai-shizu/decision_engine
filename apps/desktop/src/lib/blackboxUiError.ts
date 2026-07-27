@@ -14,6 +14,7 @@ export function mapSimUiErrorToUiCode(code: SimUiErrorCode): UiErrorCode {
     case "campaign_not_found":
     case "campaign_exhausted":
     case "generation_not_found":
+    case "BLACKBOX_PROFILE_WRITE_NOT_READY":
       return "BXS_ARENA_STATE";
     case "unavailable":
     case "internal_fault":

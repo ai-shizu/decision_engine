@@ -14,6 +14,14 @@ import {
   type StartCampaignRequest,
 } from "./parseBlackboxArena";
 import type { ActionIntentWire } from "./blackboxIntent";
+import {
+  parseBlackboxProfileMetaList,
+  parseBlackboxProfileView,
+} from "./parseBlackboxProfile";
+import type {
+  BlackboxProfileMetaView,
+  BlackboxProfileView,
+} from "./blackboxProfileView";
 
 export type {
   AdvanceView,
@@ -31,7 +39,11 @@ type BlackboxIpcCommand =
   | "bxs_get_view"
   | "bxs_submit_decision"
   | "bxs_advance"
-  | "bxs_abort";
+  | "bxs_abort"
+  | "bxs_load_generation"
+  | "bxs_estimate_profile"
+  | "bxs_latest_profile"
+  | "bxs_list_profiles";
 
 type BlackboxParser<T> = (value: unknown) => T;
 
@@ -109,4 +121,14 @@ export function bxsAdvance(campaignId: string): Promise<AdvanceView> {
 
 export function bxsAbort(campaignId: string): Promise<void> {
   return invokeBlackbox("bxs_abort", null, { campaignId });
+}
+
+/** R-9 PROFILE UI — sole IPC owner for latest blackbox profile. */
+export function bxsLatestProfile(): Promise<BlackboxProfileView> {
+  return invokeBlackbox("bxs_latest_profile", parseBlackboxProfileView);
+}
+
+/** R-9 PROFILE UI listing. */
+export function bxsListProfiles(): Promise<BlackboxProfileMetaView[]> {
+  return invokeBlackbox("bxs_list_profiles", parseBlackboxProfileMetaList);
 }

@@ -15,6 +15,11 @@ import { uiErrorMessage } from "../lib/uiErrorMessages";
 import { ContextObservatoryContainer } from "./ContextObservatoryContainer";
 import { CognitiveCalendar } from "./calendar/CognitiveCalendar";
 import { GapTensorDashboard } from "./GapTensorDashboard";
+import {
+  BlackboxProfilePanel,
+  fetchLatestBlackboxProfile,
+} from "./consult/BlackboxProfilePanel";
+import type { BlackboxProfileView } from "../lib/blackboxProfileView";
 
 function evidenceCount(evidence: unknown): number {
   return Array.isArray(evidence) ? evidence.length : 0;
@@ -98,9 +103,27 @@ export function ProfileTab() {
   const [tensorResult, setTensorResult] = useState<{ rebuilt: boolean; rows: number } | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState("");
+  const [blackboxProfile, setBlackboxProfile] = useState<BlackboxProfileView | null>(null);
+  const [blackboxError, setBlackboxError] = useState<string | null>(null);
 
   const [horizonDays, setHorizonDays] = useState(14);
   const [profilerMsg, setProfilerMsg] = useState("");
+
+  const reloadBlackbox = useCallback(async () => {
+    setBlackboxError(null);
+    try {
+      const view = await fetchLatestBlackboxProfile();
+      setBlackboxProfile(view);
+    } catch (e) {
+      console.error("blackbox profile load failed", e);
+      setBlackboxError("BLACKBOX プロファイルを読めませんでした（未測定として表示）");
+      setBlackboxProfile(null);
+    }
+  }, []);
+
+  useEffect(() => {
+    void reloadBlackbox();
+  }, [reloadBlackbox]);
 
   const loadSterile = useCallback(async () => {
     setBusy("refresh");
@@ -225,6 +248,14 @@ export function ProfileTab() {
       <CognitiveCalendar />
 
       <GapTensorDashboard />
+
+      <BlackboxProfilePanel
+        profile={blackboxProfile}
+        loadError={blackboxError}
+        onReload={() => {
+          void reloadBlackbox();
+        }}
+      />
 
       <div className="profile-topline">
         <div>

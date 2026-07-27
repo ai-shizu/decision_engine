@@ -337,26 +337,23 @@ impl Session {
 
     /// Valid-but-refused attempts recorded under an active stimulus.
     /// Crate-internal for the same reason as `stimuli()`: this feeds the
-    /// estimator (Phase 4), not the UI. Exercised today only by the
-    /// PHANTOM-BOT calibration suite (`calibration.rs`); Phase 5 wires a
-    /// live end-of-campaign call into `bias::estimate_profile`.
-    #[allow(dead_code)]
+    /// estimator, not the UI. Production caller is `bridge::estimate_pooled`
+    /// (Phase 6-A); the PHANTOM-BOT calibration suite also reads it under
+    /// `#[cfg(test)]`.
     pub(super) fn refusals(&self) -> &RefusalLog {
         &self.refusals
     }
 
     /// The decision log, read-only. Crate-internal for the same reason as
-    /// `stimuli()`: this feeds the estimator (Phase 4), not the UI. See
-    /// `refusals()` for why this is presently `#[allow(dead_code)]`.
-    #[allow(dead_code)]
+    /// `stimuli()`: this feeds the estimator, not the UI. Production caller
+    /// is `bridge::estimate_pooled` (Phase 6-A).
     pub(super) fn events(&self) -> impl Iterator<Item = &DecisionEvent> {
         self.events.records()
     }
 
     /// Lane 5 feed: one sample per successful `SetPrice`. Crate-internal for
-    /// the same reason as `stimuli()`. See `refusals()` for why this is
-    /// presently `#[allow(dead_code)]`.
-    #[allow(dead_code)]
+    /// the same reason as `stimuli()`. Production caller is
+    /// `bridge::estimate_pooled` (Phase 6-A).
     pub(super) fn pricing_trials(&self) -> impl Iterator<Item = &PricingTrial> {
         self.pricing_trials.iter()
     }

@@ -23,6 +23,7 @@ import {
   type ArenaLimitsView,
   type ObservationView,
 } from "../src/lib/parseBlackboxArena";
+import { formatLaneValue } from "../src/lib/blackboxProfileView";
 
 type TestFn = () => void;
 const tests: { name: string; fn: TestFn }[] = [];
@@ -262,6 +263,22 @@ test("BXS-08 command_failed clears busy", () => {
     message: "x",
   });
   assertOk(state.busy === false && state.error === "x", "failure path");
+});
+
+test("R9 unmeasured lane never formats as bare zero", () => {
+  const unmeasured = {
+    lane: 0,
+    axis: "loss_aversion",
+    labelJa: "損失回避",
+    valueMicro: null as number | null,
+    nObs: 0,
+    sufficiencyMicro: 0,
+    measured: false,
+  };
+  assertOk(formatLaneValue(unmeasured) === "未測定", "null → 未測定");
+  assertOk(formatLaneValue(unmeasured) !== "0", "must not coerce to 0");
+  const measured = { ...unmeasured, measured: true, valueMicro: 0, nObs: 1 };
+  assertOk(formatLaneValue(measured) === "0.000000", "measured zero stays numeric");
 });
 
 let failed = 0;

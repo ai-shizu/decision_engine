@@ -8,7 +8,7 @@ use std::{error::Error, fmt};
 
 use rusqlite::{Connection, TransactionBehavior};
 
-pub(crate) const LATEST_SCHEMA_VERSION: i64 = 12;
+pub(crate) const LATEST_SCHEMA_VERSION: i64 = 13;
 
 /// Canonical embedding width for `knowledge_chunks.embedding` (M9 foundation).
 /// Matches the historical PKBVEC01 384-d space; a future 768-d migration would
@@ -410,6 +410,102 @@ CREATE TABLE blackbox_stimuli (
 );
 "#;
 
+/// V13 — BLACKBOX SIMULATOR profile lane (`blackbox_profile.v1`, SPEC §11,
+/// Phase 6-A / R-7). Additive; v12's record lanes and vec0 untouched.
+///
+/// SPEC §11 originally pencilled this table into "schema v12, Phase 3". As
+/// built, v12 carried only the record lanes (campaign / decision / stimulus)
+/// because the profile itself was behind the double gate and had no writer;
+/// the estimate lands here at v13, the first schema version applied after the
+/// calibration suite went GREEN and the Commander adjudicated (R-7/R-8).
+///
+/// Three tables:
+///
+/// - `blackbox_profiles` — one row per pooled estimate, keyed by the pool
+///   digest (`bridge::estimate_pooled`'s content hash of the pooled campaign
+///   fingerprints, W-26). Not keyed by a campaign fingerprint: a pooled
+///   profile has no single genesis and must not be able to claim one.
+/// - `blackbox_profile_lanes` — one row per bias axis, mirroring
+///   `bias::BiasEstimate` field for field.
+/// - `blackbox_profile_sources` — the ordered campaign fingerprints the pool
+///   was built from. Order matters: the pool digest hashes fingerprints in
+///   input order, so storing `ordinal` keeps the primary key **recomputable**
+///   from the stored rows. That is why no domain-tag column exists — if the
+///   aggregation rule (and its domain string) is ever bumped, recomputation
+///   simply stops matching and the reader fail-closes, which is exactly the
+///   invalidation a stored tag would have been asked to signal.
+///
+/// # What is absent, deliberately
+///
+/// - **No 6D projection columns of any kind.** R-7 leaves the projection all
+///   N/A and keeps `CalibrationCertificate` sealed; a `score_*` column here
+///   would be a place to park an uncalibrated number, and LAW-19 forbids
+///   inventing values for which no calibration data exists.
+/// - **No certificate/"calibrated" flag.** Instead `calibration` is CHECK-ed
+///   equal to the single literal `uncalibrated-instrument`. The type seal in
+///   `bias.rs` says a calibrated profile cannot be *constructed*; this says it
+///   cannot be *stored* either. Relaxing that claim requires a reviewed v14.
+/// - **No free text.** Every TEXT column in this migration is CHECK-ed against
+///   one fixed literal, so the profile lane cannot become a PII surface
+///   (SPEC §9.2) even by a buggy writer.
+///
+/// # Invariants moved from the type into the schema
+///
+/// `BiasEstimate` can only be `NOT_MEASURED` (`None`/0/0) or `measured`
+/// (`Some`/`n_obs > 0`/sufficiency in `[0, MICRO]`). The lane CHECK reproduces
+/// exactly that disjunction, so a fabricated zero — a value with no
+/// observations behind it, or observations with no value — is unstorable
+/// rather than merely un-constructible (LAW-19, "the honest N/A").
+/// `pooled_campaigns BETWEEN 1 AND 32` is R-10 at rest: an empty pool is not a
+/// profile, and the cap matches `bridge::MAX_POOLED_CAMPAIGNS`.
+const MIGRATION_V13_SQL: &str = r#"
+CREATE TABLE blackbox_profiles (
+    pool_digest BLOB NOT NULL PRIMARY KEY,
+    schema_version TEXT NOT NULL CHECK (schema_version = 'blackbox_profile.v1'),
+    instrument TEXT NOT NULL CHECK (instrument = 'blackbox_sim'),
+    calibration TEXT NOT NULL CHECK (calibration = 'uncalibrated-instrument'),
+    pooled_campaigns INTEGER NOT NULL CHECK (pooled_campaigns BETWEEN 1 AND 32),
+    estimated_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_blackbox_profiles_estimated
+    ON blackbox_profiles(estimated_at DESC, pool_digest DESC);
+
+CREATE TABLE blackbox_profile_lanes (
+    pool_digest BLOB NOT NULL,
+    lane INTEGER NOT NULL CHECK (lane BETWEEN 0 AND 5),
+    value_micro INTEGER,
+    n_obs INTEGER NOT NULL,
+    sufficiency_micro INTEGER NOT NULL CHECK (sufficiency_micro BETWEEN 0 AND 1000000),
+    CHECK (
+        (value_micro IS NULL AND n_obs = 0 AND sufficiency_micro = 0)
+        OR (value_micro IS NOT NULL AND n_obs > 0)
+    ),
+    PRIMARY KEY (pool_digest, lane),
+    FOREIGN KEY (pool_digest)
+        REFERENCES blackbox_profiles(pool_digest) ON DELETE CASCADE
+);
+
+CREATE TABLE blackbox_profile_sources (
+    pool_digest BLOB NOT NULL,
+    ordinal INTEGER NOT NULL CHECK (ordinal BETWEEN 0 AND 31),
+    campaign_fingerprint BLOB NOT NULL,
+    PRIMARY KEY (pool_digest, ordinal),
+    UNIQUE (pool_digest, campaign_fingerprint),
+    FOREIGN KEY (pool_digest)
+        REFERENCES blackbox_profiles(pool_digest) ON DELETE CASCADE,
+    FOREIGN KEY (campaign_fingerprint)
+        REFERENCES blackbox_campaigns(campaign_fingerprint) ON DELETE CASCADE
+);
+"#;
+
+const READ_BLACKBOX_PROFILES_DDL_SQL: &str =
+    "SELECT sql FROM sqlite_schema WHERE type = 'table' AND name = 'blackbox_profiles';";
+const READ_BLACKBOX_PROFILE_LANES_DDL_SQL: &str =
+    "SELECT sql FROM sqlite_schema WHERE type = 'table' AND name = 'blackbox_profile_lanes';";
+const READ_BLACKBOX_PROFILE_SOURCES_DDL_SQL: &str =
+    "SELECT sql FROM sqlite_schema WHERE type = 'table' AND name = 'blackbox_profile_sources';";
+
 const READ_CHATS_COLUMNS_SQL: &str =
     "SELECT name, type, \"notnull\", pk FROM pragma_table_info('chats') ORDER BY cid;";
 const READ_MESSAGES_COLUMNS_SQL: &str =
@@ -491,6 +587,11 @@ const MIGRATIONS: &[Migration] = &[
         version: 12,
         sql: MIGRATION_V12_SQL,
         verify: verify_v12_schema,
+    },
+    Migration {
+        version: 13,
+        sql: MIGRATION_V13_SQL,
+        verify: verify_v13_schema,
     },
 ];
 
@@ -1163,6 +1264,107 @@ fn verify_v12_schema(connection: &Connection) -> Result<(), MigrationError> {
     Ok(())
 }
 
+/// Column contracts for the profile lane, plus something the other verifiers
+/// do not do: the CHECK constraints are verified too.
+///
+/// `pragma_table_info` cannot see a CHECK, and for this lane the CHECKs *are*
+/// the contract — they are where "uncalibrated", "no fabricated zero" and
+/// "1..=32 pooled campaigns" stop being documentation and become impossible.
+/// A table with the right columns and no CHECKs would satisfy every other
+/// verifier in this file while silently accepting a profile that claims to be
+/// calibrated, so v13 reads its own DDL back and refuses to run against a
+/// schema whose seals have gone missing.
+fn verify_v13_schema(connection: &Connection) -> Result<(), MigrationError> {
+    verify_v12_schema(connection).map_err(|_| MigrationError::SchemaMismatch { version: 13 })?;
+
+    for (table_sql, expected) in [
+        (
+            "SELECT name, type, \"notnull\", pk FROM pragma_table_info('blackbox_profiles') ORDER BY cid;",
+            &[
+                ("pool_digest", "BLOB", true, 1),
+                ("schema_version", "TEXT", true, 0),
+                ("instrument", "TEXT", true, 0),
+                ("calibration", "TEXT", true, 0),
+                ("pooled_campaigns", "INTEGER", true, 0),
+                ("estimated_at", "INTEGER", true, 0),
+                ("updated_at", "INTEGER", true, 0),
+            ][..],
+        ),
+        (
+            "SELECT name, type, \"notnull\", pk FROM pragma_table_info('blackbox_profile_lanes') ORDER BY cid;",
+            &[
+                ("pool_digest", "BLOB", true, 1),
+                ("lane", "INTEGER", true, 2),
+                ("value_micro", "INTEGER", false, 0),
+                ("n_obs", "INTEGER", true, 0),
+                ("sufficiency_micro", "INTEGER", true, 0),
+            ][..],
+        ),
+        (
+            "SELECT name, type, \"notnull\", pk FROM pragma_table_info('blackbox_profile_sources') ORDER BY cid;",
+            &[
+                ("pool_digest", "BLOB", true, 1),
+                ("ordinal", "INTEGER", true, 2),
+                ("campaign_fingerprint", "BLOB", true, 0),
+            ][..],
+        ),
+    ] {
+        let cols = read_columns(connection, table_sql)
+            .map_err(|_| MigrationError::SchemaMismatch { version: 13 })?;
+        if !columns_match(&cols, expected) {
+            return Err(MigrationError::SchemaMismatch { version: 13 });
+        }
+    }
+
+    for (ddl_sql, required) in [
+        (
+            READ_BLACKBOX_PROFILES_DDL_SQL,
+            &[
+                "schema_version TEXT NOT NULL CHECK (schema_version = 'blackbox_profile.v1')",
+                "instrument TEXT NOT NULL CHECK (instrument = 'blackbox_sim')",
+                "calibration TEXT NOT NULL CHECK (calibration = 'uncalibrated-instrument')",
+                "pooled_campaigns INTEGER NOT NULL CHECK (pooled_campaigns BETWEEN 1 AND 32)",
+            ][..],
+        ),
+        (
+            READ_BLACKBOX_PROFILE_LANES_DDL_SQL,
+            &[
+                "lane INTEGER NOT NULL CHECK (lane BETWEEN 0 AND 5)",
+                "sufficiency_micro INTEGER NOT NULL CHECK (sufficiency_micro BETWEEN 0 AND 1000000)",
+                "(value_micro IS NULL AND n_obs = 0 AND sufficiency_micro = 0)",
+                "(value_micro IS NOT NULL AND n_obs > 0)",
+            ][..],
+        ),
+        (
+            READ_BLACKBOX_PROFILE_SOURCES_DDL_SQL,
+            &[
+                "ordinal INTEGER NOT NULL CHECK (ordinal BETWEEN 0 AND 31)",
+                "UNIQUE (pool_digest, campaign_fingerprint)",
+                "REFERENCES blackbox_campaigns(campaign_fingerprint) ON DELETE CASCADE",
+            ][..],
+        ),
+    ] {
+        let ddl = read_table_ddl(connection, ddl_sql)?;
+        if !required.iter().all(|fragment| ddl.contains(fragment)) {
+            return Err(MigrationError::SchemaMismatch { version: 13 });
+        }
+    }
+
+    Ok(())
+}
+
+/// The stored `CREATE TABLE` text with runs of whitespace collapsed, so the
+/// seal check above compares constraints rather than indentation.
+fn read_table_ddl(
+    connection: &Connection,
+    query: &'static str,
+) -> Result<String, MigrationError> {
+    let sql: String = connection
+        .query_row(query, [], |row| row.get(0))
+        .map_err(|_| MigrationError::SchemaMismatch { version: 13 })?;
+    Ok(sql.split_whitespace().collect::<Vec<&str>>().join(" "))
+}
+
 fn verify_v5_schema(connection: &Connection) -> Result<(), MigrationError> {
     verify_v4_schema(connection).map_err(|_| MigrationError::SchemaMismatch { version: 5 })?;
 
@@ -1397,7 +1599,9 @@ mod tests {
     ) -> Result<(), Box<dyn Error>> {
         let mut connection = Connection::open_in_memory()?;
         run_migrations(&mut connection)?;
-        assert_eq!(read_user_version(&connection)?, 12);
+        // The v12 lane must survive every later migration, so this asserts the
+        // head version rather than 12 — v13 is additive and touches none of it.
+        assert_eq!(read_user_version(&connection)?, LATEST_SCHEMA_VERSION);
 
         // The decision log is keyed so a replayed flush cannot duplicate
         // history: re-inserting the same (campaign, seq) must conflict.
@@ -1449,6 +1653,324 @@ mod tests {
             Err(MigrationError::SchemaMismatch { version: 12 })
         ));
         Ok(())
+    }
+
+    /// A migrated database with one campaign row the profile lane can cite.
+    fn migrated_with_campaign() -> Result<Connection, Box<dyn Error>> {
+        let mut connection = Connection::open_in_memory()?;
+        run_migrations(&mut connection)?;
+        connection.execute(
+            "INSERT INTO blackbox_campaigns VALUES \
+             (X'AA', 'blackbox_log.v1', 3, 0, 1, '2026-07-28', 1, 1);",
+            [],
+        )?;
+        Ok(connection)
+    }
+
+    const INSERT_UNCALIBRATED_PROFILE: &str = "INSERT INTO blackbox_profiles VALUES \
+         (X'A1', 'blackbox_profile.v1', 'blackbox_sim', 'uncalibrated-instrument', 1, 1, 1);";
+
+    #[test]
+    fn v13_profile_lane_cannot_store_a_calibrated_or_fabricated_estimate(
+    ) -> Result<(), Box<dyn Error>> {
+        let connection = migrated_with_campaign()?;
+        assert_eq!(read_user_version(&connection)?, 13);
+
+        // LAW-19 at rest: the certificate is sealed in the type system, and the
+        // vault refuses the claim too. Only the honest marker is storable.
+        connection.execute(INSERT_UNCALIBRATED_PROFILE, [])?;
+        assert!(
+            connection
+                .execute(
+                    "INSERT INTO blackbox_profiles VALUES \
+                     (X'A2', 'blackbox_profile.v1', 'blackbox_sim', 'calibrated', 1, 1, 1);",
+                    [],
+                )
+                .is_err(),
+            "a profile claiming calibration must be unstorable (LAW-19 / R-7)"
+        );
+        // Nor may it claim a different schema or a different instrument.
+        assert!(connection
+            .execute(
+                "INSERT INTO blackbox_profiles VALUES \
+                 (X'A3', 'tensor_profile.6d.v1', 'blackbox_sim', 'uncalibrated-instrument', 1, 1, 1);",
+                [],
+            )
+            .is_err());
+        assert!(connection
+            .execute(
+                "INSERT INTO blackbox_profiles VALUES \
+                 (X'A4', 'blackbox_profile.v1', 'interview', 'uncalibrated-instrument', 1, 1, 1);",
+                [],
+            )
+            .is_err());
+
+        // R-10 at rest: an empty pool is not a profile, and the cap is the
+        // bridge's MAX_POOLED_CAMPAIGNS.
+        for pooled in ["0", "33"] {
+            assert!(
+                connection
+                    .execute(
+                        &format!(
+                            "INSERT INTO blackbox_profiles VALUES \
+                             (X'A5', 'blackbox_profile.v1', 'blackbox_sim', \
+                              'uncalibrated-instrument', {pooled}, 1, 1);"
+                        ),
+                        [],
+                    )
+                    .is_err(),
+                "pooled_campaigns = {pooled} must be refused (R-10)"
+            );
+        }
+
+        // The honest N/A is storable exactly as BiasEstimate::NOT_MEASURED.
+        connection.execute(
+            "INSERT INTO blackbox_profile_lanes VALUES (X'A1', 0, NULL, 0, 0);",
+            [],
+        )?;
+        // A measured lane needs observations behind it.
+        connection.execute(
+            "INSERT INTO blackbox_profile_lanes VALUES (X'A1', 1, -250000, 12, 600000);",
+            [],
+        )?;
+
+        // Neither half of a fabricated measurement is storable: a value with
+        // no observations, or observations with no value.
+        assert!(
+            connection
+                .execute(
+                    "INSERT INTO blackbox_profile_lanes VALUES (X'A1', 2, 0, 0, 0);",
+                    [],
+                )
+                .is_err(),
+            "a value with zero observations is a fabricated zero (LAW-19)"
+        );
+        assert!(
+            connection
+                .execute(
+                    "INSERT INTO blackbox_profile_lanes VALUES (X'A1', 2, NULL, 9, 500000);",
+                    [],
+                )
+                .is_err(),
+            "observations without a value must not be storable"
+        );
+        // Sufficiency stays inside [0, MICRO].
+        for sufficiency in ["-1", "1000001"] {
+            assert!(
+                connection
+                    .execute(
+                        &format!(
+                            "INSERT INTO blackbox_profile_lanes VALUES \
+                             (X'A1', 2, 10, 5, {sufficiency});"
+                        ),
+                        [],
+                    )
+                    .is_err(),
+                "sufficiency {sufficiency} is outside [0, MICRO]"
+            );
+        }
+        // Lane numbers are frozen at 0..=5 (BXS-I-13): a seventh axis needs a
+        // reviewed migration, not an ad-hoc row.
+        assert!(connection
+            .execute(
+                "INSERT INTO blackbox_profile_lanes VALUES (X'A1', 6, 10, 5, 500000);",
+                [],
+            )
+            .is_err());
+        // One row per axis, and no lane without its profile.
+        assert!(
+            connection
+                .execute(
+                    "INSERT INTO blackbox_profile_lanes VALUES (X'A1', 0, 10, 5, 500000);",
+                    [],
+                )
+                .is_err(),
+            "an axis must not be storable twice for one profile"
+        );
+        assert!(
+            connection
+                .execute(
+                    "INSERT INTO blackbox_profile_lanes VALUES (X'FF', 0, NULL, 0, 0);",
+                    [],
+                )
+                .is_err(),
+            "orphan lanes must be refused"
+        );
+
+        // Provenance: a profile may only cite campaigns this vault actually
+        // holds, and may not cite the same campaign twice (which would let one
+        // campaign's trials be counted more than once).
+        connection.execute(
+            "INSERT INTO blackbox_profile_sources VALUES (X'A1', 0, X'AA');",
+            [],
+        )?;
+        assert!(
+            connection
+                .execute(
+                    "INSERT INTO blackbox_profile_sources VALUES (X'A1', 1, X'AA');",
+                    [],
+                )
+                .is_err(),
+            "one campaign must not enter the same pool twice"
+        );
+        assert!(
+            connection
+                .execute(
+                    "INSERT INTO blackbox_profile_sources VALUES (X'A1', 1, X'BEEF');",
+                    [],
+                )
+                .is_err(),
+            "a profile must not cite a campaign that is not in the vault"
+        );
+        assert!(
+            connection
+                .execute(
+                    "INSERT INTO blackbox_profile_sources VALUES (X'A1', 32, X'AA');",
+                    [],
+                )
+                .is_err(),
+            "ordinal must stay inside the pool bound (R-10)"
+        );
+
+        // Deleting the estimate takes its lanes and its provenance with it —
+        // no lane row can outlive the profile it belongs to.
+        connection.execute("DELETE FROM blackbox_profiles WHERE pool_digest = X'A1';", [])?;
+        let lanes: i64 =
+            connection.query_row("SELECT count(*) FROM blackbox_profile_lanes;", [], |r| {
+                r.get(0)
+            })?;
+        let sources: i64 =
+            connection.query_row("SELECT count(*) FROM blackbox_profile_sources;", [], |r| {
+                r.get(0)
+            })?;
+        assert_eq!((lanes, sources), (0, 0));
+        Ok(())
+    }
+
+    #[test]
+    fn v13_profile_lane_has_no_6d_surface_and_no_free_text() -> Result<(), Box<dyn Error>> {
+        let mut connection = Connection::open_in_memory()?;
+        run_migrations(&mut connection)?;
+
+        // R-7: the 6D projection stays all N/A and lives nowhere in the vault.
+        // A column here would be a parking space for an uncalibrated number.
+        let mut all_columns: Vec<String> = Vec::new();
+        for query in [
+            "SELECT name, type, \"notnull\", pk FROM pragma_table_info('blackbox_profiles') ORDER BY cid;",
+            "SELECT name, type, \"notnull\", pk FROM pragma_table_info('blackbox_profile_lanes') ORDER BY cid;",
+            "SELECT name, type, \"notnull\", pk FROM pragma_table_info('blackbox_profile_sources') ORDER BY cid;",
+        ] {
+            for column in read_columns(&connection, query)? {
+                all_columns.push(column.name);
+            }
+        }
+        let forbidden: Vec<&String> = all_columns
+            .iter()
+            .filter(|name| {
+                let lower = name.to_ascii_lowercase();
+                ["score", "projection", "tensor", "6d", "dimension", "certificate"]
+                    .iter()
+                    .any(|needle| lower.contains(needle))
+            })
+            .collect();
+        assert!(
+            forbidden.is_empty(),
+            "the profile lane must expose no 6D/certificate surface (R-7, LAW-19): {forbidden:?}"
+        );
+
+        // Every TEXT column is a sealed literal; the numeric tables carry none.
+        let profile_text: Vec<String> = read_columns(
+            &connection,
+            "SELECT name, type, \"notnull\", pk FROM pragma_table_info('blackbox_profiles') ORDER BY cid;",
+        )?
+        .into_iter()
+        .filter(|column| column.data_type == "TEXT")
+        .map(|column| column.name)
+        .collect();
+        assert_eq!(
+            profile_text,
+            vec!["schema_version", "instrument", "calibration"],
+            "a new free-text column appeared in the profile lane (SPEC §9.2)"
+        );
+        for query in [
+            "SELECT name, type, \"notnull\", pk FROM pragma_table_info('blackbox_profile_lanes') ORDER BY cid;",
+            "SELECT name, type, \"notnull\", pk FROM pragma_table_info('blackbox_profile_sources') ORDER BY cid;",
+        ] {
+            assert!(
+                read_columns(&connection, query)?
+                    .iter()
+                    .all(|column| column.data_type != "TEXT"),
+                "the estimate itself is integers only"
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn v13_verification_rejects_an_extra_column_or_a_missing_seal(
+    ) -> Result<(), Box<dyn Error>> {
+        let mut connection = Connection::open_in_memory()?;
+        run_migrations(&mut connection)?;
+        verify_v13_schema(&connection)?;
+
+        // Same discipline as v12: an extra column is a mismatch.
+        connection.execute("ALTER TABLE blackbox_profile_lanes ADD COLUMN note TEXT;", [])?;
+        assert!(matches!(
+            verify_v13_schema(&connection),
+            Err(MigrationError::SchemaMismatch { version: 13 })
+        ));
+
+        // And a table with the right columns but no CHECKs — the shape a
+        // hand-repaired or downgraded database would have — is refused, since
+        // that table would accept a profile claiming to be calibrated.
+        let mut connection = Connection::open_in_memory()?;
+        run_migrations(&mut connection)?;
+        connection.execute_batch(
+            "DROP TABLE blackbox_profiles;
+             CREATE TABLE blackbox_profiles (
+                 pool_digest BLOB NOT NULL PRIMARY KEY,
+                 schema_version TEXT NOT NULL,
+                 instrument TEXT NOT NULL,
+                 calibration TEXT NOT NULL,
+                 pooled_campaigns INTEGER NOT NULL,
+                 estimated_at INTEGER NOT NULL,
+                 updated_at INTEGER NOT NULL
+             );",
+        )?;
+        assert!(
+            matches!(
+                verify_v13_schema(&connection),
+                Err(MigrationError::SchemaMismatch { version: 13 })
+            ),
+            "an unsealed profile table must not pass verification"
+        );
+        Ok(())
+    }
+
+    /// The SQL bounds are copies of Rust constants; this fails the moment one
+    /// side moves without the other.
+    #[cfg(feature = "blackbox-sim")]
+    #[test]
+    fn v13_sql_bounds_match_the_rust_constants() {
+        use crate::blackbox_sim::bias::{N_AXES, SCHEMA_BLACKBOX_PROFILE_V1};
+        use crate::blackbox_sim::bridge::MAX_POOLED_CAMPAIGNS;
+        use crate::blackbox_sim::money::MICRO;
+
+        assert_eq!(MAX_POOLED_CAMPAIGNS, 32);
+        assert!(MIGRATION_V13_SQL.contains("pooled_campaigns BETWEEN 1 AND 32"));
+        assert!(MIGRATION_V13_SQL.contains("ordinal BETWEEN 0 AND 31"));
+        assert_eq!(N_AXES, 6);
+        assert!(MIGRATION_V13_SQL.contains("lane BETWEEN 0 AND 5"));
+        assert_eq!(MICRO, 1_000_000);
+        assert!(MIGRATION_V13_SQL.contains("sufficiency_micro BETWEEN 0 AND 1000000"));
+        assert_eq!(SCHEMA_BLACKBOX_PROFILE_V1, "blackbox_profile.v1");
+        assert!(MIGRATION_V13_SQL.contains("schema_version = 'blackbox_profile.v1'"));
+        // The uncalibrated marker is `bias::CALIBRATION_UNCALIBRATED`.
+        assert_eq!(
+            crate::blackbox_sim::bias::CALIBRATION_UNCALIBRATED,
+            "uncalibrated-instrument"
+        );
+        assert_eq!(crate::blackbox_sim::bias::INSTRUMENT_ID, "blackbox_sim");
     }
 
     #[test]

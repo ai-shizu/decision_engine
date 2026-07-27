@@ -228,10 +228,10 @@ Director が `DOM_STIMULI` ストリームで**自然なゲームイベントと
 
 ## 11. deep_profile 接続 — 計器の分離
 
-- 成果物は `blackbox_profile.v1`（vault 新テーブル。schema v12、Phase 3 で migration）。面接 6D (`tensor_profile.6d.v1`) とは**別の計器**であり、直接合流しない（構成概念の純粋性 — §4.59 の精神）。
-- 6D への射影は**決定論的観測器が存在する 4 次元のみ**、`instrument="blackbox_sim"` の provenance 付きで Phase 6 に定義する（重み定数は校正データ取得後に凍結 — 投機的定数の先行凍結は LAW-19 違反）。`communication` / `collaboration_adaptability` は本計器からは**恒久 N/A**（ソロシムに観測器なし。捏造禁止）。
-- 露出の合法出口は Echo と同じ 3 つのみ: **consult 注入（`consult_context.rs` の fail-safe 読込に合流）/ 講評・Debrief / PROFILE UI**（I-22 と同型）。面接出題・GD 議論・es_review へは不出。
-- **書込は二重ゲート:** (a) §12 校正 GREEN、(b) 指揮官裁定。それまで書込 API はコード上**存在しない**（型ゲート: `CalibrationCertificate` を要求する関数署名のみ先行定義し、production 構築経路を置かない）。校正前に到達可能な唯一の射影は全 N/A + `calibration="uncalibrated-instrument"` マーカー（`authoritative_profile()` の `no-llm-authority` と同じ「正直な未測定」の作法）。
+- 成果物は `blackbox_profile.v1`（vault **v13** 三表: `blackbox_profiles` / `_lanes` / `_sources`。記録レーンの v12 とは別 migration。Phase 6-A as-built §25）。面接 6D (`tensor_profile.6d.v1`) とは**別の計器**であり、直接合流しない（構成概念の純粋性 — §4.59 の精神）。
+- 6D への射影は**決定論的観測器が存在する 4 次元のみ**、`instrument="blackbox_sim"` の provenance 付きで **Phase 6-B** に定義する（重み定数は校正データ取得後に凍結 — 投機的定数の先行凍結は LAW-19 違反）。`communication` / `collaboration_adaptability` は本計器からは**恒久 N/A**（ソロシムに観測器なし。捏造禁止）。
+- 露出の合法出口は Echo と同じ 3 つのみ: **consult 注入（`consult_context.rs` の fail-safe 読込に合流）/ 講評・Debrief / PROFILE UI**（I-22 と同型）。面接出題・GD 議論・es_review へは不出（BXS-I-26）。
+- **書込は二重ゲート（R-8）:** (a) §12 校正 GREEN（CI `needs: calibration`）、(b) feature `blackbox-profile-write`（default 外・commander ruling）。フラグ非ビルド時は `insert_profile` が**コード上不在**。畳み方は `BLACKBOX_PROFILE_WRITE_NOT_READY`（`EGRESS_LIVE_NOT_READY` 同型）。校正前に到達可能な唯一の射影は全 N/A + `calibration="uncalibrated-instrument"` マーカー（`authoritative_profile()` の `no-llm-authority` と同じ「正直な未測定」の作法）。`CalibrationCertificate` の封印は 6-A では開けない（BXS-I-24）。
 
 ## 12. 校正 — PHANTOM-BOT 既知解ゲート（R-2 の履行）
 
@@ -299,6 +299,7 @@ Director が `DOM_STIMULI` ストリームで**自然なゲームイベントと
 | BXS-I-23 | fixture-blindness（§12）: `bias.rs`（推定器）と `phantom_bot.rs`（校正 BOT）は互いに import しない。両方を import してよいのは `calibration.rs` 1 ファイルのみ。BOT が推定器の定数に合わせて書かれた瞬間、校正は同語反復になる | `test_blackbox_sim_contract.py::test_bias_and_phantom_bot_never_import_each_other` |
 | BXS-I-24 | `CalibrationCertificate` は production 構築経路を持たない。唯一のコンストラクタ `test_only()` は `#[cfg(test)]` のまま（選択肢 A 裁定、2026-07-27）。校正 suite が全軸 GREEN を返しても、この一線を跨いで証明書を鋳造する経路はコード上存在しない — `calibration.rs` 自体も `#[cfg(test)]` でしか到達できない | `bias::tests::a_passing_calibration_run_does_not_by_itself_mint_a_certificate` + `test_blackbox_sim_contract.py::test_calibration_certificate_has_no_production_constructor` |
 | BXS-I-25 | 拒否テレメトリの記録範囲は許可リスト（裁定、2026-07-27）: 「有効な形式の intent が、アクティブな刺激下で、業務ルールにより拒否された」場合のみ `RefusalLog` へ記録する。`classify_refusal` は `_ => None` で終わる allowlist であり、型・形式エラー（`InvalidForecastInterval` 等）は既定で無記録に留まる | `director::tests::a_business_rule_refusal_with_no_active_stimulus_is_not_logged` + `test_blackbox_sim_contract.py::test_refusal_classifier_is_an_allowlist_not_a_catchall` |
+| BXS-I-26 | 読み出した `blackbox_profile.v1` をゲームへ還流させない。合法出口は consult / 講評・Debrief / PROFILE UI の 3 つのみ。面接本番・GD ライブ・es_review・`Session::start` / 難度 / 刺激選択へは不出。mentor バンドル（`blackbox_block` / `append_mentor_sections` / `load_mentor_context`）の新規消費者は契約 RED（G-1）。Python `_blackbox_section()` の呼び出し元は構造列挙で固定（G-2） | `test_blackbox_sim_contract.py::test_bxs_i26_*` + `test_bxs_i26_mentor_band_consumers_are_allowlisted` + `test_bxs_i26_commands_sim_blackbox_only_inside_is_debrief` + `test_bxs_i26_python_blackbox_section_callers_are_structural` |
 
 ### 罠（予測。W-nn は実装より先に読め）
 
@@ -335,8 +336,8 @@ Director が `DOM_STIMULI` ストリームで**自然なゲームイベントと
 | **P4（完）** | 推定器 6 レーン + PHANTOM-BOT 校正 suite | 既知解回収率下限 GREEN — 全 6 軸実測（§22.3） |
 | **P5-A（完・backend-first）** | IPC command 層 + vault 永続化配線（FE・フレーバ層は裁定によりこの回は非射程） | `cargo test --features blackbox-sim` 全 GREEN・`pytest tests/test_blackbox_sim_contract.py` 全 GREEN（§23.5） |
 | **P5-B（完・FE / 固定テンプレート）** | Coliseum BLACKBOX アリーナ FE（フレーバ層は依然非射程） | `npm run test:boundary` GREEN・`tsc --noEmit` GREEN・契約テスト GREEN（§24.5） |
-| P6（未着手） | profile bridge（二重ゲート） | 校正 GREEN ∧ 指揮官裁定 |
-| P6 | profile bridge + 憲法 as-built 追記・§0 表更新 | 二重ゲート（校正 GREEN + 裁定）確認後のみ |
+| **P6-A（完・2026-07-28）** | bias 6-lane profile bridge: vault v13 + R-8 書込ゲート + live write + R-9 三出口 + BXS-I-26 | 両 feature 構成 GREEN・`pytest tests/`・`npm run test:boundary`・BXS-I-26 契約（§25） |
+| **P6-B（未着手）** | 6D 射影の重み凍結 | 校正データ取得後 ∧ `CalibrationCertificate` 裁定（LAW-19 / BXS-I-24） |
 
 ## 18. Phase 0 as-built（2026-07-27）
 
@@ -591,4 +592,53 @@ Phase 4 完遂の正式承認・コミット指示（`feat(blackbox_sim): comple
 
 - **LLM フレーバ層（§14）** — 未着手。
 - **`bxs_load_generation` FE 結線 / 保存キャンペーン一覧** — 再開 UX は follow-up。
-- **`estimate_profile` production 配線** — P6。
+- **`estimate_profile` production 配線** — **P6-A で完遂**（§25）。6D 射影は P6-B。
+
+## 25. Phase 6-A as-built（2026-07-28・profile bridge / R-7〜R-10）
+
+### 25.1 射程と裁定
+
+- **R-7:** 6-A = bias 6-lane `blackbox_profile.v1` のみ。6D 射影は 6-B。`CalibrationCertificate` 封印維持（LAW-19 / BXS-I-24）。
+- **R-8:** 書込 = `blackbox-profile-write` ∧ CI 校正 GREEN（egress-live 同型）。default 外。非ビルド時は `insert_profile` 不在 + `BLACKBOX_PROFILE_WRITE_NOT_READY`。
+- **R-9:** 三出口 = consult / 講評・Debrief / PROFILE UI。単一アクセサ `get_latest_profile` / `list_profiles` → `blackbox_profile_outlet`。
+- **R-10:** 密封キャンペーンのみ・上限 32・newest-first。密封の権威は `replay_verified` → `CampaignNotSealed`。
+
+### 25.2 実装骨格
+
+| 層 | 所在 |
+|---|---|
+| bridge | `blackbox_sim/bridge.rs` — `estimate_pooled` / `pool_digest` / Decide-time digest |
+| vault v13 | `db/migrations.rs` — profiles / lanes / sources（CHECK で uncalibrated 封印） |
+| repo | `db/blackbox_repo.rs` — insert/load/list + W-26 digest 照合 + W-a fingerprint 釘 |
+| live write | `compose_sealed_pool` → `estimate_and_insert_profile` → vault IMMEDIATE txn |
+| outlet | `db/blackbox_profile_outlet.rs` — 「未測定」リテラル・権威境界・整数 sufficiency |
+| consult/講評 | `llm/consult_context.rs` + `commands_sim`（`is_debrief` のみ）+ Python `_blackbox_section` |
+| PROFILE UI | `bxs_latest_profile` / `BlackboxProfilePanel`（Arena には出さない） |
+| CI | `.github/workflows/blackbox-profile-write-gate.yml` — `--lib` 校正 ≥14 / `needs: calibration` |
+
+### 25.3 監査で潰した欠陥（要約）
+
+| ID | 内容 |
+|---|---|
+| B-1 / B-2 | `pool_digest`↔sources 照合（write/read）; `ProfileMeta::from_row` LAW-19 |
+| C-1〜C-3 | 校正 `--lib`+1 行表明; `PROFILE_WRITE_ENTRY` 撤去; CI `grep`/`pipefail` |
+| H-1 | FingerprintMismatch 回帰テスト |
+| G-1 / G-2 | mentor バンドル消費者 allowlist; `_blackbox_section` 構造列挙; es_review 非注入 |
+
+### 25.4 検証ゲート（封緘時・実測）
+
+| ゲート | 実測 |
+|---|---|
+| `cargo test --features blackbox-sim,secure-vault` | lib **551** + 統合/doctest GREEN（exit 0） |
+| `cargo test --features blackbox-sim,secure-vault,blackbox-profile-write` | lib **563** + 統合/doctest GREEN |
+| `cargo test --features blackbox-sim` | lib **422** + 統合/doctest GREEN（vault 無し構成） |
+| `npm run test:boundary` | **BOUNDARY_EXIT=0**（blackbox_arena 含む） |
+| `pytest tests/test_blackbox_sim_contract.py` | **33/33** |
+| `pytest tests/` | **717 passed** / 54 failed / 2 skipped — 失敗 54 件は HEAD（Phase 5-B `36f3a0b`）と**同一集合**（本フェーズの回帰増は 0。既知 2 件は `.cursorrules` 記載どおり） |
+| `cargo clippy --features blackbox-sim,secure-vault,blackbox-profile-write --all-targets` | crate エラー **280**（baseline 281 → −1）。**変更ファイル由来の指摘 0** |
+
+### 25.5 意図的非射程
+
+- Phase 6-B（6D 重み凍結 / certificate 開封）
+- LLM フレーバ層（§14）
+- ブランチ既存の FE 契約ドリフト 54 件（m20 / Phase 5-B 負債。本封緘の回帰対象外）

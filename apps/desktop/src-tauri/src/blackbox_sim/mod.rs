@@ -22,6 +22,7 @@
 
 pub mod action;
 pub mod bias;
+pub mod bridge;
 pub mod det_math;
 pub mod director;
 pub mod firm;

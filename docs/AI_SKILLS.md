@@ -2101,7 +2101,7 @@ latest commit **後**にだけ `_prune_retrieval_manifests` を実行する。
 
 — 初代リードアーキテクト Fable（2026-07-27 移譲）
 
-## 20. Target Golf — THE BLACKBOX SIMULATOR (`docs/SPEC_BLACKBOX_SIMULATOR.md`。Phase 0〜5-B 完遂 / Phase 6(profile bridge)・フレーバ層 未着手)
+## 20. Target Golf — THE BLACKBOX SIMULATOR (`docs/SPEC_BLACKBOX_SIMULATOR.md`。Phase 0〜5-B 完遂 / Phase 6-A step1–7 封緘（6-B 未着手）/ フレーバ層 未着手)
 
 本節は Target Golf の設計規律と as-built の両方の要約を持つ。**正本は `docs/SPEC_BLACKBOX_SIMULATOR.md`**（§0 裁定台帳・§16 不変条件/罠台帳 `BXS-I-nn`/`BXS-W-nn`・§18〜24 各フェーズ as-built）。オフライン金融シミュレータでありながら、真の目的はプレイヤーの意思決定から損失回避・処分効果・アンカリング・過信・エスカレーション・プレッシャー下劣化の 6 バイアスを決定論的に抽出する計器である（Echo と並ぶ第二の「決定論的観測器」）。既定ビルド非包含（feature `blackbox-sim`）。
 
@@ -2114,7 +2114,8 @@ latest commit **後**にだけ `_prune_retrieval_manifests` を実行する。
 | P4 | 完遂 | 推定器 6 レーン + PHANTOM-BOT 校正 suite（SPEC §22） |
 | P5-A | 完遂（backend-first） | IPC command 層（`blackbox_arena/`）+ vault 永続化配線（SPEC §23） |
 | P5-B | 完遂（FE / 固定テンプレート） | Coliseum BLACKBOX Arena FE（SPEC §24）。フレーバ層は非射程 |
-| P6 | 未着手 | profile bridge（二重ゲート: 校正 GREEN ∧ 指揮官裁定） |
+| P6-A | 完遂（step1–7 / 封緘） | bridge + vault v13 + R-8 + live write + R-9 三出口 + BXS-I-26。証明書封印は維持（LAW-19） |
+| P6-B | 未着手 | 6D 射影の重み凍結（校正データ取得後） |
 
 Phase 4（校正 suite 実装）で踏んだ、他の決定論計測器にも一般化するハマりどころ（詳細は SPEC §16 の BXS-W-19〜21）:
 
@@ -2133,3 +2134,20 @@ Phase 5-B（Coliseum BLACKBOX Arena FE）で踏んだ、他の「計測器付き
 7. **対象 ID を持つ操作語彙があるなら、観測 DTO にその ID を選ぶための帳簿/状態ビューを同送せよ。** 市場ティックと刺激だけ返して「完全にプレイ可能」と宣言すると、UI は `ContinueProject` / `ClosePosition` 等を出せず、推定レーンが静かに餓死する。エラーは出ない。
 8. **限界値定数（価格上限・注文上限・キャンペーン長）を FE にハードコードするな。観測と一緒に同送し、ビルダはそれだけを読め。** 数値発明ガードは LLM フレーバ層だけの話ではない — FE の intent ビルダが同じ罪を犯す。
 9. **凍結オーバーレイはシェル全体ではなくアリーナ単位で掛けよ。** 同一シェルに新アリーナを足すとき、既存の COMING SOON ラッパが外側のまま残ると新機能ごと操作不能になる。
+
+Phase 6-A step1（`bridge::estimate_pooled`）で踏んだ、リプレイ恒等式を production の前提に格上げするときのハマりどころ:
+
+10. **リプレイ照合は「最終 digest」ではなく「Decide-time digest」で行え。** ライブセッションが `DecisionEvent.state_digest` に刻むのは submit 直前の状態であり、turn-end の `TurnReport.state_digest`（Settle 後）とは別物。最終だけ合わせると途中の分岐退化が黙殺される。不一致は推定を中止して `ReplayDivergence` で書込を拒否せよ — 歪んだプロファイルを書くな。
+11. **`CampaignLog` は `Session` を借りる。セッション群を先に `Vec` へ実体化してからログを組め（W-22）。** イテレータの一時値から借りようとするとコンパイルが通らない。
+12. **校正 GREEN が裏書きするのはバイアス 6 レーンだけである。面接 6D 射影の重みには校正データが無い（LAW-19）。** `CalibrationCertificate` の封印を「推定器が動くから」という理由で緩めるな。バイアス座標系の profile 書込と 6D 射影は別ゲート。
+13. **プロファイル表はスナップショット、記録表は append-only — 両者を同じ INSERT OR IGNORE で扱うな。** 同一 `pool_digest` の再推定は `INSERT OR REPLACE`（親削除 → CASCADE）で置き換える。また `blackbox_profile_sources` の FK は `blackbox_campaigns` を要求するので、推定前にキャンペーン行が存在する順序を契約にせよ。
+14. **`pool_digest` は `_sources` 順序付き fingerprint の再計算と境界で必ず照合せよ（W-26）。** 書きは `InvalidProfile`、読みは `CorruptRow`。出鱈目な 8 バイトを主キーに許すと「血統を騙る profile」が成立する（ステップ 3 監査 B-1）。
+15. **一覧 API も LAW-19 マーカーを検証せよ。** `list_profiles` が schema/instrument/calibration を無検証で返すと、改竄 DB の `calibrated` が UI に素通りする（B-2）。`ProfileMeta::from_row` に集約。
+16. **プロファイル書込は R-8 二要素 AND（`blackbox-profile-write` ∧ CI 校正 GREEN）。** default に入れない。フラグ非ビルド時は関数自体が不在（実行時 `if` 禁止）。畳み方は `BLACKBOX_PROFILE_WRITE_NOT_READY`（`EGRESS_LIVE_NOT_READY` 同型）。校正ジョブは `--lib` 必須（バイナリの `0 passed` を `tail` すると恒久 RED — C-1）。結果行は `grep -c` == 1 を表明せよ。
+17. **`#[used]` で writer の never-used を消すな（C-2）。** それは「配線済み」検査を構造的に無効化する。未配線中は `allow` + 削除予定コメント、配線後は allow を外し CI 検査へ `insert_profile` を戻せ。
+18. **密封プール組成は vault/arena 側のみ（W-b）。** `created_date`+三フィールドから `GenesisRequest` を復元し、`Session::start` の fingerprint と保存値を照合（不一致は書込拒否）。decision 件数 == `CAMPAIGN_TICKS` は効率フィルタに過ぎず、密封の権威は `replay_verified` → `CampaignNotSealed`。sources 順序は `estimate_pooled` に渡した同一 Vec から導出せよ（W-26）。
+19. **読み出した profile をゲームへ還流させるな（BXS-I-26）。** 3 出口（consult / 講評 / PROFILE UI）のみ。`Session::start` / 難度 / 刺激へ入力禁止。python 契約が deny 面を走査。
+19a. **mentor バンドルの間接伝播も監視せよ（G-1）。** 計器の媒体は識別子ではなく `MentorContextSections.blackbox_block`（String）。`append_mentor_sections` / `load_mentor_context` / `blackbox_block` / `blackbox_available` をマーカーとし、合法消費者を 4 ファイルに限定（`consult_context` / `commands_consult` / `commands_sim` / `commands_rag`）。`commands_sim` では `blackbox_block` が `if is_debrief` 内に限定されることを走査で固定 — 目視に頼るな。
+19b. **Python `_blackbox_section()` は窓ではなく囲む `def` で列挙せよ（G-2）。** `ce.find("es_review")` + N 文字窓はドキュメント伸びで無効化する。合法呼び出し元 = `{build_static_prefix, _consult_interview_sim, _consult_gd_sim}`。併せて `_consult_es_review` が `build_static_prefix` / `_blackbox_section` を呼ばないことを表明。
+20. **未測定レーンは「未測定」と書け。** `value_micro: None` を 0・平均・空欄に化けさせるな。`pooled_campaigns` と `uncalibrated-instrument` 権威境界を必ず同梱（no-llm-authority 同型）。表示は整数演算のみ（`format_sufficiency` / `format_value_micro` に f64 を残すな — N-1）。
+21. **R-9 単一アクセサ:** SQL は `get_latest_profile` / `list_profiles` のみ。表示文字列は `blackbox_profile_outlet`。出口ごとの独自 SELECT 禁止。

@@ -335,6 +335,13 @@ pub(crate) enum SimUiErrorCode {
     GenerationNotFound,
     Unavailable,
     InternalFault,
+    /// R-8 second factor absent: binary built without `blackbox-profile-write`.
+    /// Wire spelling mirrors `EGRESS_LIVE_NOT_READY` (SCREAMING_SNAKE string).
+    /// Present in every blackbox-sim build so the command signature is stable;
+    /// constructed only when the feature is off.
+    #[cfg_attr(feature = "blackbox-profile-write", allow(dead_code))]
+    #[serde(rename = "BLACKBOX_PROFILE_WRITE_NOT_READY")]
+    BlackboxProfileWriteNotReady,
 }
 
 /// Narrow `DirectorError` down to the wire vocabulary. Every arm is explicit

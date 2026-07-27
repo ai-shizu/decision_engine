@@ -2389,6 +2389,8 @@ fn build_machine_prompt(
                 prompt.push_str(&mentor.gap_block);
                 prompt.push_str("\n## Tensorプロファイル（講評専用）\n");
                 prompt.push_str(&mentor.tensor_block);
+                prompt.push_str("\n## BLACKBOXバイアス計器（講評専用・校正前）\n");
+                prompt.push_str(&mentor.blackbox_block);
                 prompt.push_str("\n## Oracle予測（講評専用）\n");
                 prompt.push_str(&mentor.oracle_block);
             }
