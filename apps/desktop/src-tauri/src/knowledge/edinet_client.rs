@@ -1272,6 +1272,118 @@ pub fn acquisition_from_selected_with_body(
     acquisition_from_selected(selected, facts, fields_from_body(body_text))
 }
 
+/// PartialEdinetFacts（財務/ナラティブ）から Step 10 マージ入力を組み立てる。
+///
+/// facts のフィールド上限・sanitize・doc_id/edinet_code 整合は既存
+/// `merge_company_facts` / `EdinetFactAcquisition::new` の規律を再利用する。
+/// evidence は入力の連結をそのまま返す（再 sanitize しない）。
+pub fn acquisition_from_selected_with_partials(
+    selected: &YuhoSelection,
+    financials: Option<&crate::knowledge::edinet_csv::PartialEdinetFacts>,
+    narratives: Option<&crate::knowledge::edinet_csv::PartialEdinetFacts>,
+) -> Result<
+    (
+        EdinetFactAcquisition,
+        Vec<crate::knowledge::edinet_csv::EdinetEvidenceSection>,
+        Vec<crate::knowledge::edinet_csv::EdinetWarning>,
+    ),
+    EdinetError,
+> {
+    if !is_eligible_yuho_original(&selected.original) {
+        return Err(EdinetError::Malformed);
+    }
+    let mut facts = facts_from_document_meta(&selected.original);
+    let mut fields = EdinetFieldAcquisition {
+        business_summary: false,
+        business_risks: false,
+        performance_summary: false,
+    };
+    let mut evidence = Vec::new();
+    let mut warnings = Vec::new();
+
+    if let Some(partial) = financials {
+        let rendered = render_performance_summary_from_financials(&partial.financials);
+        if !rendered.is_empty() {
+            facts.performance_summary = rendered;
+            fields.performance_summary = true;
+        }
+        evidence.extend(partial.evidence.iter().cloned());
+        warnings.extend(partial.warnings.iter().cloned());
+    }
+    if let Some(partial) = narratives {
+        for narrative in &partial.narratives {
+            match narrative.concept {
+                crate::knowledge::edinet_csv::NarrativeConcept::DescriptionOfBusiness => {
+                    if !narrative.text.is_empty() {
+                        facts.business_summary =
+                            safe_truncate(&narrative.text, MAX_FACT_FIELD_BYTES);
+                        fields.business_summary = true;
+                    }
+                }
+                crate::knowledge::edinet_csv::NarrativeConcept::BusinessRisks => {
+                    if !narrative.text.is_empty() {
+                        facts.business_risks =
+                            safe_truncate(&narrative.text, MAX_FACT_FIELD_BYTES);
+                        fields.business_risks = true;
+                    }
+                }
+                crate::knowledge::edinet_csv::NarrativeConcept::ManagementAnalysis => {
+                    // Display CompanyFacts has no dedicated field; evidence only.
+                }
+            }
+        }
+        evidence.extend(partial.evidence.iter().cloned());
+        warnings.extend(partial.warnings.iter().cloned());
+    }
+
+    if fields.business_summary
+        || fields.business_risks
+        || fields.performance_summary
+    {
+        facts.source = "edinet_zip".into();
+    }
+    let facts = sanitize_company_facts(&facts)?;
+    let acquisition = acquisition_from_selected(selected, facts, fields)?;
+    Ok((acquisition, evidence, warnings))
+}
+
+fn render_performance_summary_from_financials(
+    financials: &[crate::knowledge::edinet_csv::ExtractedFinancialFact],
+) -> String {
+    if financials.is_empty() {
+        return String::new();
+    }
+    let mut lines = Vec::with_capacity(financials.len());
+    for fact in financials {
+        let label = if fact.label.trim().is_empty() {
+            fact.element_id.as_str()
+        } else {
+            fact.label.as_str()
+        };
+        let unit = if fact.unit_label.trim().is_empty() {
+            fact.unit_id.as_str()
+        } else {
+            fact.unit_label.as_str()
+        };
+        let year = match fact.relative_year {
+            crate::knowledge::edinet_csv::RelativeYear::Current => "current",
+            crate::knowledge::edinet_csv::RelativeYear::Prior => "prior",
+            crate::knowledge::edinet_csv::RelativeYear::Other => "other",
+        };
+        let consol = match fact.consolidation {
+            crate::knowledge::edinet_csv::Consolidation::Consolidated => "consol",
+            crate::knowledge::edinet_csv::Consolidation::NonConsolidated => "nonconsol",
+            crate::knowledge::edinet_csv::Consolidation::Unknown => "unknown",
+        };
+        lines.push(format!(
+            "{label}\t{year}\t{consol}\t{unit}\t{}",
+            fact.value_text
+        ));
+    }
+    let joined = lines.join("\n");
+    safe_truncate(&joined, MAX_FACT_FIELD_BYTES)
+}
+
 pub fn acquisition_from_document_meta_with_body(
     original: &EdinetDocumentMeta,
     body_text: Option<&str>,
@@ -2509,5 +2621,97 @@ mod tests {
         let out = sanitize_company_facts(&facts).expect("capped fields fit total");
         assert_eq!(out.business_summary.len(), MAX_FACT_FIELD_BYTES);
         assert_eq!(out.performance_summary.len(), MAX_FACT_FIELD_BYTES);
+    }
+
+    #[test]
+    fn acquisition_from_selected_with_partials_maps_fields_and_evidence() {
+        use crate::knowledge::edinet_csv::{
+            Consolidation, EdinetEvidenceSection, ExtractedFinancialFact, ExtractedNarrative,
+            FinancialConcept, NarrativeConcept, PartialEdinetFacts, PeriodKind, RelativeYear,
+        };
+
+        let body = wrap_results(&[eligible_120("S100PART", "2024-06-25 15:00")]);
+        let filter = ListCandidateFilter::by_edinet_code("E02144").expect("filter");
+        let docs = collect_list_candidates(body.as_bytes(), &filter).expect("parse");
+        let selected = select_eligible_yuho_original(&docs).expect("select");
+
+        let financials = PartialEdinetFacts {
+            financials: vec![ExtractedFinancialFact {
+                concept: FinancialConcept::Revenue,
+                element_id: "jppfs_cor_NetSales".into(),
+                label: "売上高".into(),
+                context_id: "CurrentYearDuration".into(),
+                relative_year: RelativeYear::Current,
+                consolidation: Consolidation::Consolidated,
+                period_kind: PeriodKind::Duration,
+                unit_id: "JPY".into(),
+                unit_label: "円".into(),
+                value_text: "100".into(),
+            }],
+            narratives: Vec::new(),
+            evidence: Vec::new(),
+            warnings: Vec::new(),
+        };
+        let narratives = PartialEdinetFacts {
+            financials: Vec::new(),
+            narratives: vec![
+                ExtractedNarrative {
+                    concept: NarrativeConcept::DescriptionOfBusiness,
+                    local_name: "DescriptionOfBusinessTextBlock".into(),
+                    text: "事業の内容本文".into(),
+                    truncated: false,
+                },
+                ExtractedNarrative {
+                    concept: NarrativeConcept::BusinessRisks,
+                    local_name: "BusinessRisksTextBlock".into(),
+                    text: "リスク本文".into(),
+                    truncated: false,
+                },
+            ],
+            evidence: vec![EdinetEvidenceSection {
+                doc_id: "S100PART".into(),
+                edinet_code: "E02144".into(),
+                submitted_at: "2024-06-25 15:00".into(),
+                period_start: Some("2023-04-01".into()),
+                period_end: Some("2024-03-31".into()),
+                concept: NarrativeConcept::BusinessRisks,
+                local_name: "BusinessRisksTextBlock".into(),
+                unit: None,
+                text: "リスク本文".into(),
+                truncated: false,
+            }],
+            warnings: Vec::new(),
+        };
+
+        let (acq, evidence, _warnings) = acquisition_from_selected_with_partials(
+            &selected,
+            Some(&financials),
+            Some(&narratives),
+        )
+        .expect("partials");
+        assert!(acq.fields().performance_summary);
+        assert!(acq.fields().business_summary);
+        assert!(acq.fields().business_risks);
+        assert!(acq.facts().performance_summary.contains("100"));
+        assert_eq!(acq.facts().business_summary, "事業の内容本文");
+        assert_eq!(acq.facts().business_risks, "リスク本文");
+        assert_eq!(evidence.len(), 1);
+        assert_eq!(evidence[0].text, "リスク本文");
+    }
+
+    #[test]
+    fn acquisition_from_selected_with_partials_empty_keeps_fields_false() {
+        let body = wrap_results(&[eligible_120("S100EMPTY", "2024-06-25 15:00")]);
+        let filter = ListCandidateFilter::by_edinet_code("E02144").expect("filter");
+        let docs = collect_list_candidates(body.as_bytes(), &filter).expect("parse");
+        let selected = select_eligible_yuho_original(&docs).expect("select");
+        let (acq, evidence, warnings) =
+            acquisition_from_selected_with_partials(&selected, None, None).expect("empty");
+        assert!(!acq.fields().performance_summary);
+        assert!(!acq.fields().business_summary);
+        assert!(!acq.fields().business_risks);
+        assert!(evidence.is_empty());
+        assert!(warnings.is_empty());
+        assert!(!acq.facts().company_name.is_empty());
     }
 }

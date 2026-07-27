@@ -10,7 +10,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 use tauri::ipc::Channel;
-use tauri::{AppHandle, State};
+use tauri::{AppHandle, Manager, State};
 
 use crate::db::{VaultErrorCode, VaultHandle};
 #[cfg(feature = "egress-live")]
@@ -52,6 +52,13 @@ const DEFAULT_MAX_TOKENS: u32 = 256;
 const ANALYSIS_MAX_TOKENS: u32 = 768;
 const ANALYSIS_N_CTX: u32 = 3072;
 const EDINET_FETCH_DEADLINE: Duration = Duration::from_secs(15);
+/// Per-archive parse wall budget (ZIP entry/XML/CSV). Download uses
+/// `edinet_archive::DEFAULT_ARCHIVE_DOWNLOAD_DEADLINE` (120s, Step 5).
+#[cfg(feature = "egress-live")]
+const EDINET_PARSE_DEADLINE: Duration = Duration::from_secs(20);
+/// Whole ZIP job = 2 download + 2 parse + merge slack.
+#[cfg(feature = "egress-live")]
+const EDINET_ZIP_JOB_DEADLINE: Duration = Duration::from_secs(300);
 /// How many calendar days before anchor to scan when resolving by filer name.
 const EDINET_NAME_LOOKBACK_DAYS: u32 = 21;
 
@@ -229,6 +236,8 @@ struct ResolvedEdinetAcquisition {
     result: DiscoveryResult,
     served_from: ServedFrom,
     correction_available: Tristate,
+    fetch: FetchStatus,
+    extraction: ExtractionStatus,
 }
 
 struct EdinetResolveFailure {
@@ -497,17 +506,22 @@ where
             DEFAULT_DISCOVERY_WINDOW_DAYS_BACK,
         };
         let (subject_key, filter) = if can_fetch_by_code {
-            (
-                format!("edinet:{}", code.trim()),
-                ListCandidateFilter::by_edinet_code(code.trim())
-                    .ok_or_else(|| "edinet_invalid_argument".to_string())?,
-            )
+            match ListCandidateFilter::by_edinet_code(code.trim()) {
+                Some(filter) => (format!("edinet:{}", code.trim()), filter),
+                None => {
+                    return soft_fallback_named_base(injected_sanitized, "edinet_invalid_argument");
+                }
+            }
         } else {
-            (
-                format!("name:{}", normalize_filer_key(&lookup_name)),
-                ListCandidateFilter::by_filer_name(&lookup_name)
-                    .ok_or_else(|| "edinet_invalid_argument".to_string())?,
-            )
+            match ListCandidateFilter::by_filer_name(&lookup_name) {
+                Some(filter) => (
+                    format!("name:{}", normalize_filer_key(&lookup_name)),
+                    filter,
+                ),
+                None => {
+                    return soft_fallback_named_base(injected_sanitized, "edinet_invalid_argument");
+                }
+            }
         };
         match discover_eligible_in_window(
             cache,
@@ -651,6 +665,7 @@ fn merge_company_facts_prefer_filled(base: &CompanyFacts, incoming: &CompanyFact
 /// Dual-gated EDINET list → [`CompanyFacts`] (UI prep / offline inject preferred).
 #[tauri::command]
 pub async fn fetch_edinet_company_facts(
+    app: AppHandle,
     vault: State<'_, VaultHandle>,
     store: State<'_, NetworkPolicyStore>,
     llm: State<'_, LlmHandle>,
@@ -671,10 +686,12 @@ pub async fn fetch_edinet_company_facts(
         ))
     }
     .map_err(|_| "invalid subject key".to_string())?;
-    enrich_company_facts_from_edinet_inner(
+    let temp_dir = resolve_edinet_temp_dir(&app);
+    enrich_company_facts_from_edinet_core(
         vault.inner(),
         store.inner(),
         llm.inner(),
+        temp_dir.as_deref(),
         EdinetEnrichmentRequestV3 {
             schema_version: 3,
             subject_key,
@@ -688,25 +705,120 @@ pub async fn fetch_edinet_company_facts(
         },
     )
     .await
-    .map(|response| response.facts)
+    .and_then(|outcome| match outcome.legacy_error {
+        Some(msg) => Err(msg),
+        None => Ok(outcome.response.facts),
+    })
 }
 
 #[tauri::command]
 pub async fn enrich_company_facts_from_edinet(
+    app: AppHandle,
     vault: State<'_, VaultHandle>,
     store: State<'_, NetworkPolicyStore>,
     llm: State<'_, LlmHandle>,
     request: EdinetEnrichmentRequestV3,
 ) -> Result<EdinetEnrichmentResponseV3, String> {
-    enrich_company_facts_from_edinet_inner(vault.inner(), store.inner(), llm.inner(), request).await
+    let temp_dir = resolve_edinet_temp_dir(&app);
+    enrich_company_facts_from_edinet_core(
+        vault.inner(),
+        store.inner(),
+        llm.inner(),
+        temp_dir.as_deref(),
+        request,
+    )
+    .await
+    .map(|outcome| outcome.response)
 }
 
-async fn enrich_company_facts_from_edinet_inner(
+fn resolve_edinet_temp_dir(app: &AppHandle) -> Option<std::path::PathBuf> {
+    let cache = app.path().app_cache_dir().ok()?;
+    let dir = cache.join("edinet-tmp");
+    std::fs::create_dir_all(&dir).ok()?;
+    Some(dir)
+}
+
+/// fallback 層の唯一の戻り値。Err は入力棄却層専用。
+struct EnrichOutcome {
+    response: EdinetEnrichmentResponseV3,
+    /// Some(...) は「base が空 かつ EDINET レーン失敗」の1ケースのみ（旧コマンド互換）。
+    legacy_error: Option<String>,
+}
+
+fn merge_warning_codes(
+    mut warnings: Vec<EdinetWarningCode>,
+    extra: &[EdinetWarningCode],
+) -> Vec<EdinetWarningCode> {
+    for code in extra {
+        if !warnings.contains(code) {
+            warnings.push(*code);
+        }
+    }
+    warnings
+}
+
+fn read_failed_warnings(read_failed: bool) -> Vec<EdinetWarningCode> {
+    if read_failed {
+        vec![EdinetWarningCode::VaultReadFailed]
+    } else {
+        Vec::new()
+    }
+}
+
+/// V3 レーン唯一の outer fallback コンストラクタ（inner status は無加工転記）。
+fn fallback_enrichment_response(
+    base: &FactCells,
+    revision: i64,
+    subject: SubjectKey,
+    failure: &EdinetResolveFailure,
+    extra_warnings: &[EdinetWarningCode],
+) -> EdinetEnrichmentResponseV3 {
+    v3_response(
+        wires_from_cells(base, revision),
+        subject,
+        revision,
+        failure.fetch,
+        failure.extraction,
+        failure.coverage,
+        failure.result,
+        FactPersistence::NotAttempted,
+        failure.served_from,
+        None,
+        failure.correction_available,
+        merge_warning_codes(vec![EdinetWarningCode::SoftFallback], extra_warnings),
+    )
+}
+
+fn identity_mismatch_response(
+    base: &FactCells,
+    revision: i64,
+    subject: SubjectKey,
+    resolved: &ResolvedEdinetAcquisition,
+    extra_warnings: &[EdinetWarningCode],
+) -> EdinetEnrichmentResponseV3 {
+    v3_response(
+        wires_from_cells(base, revision),
+        subject,
+        revision,
+        resolved.fetch,
+        resolved.extraction,
+        resolved.coverage,
+        DiscoveryResult::IdentityAmbiguous,
+        FactPersistence::NotAttempted,
+        resolved.served_from,
+        None,
+        resolved.correction_available,
+        merge_warning_codes(vec![EdinetWarningCode::SoftFallback], extra_warnings),
+    )
+}
+
+async fn enrich_company_facts_from_edinet_core(
     vault: &VaultHandle,
     store: &NetworkPolicyStore,
     llm: &LlmHandle,
+    temp_dir: Option<&std::path::Path>,
     request: EdinetEnrichmentRequestV3,
-) -> Result<EdinetEnrichmentResponseV3, String> {
+) -> Result<EnrichOutcome, String> {
     if request.schema_version != 3 || request.subject_revision < 0 {
         return Err("invalid_v3_request".into());
     }
@@ -766,19 +878,25 @@ async fn enrich_company_facts_from_edinet_inner(
         Ok(cells) => (cells, false),
         Err(_) => (Vec::new(), true),
     };
+    let extras = read_failed_warnings(read_failed);
     let vault_revision = vault_wire
         .iter()
         .map(|cell| cell.revision)
         .max()
         .unwrap_or(0);
     if !read_failed && stale_subject_revision(request.subject_revision, vault_revision) {
-        return current_v3_response(
-            vault,
-            &read_subject_wire,
-            read_subject,
-            FactPersistence::Conflict,
-            DiscoveryResult::NotRun,
-        );
+        return Ok(EnrichOutcome {
+            legacy_error: None,
+            response: current_v3_response(
+                vault,
+                &read_subject_wire,
+                read_subject,
+                FactPersistence::Conflict,
+                DiscoveryResult::NotRun,
+                vault_wire,
+                &extras,
+            ),
+        });
     }
     let revision = request.subject_revision;
     let input_wire = request.fact_cells.unwrap_or(vault_wire);
@@ -809,26 +927,18 @@ async fn enrich_company_facts_from_edinet_inner(
         params.edinet_code.as_deref(),
         params.edinet_date.as_deref(),
         params.filing_text.as_deref(),
+        temp_dir,
     )
     .await
     {
         Ok(resolved) => resolved,
-        Err(error) if base.is_empty() => return Err(error.message),
         Err(error) => {
-            return Ok(v3_response(
-                wires_from_cells(&base, revision),
-                subject,
-                revision,
-                error.fetch,
-                error.extraction,
-                error.coverage,
-                error.result,
-                FactPersistence::NotAttempted,
-                error.served_from,
-                None,
-                error.correction_available,
-                vec![EdinetWarningCode::SoftFallback],
-            ))
+            return Ok(EnrichOutcome {
+                legacy_error: base.is_empty().then(|| error.message.clone()),
+                response: fallback_enrichment_response(
+                    &base, revision, subject, &error, &extras,
+                ),
+            });
         }
     };
     let acquisition = &resolved.acquisition;
@@ -845,10 +955,24 @@ async fn enrich_company_facts_from_edinet_inner(
                 _ => None,
             });
     if subject_wire.starts_with("name:") || explicit_rekey_from.is_some() {
-        let target = SubjectKey::try_from(format!("edinet:{}", acquisition.edinet_code()))
-            .map_err(|_| "invalid confirmed identity".to_string())?;
+        let target = match SubjectKey::try_from(format!("edinet:{}", acquisition.edinet_code())) {
+            Ok(target) => target,
+            Err(_) => {
+                return Ok(EnrichOutcome {
+                    legacy_error: None,
+                    response: identity_mismatch_response(
+                        &base, revision, subject, &resolved, &extras,
+                    ),
+                });
+            }
+        };
         if target != subject && explicit_rekey_from.is_some() {
-            return Err("confirmed identity does not match rekey target".into());
+            return Ok(EnrichOutcome {
+                legacy_error: None,
+                response: identity_mismatch_response(
+                    &base, revision, subject, &resolved, &extras,
+                ),
+            });
         }
         let target_wire = String::from(target.clone());
         let from_wire = explicit_rekey_from
@@ -872,17 +996,34 @@ async fn enrich_company_facts_from_edinet_inner(
             Ok(_) => FactPersistence::Persisted,
             Err(VaultErrorCode::Conflict) => FactPersistence::Conflict,
             Err(VaultErrorCode::IdentityAmbiguous) => {
-                return current_v3_response(
-                    vault,
-                    &target_wire,
-                    target,
-                    FactPersistence::Conflict,
-                    DiscoveryResult::IdentityAmbiguous,
-                )
+                return Ok(EnrichOutcome {
+                    legacy_error: None,
+                    response: current_v3_response(
+                        vault,
+                        &target_wire,
+                        target,
+                        FactPersistence::Conflict,
+                        DiscoveryResult::IdentityAmbiguous,
+                        wires_from_cells(&merged, revision),
+                        &extras,
+                    ),
+                });
             }
             Err(_) => FactPersistence::Failed,
         };
-        return persistence_response(vault, target, revision, persistence, &merged, &resolved);
+        return Ok(EnrichOutcome {
+            legacy_error: None,
+            response: persistence_response(
+                vault,
+                target,
+                revision,
+                persistence,
+                &merged,
+                &resolved,
+                wires_from_cells(&merged, revision),
+                &extras,
+            ),
+        });
     }
     let persist_revision = if matches!(
         request.subject_transition,
@@ -897,7 +1038,19 @@ async fn enrich_company_facts_from_edinet_inner(
         Err(VaultErrorCode::Conflict) => FactPersistence::Conflict,
         Err(_) => FactPersistence::Failed,
     };
-    persistence_response(vault, subject, revision, persistence, &merged, &resolved)
+    Ok(EnrichOutcome {
+        legacy_error: None,
+        response: persistence_response(
+            vault,
+            subject,
+            revision,
+            persistence,
+            &merged,
+            &resolved,
+            wires_from_cells(&merged, revision),
+            &extras,
+        ),
+    })
 }
 
 fn switch_base_from_company_facts(facts: Option<&CompanyFacts>) -> FactCells {
@@ -990,13 +1143,26 @@ fn current_v3_response(
     subject_key: SubjectKey,
     persistence: FactPersistence,
     discovery_result: DiscoveryResult,
-) -> Result<EdinetEnrichmentResponseV3, String> {
-    let current = vault
-        .fact_cells(subject_wire.to_string())
-        .map_err(map_vault_err)?;
-    let revision = current.iter().map(|cell| cell.revision).max().unwrap_or(0);
-    Ok(v3_response(
-        current,
+    known: Vec<FactCellWire>,
+    extra_warnings: &[EdinetWarningCode],
+) -> EdinetEnrichmentResponseV3 {
+    let (fact_cells, revision, read_back_warnings) = match vault.fact_cells(subject_wire.to_string())
+    {
+        Ok(current) => {
+            let revision = current.iter().map(|cell| cell.revision).max().unwrap_or(0);
+            (current, revision, Vec::new())
+        }
+        Err(_) => {
+            let revision = known.iter().map(|cell| cell.revision).max().unwrap_or(0);
+            (
+                known,
+                revision,
+                vec![EdinetWarningCode::VaultReadFailed],
+            )
+        }
+    };
+    v3_response(
+        fact_cells,
         subject_key,
         revision,
         FetchStatus::NotAttempted,
@@ -1007,8 +1173,8 @@ fn current_v3_response(
         ServedFrom::Cache,
         None,
         Tristate::Unknown,
-        Vec::new(),
-    ))
+        merge_warning_codes(read_back_warnings, extra_warnings),
+    )
 }
 
 fn persistence_response(
@@ -1018,7 +1184,9 @@ fn persistence_response(
     persistence: FactPersistence,
     merged: &FactCells,
     resolved: &ResolvedEdinetAcquisition,
-) -> Result<EdinetEnrichmentResponseV3, String> {
+    known_on_conflict: Vec<FactCellWire>,
+    extra_warnings: &[EdinetWarningCode],
+) -> EdinetEnrichmentResponseV3 {
     if matches!(persistence, FactPersistence::Conflict) {
         let subject_wire = String::from(subject_key.clone());
         return current_v3_response(
@@ -1027,43 +1195,69 @@ fn persistence_response(
             subject_key,
             persistence,
             DiscoveryResult::Selected,
+            known_on_conflict,
+            extra_warnings,
         );
     }
     if matches!(persistence, FactPersistence::Persisted) {
         let subject_wire = String::from(subject_key.clone());
-        let current = vault.fact_cells(subject_wire).map_err(map_vault_err)?;
-        let revision = current.iter().map(|cell| cell.revision).max().unwrap_or(0);
-        return Ok(v3_response(
-            current,
-            subject_key,
-            revision,
-            FetchStatus::Succeeded,
-            extraction_from_acquisition(&resolved.acquisition),
-            resolved.coverage,
-            resolved.result,
-            FactPersistence::Persisted,
-            resolved.served_from,
-            Some(&resolved.acquisition),
-            resolved.correction_available,
-            Vec::new(),
-        ));
+        return match vault.fact_cells(subject_wire) {
+            Ok(current) => {
+                let revision = current.iter().map(|cell| cell.revision).max().unwrap_or(0);
+                v3_response(
+                    current,
+                    subject_key,
+                    revision,
+                    resolved.fetch,
+                    resolved.extraction,
+                    resolved.coverage,
+                    resolved.result,
+                    FactPersistence::Persisted,
+                    resolved.served_from,
+                    Some(&resolved.acquisition),
+                    resolved.correction_available,
+                    merge_warning_codes(Vec::new(), extra_warnings),
+                )
+            }
+            Err(_) => v3_response(
+                wires_from_cells(merged, previous_revision.saturating_add(1)),
+                subject_key,
+                previous_revision.saturating_add(1),
+                resolved.fetch,
+                resolved.extraction,
+                resolved.coverage,
+                resolved.result,
+                FactPersistence::Persisted,
+                resolved.served_from,
+                Some(&resolved.acquisition),
+                resolved.correction_available,
+                merge_warning_codes(
+                    vec![EdinetWarningCode::VaultReadFailed],
+                    extra_warnings,
+                ),
+            ),
+        };
     }
-    Ok(v3_response(
+    v3_response(
         wires_from_cells(merged, previous_revision),
         subject_key,
         previous_revision,
-        FetchStatus::Succeeded,
-        extraction_from_acquisition(&resolved.acquisition),
+        resolved.fetch,
+        resolved.extraction,
         resolved.coverage,
         resolved.result,
         FactPersistence::Failed,
         resolved.served_from,
         Some(&resolved.acquisition),
         resolved.correction_available,
-        vec![EdinetWarningCode::VaultWriteFailed],
-    ))
+        merge_warning_codes(
+            vec![EdinetWarningCode::VaultWriteFailed],
+            extra_warnings,
+        ),
+    )
 }
 
+#[cfg_attr(not(feature = "egress-live"), allow(dead_code))]
 fn extraction_from_acquisition(acquisition: &EdinetFactAcquisition) -> ExtractionStatus {
     let fields = acquisition.fields();
     let narratives = fields.business_summary || fields.business_risks;
@@ -1075,6 +1269,354 @@ fn extraction_from_acquisition(acquisition: &EdinetFactAcquisition) -> Extractio
     }
 }
 
+#[cfg(feature = "egress-live")]
+fn extraction_status_from_zip(
+    acquisition: &EdinetFactAcquisition,
+    interrupted: bool,
+    extraction_failed: bool,
+) -> ExtractionStatus {
+    let base = extraction_from_acquisition(acquisition);
+    let fields_all_false = matches!(base, ExtractionStatus::None);
+    if interrupted && fields_all_false {
+        ExtractionStatus::Cancelled
+    } else if extraction_failed && fields_all_false {
+        ExtractionStatus::ParseFailed
+    } else {
+        base
+    }
+}
+
+#[cfg(feature = "egress-live")]
+fn fetch_status_from_zip(
+    interrupted: bool,
+    guard: &crate::llm::service::EdinetJobGuard,
+    any_download_ok: bool,
+    only_network_failures: bool,
+    only_api_failures: bool,
+) -> FetchStatus {
+    use crate::llm::service::EdinetCancelCause;
+    if interrupted {
+        return match guard.cancellation_cause() {
+            EdinetCancelCause::MemoryPressure | EdinetCancelCause::ThermalPressure => {
+                FetchStatus::MemoryPressure
+            }
+            EdinetCancelCause::Background
+            | EdinetCancelCause::Dropped
+            | EdinetCancelCause::None => FetchStatus::Cancelled,
+        };
+    }
+    if any_download_ok {
+        FetchStatus::Succeeded
+    } else if only_network_failures {
+        FetchStatus::NetworkFailed
+    } else if only_api_failures {
+        FetchStatus::ApiError
+    } else {
+        FetchStatus::Succeeded
+    }
+}
+
+#[cfg(feature = "egress-live")]
+fn is_interrupt_edinet_error(error: &EdinetError) -> bool {
+    matches!(
+        error,
+        EdinetError::MemoryPressure
+            | EdinetError::Gateway(crate::knowledge::net_gateway::GatewayError::Cancelled)
+    )
+}
+
+#[cfg(feature = "egress-live")]
+fn note_download_soft_fail(
+    error: &EdinetError,
+    only_network_failures: &mut bool,
+    only_api_failures: &mut bool,
+) {
+    match error {
+        EdinetError::Gateway(crate::knowledge::net_gateway::GatewayError::Cancelled)
+        | EdinetError::MemoryPressure => {}
+        EdinetError::Gateway(_) | EdinetError::TempFileIo | EdinetError::TempArchiveBusy => {
+            *only_api_failures = false;
+        }
+        EdinetError::ApiResponse { .. }
+        | EdinetError::InvalidContentType
+        | EdinetError::ApiKeyMissing => {
+            *only_network_failures = false;
+        }
+        EdinetError::TooLarge
+        | EdinetError::InvalidZip
+        | EdinetError::UnsupportedArchive
+        | EdinetError::UrlViolation
+        | EdinetError::InvalidArgument => {
+            *only_network_failures = false;
+            *only_api_failures = false;
+        }
+        _ => {
+            *only_network_failures = false;
+            *only_api_failures = false;
+        }
+    }
+}
+
+/// パイプラインの soft 結果。Err を返さない（fallback は呼出側の既存機構）。
+#[cfg(feature = "egress-live")]
+struct EdinetZipOutcome {
+    financials: Option<crate::knowledge::edinet_csv::PartialEdinetFacts>,
+    narratives: Option<crate::knowledge::edinet_csv::PartialEdinetFacts>,
+    fetch: FetchStatus,
+    extraction_failed: bool,
+    interrupted: bool,
+    warnings: Vec<crate::knowledge::edinet_csv::EdinetWarning>,
+}
+
+/// spawn_blocking 境界。guard clone / token clone / TempArchive 所有権を
+/// closure へ move。archive は closure 内で extract 後に必ず drop される。
+#[cfg(feature = "egress-live")]
+async fn extract_on_blocking<Fx>(
+    guard: &crate::llm::service::EdinetJobGuard,
+    archive: crate::knowledge::edinet_archive::TempArchive,
+    extract: Fx,
+) -> Result<crate::knowledge::edinet_csv::PartialEdinetFacts, EdinetError>
+where
+    Fx: FnOnce(
+            &mut crate::knowledge::edinet_archive::TempArchive,
+            &tokio_util::sync::CancellationToken,
+        ) -> Result<crate::knowledge::edinet_csv::PartialEdinetFacts, EdinetError>
+        + Send
+        + 'static,
+{
+    let guard_clone = guard.clone();
+    let token = guard.cancel_token();
+    let joined = tauri::async_runtime::spawn_blocking(move || {
+        let mut archive = archive;
+        let result = extract(&mut archive, &token);
+        drop(archive);
+        drop(guard_clone);
+        result
+    })
+    .await;
+    match joined {
+        Ok(result) => result,
+        Err(_) => Err(EdinetError::Parse),
+    }
+}
+
+/// 完全直列: [csvFlag=="1"] type=5 DL→extract→drop → type=1 DL→extract→drop。
+#[cfg(feature = "egress-live")]
+async fn run_edinet_zip_pipeline<T: crate::knowledge::net_gateway::HttpTransport>(
+    transport: &T,
+    selected: &crate::knowledge::edinet_client::YuhoSelection,
+    subscription_key: &str,
+    temp_dir: &std::path::Path,
+    guard: &crate::llm::service::EdinetJobGuard,
+) -> EdinetZipOutcome {
+    use crate::knowledge::edinet_archive::{
+        download_edinet_archive_to_temp, production_archive_gate, DEFAULT_ARCHIVE_DOWNLOAD_DEADLINE,
+        MAX_EDINET_ARCHIVE_BYTES,
+    };
+    use crate::knowledge::edinet_client::EdinetDocumentKind;
+    use crate::knowledge::edinet_csv::{
+        extract_financials_from_type5_archive, FinancialExtractMeta,
+    };
+    use crate::knowledge::edinet_xbrl::{
+        extract_narratives_from_type1_archive, NarrativeExtractMeta,
+    };
+    use crate::llm::service::{EdinetCancelCause, EDINET_CANCEL_HEADROOM_BYTES};
+
+    let mut financials = None;
+    let mut narratives = None;
+    let mut warnings = Vec::new();
+    let mut extraction_failed = false;
+    let mut interrupted = false;
+    let mut any_download_ok = false;
+    let mut only_network_failures = true;
+    let mut only_api_failures = true;
+
+    let doc_id = selected
+        .original
+        .doc_id
+        .as_deref()
+        .unwrap_or("")
+        .trim()
+        .to_string();
+    let edinet_code = selected
+        .original
+        .edinet_code
+        .as_deref()
+        .unwrap_or("")
+        .trim()
+        .to_string();
+    let submitted_at = selected
+        .original
+        .submit_date_time
+        .as_deref()
+        .unwrap_or("")
+        .trim()
+        .to_string();
+    let csv_flag_one = selected
+        .original
+        .csv_flag
+        .as_deref()
+        .is_some_and(|v| v.trim() == "1");
+
+    if csv_flag_one {
+        guard.set_phase(crate::monitor::MemPhase::EdinetFetch);
+        match download_edinet_archive_to_temp(
+            transport,
+            &doc_id,
+            EdinetDocumentKind::XbrlCsv,
+            subscription_key,
+            temp_dir,
+            &production_archive_gate(),
+            &guard.cancel_token(),
+            DEFAULT_ARCHIVE_DOWNLOAD_DEADLINE,
+            MAX_EDINET_ARCHIVE_BYTES,
+            {
+                let g = guard.clone();
+                move || {
+                    g.is_cancelled()
+                        || crate::monitor::os_proc_available_memory_bytes()
+                            .is_some_and(|v| v < EDINET_CANCEL_HEADROOM_BYTES)
+                }
+            },
+        )
+        .await
+        {
+            Ok(archive) => {
+                any_download_ok = true;
+                only_network_failures = false;
+                only_api_failures = false;
+                guard.set_phase(crate::monitor::MemPhase::EdinetExtract);
+                let fin_meta = FinancialExtractMeta {
+                    doc_id: doc_id.clone(),
+                    edinet_code: edinet_code.clone(),
+                    submitted_at: submitted_at.clone(),
+                };
+                match extract_on_blocking(guard, archive, move |archive, token| {
+                    extract_financials_from_type5_archive(
+                        archive,
+                        &fin_meta,
+                        EDINET_PARSE_DEADLINE,
+                        token,
+                    )
+                })
+                .await
+                {
+                    Ok(partial) => {
+                        warnings.extend(partial.warnings.iter().cloned());
+                        financials = Some(partial);
+                    }
+                    Err(error) if is_interrupt_edinet_error(&error) => {
+                        if matches!(error, EdinetError::MemoryPressure) {
+                            guard.cancel_with_cause(EdinetCancelCause::MemoryPressure);
+                        }
+                        interrupted = true;
+                    }
+                    Err(_) => {
+                        extraction_failed = true;
+                    }
+                }
+            }
+            Err(error) if is_interrupt_edinet_error(&error) => {
+                if matches!(error, EdinetError::MemoryPressure) {
+                    guard.cancel_with_cause(EdinetCancelCause::MemoryPressure);
+                }
+                interrupted = true;
+            }
+            Err(error) => {
+                note_download_soft_fail(&error, &mut only_network_failures, &mut only_api_failures);
+            }
+        }
+    }
+
+    if !interrupted {
+        guard.set_phase(crate::monitor::MemPhase::EdinetFetch);
+        match download_edinet_archive_to_temp(
+            transport,
+            &doc_id,
+            EdinetDocumentKind::FilingAndXbrl,
+            subscription_key,
+            temp_dir,
+            &production_archive_gate(),
+            &guard.cancel_token(),
+            DEFAULT_ARCHIVE_DOWNLOAD_DEADLINE,
+            MAX_EDINET_ARCHIVE_BYTES,
+            {
+                let g = guard.clone();
+                move || {
+                    g.is_cancelled()
+                        || crate::monitor::os_proc_available_memory_bytes()
+                            .is_some_and(|v| v < EDINET_CANCEL_HEADROOM_BYTES)
+                }
+            },
+        )
+        .await
+        {
+            Ok(archive) => {
+                any_download_ok = true;
+                only_network_failures = false;
+                only_api_failures = false;
+                guard.set_phase(crate::monitor::MemPhase::EdinetExtract);
+                let narr_meta = NarrativeExtractMeta {
+                    doc_id: doc_id.clone(),
+                    edinet_code: edinet_code.clone(),
+                    submitted_at: submitted_at.clone(),
+                    period_start: selected.original.period_start.clone(),
+                    period_end: selected.original.period_end.clone(),
+                };
+                match extract_on_blocking(guard, archive, move |archive, token| {
+                    extract_narratives_from_type1_archive(
+                        archive,
+                        &narr_meta,
+                        EDINET_PARSE_DEADLINE,
+                        token,
+                    )
+                })
+                .await
+                {
+                    Ok(partial) => {
+                        warnings.extend(partial.warnings.iter().cloned());
+                        narratives = Some(partial);
+                    }
+                    Err(error) if is_interrupt_edinet_error(&error) => {
+                        if matches!(error, EdinetError::MemoryPressure) {
+                            guard.cancel_with_cause(EdinetCancelCause::MemoryPressure);
+                        }
+                        interrupted = true;
+                    }
+                    Err(_) => {
+                        extraction_failed = true;
+                    }
+                }
+            }
+            Err(error) if is_interrupt_edinet_error(&error) => {
+                if matches!(error, EdinetError::MemoryPressure) {
+                    guard.cancel_with_cause(EdinetCancelCause::MemoryPressure);
+                }
+                interrupted = true;
+            }
+            Err(error) => {
+                note_download_soft_fail(&error, &mut only_network_failures, &mut only_api_failures);
+            }
+        }
+    }
+
+    let fetch = fetch_status_from_zip(
+        interrupted,
+        guard,
+        any_download_ok,
+        only_network_failures,
+        only_api_failures,
+    );
+    EdinetZipOutcome {
+        financials,
+        narratives,
+        fetch,
+        extraction_failed,
+        interrupted,
+        warnings,
+    }
+}
+
 async fn resolve_typed_edinet_acquisition(
     vault: &VaultHandle,
     store: &NetworkPolicyStore,
@@ -1083,6 +1625,7 @@ async fn resolve_typed_edinet_acquisition(
     edinet_code: Option<&str>,
     edinet_date: Option<&str>,
     filing_text: Option<&str>,
+    temp_dir: Option<&std::path::Path>,
 ) -> Result<ResolvedEdinetAcquisition, EdinetResolveFailure> {
     #[cfg(feature = "egress-live")]
     {
@@ -1186,7 +1729,7 @@ async fn resolve_typed_edinet_acquisition(
                 correction_available,
             });
         }
-        let selected = outcome.selected.ok_or_else(|| EdinetResolveFailure {
+        let selected_meta = outcome.selected.ok_or_else(|| EdinetResolveFailure {
             message: "edinet_no_eligible_filing".into(),
             fetch: FetchStatus::Succeeded,
             extraction: ExtractionStatus::None,
@@ -1203,42 +1746,168 @@ async fn resolve_typed_edinet_acquisition(
             failure.correction_available = correction_available;
             failure
         })?;
-        guard.set_phase(crate::monitor::MemPhase::EdinetFetch);
-        guard.set_phase(crate::monitor::MemPhase::EdinetExtract);
-        if guard.is_cancelled() {
-            return Err(resolve_failure(
-                "edinet_cancelled",
-                FetchStatus::MemoryPressure,
-            ));
+        let _cancel_on_drop = guard.cancel_token().drop_guard();
+        let _watch = crate::llm::service::spawn_edinet_cancel_watch(&guard);
+
+        if let Some(text) = filing_text {
+            let acquisition =
+                crate::knowledge::edinet_client::acquisition_from_document_meta_with_body(
+                    &selected_meta,
+                    Some(text),
+                )
+                .map_err(|error| {
+                    let mut failure =
+                        resolve_failure(&map_edinet_err(error), FetchStatus::Succeeded);
+                    failure.extraction = ExtractionStatus::ParseFailed;
+                    failure
+                })?;
+            if guard.is_cancelled() {
+                return Err(resolve_failure(
+                    "edinet_cancelled",
+                    match guard.cancellation_cause() {
+                        crate::llm::service::EdinetCancelCause::MemoryPressure
+                        | crate::llm::service::EdinetCancelCause::ThermalPressure => {
+                            FetchStatus::MemoryPressure
+                        }
+                        _ => FetchStatus::Cancelled,
+                    },
+                ));
+            }
+            let extraction = extraction_from_acquisition(&acquisition);
+            return Ok(ResolvedEdinetAcquisition {
+                acquisition,
+                coverage,
+                result,
+                served_from,
+                correction_available,
+                fetch: FetchStatus::Succeeded,
+                extraction,
+            });
         }
-        let _guard = guard;
-        let acquisition =
-            crate::knowledge::edinet_client::acquisition_from_document_meta_with_body(
+
+        let Some(temp_dir) = temp_dir else {
+            return Err(resolve_failure(
+                "edinet_zip_unavailable",
+                FetchStatus::NotAttempted,
+            ));
+        };
+
+        let selected = crate::knowledge::edinet_client::YuhoSelection {
+            original: selected_meta,
+            correction_available: matches!(correction_available, Tristate::Yes),
+        };
+
+        let timed = tokio::time::timeout(
+            EDINET_ZIP_JOB_DEADLINE,
+            run_edinet_zip_pipeline(&transport, &selected, &key, temp_dir, &guard),
+        )
+        .await;
+        let outcome = match timed {
+            Ok(outcome) => outcome,
+            Err(_) => {
+                guard.cancel_with_cause(crate::llm::service::EdinetCancelCause::Dropped);
+                EdinetZipOutcome {
+                    financials: None,
+                    narratives: None,
+                    fetch: FetchStatus::Cancelled,
+                    extraction_failed: false,
+                    interrupted: true,
+                    warnings: Vec::new(),
+                }
+            }
+        };
+        let _ = outcome.warnings;
+
+        let (acquisition, _evidence, _warn) =
+            crate::knowledge::edinet_client::acquisition_from_selected_with_partials(
                 &selected,
-                filing_text,
+                outcome.financials.as_ref(),
+                outcome.narratives.as_ref(),
             )
             .map_err(|error| {
                 let mut failure = resolve_failure(&map_edinet_err(error), FetchStatus::Succeeded);
                 failure.extraction = ExtractionStatus::ParseFailed;
+                failure.coverage = coverage;
+                failure.result = result;
+                failure.served_from = served_from;
+                failure.correction_available = correction_available;
                 failure
             })?;
-        if _guard.is_cancelled() {
-            return Err(resolve_failure(
-                "edinet_cancelled",
-                FetchStatus::MemoryPressure,
-            ));
+
+        let extraction = extraction_status_from_zip(
+            &acquisition,
+            outcome.interrupted,
+            outcome.extraction_failed,
+        );
+        if matches!(extraction, ExtractionStatus::Cancelled)
+            && matches!(
+                outcome.fetch,
+                FetchStatus::Cancelled | FetchStatus::MemoryPressure
+            )
+        {
+            let mut failure = resolve_failure("edinet_cancelled", outcome.fetch);
+            failure.extraction = ExtractionStatus::Cancelled;
+            failure.coverage = coverage;
+            failure.result = result;
+            failure.served_from = served_from;
+            failure.correction_available = correction_available;
+            return Err(failure);
         }
+        if matches!(
+            outcome.fetch,
+            FetchStatus::NetworkFailed | FetchStatus::ApiError
+        ) && matches!(extraction, ExtractionStatus::None | ExtractionStatus::ParseFailed)
+        {
+            let mut failure = resolve_failure(
+                if matches!(outcome.fetch, FetchStatus::NetworkFailed) {
+                    "edinet_network_failed"
+                } else {
+                    "edinet_api_error"
+                },
+                outcome.fetch,
+            );
+            failure.extraction = extraction;
+            failure.coverage = coverage;
+            failure.result = result;
+            failure.served_from = served_from;
+            failure.correction_available = correction_available;
+            return Err(failure);
+        }
+        if matches!(extraction, ExtractionStatus::ParseFailed)
+            && matches!(outcome.fetch, FetchStatus::Succeeded)
+            && matches!(extraction_from_acquisition(&acquisition), ExtractionStatus::None)
+        {
+            let mut failure = resolve_failure("edinet_parse_failed", FetchStatus::Succeeded);
+            failure.extraction = ExtractionStatus::ParseFailed;
+            failure.coverage = coverage;
+            failure.result = result;
+            failure.served_from = served_from;
+            failure.correction_available = correction_available;
+            return Err(failure);
+        }
+
         Ok(ResolvedEdinetAcquisition {
             acquisition,
             coverage,
             result,
             served_from,
             correction_available,
+            fetch: outcome.fetch,
+            extraction,
         })
     }
     #[cfg(not(feature = "egress-live"))]
     {
-        let _ = (store, llm, injected, edinet_code, edinet_date, filing_text);
+        let _ = (
+            vault,
+            store,
+            llm,
+            injected,
+            edinet_code,
+            edinet_date,
+            filing_text,
+            temp_dir,
+        );
         Err(resolve_failure(
             "egress_unavailable",
             FetchStatus::NotAttempted,
@@ -1258,6 +1927,7 @@ fn resolve_failure(message: &str, fetch: FetchStatus) -> EdinetResolveFailure {
     }
 }
 
+#[cfg_attr(not(feature = "egress-live"), allow(dead_code))]
 fn served_from_for_discovery(cache_days: u32, live_days: u32) -> ServedFrom {
     match (cache_days, live_days) {
         (0, 0) => ServedFrom::NotApplicable,
@@ -2927,5 +3597,631 @@ mod edinet_step1_fallback_contract_tests {
         .expect_err("no base");
         assert_eq!(err, "EGRESS_LIVE_NOT_READY");
         assert_eq!(counts.snapshot(), (0, 0, 0));
+    }
+
+    #[tokio::test]
+    async fn invalid_short_filer_name_keeps_injected_base() {
+        let fx = isolated_store();
+        fx.store.set_enabled(true).expect("enable");
+        let raw = CompanyFacts {
+            company_name: "あ".into(),
+            business_summary: "必ず残る要約".into(),
+            source: "wikipedia".into(),
+            ..CompanyFacts::default()
+        };
+        let before = sanitize_company_facts(&raw).expect("sanitize");
+        let counts = CallCounters::new();
+        let out = resolve_company_facts_with(
+            &fx.store,
+            None,
+            Some(raw),
+            None,
+            Some("2026-07-26".into()),
+            None,
+            ok_key(&counts),
+            ok_factory(&counts),
+        )
+        .await
+        .expect("soft fallback on short filer key");
+        assert_eq!(out, before);
+        assert_eq!(out.business_summary, "必ず残る要約");
+    }
+}
+
+/// Step 12 — outer fallback exit unification (no live network).
+#[cfg(test)]
+mod edinet_step12_outer_fallback_tests {
+    use super::{
+        enrich_company_facts_from_edinet_core, fallback_enrichment_response,
+        identity_mismatch_response, resolve_failure, DiscoveryCoverage, DiscoveryResult,
+        EdinetEnrichmentRequestV3, EdinetWarningCode, ExtractionStatus, FactPersistence,
+        FetchStatus, ResolvedEdinetAcquisition, ServedFrom, Tristate,
+    };
+    use crate::db::VaultHandle;
+    use crate::knowledge::edinet_client::{
+        sanitize_company_facts, CompanyFacts, EdinetFactAcquisition, EdinetFieldAcquisition,
+    };
+    use crate::knowledge::fact_merge::{
+        protected_cells_from_company_facts, FactCells, SubjectKey,
+    };
+    use crate::knowledge::NetworkPolicyStore;
+    use crate::llm::LlmHandle;
+    use tempfile::TempDir;
+
+    fn named_base_cells() -> (CompanyFacts, FactCells) {
+        let facts = sanitize_company_facts(&CompanyFacts {
+            company_name: "トヨタ自動車".into(),
+            business_summary: "wikiの事業概要".into(),
+            business_risks: "wikiのリスク".into(),
+            source: "wikipedia".into(),
+            ..CompanyFacts::default()
+        })
+        .expect("sanitize");
+        let cells = protected_cells_from_company_facts(&facts);
+        (facts, cells)
+    }
+
+    #[test]
+    fn fallback_response_transcribes_inner_status_and_keeps_base() {
+        let (facts, base) = named_base_cells();
+        let failure = resolve_failure("edinet_not_ready", FetchStatus::NotAttempted);
+        let subject = SubjectKey::try_from("name:トヨタ自動車".to_string()).expect("key");
+        let response = fallback_enrichment_response(&base, 3, subject, &failure, &[]);
+        assert_eq!(response.fetch, FetchStatus::NotAttempted);
+        assert_eq!(response.extraction, ExtractionStatus::None);
+        assert_eq!(response.fact_persistence, FactPersistence::NotAttempted);
+        assert!(response.warnings.contains(&EdinetWarningCode::SoftFallback));
+        assert_eq!(response.facts.business_summary, facts.business_summary);
+        assert_eq!(response.facts.business_risks, facts.business_risks);
+        assert!(response.freshness.selected_doc_id.is_none());
+    }
+
+    #[test]
+    fn identity_mismatch_uses_base_not_merged_and_clears_freshness() {
+        let (facts, base) = named_base_cells();
+        let acquisition = EdinetFactAcquisition::new(
+            CompanyFacts {
+                company_name: "他社".into(),
+                edinet_code: "E02144".into(),
+                doc_id: "S100TEST1".into(),
+                business_summary: "EDINET側".into(),
+                business_risks: String::new(),
+                performance_summary: "業績".into(),
+                source: "edinet_zip".into(),
+            },
+            "S100TEST1".into(),
+            "2024-06-25 15:00".into(),
+            "E02144".into(),
+            EdinetFieldAcquisition {
+                business_summary: true,
+                business_risks: false,
+                performance_summary: true,
+            },
+        )
+        .expect("acq");
+        let resolved = ResolvedEdinetAcquisition {
+            acquisition,
+            coverage: DiscoveryCoverage::WindowComplete,
+            result: DiscoveryResult::Selected,
+            served_from: ServedFrom::Live,
+            correction_available: Tristate::No,
+            fetch: FetchStatus::Succeeded,
+            extraction: ExtractionStatus::Both,
+        };
+        let subject = SubjectKey::try_from("edinet:E99999".to_string()).expect("key");
+        let response = identity_mismatch_response(&base, 1, subject, &resolved, &[]);
+        assert_eq!(response.discovery_result, DiscoveryResult::IdentityAmbiguous);
+        assert_eq!(response.fact_persistence, FactPersistence::NotAttempted);
+        assert_eq!(response.facts.business_summary, facts.business_summary);
+        assert_ne!(response.facts.business_summary, "EDINET側");
+        assert!(response.freshness.selected_doc_id.is_none());
+        assert!(response.warnings.contains(&EdinetWarningCode::SoftFallback));
+    }
+
+    #[tokio::test]
+    async fn input_rejection_schema_version_still_errs() {
+        let vault = VaultHandle::unavailable();
+        let dir = TempDir::new().expect("temp");
+        let store = NetworkPolicyStore::from_root(dir.path().to_path_buf());
+        let llm = LlmHandle::unavailable("test".into());
+        let err = match enrich_company_facts_from_edinet_core(
+            &vault,
+            &store,
+            &llm,
+            None,
+            EdinetEnrichmentRequestV3 {
+                schema_version: 2,
+                subject_key: SubjectKey::try_from("name:x".to_string()).expect("key"),
+                subject_revision: 0,
+                subject_transition: None,
+                fact_cells: None,
+                company_facts: None,
+                edinet_code: None,
+                edinet_date: None,
+                filing_text: None,
+            },
+        )
+        .await
+        {
+            Ok(_) => panic!("input rejection must Err"),
+            Err(message) => message,
+        };
+        assert_eq!(err, "invalid_v3_request");
+    }
+
+    #[tokio::test]
+    async fn v3_keeps_base_when_edinet_not_ready() {
+        let vault = VaultHandle::unavailable();
+        let dir = TempDir::new().expect("temp");
+        let store = NetworkPolicyStore::from_root(dir.path().to_path_buf());
+        let llm = LlmHandle::unavailable("test".into());
+        let (before, _) = named_base_cells();
+        let subject = SubjectKey::try_from(format!(
+            "name:{}",
+            crate::knowledge::edinet_client::normalize_filer_key(&before.company_name)
+        ))
+        .expect("key");
+        let outcome = enrich_company_facts_from_edinet_core(
+            &vault,
+            &store,
+            &llm,
+            None,
+            EdinetEnrichmentRequestV3 {
+                schema_version: 3,
+                subject_key: subject,
+                subject_revision: 0,
+                subject_transition: None,
+                fact_cells: None,
+                company_facts: Some(before.clone()),
+                edinet_code: Some("E02144".into()),
+                edinet_date: Some("2026-07-26".into()),
+                filing_text: None,
+            },
+        )
+        .await
+        .expect("fallback ok");
+        assert!(outcome.legacy_error.is_none());
+        assert_eq!(outcome.response.facts.business_summary, before.business_summary);
+        assert_eq!(outcome.response.facts.business_risks, before.business_risks);
+        assert_eq!(outcome.response.fetch, FetchStatus::NotAttempted);
+        assert_eq!(outcome.response.extraction, ExtractionStatus::None);
+        assert_eq!(
+            outcome.response.fact_persistence,
+            FactPersistence::NotAttempted
+        );
+        assert!(outcome
+            .response
+            .warnings
+            .contains(&EdinetWarningCode::SoftFallback));
+        assert!(outcome
+            .response
+            .warnings
+            .contains(&EdinetWarningCode::VaultReadFailed));
+    }
+
+    #[tokio::test]
+    async fn empty_base_sets_legacy_error_for_old_command() {
+        let vault = VaultHandle::unavailable();
+        let dir = TempDir::new().expect("temp");
+        let store = NetworkPolicyStore::from_root(dir.path().to_path_buf());
+        let llm = LlmHandle::unavailable("test".into());
+        let subject = SubjectKey::try_from("name:emptybase".to_string()).expect("key");
+        let outcome = enrich_company_facts_from_edinet_core(
+            &vault,
+            &store,
+            &llm,
+            None,
+            EdinetEnrichmentRequestV3 {
+                schema_version: 3,
+                subject_key: subject,
+                subject_revision: 0,
+                subject_transition: None,
+                fact_cells: None,
+                company_facts: None,
+                edinet_code: Some("E02144".into()),
+                edinet_date: Some("2026-07-26".into()),
+                filing_text: None,
+            },
+        )
+        .await
+        .expect("v3 ok with empty facts");
+        assert!(
+            matches!(
+                outcome.legacy_error.as_deref(),
+                Some("edinet_not_ready") | Some("egress_unavailable")
+            ),
+            "legacy_error={:?}",
+            outcome.legacy_error
+        );
+        assert_eq!(outcome.response.fetch, FetchStatus::NotAttempted);
+        assert!(outcome.response.facts.company_name.is_empty());
+        assert!(outcome
+            .response
+            .warnings
+            .contains(&EdinetWarningCode::SoftFallback));
+    }
+
+    #[cfg(not(feature = "egress-live"))]
+    #[tokio::test]
+    async fn egress_off_v3_ok_not_attempted_keeps_base() {
+        let vault = VaultHandle::unavailable();
+        let dir = TempDir::new().expect("temp");
+        let store = NetworkPolicyStore::from_root(dir.path().to_path_buf());
+        store.set_enabled(true).expect("enable");
+        let llm = LlmHandle::unavailable("test".into());
+        let (before, _) = named_base_cells();
+        let subject = SubjectKey::try_from(format!(
+            "name:{}",
+            crate::knowledge::edinet_client::normalize_filer_key(&before.company_name)
+        ))
+        .expect("key");
+        let outcome = enrich_company_facts_from_edinet_core(
+            &vault,
+            &store,
+            &llm,
+            None,
+            EdinetEnrichmentRequestV3 {
+                schema_version: 3,
+                subject_key: subject,
+                subject_revision: 0,
+                subject_transition: None,
+                fact_cells: None,
+                company_facts: Some(before.clone()),
+                edinet_code: Some("E02144".into()),
+                edinet_date: Some("2026-07-26".into()),
+                filing_text: None,
+            },
+        )
+        .await
+        .expect("ok");
+        assert!(outcome.legacy_error.is_none());
+        assert_eq!(outcome.response.facts.business_summary, before.business_summary);
+        assert_eq!(outcome.response.fetch, FetchStatus::NotAttempted);
+        assert!(outcome
+            .response
+            .warnings
+            .contains(&EdinetWarningCode::SoftFallback));
+    }
+
+}
+
+/// Step 11 — ZIP pipeline orchestration (fake transport; no live network).
+#[cfg(all(test, feature = "egress-live"))]
+mod edinet_step11_zip_pipeline_tests {
+    use super::{extraction_status_from_zip, run_edinet_zip_pipeline, ExtractionStatus, FetchStatus};
+    use crate::knowledge::edinet_archive::MAX_EDINET_ARCHIVE_BYTES;
+    use crate::knowledge::edinet_client::{
+        acquisition_from_selected_with_partials, EdinetDocumentMeta, YuhoSelection,
+    };
+    use crate::knowledge::net_gateway::{GatewayError, HttpTransport, ResponseBody, ResponseMeta};
+    use crate::llm::service::{
+        edinet_coordinator_test_handle, EdinetCancelCause, EDINET_MIN_START_HEADROOM_BYTES,
+    };
+    use std::sync::{Mutex, OnceLock};
+    use std::time::Duration;
+
+    /// `production_archive_gate()` is process-global; serialize Step 11 pipeline tests.
+    fn archive_test_lock() -> std::sync::MutexGuard<'static, ()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(()))
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    struct ChunkBody {
+        data: Option<Vec<u8>>,
+    }
+
+    impl ResponseBody for ChunkBody {
+        fn next_chunk(
+            &mut self,
+        ) -> impl std::future::Future<Output = Option<Result<Vec<u8>, GatewayError>>> + Send
+        {
+            let next = self.data.take().map(Ok);
+            async move { next }
+        }
+    }
+
+    struct RecordingTransport {
+        payloads: Mutex<Vec<Vec<u8>>>,
+        calls: Mutex<Vec<String>>,
+        fail_mode: Mutex<Option<&'static str>>,
+    }
+
+    impl RecordingTransport {
+        fn new(payloads: Vec<Vec<u8>>) -> Self {
+            Self {
+                payloads: Mutex::new(payloads),
+                calls: Mutex::new(Vec::new()),
+                fail_mode: Mutex::new(None),
+            }
+        }
+
+        fn with_fail(payloads: Vec<Vec<u8>>, mode: &'static str) -> Self {
+            let t = Self::new(payloads);
+            if let Ok(mut m) = t.fail_mode.lock() {
+                *m = Some(mode);
+            }
+            t
+        }
+
+        fn call_types(&self) -> Vec<String> {
+            self.calls.lock().map(|c| c.clone()).unwrap_or_default()
+        }
+    }
+
+    impl HttpTransport for RecordingTransport {
+        type Body = ChunkBody;
+        fn get(
+            &self,
+            url: &str,
+            _deadline: Duration,
+        ) -> impl std::future::Future<Output = Result<(ResponseMeta, Self::Body), GatewayError>> + Send
+        {
+            let kind = if url.contains("type=5") {
+                "5"
+            } else if url.contains("type=1") {
+                "1"
+            } else {
+                "?"
+            };
+            if let Ok(mut calls) = self.calls.lock() {
+                calls.push(kind.into());
+            }
+            let fail = self.fail_mode.lock().ok().and_then(|m| *m);
+            let payload = self.payloads.lock().ok().and_then(|mut p| {
+                if p.is_empty() {
+                    None
+                } else {
+                    Some(p.remove(0))
+                }
+            });
+            async move {
+                if fail == Some("network") && kind == "1" {
+                    return Err(GatewayError::DnsLookupFailed);
+                }
+                if fail == Some("too_large") && kind == "5" {
+                    return Ok((
+                        ResponseMeta {
+                            status: 200,
+                            content_type: Some("application/octet-stream".into()),
+                            content_encoding: Some("identity".into()),
+                            content_length: Some(MAX_EDINET_ARCHIVE_BYTES + 1),
+                        },
+                        ChunkBody {
+                            data: Some(vec![0x50, 0x4b, 0x03, 0x04]),
+                        },
+                    ));
+                }
+                let body = payload.unwrap_or_else(|| vec![0x50, 0x4b, 0x03, 0x04]);
+                Ok((
+                    ResponseMeta {
+                        status: 200,
+                        content_type: Some("application/octet-stream".into()),
+                        content_encoding: Some("identity".into()),
+                        content_length: Some(body.len() as u64),
+                    },
+                    ChunkBody { data: Some(body) },
+                ))
+            }
+        }
+    }
+
+    fn minimal_zip_bytes() -> Vec<u8> {
+        let dir = tempfile::tempdir().expect("temp");
+        let path = dir.path().join("empty.zip");
+        {
+            let file = std::fs::File::create(&path).expect("create");
+            let zw = zip::ZipWriter::new(file);
+            zw.finish().expect("finish");
+        }
+        std::fs::read(&path).expect("read")
+    }
+
+    fn selection(csv_flag: &str) -> YuhoSelection {
+        YuhoSelection {
+            original: EdinetDocumentMeta {
+                doc_id: Some("S100ZIP1".into()),
+                edinet_code: Some("E02144".into()),
+                filer_name: Some("テスト株式会社".into()),
+                doc_type_code: Some("120".into()),
+                doc_description: Some("有価証券報告書".into()),
+                submit_date_time: Some("2024-06-25 15:00".into()),
+                withdrawal_status: Some("0".into()),
+                disclosure_status: Some("0".into()),
+                legal_status: Some("1".into()),
+                xbrl_flag: Some("1".into()),
+                csv_flag: Some(csv_flag.into()),
+                period_start: Some("2023-04-01".into()),
+                period_end: Some("2024-03-31".into()),
+                ..EdinetDocumentMeta::default()
+            },
+            correction_available: false,
+        }
+    }
+
+    #[tokio::test]
+    async fn csv_flag_one_downloads_type5_then_type1_serially() {
+        let _lock = archive_test_lock();
+        let zip = minimal_zip_bytes();
+        let transport = RecordingTransport::new(vec![zip.clone(), zip]);
+        let temp = tempfile::tempdir().expect("temp");
+        let (handle, worker) = edinet_coordinator_test_handle();
+        let guard = handle
+            .acquire_edinet_job_with_headroom(|| Some(EDINET_MIN_START_HEADROOM_BYTES))
+            .expect("acquire");
+        let selected = selection("1");
+        let outcome = run_edinet_zip_pipeline(
+            &transport,
+            &selected,
+            "test-key",
+            temp.path(),
+            &guard,
+        )
+        .await;
+        assert_eq!(transport.call_types(), vec!["5".to_string(), "1".to_string()]);
+        assert!(matches!(
+            outcome.fetch,
+            FetchStatus::Succeeded | FetchStatus::NetworkFailed | FetchStatus::ApiError
+        ));
+        let leftover: Vec<_> = std::fs::read_dir(temp.path())
+            .expect("read temp")
+            .filter_map(|e| e.ok())
+            .collect();
+        assert!(leftover.is_empty(), "temp archive must be dropped");
+        drop(guard);
+        drop(handle);
+        worker.join().expect("worker");
+    }
+
+    #[tokio::test]
+    async fn csv_flag_not_one_skips_type5() {
+        let _lock = archive_test_lock();
+        let zip = minimal_zip_bytes();
+        let transport = RecordingTransport::new(vec![zip]);
+        let temp = tempfile::tempdir().expect("temp");
+        let (handle, worker) = edinet_coordinator_test_handle();
+        let guard = handle
+            .acquire_edinet_job_with_headroom(|| Some(EDINET_MIN_START_HEADROOM_BYTES))
+            .expect("acquire");
+        let selected = selection("0");
+        let _ = run_edinet_zip_pipeline(
+            &transport,
+            &selected,
+            "test-key",
+            temp.path(),
+            &guard,
+        )
+        .await;
+        assert_eq!(transport.call_types(), vec!["1".to_string()]);
+        drop(guard);
+        drop(handle);
+        worker.join().expect("worker");
+    }
+
+    #[tokio::test]
+    async fn type5_too_large_continues_to_type1() {
+        let _lock = archive_test_lock();
+        let zip = minimal_zip_bytes();
+        let transport = RecordingTransport::with_fail(vec![zip], "too_large");
+        let temp = tempfile::tempdir().expect("temp");
+        let (handle, worker) = edinet_coordinator_test_handle();
+        let guard = handle
+            .acquire_edinet_job_with_headroom(|| Some(EDINET_MIN_START_HEADROOM_BYTES))
+            .expect("acquire");
+        let selected = selection("1");
+        let _ = run_edinet_zip_pipeline(
+            &transport,
+            &selected,
+            "test-key",
+            temp.path(),
+            &guard,
+        )
+        .await;
+        assert_eq!(transport.call_types(), vec!["5".to_string(), "1".to_string()]);
+        drop(guard);
+        drop(handle);
+        worker.join().expect("worker");
+    }
+
+    #[tokio::test]
+    async fn type1_network_fail_after_type5_attempt_keeps_serial_order() {
+        let _lock = archive_test_lock();
+        let zip = minimal_zip_bytes();
+        let transport = RecordingTransport::with_fail(vec![zip], "network");
+        let temp = tempfile::tempdir().expect("temp");
+        let (handle, worker) = edinet_coordinator_test_handle();
+        let guard = handle
+            .acquire_edinet_job_with_headroom(|| Some(EDINET_MIN_START_HEADROOM_BYTES))
+            .expect("acquire");
+        let selected = selection("1");
+        let outcome = run_edinet_zip_pipeline(
+            &transport,
+            &selected,
+            "test-key",
+            temp.path(),
+            &guard,
+        )
+        .await;
+        assert_eq!(transport.call_types(), vec!["5".to_string(), "1".to_string()]);
+        let (acq, _, _) = acquisition_from_selected_with_partials(
+            &selected,
+            outcome.financials.as_ref(),
+            outcome.narratives.as_ref(),
+        )
+        .expect("acq");
+        let extraction =
+            extraction_status_from_zip(&acq, outcome.interrupted, outcome.extraction_failed);
+        assert!(matches!(
+            extraction,
+            ExtractionStatus::None
+                | ExtractionStatus::ParseFailed
+                | ExtractionStatus::FinancialsOnly
+        ));
+        drop(guard);
+        drop(handle);
+        worker.join().expect("worker");
+    }
+
+    #[tokio::test]
+    async fn pre_cancelled_token_maps_to_cancelled_extraction() {
+        let _lock = archive_test_lock();
+        let zip = minimal_zip_bytes();
+        let transport = RecordingTransport::new(vec![zip.clone(), zip]);
+        let temp = tempfile::tempdir().expect("temp");
+        let (handle, worker) = edinet_coordinator_test_handle();
+        let guard = handle
+            .acquire_edinet_job_with_headroom(|| Some(EDINET_MIN_START_HEADROOM_BYTES))
+            .expect("acquire");
+        guard.cancel_with_cause(EdinetCancelCause::Background);
+        let selected = selection("1");
+        let outcome = run_edinet_zip_pipeline(
+            &transport,
+            &selected,
+            "test-key",
+            temp.path(),
+            &guard,
+        )
+        .await;
+        assert!(outcome.interrupted);
+        assert_eq!(outcome.fetch, FetchStatus::Cancelled);
+        let (acq, _, _) = acquisition_from_selected_with_partials(
+            &selected,
+            outcome.financials.as_ref(),
+            outcome.narratives.as_ref(),
+        )
+        .expect("acq");
+        let extraction = extraction_status_from_zip(&acq, true, outcome.extraction_failed);
+        assert_eq!(extraction, ExtractionStatus::Cancelled);
+        drop(guard);
+        drop(handle);
+        worker.join().expect("worker");
+    }
+
+    #[tokio::test]
+    async fn memory_cause_maps_to_memory_pressure_fetch() {
+        let _lock = archive_test_lock();
+        let zip = minimal_zip_bytes();
+        let transport = RecordingTransport::new(vec![zip]);
+        let temp = tempfile::tempdir().expect("temp");
+        let (handle, worker) = edinet_coordinator_test_handle();
+        let guard = handle
+            .acquire_edinet_job_with_headroom(|| Some(EDINET_MIN_START_HEADROOM_BYTES))
+            .expect("acquire");
+        guard.cancel_with_cause(EdinetCancelCause::MemoryPressure);
+        let selected = selection("0");
+        let outcome = run_edinet_zip_pipeline(
+            &transport,
+            &selected,
+            "test-key",
+            temp.path(),
+            &guard,
+        )
+        .await;
+        assert!(outcome.interrupted);
+        assert_eq!(outcome.fetch, FetchStatus::MemoryPressure);
+        drop(guard);
+        drop(handle);
+        worker.join().expect("worker");
     }
 }

@@ -713,6 +713,30 @@ rm -rf .boundary-tests-out
 - `MAX_COMPANY_FACTS_BYTES` を counted フィールド数 × `MAX_FACT_FIELD_BYTES` 未満に戻すな（sanitize が正当な capped facts を `Malformed` にする）。
 - `PartialEdinetFacts` にフィールドを足したら全 struct literal（csv 側 2 + xbrl 側 4）を追従させること（`..Default::default()` は使っていない）。
 
+**Step 11 as-built (2026-07-27) — cancel 橋 + ZIP 直列パイプライン接続のみ（Vault Evidence / Keychain / heavy_coordinator.rs 移設禁止）:**
+1. `EdinetCancelCause` + `EdinetJobGuard` 内 `CancellationToken` / `cancel_cause`。`cancel_with_cause` は first-writer-wins。`Drop` は token cancel → Unpark → gate open → Idle（順序厳守）。LLM 自動再ロード禁止。
+2. `spawn_edinet_cancel_watch` は **`Weak` 保持**のみ（strong 禁止）。250ms で admission bits / headroom floor（`EDINET_CANCEL_HEADROOM_BYTES`）を見て token 化。ObjC callback から `CancellationToken::cancel()` 直接呼びは不可（V3 §3.3）。
+3. `commands_sim::run_edinet_zip_pipeline` — type=5→extract→drop→type=1→extract→drop 完全直列。`extract_on_blocking` は `tauri::async_runtime::spawn_blocking` + closure 内で `TempArchive`/`guard` clone drop。`JoinHandle::abort` 禁止。
+4. `acquisition_from_selected_with_partials` — Partial → `EdinetFactAcquisition` + evidence 連結。`FetchStatus`/`ExtractionStatus` は設計書 §3.5 決定表のみ。
+5. `AppHandle` → `app_cache_dir()/edinet-tmp` を `temp_dir` として注入。`filing_text: Some` 注入経路と `temp_dir: None` soft-fail は温存。`Cargo.toml` 無変更。
+
+**Step 11 ハマりどころ:**
+- watcher が guard を strong 保持すると gate が永遠に閉じ LLM が死ぬ。Weak + 最終 drop 自然終了を回帰テストで固定。
+- `production_archive_gate()` はプロセス唯一 — 並列 unit test は TempArchiveBusy で GET 0 回になる。Step 11 パイプラインテストはモジュール内 Mutex で直列化。
+- cancel 済みでも fields 全 false なら `ExtractionStatus::Cancelled` で base soft-fallback。片側成功は partial（FinancialsOnly/NarrativesOnly）として返す — 「片方失敗で全部捨て」は禁止。
+
+**Step 12 as-built (2026-07-27) — Outer Fallback 出口一本化のみ（inner §3.5 / wire / Keychain / service.rs 禁止）:**
+1. `enrich_company_facts_from_edinet_core` → `Result<EnrichOutcome, String>`。Err は入力棄却層のみ。fallback 層は常に `Ok`。
+2. `fallback_enrichment_response` が V3 outer の唯一出口。inner の fetch/extraction/coverage/result を無加工転記 + `SoftFallback`。`legacy_error` は base 空時のみ（旧 `fetch_edinet_company_facts` 互換 Err）。
+3. 取得成功後の `?` 排除: rekey 不一致 → `identity_mismatch_response`（facts=base、result=`identity_ambiguous`、freshness 無 doc_id）。persist read-back 失敗 → `persisted`+`VaultReadFailed`（CAS 成功は格下げしない）。Conflict read-back → `known` wires + `VaultReadFailed`。
+4. 初回 vault 読取失敗は `VaultReadFailed` warning を成功/fallback 双方へ合流（重複排除）。
+5. interview レーン `:512/:518` filter 失敗は `soft_fallback_named_base`（V3 core へ統合しない）。
+
+**Step 12 ハマりどころ:**
+- base 確定前の schema/sanitize Err を fallback に飲み込むな（入力棄却層の契約）。
+- outer で cancel→`network_failed` 等の status 丸めを書くな。決定表の転記のみ。
+- `CompanyFacts::default()` で非空 base を置換するな。base 空の空 facts + 真実 status は「未取得」表現であり V3 §12 の禁止対象外（`base.is_empty()` のみ根拠）。
+
 ### 4.13 M13 — Daily Context merger + auto-ingest (2026-07-20)
 
 **射程:** フロント/別経路から渡された予定 JSON + 日誌テキストを Daily Context Markdown に結合し、`chunk_markdown` → embed → `knowledge_replace` で同日 upsert。iOS EventKit 直接バインド・React UI・profiler 起動は対象外。

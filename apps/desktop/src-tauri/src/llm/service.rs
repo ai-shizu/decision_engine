@@ -12,13 +12,14 @@
 use std::num::NonZeroU32;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicU8, Ordering};
-use std::sync::{mpsc, Arc, Mutex};
+use std::sync::{mpsc, Arc, Mutex, Weak};
 use std::thread;
 use std::time::Duration;
 
 use serde::Serialize;
 use tauri::ipc::Channel;
 use tokio::sync::oneshot;
+use tokio_util::sync::CancellationToken;
 
 use llama_cpp_2::context::params::LlamaContextParams;
 use llama_cpp_2::llama_backend::LlamaBackend;
@@ -592,15 +593,53 @@ enum LlmCommand {
     },
 }
 
+/// EDINET job が cancel された理由。watcher / drop / 直接 cancel が
+/// 最初の1回だけ書き込む（AtomicU8, compare_exchange で first-writer-wins）。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(not(feature = "egress-live"), allow(dead_code))]
+pub enum EdinetCancelCause {
+    None,
+    Background,
+    MemoryPressure,
+    ThermalPressure,
+    Dropped,
+}
+
+impl EdinetCancelCause {
+    fn as_u8(self) -> u8 {
+        match self {
+            Self::None => 0,
+            Self::Background => 1,
+            Self::MemoryPressure => 2,
+            Self::ThermalPressure => 3,
+            Self::Dropped => 4,
+        }
+    }
+
+    #[cfg_attr(not(feature = "egress-live"), allow(dead_code))]
+    fn from_u8(v: u8) -> Self {
+        match v {
+            1 => Self::Background,
+            2 => Self::MemoryPressure,
+            3 => Self::ThermalPressure,
+            4 => Self::Dropped,
+            _ => Self::None,
+        }
+    }
+}
+
 struct EdinetJobGuardInner {
     tx: Arc<Mutex<mpsc::SyncSender<LlmCommand>>>,
     governor: Arc<LlmMemoryGovernor>,
     epoch: u64,
     monitor: Arc<MemoryMonitor>,
+    cancel: CancellationToken,
+    cancel_cause: AtomicU8,
 }
 
 impl Drop for EdinetJobGuardInner {
     fn drop(&mut self) {
+        self.cancel.cancel();
         if let Ok(tx) = self.tx.lock() {
             let _ = tx.try_send(LlmCommand::Unpark { epoch: self.epoch });
         }
@@ -612,16 +651,99 @@ impl Drop for EdinetJobGuardInner {
 }
 
 #[derive(Clone)]
+#[cfg_attr(not(feature = "egress-live"), allow(dead_code))]
 pub struct EdinetJobGuard(Arc<EdinetJobGuardInner>);
 
 impl EdinetJobGuard {
-    pub fn is_cancelled(&self) -> bool {
-        self.0.governor.admission_bits() != 0
+    /// download / spawn_blocking へ渡す協調 cancel token（clone）。
+    #[cfg_attr(not(feature = "egress-live"), allow(dead_code))]
+    pub fn cancel_token(&self) -> CancellationToken {
+        self.0.cancel.clone()
     }
 
+    /// 理由を記録して cancel。既に cancel 済みなら理由は上書きしない。
+    pub fn cancel_with_cause(&self, cause: EdinetCancelCause) {
+        if matches!(cause, EdinetCancelCause::None) {
+            return;
+        }
+        let _ = self.0.cancel_cause.compare_exchange(
+            EdinetCancelCause::None.as_u8(),
+            cause.as_u8(),
+            Ordering::SeqCst,
+            Ordering::SeqCst,
+        );
+        self.0.cancel.cancel();
+    }
+
+    /// 最初に記録された理由（未 cancel なら None）。
+    #[cfg_attr(not(feature = "egress-live"), allow(dead_code))]
+    pub fn cancellation_cause(&self) -> EdinetCancelCause {
+        EdinetCancelCause::from_u8(self.0.cancel_cause.load(Ordering::SeqCst))
+    }
+
+    #[cfg_attr(not(feature = "egress-live"), allow(dead_code))]
+    pub fn is_cancelled(&self) -> bool {
+        self.0.governor.admission_bits() != 0 || self.0.cancel.is_cancelled()
+    }
+
+    #[cfg_attr(not(feature = "egress-live"), allow(dead_code))]
     pub fn set_phase(&self, phase: MemPhase) {
         self.0.monitor.set_phase(phase);
     }
+}
+
+/// admission bits / headroom floor を低頻度ポーリングし、成立時に
+/// cancel token を立てる監視 task。**`Weak<EdinetJobGuardInner>` を保持**
+/// し、job の最終 guard drop と同時に自然終了する。
+#[cfg_attr(not(feature = "egress-live"), allow(dead_code))]
+pub fn spawn_edinet_cancel_watch(
+    guard: &EdinetJobGuard,
+) -> tauri::async_runtime::JoinHandle<()> {
+    spawn_edinet_cancel_watch_with_headroom(
+        guard,
+        crate::monitor::os_proc_available_memory_bytes,
+    )
+}
+
+fn spawn_edinet_cancel_watch_with_headroom<F>(
+    guard: &EdinetJobGuard,
+    headroom: F,
+) -> tauri::async_runtime::JoinHandle<()>
+where
+    F: Fn() -> Option<u64> + Send + 'static,
+{
+    let weak: Weak<EdinetJobGuardInner> = Arc::downgrade(&guard.0);
+    tauri::async_runtime::spawn(async move {
+        loop {
+            tokio::time::sleep(Duration::from_millis(250)).await;
+            let Some(inner) = weak.upgrade() else {
+                return;
+            };
+            if inner.cancel.is_cancelled() {
+                return;
+            }
+            let bits = inner.governor.admission_bits();
+            if bits != 0 {
+                let cause = if bits & ADMISSION_MEMORY_PRESSURE != 0 {
+                    EdinetCancelCause::MemoryPressure
+                } else if bits & ADMISSION_THERMAL_PRESSURE != 0 {
+                    EdinetCancelCause::ThermalPressure
+                } else if bits & ADMISSION_BACKGROUND != 0 {
+                    EdinetCancelCause::Background
+                } else {
+                    EdinetCancelCause::MemoryPressure
+                };
+                let guard = EdinetJobGuard(inner);
+                guard.cancel_with_cause(cause);
+                return;
+            }
+            if headroom().is_some_and(|v| v < EDINET_CANCEL_HEADROOM_BYTES) {
+                let guard = EdinetJobGuard(inner);
+                guard.cancel_with_cause(EdinetCancelCause::MemoryPressure);
+                return;
+            }
+        }
+    })
 }
 
 /// Send + Sync handle placed in Tauri `State`.
@@ -709,11 +831,15 @@ impl LlmHandle {
         }
     }
 
+    #[cfg_attr(not(feature = "egress-live"), allow(dead_code))]
     pub fn acquire_edinet_job(&self) -> Result<EdinetJobGuard, String> {
         self.acquire_edinet_job_with_headroom(crate::monitor::os_proc_available_memory_bytes)
     }
 
-    fn acquire_edinet_job_with_headroom<F>(&self, headroom: F) -> Result<EdinetJobGuard, String>
+    pub(crate) fn acquire_edinet_job_with_headroom<F>(
+        &self,
+        headroom: F,
+    ) -> Result<EdinetJobGuard, String>
     where
         F: Fn() -> Option<u64>,
     {
@@ -785,6 +911,8 @@ impl LlmHandle {
             governor: Arc::clone(&self.governor),
             epoch,
             monitor: Arc::clone(&self.monitor),
+            cancel: CancellationToken::new(),
+            cancel_cause: AtomicU8::new(0),
         })))
     }
 
@@ -1465,21 +1593,59 @@ fn generate(
     }
 }
 
+/// Test-only EDINET coordinator harness (fake Barrier/Park worker). Shared with
+/// `commands_sim` Step 11 pipeline tests so they do not re-implement acquire.
+#[cfg(test)]
+fn edinet_disconnected_test_handle() -> (LlmHandle, mpsc::Receiver<LlmCommand>) {
+    let (tx, rx) = mpsc::sync_channel(LLM_COMMAND_QUEUE_CAPACITY);
+    (
+        LlmHandle {
+            tx: Arc::new(Mutex::new(tx)),
+            governor: Arc::new(LlmMemoryGovernor::new()),
+            startup_error: None,
+            monitor: Arc::new(MemoryMonitor::new()),
+        },
+        rx,
+    )
+}
+
+#[cfg(test)]
+pub(crate) fn edinet_coordinator_test_handle() -> (LlmHandle, thread::JoinHandle<()>) {
+    let (handle, rx) = edinet_disconnected_test_handle();
+    let governor = handle.governor();
+    let worker = thread::spawn(move || {
+        while let Ok(command) = rx.recv() {
+            match command {
+                LlmCommand::Barrier { reply } => {
+                    let _ = reply.send(());
+                }
+                LlmCommand::Park { epoch, reply } => {
+                    let _ = governor.take_purge();
+                    governor.edinet_parked_epoch.store(epoch, Ordering::SeqCst);
+                    let _ = reply.send(Ok(()));
+                }
+                LlmCommand::Unpark { epoch } => {
+                    if governor.edinet_parked_epoch.load(Ordering::SeqCst) == epoch {
+                        governor.edinet_parked_epoch.store(0, Ordering::SeqCst);
+                    }
+                }
+                _ => {}
+            }
+        }
+    });
+    (handle, worker)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    fn coordinator_test_handle() -> (LlmHandle, thread::JoinHandle<()>) {
+        edinet_coordinator_test_handle()
+    }
+
     fn disconnected_test_handle() -> (LlmHandle, mpsc::Receiver<LlmCommand>) {
-        let (tx, rx) = mpsc::sync_channel(LLM_COMMAND_QUEUE_CAPACITY);
-        (
-            LlmHandle {
-                tx: Arc::new(Mutex::new(tx)),
-                governor: Arc::new(LlmMemoryGovernor::new()),
-                startup_error: None,
-                monitor: Arc::new(MemoryMonitor::new()),
-            },
-            rx,
-        )
+        edinet_disconnected_test_handle()
     }
 
     fn test_generation_params() -> GenerationParams {
@@ -1536,32 +1702,6 @@ mod tests {
         );
     }
 
-    fn coordinator_test_handle() -> (LlmHandle, thread::JoinHandle<()>) {
-        let (handle, rx) = disconnected_test_handle();
-        let governor = handle.governor();
-        let worker = thread::spawn(move || {
-            while let Ok(command) = rx.recv() {
-                match command {
-                    LlmCommand::Barrier { reply } => {
-                        let _ = reply.send(());
-                    }
-                    LlmCommand::Park { epoch, reply } => {
-                        let _ = governor.take_purge();
-                        governor.edinet_parked_epoch.store(epoch, Ordering::SeqCst);
-                        let _ = reply.send(Ok(()));
-                    }
-                    LlmCommand::Unpark { epoch } => {
-                        if governor.edinet_parked_epoch.load(Ordering::SeqCst) == epoch {
-                            governor.edinet_parked_epoch.store(0, Ordering::SeqCst);
-                        }
-                    }
-                    _ => {}
-                }
-            }
-        });
-        (handle, worker)
-    }
-
     #[test]
     fn edinet_guard_closes_heavy_gate_and_unparks_on_last_drop() {
         let (handle, worker) = coordinator_test_handle();
@@ -1600,6 +1740,123 @@ mod tests {
             .acquire_edinet_job_with_headroom(|| Some(EDINET_MIN_START_HEADROOM_BYTES - 1))
             .is_err());
         assert!(handle.acquire_edinet_job_with_headroom(|| None).is_err());
+        drop(handle);
+        worker.join().expect("worker");
+    }
+
+    #[test]
+    fn edinet_cancel_token_live_until_last_guard_drop() {
+        let (handle, worker) = coordinator_test_handle();
+        let guard = handle
+            .acquire_edinet_job_with_headroom(|| Some(EDINET_MIN_START_HEADROOM_BYTES))
+            .expect("acquire");
+        let token = guard.cancel_token();
+        assert!(!token.is_cancelled());
+        let clone = guard.clone();
+        drop(guard);
+        assert!(!token.is_cancelled());
+        drop(clone);
+        assert!(token.is_cancelled());
+        drop(handle);
+        worker.join().expect("worker");
+    }
+
+    #[test]
+    fn edinet_cancel_with_cause_is_first_writer_wins() {
+        let (handle, worker) = coordinator_test_handle();
+        let guard = handle
+            .acquire_edinet_job_with_headroom(|| Some(EDINET_MIN_START_HEADROOM_BYTES))
+            .expect("acquire");
+        guard.cancel_with_cause(EdinetCancelCause::Background);
+        guard.cancel_with_cause(EdinetCancelCause::MemoryPressure);
+        assert_eq!(
+            guard.cancellation_cause(),
+            EdinetCancelCause::Background
+        );
+        assert!(guard.cancel_token().is_cancelled());
+        drop(guard);
+        drop(handle);
+        worker.join().expect("worker");
+    }
+
+    #[test]
+    fn edinet_is_cancelled_true_for_token_alone() {
+        let (handle, worker) = coordinator_test_handle();
+        let guard = handle
+            .acquire_edinet_job_with_headroom(|| Some(EDINET_MIN_START_HEADROOM_BYTES))
+            .expect("acquire");
+        assert!(!guard.is_cancelled());
+        guard.cancel_token().cancel();
+        assert!(guard.is_cancelled());
+        drop(guard);
+        drop(handle);
+        worker.join().expect("worker");
+    }
+
+    #[tokio::test]
+    async fn edinet_watcher_cancels_on_admission_bits() {
+        async fn case(bit: u32, expected: EdinetCancelCause) {
+            let (handle, worker) = coordinator_test_handle();
+            let guard = handle
+                .acquire_edinet_job_with_headroom(|| Some(EDINET_MIN_START_HEADROOM_BYTES))
+                .expect("acquire");
+            let token = guard.cancel_token();
+            let _watch = spawn_edinet_cancel_watch_with_headroom(&guard, || {
+                Some(EDINET_MIN_START_HEADROOM_BYTES)
+            });
+            handle.governor.set_admission_bit(bit, true);
+            let deadline = tokio::time::Instant::now() + Duration::from_secs(1);
+            while !token.is_cancelled() && tokio::time::Instant::now() < deadline {
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+            assert!(token.is_cancelled());
+            assert_eq!(guard.cancellation_cause(), expected);
+            drop(guard);
+            drop(handle);
+            worker.join().expect("worker");
+        }
+        case(ADMISSION_BACKGROUND, EdinetCancelCause::Background).await;
+        case(ADMISSION_MEMORY_PRESSURE, EdinetCancelCause::MemoryPressure).await;
+        case(ADMISSION_THERMAL_PRESSURE, EdinetCancelCause::ThermalPressure).await;
+    }
+
+    #[tokio::test]
+    async fn edinet_watcher_exits_when_guard_drops_and_gate_opens() {
+        let (handle, worker) = coordinator_test_handle();
+        let guard = handle
+            .acquire_edinet_job_with_headroom(|| Some(EDINET_MIN_START_HEADROOM_BYTES))
+            .expect("acquire");
+        let watch = spawn_edinet_cancel_watch_with_headroom(&guard, || {
+            Some(EDINET_MIN_START_HEADROOM_BYTES)
+        });
+        drop(guard);
+        let joined = tokio::time::timeout(Duration::from_secs(2), watch).await;
+        assert!(joined.is_ok(), "watcher must finish after Weak upgrade fails");
+        assert!(handle.ensure_llm_heavy_admitted().is_ok());
+        drop(handle);
+        worker.join().expect("worker");
+    }
+
+    #[tokio::test]
+    async fn edinet_watcher_cancels_on_headroom_floor() {
+        let (handle, worker) = coordinator_test_handle();
+        let guard = handle
+            .acquire_edinet_job_with_headroom(|| Some(EDINET_MIN_START_HEADROOM_BYTES))
+            .expect("acquire");
+        let token = guard.cancel_token();
+        let _watch = spawn_edinet_cancel_watch_with_headroom(&guard, || {
+            Some(EDINET_CANCEL_HEADROOM_BYTES - 1)
+        });
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(1);
+        while !token.is_cancelled() && tokio::time::Instant::now() < deadline {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        assert!(token.is_cancelled());
+        assert_eq!(
+            guard.cancellation_cause(),
+            EdinetCancelCause::MemoryPressure
+        );
+        drop(guard);
         drop(handle);
         worker.join().expect("worker");
     }
