@@ -4,6 +4,7 @@
 //! can name the type and call `as_str`, but cannot forge `Checked(raw)`.
 
 use crate::flavor::policy::FlavorPolicy;
+use crate::flavor::scan;
 
 /// Opaque proof that `raw` passed `check` under a given policy.
 ///
@@ -19,9 +20,13 @@ impl Checked {
     }
 }
 
-/// F-1 skeleton: always reject. F-2 implements the absolute numeric ban
-/// (SPEC §4). The type chain `check` → `Checked` → `VerifiedFlavor` is
-/// complete; only the detector body is deferred.
-pub(crate) fn check(_raw: &str, _ctx: &FlavorPolicy) -> Option<Checked> {
-    None
+/// Absolute numeric ban + charset / budget (SPEC §4). Returns `Some` only
+/// when the scanner accumulates zero findings.
+pub(crate) fn check(raw: &str, ctx: &FlavorPolicy) -> Option<Checked> {
+    let result = scan::scan(raw, ctx);
+    if result.is_clean() {
+        Some(Checked(raw.to_string()))
+    } else {
+        None
+    }
 }

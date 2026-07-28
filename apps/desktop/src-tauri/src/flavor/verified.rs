@@ -28,7 +28,7 @@ pub struct VerifiedFlavor {
 }
 
 impl VerifiedFlavor {
-    /// Sole safe transition from unverified text to a witness (F-1: always `None`).
+    /// Sole safe transition from unverified text to a witness.
     pub fn verify(raw: &str, ctx: &FlavorPolicy) -> Option<VerifiedFlavor> {
         let checked = checked::check(raw, ctx)?;
         Some(VerifiedFlavor { checked })
@@ -59,25 +59,9 @@ fn flavor_seal_probe_checked() {
 }
 
 // ---------------------------------------------------------------------------
-// Positive contract: Serialize (ordinary unit test — not a doctest fence).
-// ---------------------------------------------------------------------------
-
-#[cfg(test)]
-mod serialize_contract {
-    use super::VerifiedFlavor;
-    use serde::Serialize;
-
-    fn assert_serialize<T: Serialize>() {}
-
-    #[test]
-    fn verified_flavor_implements_serialize() {
-        assert_serialize::<VerifiedFlavor>();
-    }
-}
-
-// ---------------------------------------------------------------------------
 // Negative fences + positive companions (FLV-I-09 / FLV-W-06).
 // Attack one per fence. Companion = same scaffolding, attack removed.
+// Must appear *before* any `#[cfg(test)]` module (clippy: items_after_test_module).
 // ---------------------------------------------------------------------------
 
 /// Positive companion: scaffolding for Deserialize-for<'de> fence compiles.
@@ -239,3 +223,20 @@ fn _fence_no_struct_update() {}
 /// }
 /// ```
 fn _fence_no_destructure_rebuild() {}
+
+// ---------------------------------------------------------------------------
+// Positive contract: Serialize (ordinary unit test — not a doctest fence).
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod serialize_contract {
+    use super::VerifiedFlavor;
+    use serde::Serialize;
+
+    fn assert_serialize<T: Serialize>() {}
+
+    #[test]
+    fn verified_flavor_implements_serialize() {
+        assert_serialize::<VerifiedFlavor>();
+    }
+}

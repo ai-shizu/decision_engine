@@ -85,6 +85,31 @@ pub const MUST_ACCEPT: &[&str] = &[
     "呼吸を整え、次の手を待つ。",
 ];
 
+/// Lexical-trap accept corpus (F-2 §0 / Gate C).
+///
+/// Proves L2 must **not** absorb `無` `大` `半` `数` `両` as single-char
+/// numerals — those morphemes are ubiquitous in non-quantity Japanese.
+/// Do not shrink this list; append-only if extended.
+pub const MUST_ACCEPT_LEXICAL_TRAPS: &[&str] = &[
+    "大きな波が場を攫った。",
+    "無言の圧力が続いた。",
+    "前半の勢いが失われた。",
+    "両手が震えていた。",
+    "手数が増えるだけだった。",
+    "半端な決着に終わった。",
+    "無理を通した代償が残る。",
+    "数える間もなく崩れた。",
+];
+
+/// Shield-boundary reject corpus (F-2 Gate E).
+///
+/// Audited terminals shield only their own span; trailing numerals remain
+/// detectable (`万が一` / `一気に` do not launder `一万円` / `一万`).
+pub const MUST_REJECT_SHIELD_BOUNDARY: &[&str] = &[
+    "万が一、一万円がかかる。",
+    "一気に一万が消えた。",
+];
+
 #[cfg(test)]
 mod corpus_tests {
     use super::*;
@@ -108,7 +133,6 @@ mod corpus_tests {
     }
 
     #[test]
-    #[ignore = "F-2 でガード実装時に解除"]
     fn f2_guard_must_accept_clean_flavor() {
         let policy = FlavorPolicy::v1_empty();
         for (i, sample) in MUST_ACCEPT.iter().enumerate() {
@@ -118,6 +142,34 @@ mod corpus_tests {
             );
         }
         assert_eq!(MUST_ACCEPT.len(), 10);
+    }
+
+    #[test]
+    fn f2_must_accept_lexical_traps() {
+        let policy = FlavorPolicy::v1_empty();
+        for (i, sample) in MUST_ACCEPT_LEXICAL_TRAPS.iter().enumerate() {
+            assert!(
+                VerifiedFlavor::verify(sample, &policy).is_some(),
+                "MUST_ACCEPT_LEXICAL_TRAPS[{i}] rejected: {sample:?}"
+            );
+        }
+        assert!(
+            MUST_ACCEPT_LEXICAL_TRAPS.len() >= 8,
+            "MUST_ACCEPT_LEXICAL_TRAPS must have >= 8 vectors, got {}",
+            MUST_ACCEPT_LEXICAL_TRAPS.len()
+        );
+    }
+
+    #[test]
+    fn f2_must_reject_shield_boundary() {
+        let policy = FlavorPolicy::v1_empty();
+        for (i, sample) in MUST_REJECT_SHIELD_BOUNDARY.iter().enumerate() {
+            assert!(
+                VerifiedFlavor::verify(sample, &policy).is_none(),
+                "MUST_REJECT_SHIELD_BOUNDARY[{i}] unexpectedly accepted: {sample:?}"
+            );
+        }
+        assert_eq!(MUST_REJECT_SHIELD_BOUNDARY.len(), 2);
     }
 }
 

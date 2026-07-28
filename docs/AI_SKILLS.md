@@ -2136,7 +2136,7 @@ latest commit **後**にだけ `_prune_retrieval_manifests` を実行する。
 
 — 初代リードアーキテクト Fable（2026-07-27 移譲）
 
-## 20. Target Golf — THE BLACKBOX SIMULATOR (`docs/SPEC_BLACKBOX_SIMULATOR.md`。Phase 0〜5-B 完遂 / Phase 6-A step1–7 封緘（6-B は R-11 により無期限凍結）/ フレーバ層 F-1 型骨格+封印 完遂)
+## 20. Target Golf — THE BLACKBOX SIMULATOR (`docs/SPEC_BLACKBOX_SIMULATOR.md`。Phase 0〜5-B 完遂 / Phase 6-A step1–7 封緘（6-B は R-11 により無期限凍結）/ フレーバ層 F-1 型骨格+封印 + F-2 ガード完遂)
 
 本節は Target Golf の設計規律と as-built の両方の要約を持つ。**正本は `docs/SPEC_BLACKBOX_SIMULATOR.md`**（§0 裁定台帳・§16 不変条件/罠台帳 `BXS-I-nn`/`BXS-W-nn`・§18〜24 各フェーズ as-built）。オフライン金融シミュレータでありながら、真の目的はプレイヤーの意思決定から損失回避・処分効果・アンカリング・過信・エスカレーション・プレッシャー下劣化の 6 バイアスを決定論的に抽出する計器である（Echo と並ぶ第二の「決定論的観測器」）。既定ビルド非包含（feature `blackbox-sim`）。
 
@@ -2187,14 +2187,17 @@ Phase 6-A step1（`bridge::estimate_pooled`）で踏んだ、リプレイ恒等�
 20. **未測定レーンは「未測定」と書け。** `value_micro: None` を 0・平均・空欄に化けさせるな。`pooled_campaigns` と `uncalibrated-instrument` 権威境界を必ず同梱（no-llm-authority 同型）。表示は整数演算のみ（`format_sufficiency` / `format_value_micro` に f64 を残すな — N-1）。
 21. **R-9 単一アクセサ:** SQL は `get_latest_profile` / `list_profiles` のみ。表示文字列は `blackbox_profile_outlet`。出口ごとの独自 SELECT 禁止。
 
-### 20.1 フレーバ層 F-1 as-built（2026-07-28）
+### 20.1 フレーバ層 F-1 / F-2 as-built（2026-07-28）
 
 正本: `docs/SPEC_FLAVOR_LAYER.md` v2。配置は **`src-tauri/src/flavor/`**（`llm/` 配下ではない — `pocket-brain`/cmake 無しで封印を証明するため）。feature `flavor-layer = []`（default 外・`pocket-brain` 非依存 / FLV-R-4 / FLV-I-08）。
 
 生き残る掟:
 
 1. **二鍵封印（FLV-R-7）:** `checked::Checked(String)` のタプル欄は checked に private、`VerifiedFlavor { checked }` の欄は verified に private。crate root の波括弧構築 → **E0451**、兄弟からの `Checked(raw)` 偽造 → **E0603**。`#[cfg(flavor_seal_probe_*)]` プローブ + CI/監査の `cargo rustc --cfg ...` で理由まで検証（doctest では private→pub(crate) 退行を検出できない — FLV-W-06 / §9.1-3）。
-2. **負のフェンスには正の伴走を必ず対で置け（FLV-W-06）。** rustdoc の `compile_fail,E0451` 注釈は強制されない — 未定義識別子でも `ok` になる。攻撃 1 つにつきフェンス 1 つ。
-3. **`char::is_numeric()` は必要だが不十分（FLV-W-04）。** 漢数字 `一/二/十/壱/零` は `false`、`〇/Ⅳ/②/½` 等は `true`。F-2 検出器は明示的な漢字・仮名テーブルとの併用が必須。トリップワイヤは `flavor/corpus.rs`。
-4. **敵対コーパスを検出器より先にコミットせよ。** MUST_REJECT は F-1 で固定、MUST_ACCEPT は `#[ignore = "F-2 でガード実装時に解除"]`。不可視文字は `\u{...}` エスケープのみ（FLV-W-05）。
+2. **負のフェンスには正の伴走を必ず対で置け（FLV-W-06）。** rustdoc の `compile_fail,E0451` 注釈は強制されない — 未定義識別子でも `ok` になる。攻撃 1 つにつきフェンス 1 つ。`verified.rs` の `_fence_*` は `#[cfg(test)]` モジュールより**前**に置け（clippy `items_after_test_module`）。
+3. **`char::is_numeric()` は必要だが不十分（FLV-W-04）。** 漢数字 `一/二/十/壱/零` は `false`、`〇/Ⅳ/②/½` 等は `true`。F-2 は `is_numeral_char = is_numeric ∨ HAN_NUMERALS` とし、`assert!(is_numeral_char('一')); assert!(!'一'.is_numeric());` の強制対で L2 依存を釘付けする。
+4. **敵対コーパスを検出器より先にコミットせよ。** MUST_REJECT / MUST_ACCEPT の **48 件本文は 1 バイトも改変禁止**（追加 const の append のみ可）。不可視文字は `\u{...}` エスケープのみ（FLV-W-05）。
 5. **`SlotValue` は閉じた定性 enum のみ。** `from_quantized` / 数値・`String` 保持バリアント / 権威型からの `Into<SlotValue>` を禁ずる（FLV-I-02/I-03/I-10）。`VerifiedFlavor` に `Deserialize`/`Default`/`Clone`/`DerefMut`/`From`/`TryFrom`/`FromStr` を実装するな — `Serialize` のみ手書き。
+6. **F-2 走査は 4 段・変換なし（charset → shield → numeral → budget）。** NFKC / 畳み込み / 切り詰め禁止。第2段シールドが第3段より前にあることだけが `一気に` を通し、`万が一、一万円` で前者だけを遮蔽する理由。所見は `Finding` 理由付き（bool 化禁止 — FLV-R-3 の打ち手材料）。
+7. **テーブル 3 層を混同するな。** L1=`is_numeric` / L2=漢数字・大字・位取り（単一文字・`Lo`）/ L3=語彙トークン（複数文字・最長一致）。**`無` `大` `半` `数` `両` を L2 に入れるな** — 既存 48 件は通ったまま現実散文が全滅する（`MUST_ACCEPT_LEXICAL_TRAPS` が変異ドリル）。
+8. **監査済み例外表はスキャナ側の版凍結定数。** `FlavorPolicy` は `version` + `max_chars` のみ。実行時注入可能な `exceptions` フィールドは穴なので削除済み。曖昧終端（`十分`/`一部`/裸の`一方`等）は載せず破棄。
