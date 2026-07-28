@@ -109,10 +109,10 @@ SlotValue  : 閉じた enum の定性タグのみ
 
 ### 3.3 出力の封印 — 二鍵モジュール
 
-`llm/flavor/` 配下に**兄弟モジュール 2 つ**を置く。Rust の可視性はモジュール単位であり、private 項目は定義モジュールとその子孫からのみ到達できる（親・兄弟からは不可）。
+`flavor/`（`src-tauri/src/flavor/`・**`llm/` の下ではない**）配下に**兄弟モジュール 2 つ**を置く。`llm/` は `#[cfg(feature = "pocket-brain")]` に閉じているため、型骨格と封印証明のためだけに llama-cpp-2 + cmake を要求すると F-1 の趣旨（LLM を動かさずに封印を証明する）が壊れる。Rust の可視性はモジュール単位であり、private 項目は定義モジュールとその子孫からのみ到達できる（親・兄弟からは不可）。
 
 ```
-llm/flavor/
+flavor/
   ├─ checked.rs    pub(crate) struct Checked(String);   ← フィールドは checked に private
   │                pub(crate) fn check(raw, ctx) -> Option<Checked>
   ├─ verified.rs   pub struct VerifiedFlavor { checked: Checked }  ← フィールドは verified に private
@@ -144,7 +144,7 @@ llm/flavor/
 | `Deref` / `DerefMut` / `AsMut` / `BorrowMut` | 実装しない。公開するのは `&str` のみ |
 | `Clone` | **実装しない**（保守的既定）。複製可能な命題であることを文書化してから追加すること |
 | `Arbitrary` / proptest 派生 | 依存自体を禁止 |
-| `unsafe` / `transmute` | `llm/flavor/` に `#![deny(unsafe_code)]` を置く。外部の敵対的 `unsafe` には型で対抗できない（射程外） |
+| `unsafe` / `transmute` | `flavor/` に `#![deny(unsafe_code)]` を置く。外部の敵対的 `unsafe` には型で対抗できない（射程外） |
 
 > **R1 の正確な表現**: 「唯一の構築経路」は厳密には成立しない。move・`identity`・std が定める反射的 `From<T> for T` は既存の値を複製する。**強制可能な命題は「未検証データから新しいウィットネスへの安全な遷移は `verify` のみ」である。**
 

@@ -35,6 +35,21 @@ mod haptics;
 #[cfg(feature = "pocket-brain")]
 mod coliseum;
 
+// LLM Flavor Layer — type skeleton + two-key witness seal (F-1).
+// Parent: docs/SPEC_FLAVOR_LAYER.md v2. Top-level (NOT under llm/) so seal
+// proofs do not require llama-cpp-2 / cmake. Opt-in only (FLV-R-4).
+#[cfg(feature = "flavor-layer")]
+#[doc(hidden)]
+pub mod flavor;
+
+/// Seal probe: crate-root brace construction of VerifiedFlavor → E0451.
+/// Driven by `cargo rustc --features flavor-layer --lib -- --cfg flavor_seal_probe_verified`.
+#[cfg(all(feature = "flavor-layer", flavor_seal_probe_verified))]
+#[allow(dead_code)]
+fn flavor_seal_probe_verified(checked: crate::flavor::checked::Checked) {
+    let _ = crate::flavor::verified::VerifiedFlavor { checked };
+}
+
 // BLACKBOX SIMULATOR — deterministic finance-sim core
 // (docs/SPEC_BLACKBOX_SIMULATOR.md). As of Phase 3 this carries the market
 // kernel, the operating model, the turn driver and stimulus planting; command
