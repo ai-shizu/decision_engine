@@ -1,9 +1,13 @@
-# SPEC — LLM フレーバ層（Flavor Layer） v2
+# SPEC — LLM フレーバ層（Flavor Layer） v3
 
 **正本。** 親: `docs/AI_SKILLS.md`（統治憲法）/ `docs/SPEC_BLACKBOX_SIMULATOR.md` §14（本機構の初出）。
 不変条件は `FLV-I-nn`、罠は `FLV-W-nn` で採番する（`BXS-I-nn` / `BXS-W-nn` と同型・**改番禁止**）。
 
 **v2 の変更点**: 裁定 FLV-R-6（提案 A′）により、フレーバ層は**数値を扱わなくなった**。数値検出器の役割は「許可リストとの照合」から「**あらゆる数値表現の絶対的遮断**」へ縮退している。併せて FLV-R-7 により、出力型を**コンテキスト・ウィットネス**として型封印する。
+
+**v3 の変更点（2026-07-29・F-3 着工に伴う）**: 非決定論を実際に注入する段の規約を確定した。裁定 FLV-R-8〜R-12 を追加し、生成経路の配置と feature（§11）・アンビエント配信と相関トークン（§12）・A-1 削除可能性の証明手続（§13）・破棄率計測の規約（§14）を新設。併せて F-3 着工前監査で発見した 4 件の「緑なのに何も守っていない」状態を不変条件 FLV-I-12〜17 として閉塞する（§9 台帳）。
+
+> **v3 の正誤（§19.3 違憲審査）**: v2 の §1.3 と公理 A-3 は no-llm-authority の典拠を **LAW-19** と記していたが、これは誤りである。§17 の LAW-19 は「スナップショットを不変条件と混同するな」であり、「**権威はコードのみ、LLM は言語化係である。決定論的観測器が無いなら N/A を返せ — 0 の捏造は嘘である**」は **LAW-20**。`SPEC_BLACKBOX_SIMULATOR.md` §13 は同じ原則を正しく LAW-20 で引いている。v3 で是正した。**由来を読まずに法則番号だけ引くと、この種の誤りは検証されないまま伝播する**（§17 冒頭の戒め）。
 
 ---
 
@@ -18,6 +22,11 @@
 | FLV-R-5 | 文体 | テンプレート単位の**厳格上限**。冗長な出力は破棄し固定テンプレートへ | 2026-07-28 |
 | **FLV-R-6** | **数値の扱い（提案 A′）** | **フレーバ層は数値を一切扱わない。** LLM への入力に数値を渡さず（`SlotValue` は閉じた enum のみ）、出力に数値表現が現れた時点で破棄する。許可リスト照合という設計を**廃止**する | 2026-07-28 |
 | **FLV-R-7** | **出力型の封印** | 出力は**コンテキスト・ウィットネス**とする。`Serialize` は実装するが **`Deserialize` は実装しない**。兄弟モジュールによる二鍵封印を用いる | 2026-07-28 |
+| **FLV-R-8** | **生成経路の配置と feature** | `flavor/` は純粋なまま（`pocket-brain` 非依存）を維持する。生成アダプタは **`llm/flavor_gen.rs`（ファイル。`llm/flavor/` ディレクトリは禁止）**、アリーナ配線は `blackbox_arena/flavor_slot.rs`。feature は **`flavor-live = ["flavor-layer", "pocket-brain", "blackbox-sim"]`・default OFF** | 2026-07-29 |
+| **FLV-R-9** | **予算の権威** | 文字数上限の権威は**ガードであってプロンプトではない**。`FlavorPolicy::for_template(TemplateId)` を追加し、生成経路はこれのみを使う。`v1_empty()` は**コーパス／計測専用**とし、生成経路からの呼出を禁ずる。凍結 API（`verify(&str, &FlavorPolicy)` / `v1_empty()`）の**signature は不変** | 2026-07-29 |
+| **FLV-R-10** | **アンビエント配信** | **単一スロット・最新優先・busy 時は要求を捨てる**（キューイング禁止）。配信は `AdvanceView` に相乗りさせず、**非ブロッキングの pull コマンド**で行う。遅延到着は**相関トークン（Genesis fingerprint + tick + TemplateId）**の Rust 側照合で棄却する | 2026-07-29 |
+| **FLV-R-11** | **破棄率の計測** | **閾値を設けない。** N・通過・破棄・`Finding` 種別内訳を生で報告する。**低い破棄率を理由にテーブル・例外表・境界を緩めることを禁ずる**（LAW-25b）。N を併記しない比率の報告は無効 | 2026-07-29 |
+| **FLV-R-12** | **プロンプトの位置づけ** | 「数値を書くな」という指示文は**破棄率を下げる効率手段であって安全装置ではない**。安全は `flavor::verify` のみが担保する。この命題は**プロンプト有/無の 2 アーム計測で経験的に検証する**（§14.2） | 2026-07-29 |
 
 ### FLV-R-6 の根拠（脅威モデルの訂正）
 
@@ -51,7 +60,7 @@
 
 **含む**: 決定論的に確定した Fact に対し、LLM が**言い回しのみ**を与える経路。初回適用先は BLACKBOX アリーナのイベント文言。
 
-**含まない**: CONSULT の応答、面接対話、ES 添削、講評本文。これらは **LLM が主機能そのもの**であり、LAW-19 / no-llm-authority で既に律されている。
+**含まない**: CONSULT の応答、面接対話、ES 添削、講評本文。これらは **LLM が主機能そのもの**であり、**LAW-20** / no-llm-authority で既に律されている（v2 は LAW-19 と誤記していた — 冒頭の正誤を見よ）。
 
 > **FLV-W-01（最大の罠）**: 「LLM が化粧」の面と「LLM が本体」の面を混同すること。射程の拡大は必ず裁定を経ること。
 
@@ -63,7 +72,7 @@
 |---|---|---|
 | **A-1 削除可能性** | フレーバ層は削除可能。LLM 不在は劣化ではなく既定 | SPEC_BLACKBOX §14 |
 | **A-2 数値ゼロ** | **入力に数値を渡さず、出力の数値表現を絶対遮断する。** 監査済み例外表以外の数値表現を含む出力は破棄（修正・再試行しない） | FLV-R-6 |
-| **A-3 権威への非到達** | フレーバ出力は永続化されず、再注入されず、6D / profile / gap / tensor へ入らない | LAW-19 |
+| **A-3 権威への非到達** | フレーバ出力は永続化されず、再注入されず、6D / profile / gap / tensor へ入らない | **LAW-20** |
 | **A-4 アンビエント** | UI もゲームも LLM を待たない。タイムアウトは既定への復帰であってエラーではない | SPEC_BLACKBOX §14 |
 | **A-5 型による遮断** | 権威データ型はフレーバ層へ渡せない。渡せるのは `TemplateId` と閉じた enum の定性タグのみ | 壁 W-a / W-b |
 | **A-6 リプレイ純度** | リプレイ・監査時にフレーバを再生成しない | 第八律 |
@@ -271,17 +280,25 @@ maxChars:   u16                             （テンプレートごとの上限
 
 | ID | 内容 | ガード（実装時に実名へ） |
 |---|---|---|
-| FLV-I-01 | フレーバ層削除でも全機能が動作 | feature 無効構成での全テスト GREEN |
-| FLV-I-02 | `SlotValue` は閉じた enum であり、数値・任意文字列を保持しない | 契約テスト走査 |
-| FLV-I-03 | 権威型に `Into<SlotValue>` が存在しない | 契約テスト走査 |
-| FLV-I-04 | `VerifiedFlavor` の構築経路が `verify` のみ（二鍵封印） | compile-fail + cfg プローブ |
-| FLV-I-05 | FE がフレーバ文字列から数値を抽出しない | 契約テスト走査 |
-| FLV-I-06 | フレーバが決定ログ / 権威テーブル / vault に入らない | 契約テスト + スキーマ走査 |
-| FLV-I-07 | ガード不通過時に再試行しない | 契約テスト走査 |
-| FLV-I-08 | `blackbox-sim` は `pocket-brain` に依存しない | Cargo.toml 契約テスト |
-| **FLV-I-09** | `VerifiedFlavor` が `Deserialize` / `Default` / `Clone` / `DerefMut` を実装しない | compile-fail（負のトレイト境界） |
-| **FLV-I-10** | FlavorRequest に数値が含まれない | 契約テスト走査 |
-| **FLV-I-11** | フレーバは視覚的に区別された表示スロットにのみ描画される | FE 契約テスト |
+| FLV-I-01 | フレーバ層削除でも全機能が動作 | **`flavor-gate.yml` job `a1-deletability`（§13 digest 恒等）** |
+| FLV-I-02 | `SlotValue` は閉じた enum であり、数値・任意文字列を保持しない | `test_flv_i_02_slot_value_has_no_numeric_or_string_payload` |
+| FLV-I-03 | 権威型に `Into<SlotValue>` が存在しない | `test_flv_i_03_no_into_or_from_slot_value_for_authority_types` |
+| FLV-I-04 | `VerifiedFlavor` の構築経路が `verify` のみ（二鍵封印） | **`flavor-gate.yml` job `seal-probe`**（E0451 / E0603 を stderr で表明）+ `verified.rs` の `_fence_*` |
+| FLV-I-05 | FE がフレーバ文字列から数値を抽出しない | **`test_flv_i_05_fe_never_parses_flavor_text`** |
+| FLV-I-06 | フレーバが決定ログ / 権威テーブル / vault に入らない | **`test_flv_i_06_flavor_absent_from_persistence_and_decision_log`** |
+| FLV-I-07 | ガード不通過時に再試行しない | **`test_flv_i_07_no_retry_on_guard_failure`** |
+| FLV-I-08 | `blackbox-sim` は `pocket-brain` に依存しない | `test_blackbox_sim_still_independent_of_pocket_brain` |
+| **FLV-I-09** | `VerifiedFlavor` が `Deserialize` / `Default` / `Clone` / `DerefMut` を実装しない | `verified.rs` の `_fence_no_*`（正の伴走付き） |
+| **FLV-I-10** | FlavorRequest に数値が含まれない | `test_flv_i_10_flavor_request_has_no_numeric_fields` |
+| **FLV-I-11** | フレーバは視覚的に区別された表示スロットにのみ描画される | **`test_flv_i_11_flavor_slot_is_visually_distinct`**（FE 契約） |
+| **FLV-I-12** | `flavor-live` が default features に無く、`flavor-layer` / `blackbox-sim` の単独有効化が `pocket-brain` を引かない | **`test_flv_i_12_flavor_live_not_in_default`** |
+| **FLV-I-13** | 相関トークンが現在の（fingerprint, tick, TemplateId）と一致しないフレーバは配信されない | **`flavor_slot::tests::stale_correlation_is_dropped`** |
+| **FLV-I-14** | 単一スロット。busy 時に要求が滞留せず、ゲームは LLM を待たない | **`flavor_slot::tests::busy_request_is_dropped_not_queued`** |
+| **FLV-I-15** | テンプレート単位の文字数上限が `verify` によって実際に強制される（FLV-R-9） | **`policy::tests::for_template_budget_is_enforced_by_verify`** + `test_flv_i_15_generation_path_never_calls_v1_empty` |
+| **FLV-I-16** | 破棄率の報告が N と `Finding` 種別内訳を必ず同伴する | **`flavor_gen::measure` の出力形式テスト** |
+| **FLV-I-17** | 二鍵封印プローブと A-1 digest 恒等が CI で実際に駆動される | **`test_flv_i_17_flavor_gate_workflow_drives_probes`**（workflow 走査） |
+
+> **FLV-W-07（F-3 着工前監査で実測 — 2026-07-29）**: v2 時点でこの表の I-01 / I-05 / I-06 / I-07 / I-11 は「ガード（実装時に実名へ）」欄が**散文のまま**であり、`grep -rl` を `tests/` / `src-tauri/src` / `apps/desktop/src` / `.github/` に掛けて**一件も実体が無かった**。同様に、二鍵封印プローブ（`flavor_seal_probe_verified` / `flavor_seal_probe_checked`）は**それを起動するものが repo 内に存在せず**（workflow・shell・Makefile・pytest のいずれにも無い）、§9.2 が要求する「CI の独立したステップ」は未実装だった。**この層で最も強い保証が、どの自動ゲートからも駆動されていなかった。** 「ガード欄に散文を書く」ことは「ガードがある」ことではない。**実名を書き、その実名を grep して実在を確認せよ。**
 
 ### 9.1 封印テストの作法（実測に基づく必須規約）
 
@@ -292,6 +309,12 @@ maxChars:   u16                             （テンプレートごとの上限
 > 1. **負のフェンスには必ず正の伴走テストを置く。** 同一の import・同一の scaffolding で、攻撃部分だけを取り除いたコードが**コンパイルできること**を確認する。これにより「周辺コードが壊れているせいで落ちている」状態を検出する
 > 2. **攻撃 1 つにつきフェンス 1 つ。** 複数の欠如を 1 フェンスにまとめると、残った 1 つのエラーが新しく開いた穴を隠す
 > 3. **crate 内部の封印（private → `pub(crate)` への退行）は doctest では検出できない。** `#[cfg(...)]` プローブを本体に置き、**stderr に期待するエラーコードが現れることを assert する**ハーネスで駆動する（これは理由まで検証できる唯一の形）
+
+> **FLV-W-11（`--lib` が doctest 全部を黙って外す — 実測済み・2026-07-29）**: BXS の C-1 は「`cargo test` に **`--lib` を必ず付けよ**」を掟とした（付けないとバイナリクレートの `0 passed` が混じり `tail` が嘘をつく）。これは正しい。しかし **`--lib` は doctest を実行対象から外すフラグでもある。**
+>
+> 実測: `.github/workflows/` 内の `cargo test` は**全て `--lib`** であり、`--doc` はどの workflow にも**存在しない**。一方 `cargo test --features flavor-layer --doc` は **30 passed**（`flavor/verified.rs` の 11 フェンス + 11 伴走、`knowledge/fsm.rs` の 4 フェンス + 4 伴走）。**つまり本 repo の compile-fail フェンス 15 本は、書かれた日から一度も CI で実行されていない。**
+>
+> **一つの失敗様式を塞いだ規律が、別のガード群を丸ごと無効化した。** これは「緑なのに何も守っていない」の最も静かな変奏であり、**どちらの掟も単独では正しい**ため、掟を読むだけでは絶対に発見できない。`--lib` を掟とする箇所には、**`--doc` を別ステップとして併記せよ。**
 
 ### 9.2 本 crate 固有の注意
 
@@ -305,10 +328,145 @@ gptsol の `must_fail` ハーネスは `cargo rustc --cfg ...` で lib を再コ
 |---|---|---|
 | **F-1** | 型骨格のみ。`TemplateId` / `SlotId` / `SlotValue`（閉じた enum）、`checked` / `verified` 二鍵モジュール、`UnverifiedFlavor`、`FlavorPolicy` の器。**LLM 呼び出しなし・ガードは常に None を返す骨格** | FLV-I-02〜04, I-09 GREEN。封印プローブが E0451 / E0603 で落ちることを実測 |
 | **F-2** | ガード完全実装（§4 の全規約 + 監査済み例外表）+ 既知解テストベクタ | 数値表現族の検出率実測。偽陽性率も報告 |
-| **F-3** | BLACKBOX アリーナ 1 面へ配線（アンビエント配信）。同梱 1.5B で**破棄率を実測** | FLV-I-01 GREEN・破棄率報告 → FLV-R-3 の判断 |
+| **F-3** | BLACKBOX アリーナ 1 面へ配線（アンビエント配信・§11〜§12）。同梱 1.5B で**破棄率を実測**（§14） | **FLV-I-01 GREEN（§13 の digest 恒等）・FLV-I-12〜17 GREEN・§14 の 2 アーム破棄率報告** → FLV-R-3 の判断 |
 | **F-4** | 他面への展開 | 面ごとに裁定 |
 
 **F-1 と F-2 を分ける理由**: 型の封印は LLM が 1 行も動かなくても検証できる。**防壁を先に建て、非決定論は後から入れる。**
+
+---
+
+## 11. 生成経路の配置と feature（FLV-R-8 / FLV-R-9）
+
+### 11.1 配置
+
+```
+flavor/                     ← 純粋。pocket-brain 非依存を維持（F-1 の趣旨）
+llm/flavor_gen.rs           ← 生成アダプタ。#[cfg(feature = "flavor-live")]
+                              ファイルであること。llm/flavor/ ディレクトリは禁止
+blackbox_arena/flavor_slot.rs ← アンビエント単一スロット。#[cfg(feature = "flavor-live")]
+```
+
+> **FLV-W-08**: `llm/flavor/` を**ディレクトリ**として作ってはならない。契約テスト `test_lib_rs_gates_flavor_module` が `src/llm/flavor` の不在を表明しており、v2 §3.3 の配置訂正（`llm/` 配下ではない）はこの走査で固定されている。生成アダプタは単一ファイル `llm/flavor_gen.rs` とせよ。
+
+### 11.2 feature
+
+```toml
+flavor-live = ["flavor-layer", "pocket-brain", "blackbox-sim"]
+```
+
+**default に入れない**（`egress-live` / `blackbox-profile-write` と同型）。`blackbox-sim` を含めるのは、アリーナ配線が `blackbox_arena/` に置かれる以上この feature 無しでは意味を成さないためであり、`blackbox-profile-write = ["blackbox-sim"]` の確立形に倣う。
+
+**依存の向きを取り違えるな。** FLV-I-08 が禁じているのは `blackbox-sim` **が** `pocket-brain` を引くことである。`flavor-live` が `blackbox-sim` を引くのは逆向きであり、違反ではない。**逆辺（`blackbox-sim` の定義に `pocket-brain` / `flavor-layer` / `flavor-live` が現れること）は契約テストが引き続き禁じる。**
+
+### 11.3 予算の権威（FLV-R-9 — 発見された未配線の是正）
+
+F-3 着工前監査の実測: `TemplateId::max_chars()`（48 / 72 / 64）は `const fn` として存在するが、スキャナが読むのは `policy.max_chars()` であり、唯一の `FlavorPolicy` コンストラクタ `v1_empty()` は **256 固定**である。`TemplateId::max_chars()` の呼出元は `FlavorRequest::max_chars()` ただ 1 つ、その呼出元は**ゼロ**。**この状態で生成経路を `verify(raw, &FlavorPolicy::v1_empty())` と配線すると、48 字テンプレートに 200 字が通り、FLV-R-5 は全ゲート GREEN のまま死ぬ。**
+
+是正:
+
+```
+FlavorPolicy::for_template(TemplateId) -> FlavorPolicy   ← 追加。生成経路はこれのみを使う
+FlavorPolicy::v1_empty()                                 ← 凍結。コーパス／計測専用へ用途を限定
+VerifiedFlavor::verify(&str, &FlavorPolicy)              ← 凍結。signature 不変
+```
+
+> **FLV-W-09（型で不変条件を満たしたつもりの罠）**: `const fn` に上限を載せる設計は正しい。しかし**その `const fn` を誰も呼ばなければ、型は何も強制していない。** 「型で表現した」ことと「型が経路上にある」ことは別である。新しい `const` を導入したら、**その識別子を grep して生きた呼出元があることを確認せよ** — 呼出元ゼロの不変条件は装飾である。
+
+---
+
+## 12. アンビエント配信と相関トークン（FLV-R-10）
+
+### 12.1 スロットの規約
+
+```
+単一スロット      Option<(FlavorCorrelation, VerifiedFlavor)>
+最新優先          新しい結果は古い結果を上書きする
+busy 時は捨てる   生成中に新要求が来たら【新要求を捨てる】。キューを作らない
+配信              非ブロッキング pull。ゲームは決して LLM を待たない
+```
+
+**`AdvanceView` にフレーバを相乗りさせてはならない。** 相乗りさせた瞬間、ターン進行が生成完了を待つ経路が生まれる（A-4 違反）。配信は独立した pull コマンドで行い、フレーバ不在時は即座に `None` を返す。
+
+### 12.2 相関トークン
+
+```
+FlavorCorrelation {
+    genesis_fingerprint: [u8; 8],   // CampaignGenesis::digest8() 由来
+    tick: u32,
+    template_id: TemplateId,
+}
+```
+
+> `CampaignGenesis::digest8() -> [u8; 8]`（`blackbox_sim/genesis.rs`）は `#[must_use]` 付きで存在するが、**現時点で呼出元がゼロである**（監査役が実測）。F-3 がその最初の消費者となる。FLV-W-09 と同じ形 —— 存在することと経路上にあることは別である。
+
+**照合は Rust 側で行う。** pull 時に、スロットが保持する相関トークンを**セッションが所有する現在値**と突き合わせ、不一致なら破棄して `None` を返す。FE から相関トークンを受け取って照合する設計にしてはならない —— 権威を FE に置くことになる。
+
+`FlavorCorrelation` は `blackbox_arena/` に置く。`flavor/` に置くと、フレーバ層が Genesis fingerprint（Fact）を知ることになり A-5 の壁を弱める。
+
+> **FLV-W-10**: 遅延到着したフレーバが**次のターンの表示に載る**。これは例外を出さず、ログにも残らず、破棄率にも現れない。プレイヤーには「前のターンの出来事を今のターンの散文が語る」という形でだけ現れ、しかも散文なので誤りとして認識されない。**相関トークンはこの失敗様式に対する唯一の防御である。**
+
+---
+
+## 13. A-1（削除可能性）の証明手続 — F-3 完了条件の中心
+
+### 13.1 命題
+
+> 同一シードのキャンペーンを `flavor-live` **有 / 無**で走らせ、`state_digest` の系列が**バイト単位で完全一致**する。
+
+一致は「フレーバが権威状態に触れていない」ことの最強の証明であり、§1.2 の受入基準そのものである。Phase 6-A のリプレイ恒等性資産（`Decide-time digest` の照合作法・BXS-I-26）をそのまま用いる。
+
+### 13.2 手続
+
+**cargo の中で cargo を起動しない**（§9.2 — 本 crate は巨大な単一 Tauri crate であり、入れ子起動は再コンパイル時間と lock 競合の双方で不安定になる）。したがって A-1 の証明は **CI の独立したステップ（シェル）**として駆動する。
+
+1. `flavor-live` **無し**で固定シードのキャンペーンを完走させ、`state_digest` 系列をファイルへ落とす
+2. `flavor-live` **有り**（モデル未ロードでよい）で同一シードを完走させ、同様に落とす
+3. 2 ファイルを `diff` で照合する。**1 バイトでも違えば RED**
+
+**digest 系列は最終値ではなく Decide-time の全系列を出せ。** 最終だけ合わせると途中の分岐退化が黙殺される（Phase 6-A step1 の教訓）。
+
+**モデルをロードした状態でも同じ照合を行うこと。** 「LLM が動いていないから一致した」のでは A-1 を証明したことにならない。ロード有りの一致こそが命題である。
+
+---
+
+## 14. 破棄率の計測（FLV-R-11 / FLV-R-12）
+
+### 14.1 なぜこれだけが本物か
+
+LAW-25b の再定義により、**計測の母集団は期待判定を誰も設計していないものでなければならない**。期待判定を設計した集合は合否試験であって計測ではなく、比率は被験体の挙動ではなく出題者の内訳を映す（F-2b の 66.7% が情報を失った理由）。
+
+**LLM の生成物は、この条件を満たす本系で唯一の母集団である。** したがって破棄率は F-3 でのみ成立する本物の情報であり、**監査側が母集団を著述してはならない**（LAW-25 の例外）。
+
+### 14.2 二アーム設計（FLV-R-12 の経験的検証）
+
+| アーム | プロンプト | 目的 |
+|---|---|---|
+| **A** | 「数値を書くな」の指示文**あり** | 実運用構成の破棄率 |
+| **B** | 当該指示文を**除去** | 指示文が**効率**手段にすぎず、**安全**は `verify` のみが担保することの実証 |
+
+**安全性の主張は「両アームとも、表示スロットへ到達した文字列に数値表現がゼロ件」である。** 破棄率はアーム間で当然異なってよい —— 異なることこそが「指示文は効率手段である」の意味である。**アーム B の破棄率が高いことを理由にテーブルを緩めてはならない。**
+
+### 14.3 報告形式（FLV-I-16）
+
+以下を欠く報告は無効とする。
+
+```
+arm            = A | B
+model          = <同梱 1.5B の実体名>
+N              = <生成試行数>
+accepted       = <件数>
+discarded      = <件数>
+findings       = Invisible / Markup / UnicodeNumeral / HanNumeral / LexicalQuantity / OverBudget の件数内訳
+leaked         = <表示スロットへ到達した数値表現ありの件数> ← 常に 0 でなければならない
+```
+
+**比率を単独で報告してはならない。** N を伴わない比率は FLV-R-3 をノイズで決める（本 SPEC が禁ずる失敗様式）。
+
+### 14.4 禁止
+
+- **破棄率を良くするための、テーブル・例外表・境界・コーパスの変更**（LAW-25b の「さらに悪い変奏」）
+- ガード不通過時の**再試行**（A-2 / FLV-R-2 / FLV-I-07）—— 再試行は検証器の穴の探索である
+- 計測値の**永続化**・決定ログ混入（A-6 / §7）。破棄率は権威状態ではない
 
 ---
 
