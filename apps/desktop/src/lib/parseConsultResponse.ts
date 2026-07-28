@@ -367,7 +367,6 @@ const CONFIG_ALLOWED_KEYS: ReadonlySet<string> = new Set([
   "genre",
   "difficulty",
   "stance",
-  "customTheme",
   "esId",
 ]);
 const DIFFICULTY_VALUES = ["standard", "hard", "extreme"] as const;
@@ -417,9 +416,6 @@ function parseInterviewConfig(raw: unknown, path: string): Partial<InterviewConf
       throw new ConsultResponseParseError(`${path}.stance`, `one of ${STANCE_VALUES.join(",")}`);
     }
     result.stance = raw.stance;
-  }
-  if ("customTheme" in raw) {
-    result.customTheme = parseConfigStringField(raw.customTheme, `${path}.customTheme`);
   }
   if ("esId" in raw) {
     result.esId = parseConfigStringField(raw.esId, `${path}.esId`);

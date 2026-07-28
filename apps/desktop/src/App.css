@@ -2924,50 +2924,6 @@ button.secondary {
   }
 }
 
-/* GD Thread (SPEC_FEATURE_GD_UI.md) */
-.gd-thread-row {
-  width: 100%;
-}
-
-.gd-thread {
-  display: flex;
-  flex-direction: column;
-  gap: var(--s2);
-  width: 100%;
-}
-
-.gd-turn {
-  display: flex;
-  gap: var(--s2);
-  align-items: flex-start;
-  padding: var(--s2);
-  border: 1px solid var(--border);
-  border-radius: 0;
-  background: var(--panel);
-}
-
-.gd-turn-avatar {
-  flex-shrink: 0;
-}
-
-.gd-turn-body {
-  flex: 1;
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-  gap: var(--s1);
-}
-
-.gd-turn-speaker {
-  font-size: 0.85rem;
-  color: var(--muted);
-}
-
-.gd-turn-text {
-  margin: 0;
-  white-space: pre-wrap;
-}
-
 /* Tensor radar (SPEC_ENGINE_TENSOR_PROFILING.md — measured display) */
 .tensor-radar-panel {
   display: flex;
@@ -3040,8 +2996,8 @@ button.secondary {
   font-size: 0.85rem;
 }
 
-/* Phase 3-A: Custom theme textarea */
-.custom-theme-textarea {
+/* ES draft textarea (EsReviewPanel) */
+.es-draft-textarea {
   width: 100%;
   min-height: 6rem;
   resize: vertical;
@@ -3333,7 +3289,7 @@ button.secondary {
 }
 
 .company-facts-form textarea,
-.es-review-panel .custom-theme-textarea {
+.es-review-panel .es-draft-textarea {
   width: 100%;
 }
 

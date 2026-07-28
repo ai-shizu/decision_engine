@@ -175,8 +175,6 @@ struct InterviewConfig {
     genre: String,
     difficulty: InterviewDifficulty,
     stance: InterviewStance,
-    #[serde(rename = "customTheme", default, skip_serializing_if = "Option::is_none")]
-    custom_theme: Option<String>,
     /// M20-N: 企業別 ES の id。空文字 = ゼロベース面接。
     #[serde(rename = "esId", default, skip_serializing_if = "Option::is_none")]
     es_id: Option<String>,
@@ -220,9 +218,6 @@ impl ValidateRequest for ConsultRequest {
         if let Some(config) = &self.config {
             require_max_bytes(&config.industry, "config.industry", MAX_SHORT_TEXT_BYTES)?;
             require_max_bytes(&config.genre, "config.genre", MAX_SHORT_TEXT_BYTES)?;
-            if let Some(theme) = &config.custom_theme {
-                require_max_bytes(theme, "config.customTheme", MAX_SHORT_TEXT_BYTES)?;
-            }
             if let Some(es_id) = &config.es_id {
                 require_max_bytes(es_id, "config.esId", MAX_SHORT_TEXT_BYTES)?;
             }

@@ -501,12 +501,11 @@ test("T-36 accepts full config with empty-string fields (UI blank = valid)", () 
     genre: "",
     difficulty: "standard",
     stance: "adversarial",
-    customTheme: "",
   };
   const out = parseConsultResponse({ ...baseEnvelope(), report });
   assertEqual(
     out.report?.config,
-    { industry: "", genre: "", difficulty: "standard", stance: "adversarial", customTheme: "" },
+    { industry: "", genre: "", difficulty: "standard", stance: "adversarial" },
     "full config with blanks",
   );
 });

@@ -30,21 +30,6 @@ def _read(rel: str) -> str:
     return (DESKTOP / rel).read_text(encoding="utf-8")
 
 
-def test_custom_theme_textarea_rows_and_class() -> None:
-    tab = _read("components/InterviewTab.tsx")
-    block = tab.split("持ち込みお題", 1)[1].split("maxLength={CUSTOM_THEME_MAX_CHARS}", 1)[0]
-    assert "rows={6}" in block
-    assert 'className="custom-theme-textarea"' in block
-    assert "rows={2}" not in block
-
-
-def test_custom_theme_textarea_resize_vertical_css() -> None:
-    css = _read("App.css")
-    assert ".custom-theme-textarea" in css
-    snippet = css.split(".custom-theme-textarea", 1)[1].split("}", 1)[0]
-    assert "resize:" in snippet and "vertical" in snippet
-    assert "width:" in snippet and "100%" in snippet
-    assert "min-height" in snippet
 
 
 def test_narrative_draft_copy() -> None:

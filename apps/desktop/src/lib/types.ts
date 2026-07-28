@@ -167,7 +167,6 @@ export interface InterviewConfig {
   genre: string;
   difficulty: "standard" | "hard" | "extreme";
   stance: "adversarial" | "standard";
-  customTheme?: string;
   /** 企業別 ES id。"" = ゼロベース面接。 */
   esId?: string;
 }
@@ -239,25 +238,6 @@ export interface InterviewReport {
   latency: InterviewReportLatency;
   simulated: true;
   tensor_profile: TensorProfileReportV1;
-}
-
-/** INTERVIEW タブのチャットメッセージ */
-export interface InterviewMessage {
-  role: "user" | "ai" | "feedback";
-  /** GD で AI 発言を話者別に分割した時の話者名 (面接では "面接官") */
-  speaker?: string;
-  text: string;
-  streaming?: boolean;
-  /** ユーザー発言に付随する応答時間 (秒) */
-  responseTimeSec?: number;
-  /** gd_sim 議論フェーズのみ: 生テキストをスレッド renderer へ渡す */
-  renderAs?: "plain" | "gd_thread";
-}
-
-/** GD_FORMAT_V1 の1発言分 (parseGdSpeakerTurns の戻り値) */
-export interface GdSpeakerTurn {
-  speaker: string;
-  text: string;
 }
 
 export type RecordSubTab = "events" | "finance" | "diary";

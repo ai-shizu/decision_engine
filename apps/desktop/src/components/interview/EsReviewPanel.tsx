@@ -192,7 +192,7 @@ export function EsReviewPanel({
         <div className="term-row config-row">
           <span className="term-source-name">ES 本文 *</span>
           <textarea
-            className="custom-theme-textarea"
+            className="es-draft-textarea"
             rows={8}
             value={state.esDraft}
             onChange={(e) =>
