@@ -185,7 +185,8 @@ export default function App() {
     };
   }, [isNarrow, modelGateDone]);
 
-  // SPEC_FOXTROT_UI.md §3.6 — desktop Alt+[1-7] only.
+  // SPEC_FOXTROT_UI.md §3.6 — desktop Alt+[1-7] only. (PROBE shipped when
+  // tabs still spanned Alt+[1-6]; SETTINGS/PROFILE later extended the range.)
   useEffect(() => {
     if (!ready || isNarrow) return;
     const onKey = (e: KeyboardEvent) => {

@@ -240,6 +240,17 @@ export interface InterviewReport {
   tensor_profile: TensorProfileReportV1;
 }
 
+/** INTERVIEW タブのチャットメッセージ (legacy interview_sim/es_review/gd_sim) */
+export interface InterviewMessage {
+  role: "user" | "ai" | "feedback";
+  speaker?: string;
+  text: string;
+  streaming?: boolean;
+  /** ユーザー発言に付随する応答時間 (秒) */
+  responseTimeSec?: number;
+}
+
+
 export type RecordSubTab = "events" | "finance" | "diary";
 
 /** F2 (SPEC_FOXTROT_UI.md §2.2.1): IMPORT SourceTable 用の軽量 stat */

@@ -1,5 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import type { ContextManifestResponseV1 } from "./manifest";
+import { parseConsultResponse, type ConsultResponse } from "./parseConsultResponse";
 import { parseKnowledgePolicy } from "./parseKnowledgePolicy";
 import {
   parseBoolean,
@@ -11,8 +12,15 @@ import {
   parseEsList,
   parseEsView,
   parseImportStats,
+  parseKnowledgeFetchSummary,
   parseKnowledgeResearchReceipt,
   parseLineImportResult,
+  parseNarrativeCompileResult,
+  parseOraclePayload,
+  parseOracleReport,
+  parseProbeAnswerResult,
+  parseProbeQuestion,
+  parseProbeStatus,
   parseProfilerResult,
   parseRecordData,
   parseRecordSaveResult,
@@ -20,11 +28,17 @@ import {
   parseSettingsData,
   parseSourceCodeView,
   parseTensorRebuildResult,
+  parseTwinForecast,
   type CalendarSyncResult,
   type DocumentImportResult,
+  type KnowledgeFetchSummary,
   type KnowledgeResearchReceipt,
   type LineImportResult,
+  type NarrativeCompileResult,
+  type OraclePayload,
+  type OracleReportResult,
   type ProfilerResult,
+  type TwinForecast,
 } from "./parseEngineResponse";
 import { parseContextManifestResponseV1 } from "./parseManifest";
 import { readTextLenient } from "./textDecode";
@@ -32,6 +46,10 @@ import type {
   ClassifyResult,
   EsListItem,
   EsView,
+  InterviewConfig,
+  ProbeAnswerResult,
+  ProbeQuestionView,
+  ProbeStatus,
   RecordData,
   SettingsData,
   SourceCodeView,
@@ -49,6 +67,7 @@ type EngineIpcCommand =
   | "import_stats"
   | "es_list"
   | "es_view"
+  | "consult"
   | "calendar_sync_ics"
   | "calendar_sync_apple"
   | "import_line_single"
@@ -61,9 +80,17 @@ type EngineIpcCommand =
   | "settings_run_profiler"
   | "tensor_rebuild"
   | "profile_source_code"
+  | "oracle_payload"
+  | "oracle_report"
+  | "twin_forecast"
+  | "narrative_compile"
+  | "knowledge_fetch_pending"
   | "knowledge_research"
   | "knowledge_policy_get"
   | "knowledge_policy_set"
+  | "probe_status"
+  | "probe_next"
+  | "probe_answer"
   | "context_manifest_latest";
 
 
@@ -156,6 +183,27 @@ export async function esView(id?: string): Promise<EsView> {
     parseEsView,
     id && id.trim() ? { id: id.trim() } : {},
   );
+}
+
+
+export interface ConsultOptions {
+  mode?: "consult" | "interview_sim" | "es_review" | "gd_sim" | "romance_analysis";
+  personas?: { name: string; trait: string }[];
+  response_time_sec?: number;
+  config?: InterviewConfig;
+  external_research_id?: string;
+}
+
+
+export type { RomanceAnalysisResult } from "./parseConsultResponse";
+
+
+export async function consult(
+  query: string,
+  opts: ConsultOptions = {},
+  cid?: number,
+): Promise<ConsultResponse> {
+  return invokeEngine("consult", parseConsultResponse, { query, ...opts }, cid);
 }
 
 
@@ -329,6 +377,94 @@ export async function sourceCode(): Promise<SourceCodeView> {
 }
 
 
+export async function oraclePayload(
+  scope: "global" | "dyad" = "global",
+  alias?: string,
+): Promise<OraclePayload> {
+  return invokeEngine(
+    "oracle_payload",
+    parseOraclePayload,
+    { scope, alias: alias ?? null },
+  );
+}
+
+
+export async function oracleReport(
+  scope: "global" | "dyad" = "global",
+  alias?: string,
+): Promise<OracleReportResult> {
+  return invokeEngine(
+    "oracle_report",
+    parseOracleReport,
+    { scope, alias: alias ?? null },
+  );
+}
+
+
+export interface TwinScenario {
+  horizon_days: number;
+  calendar: { date: string; time: string; title: string }[];
+  mode?: "daily" | "interview";
+  interview_turns?: number | null;
+}
+
+
+export async function twinForecast(
+  scenario: TwinScenario,
+  scope: "global" | "dyad" = "global",
+  alias?: string,
+): Promise<TwinForecast> {
+  return invokeEngine(
+    "twin_forecast",
+    parseTwinForecast,
+    { scenario, scope, alias: alias ?? null },
+  );
+}
+
+
+export async function narrativeCompile(targetDomain?: string): Promise<NarrativeCompileResult> {
+  return invokeEngine(
+    "narrative_compile",
+    parseNarrativeCompileResult,
+    { target_domain: targetDomain ?? null },
+  );
+}
+
+
+export async function knowledgeFetchPending(): Promise<KnowledgeFetchSummary> {
+  return invokeEngine("knowledge_fetch_pending", parseKnowledgeFetchSummary);
+}
+
+
+export async function probeStatus(today: string): Promise<ProbeStatus> {
+  return invokeEngine("probe_status", parseProbeStatus, { today });
+}
+
+
+export async function probeNext(today: string): Promise<ProbeQuestionView> {
+  return invokeEngine("probe_next", parseProbeQuestion, { today });
+}
+
+
+export async function probeAnswer(
+  sessionId: string,
+  questionId: string,
+  answer: string,
+  today: string,
+): Promise<ProbeAnswerResult> {
+  return invokeEngine(
+    "probe_answer",
+    parseProbeAnswerResult,
+    {
+      session_id: sessionId,
+      question_id: questionId,
+      answer,
+      today,
+    },
+  );
+}
+
+
 export async function knowledgeResearch(query: string): Promise<KnowledgeResearchReceipt> {
   return invokeEngine("knowledge_research", parseKnowledgeResearchReceipt, { query });
 }
@@ -355,6 +491,11 @@ export async function latestContextManifest(): Promise<ContextManifestResponseV1
 export type {
   CalendarSyncResult,
   DocumentImportResult,
+  KnowledgeFetchSummary,
   LineImportResult,
+  NarrativeCompileResult,
+  OraclePayload,
+  OracleReportResult,
   ProfilerResult,
+  TwinForecast,
 };

@@ -7,11 +7,13 @@ import {
   importLineContent,
   importLineFiles,
   importStats,
+  knowledgeFetchPending,
   loadSettings,
   syncAppleCalendar,
   syncIcsContent,
   syncIcsFiles,
   type DocumentImportResult,
+  type KnowledgeFetchSummary,
 } from "../lib/engine";
 import { parseEngineEvent } from "../lib/parseEngineResponse";
 import { ingestLineHistory, fetchAppleCalendarEvents, syncDailyContext } from "../lib/pocketBrain";
@@ -111,6 +113,8 @@ export function ImportTab() {
   const [vaultLedger, setVaultLedger] = useState(() => listVaultImports());
   const [pending, setPending] = useState<PendingItem[]>([]);
   const [esConflict, setEsConflict] = useState<EsConflictPending | null>(null);
+  const [fetchSummary, setFetchSummary] = useState<KnowledgeFetchSummary | null>(null);
+  const [fetchBusy, setFetchBusy] = useState(false);
   const lineRef = useRef<HTMLInputElement>(null);
   const icsRef = useRef<HTMLInputElement>(null);
   const otherRef = useRef<HTMLInputElement>(null);
@@ -191,23 +195,24 @@ export function ImportTab() {
     let ok = 0;
     const failNotes: string[] = [];
     for (const file of files) {
+      const fileLabel = file.name;
       try {
         const r = await ingestLineHistory(file);
         ok += 1;
         const parts = r.part_count && r.part_count > 1 ? ` / ${r.part_count}パート` : "";
         const truncNote = r.truncated ? "（上限到達・末尾は未取込の可能性）" : "";
         pushImportLog(
-          `${file.name}: Vault格納 ${r.chunk_count}チャンク${parts}${truncNote} [${r.source_id}]`,
+          `${fileLabel}: Vault格納 ${r.chunk_count}チャンク${parts}${truncNote} [${r.source_id}]`,
         );
         setVaultLedger(
           pushVaultImport({
             kind: "line",
-            label: file.name,
+            label: fileLabel,
             detail: `${r.chunk_count}チャンク${parts} → ${r.source_id}`,
           }),
         );
       } catch (err) {
-        failNotes.push(`${file.name}: ${sterileLineImportFromUnknown(err)}`);
+        failNotes.push(`${fileLabel}: ${sterileLineImportFromUnknown(err)}`);
       }
     }
     for (const note of failNotes) pushImportLog(note);
@@ -354,11 +359,12 @@ export function ImportTab() {
     try {
       const next: PendingItem[] = [];
       for (const file of Array.from(files)) {
+        const fileLabel = file.name;
         try {
           const result = await classifyDocument(file);
           if (result.type === "es") {
             pushImportLog(
-              `${file.name}: ES は下の「ES（エントリーシート）管理・取り込み」から取り込んでください`,
+              `${fileLabel}: ES は下の「ES（エントリーシート）管理・取り込み」から取り込んでください`,
             );
             continue;
           }
@@ -366,7 +372,7 @@ export function ImportTab() {
             result.type === "knowledge" ? "knowledge" : "skip";
           next.push({ file, result, dest, companyName: "" });
         } catch {
-          pushImportLog(`${file.name}: ${uiErrorMessage("DOCUMENT_IMPORT")}`);
+          pushImportLog(`${fileLabel}: ${uiErrorMessage("DOCUMENT_IMPORT")}`);
         }
       }
       if (mountedRef.current) {
@@ -450,16 +456,17 @@ export function ImportTab() {
     try {
       for (const item of items) {
         const { file, result, dest } = item;
+        const fileLabel = file.name;
         const content = result.content ?? "";
         try {
           if (result.type === "reject") {
-            pushImportLog(`${file.name}: 拒否 — ${result.reasons.join("; ")}`);
+            pushImportLog(`${fileLabel}: 拒否 — ${result.reasons.join("; ")}`);
             continue;
           }
           if (result.type === "line") {
             try {
-              const res = await importLineContent(content, file.name, myCid);
-              pushImportLog(res.message ?? `${file.name} を LINE として取り込みました`);
+              const res = await importLineContent(content, fileLabel, myCid);
+              pushImportLog(res.message ?? `${fileLabel} を LINE として取り込みました`);
             } catch {
               // iOS 実機など Python サイドカー不在環境向けフォールバック。
               try {
@@ -467,17 +474,17 @@ export function ImportTab() {
                 const parts =
                   r.part_count && r.part_count > 1 ? ` / ${r.part_count}パート` : "";
                 pushImportLog(
-                  `${file.name}: Vault格納 ${r.chunk_count}チャンク${parts} [${r.source_id}]`,
+                  `${fileLabel}: Vault格納 ${r.chunk_count}チャンク${parts} [${r.source_id}]`,
                 );
                 setVaultLedger(
                   pushVaultImport({
                     kind: "line",
-                    label: file.name,
+                    label: fileLabel,
                     detail: `${r.chunk_count}チャンク${parts} → ${r.source_id}`,
                   }),
                 );
               } catch (err) {
-                pushImportLog(`${file.name}: ${sterileLineImportFromUnknown(err)}`);
+                pushImportLog(`${fileLabel}: ${sterileLineImportFromUnknown(err)}`);
               }
             }
             continue;
@@ -487,20 +494,20 @@ export function ImportTab() {
             pushImportLog(
               typeof res.message === "string"
                 ? res.message
-                : `${file.name} を ICS として同期しました`,
+                : `${fileLabel} を ICS として同期しました`,
             );
             continue;
           }
           if (dest === "skip" || dest === "es") {
             pushImportLog(
               dest === "es"
-                ? `${file.name}: ES は専用セクションから取り込んでください`
-                : `${file.name}: スキップしました`,
+                ? `${fileLabel}: ES は専用セクションから取り込んでください`
+                : `${fileLabel}: スキップしました`,
             );
             continue;
           }
-          const res = await importDocument(content, file.name, "knowledge", myCid);
-          pushImportLog(res.message ?? `${file.name} を取り込みました`);
+          const res = await importDocument(content, fileLabel, "knowledge", myCid);
+          pushImportLog(res.message ?? `${fileLabel} を取り込みました`);
         } catch {
           pushImportLog(uiErrorMessage("DOCUMENT_IMPORT"));
         }
@@ -512,6 +519,25 @@ export function ImportTab() {
         setLog([...importLog]);
         setPending([]);
         resetInput(otherRef);
+      }
+      void refreshStats();
+    }
+  }
+
+  async function handleKnowledgeFetch() {
+    setFetchBusy(true);
+    try {
+      const summary = await knowledgeFetchPending();
+      if (mountedRef.current) setFetchSummary(summary);
+      pushImportLog(
+        summary.message ?? `知識キュー処理: 完了 ${summary.processed}件 / 保留 ${summary.pending}件`,
+      );
+    } catch {
+      pushImportLog(uiErrorMessage("KNOWLEDGE_FETCH"));
+    } finally {
+      if (mountedRef.current) {
+        setFetchBusy(false);
+        setLog([...importLog]);
       }
       void refreshStats();
     }
@@ -589,6 +615,33 @@ export function ImportTab() {
             </div>
           );
         })}
+      </div>
+
+      <div className="term-panel knowledge-fetch-panel">
+        <p className="term-header">KNOWLEDGE_QUEUE</p>
+        <p className="hint">
+          ユーザー明示操作のみ。オフライン既定では pending 件数の報告のみ
+          (PKB_ALLOW_ONLINE_FETCH=1 時のみネットワーク取得)。
+        </p>
+        <button type="button" disabled={fetchBusy} onClick={() => void handleKnowledgeFetch()}>
+          {fetchBusy ? "処理中…" : "知識キューを処理 (ユーザー明示操作)"}
+        </button>
+        {fetchSummary && (
+          <>
+            <div className="term-row">
+              <span className="term-source-name">processed</span>
+              <span className="term-value">{fetchSummary.processed}</span>
+            </div>
+            <div className="term-row">
+              <span className="term-source-name">pending</span>
+              <span className="term-value">{fetchSummary.pending}</span>
+            </div>
+            <div className="term-row">
+              <span className="term-source-name">online_allowed</span>
+              <span className="term-value">{fetchSummary.online_allowed ? "true" : "false"}</span>
+            </div>
+          </>
+        )}
       </div>
 
       <div className="mode-row">
