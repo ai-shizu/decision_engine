@@ -71,8 +71,20 @@ def default_calendar_db_paths() -> list[Path]:
     ]
 
 
-def find_calendar_databases(extra_paths: list[Path] | None = None) -> list[Path]:
-    """利用可能なカレンダー SQLite DB を列挙 (重複排除・更新日時順)。"""
+def find_calendar_databases(
+    extra_paths: list[Path] | None = None,
+    *,
+    scan_defaults: bool = True,
+) -> list[Path]:
+    """利用可能なカレンダー SQLite DB を列挙 (重複排除・更新日時順)。
+
+    すべてのパスは ``Path.resolve()`` で正規化する（macOS の ``/var`` →
+    ``/private/var`` 等の symlink 差を吸収）。
+
+    ``scan_defaults=False`` は hermetic テスト用: 明示 ``extra_paths`` だけを
+    返し、実機の ``~/Library/...`` を覗かない。本番呼び出しは既定のまま
+    （defaults ON）。
+    """
     seen: set[Path] = set()
     found: list[Path] = []
 
@@ -85,14 +97,15 @@ def find_calendar_databases(extra_paths: list[Path] | None = None) -> list[Path]
 
     for p in extra_paths or []:
         add(p)
-    for p in default_calendar_db_paths():
-        add(p)
+    if scan_defaults:
+        for p in default_calendar_db_paths():
+            add(p)
 
-    cal_root = Path.home() / "Library/Calendars"
-    if cal_root.is_dir():
-        for pattern in ("*.sqlite", "*.sqlitedb", "**/*.sqlite", "**/*.sqlitedb"):
-            for p in cal_root.glob(pattern):
-                add(p)
+        cal_root = Path.home() / "Library/Calendars"
+        if cal_root.is_dir():
+            for pattern in ("*.sqlite", "*.sqlitedb", "**/*.sqlite", "**/*.sqlitedb"):
+                for p in cal_root.glob(pattern):
+                    add(p)
 
     found.sort(key=lambda p: p.stat().st_mtime, reverse=True)
     return found

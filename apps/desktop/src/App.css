@@ -30,6 +30,10 @@
 
   --s1: 4px;  --s2: 8px;  --s3: 12px;  --s4: 16px;  --s5: 24px;  --s6: 48px;
 
+  /* Focus ring (a11y) — no raw px/hex in :focus-visible rules */
+  --focus-outline-width: 1px;
+  --focus-outline-offset: -1px;
+
   --radius: 0px;  --radius-s: 0px;
   --t-fast: 120ms;
 
@@ -873,8 +877,8 @@ button:disabled {
 .tabs button:focus-visible,
 .main-tab-panel:focus-visible,
 .sub-tabs button:focus-visible {
-  outline: 1px solid var(--accent);
-  outline-offset: -1px;
+  outline: var(--focus-outline-width) solid var(--accent);
+  outline-offset: var(--focus-outline-offset);
 }
 
 .tabs button,

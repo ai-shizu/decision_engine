@@ -94,7 +94,9 @@ def test_find_calendar_databases_custom_path():
     with tempfile.TemporaryDirectory() as tmp:
         db = Path(tmp) / "Calendar.sqlitedb"
         _make_calendar_db(db)
-        found = acs.find_calendar_databases([db])
+        # Hermetic: do not scan the developer's real ~/Library calendars.
+        # Both sides use resolve() so /var ↔ /private/var cannot diverge.
+        found = acs.find_calendar_databases([db], scan_defaults=False)
         assert found == [db.resolve()]
 
 
