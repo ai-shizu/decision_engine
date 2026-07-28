@@ -1127,15 +1127,42 @@ LINE: 上限 16 MiB・`chunk_markdown_capped` で `source_id-p00`… に分割�
    （GGUF 取込と LINE staging に必要な動詞だけ）。
 5. 回帰: `tests-runtime/modelSetupReducer.test.ts`。`cargo test --lib` の `model_path` 単体。
 
-**🚩 出荷前必須検証（ブロッカー・2026-07-28 指揮官裁定 / commit `f38bf42`）**
+**🚩 出荷前必須検証（2026-07-28 設定 / commit `f38bf42`）— 2026-07-29 に Tier 1・Tier 2 GREEN で降格。F-3 着工ブロッカーは解除、出荷ブロッカー（Tier 3 実機）は残置**
 
 **対象:** ピッカー由来 GGUF → `$APPDATA/models` のコピー経路（上記 1 の `copyFile`）。
 
 **リスク:** `copyFile(sourcePath, dest)` の **source はピッカー由来の `$APPDATA` 外パス**であり、項目 4 のスコープ付き静的 allow には含まれない。この経路は `tauri-plugin-dialog` が `open()` 時に `allow_file` でランタイム scope を拡張する機構に依存している。**この依存は静的検査では検証できない — `npx tsc --noEmit` / `pytest tests/` / `npm run test:boundary` の全ゲートが GREEN のまま、実行時にのみ破損する（サイレント破壊）。** リスク増分自体は低い（縮小前の `fs:default` も `$APPDATA` 外 source を覆っておらず同じランタイム拡張に依存していた。実質の変更は宛先側の絞り込みのみ）が、破損すれば「オフラインでローカル GGUF を読み込める」というコアバリューが無言で失われる。
 
-**ブロッカー要件:** `main` ブランチへのマージ、および出荷ビルドの作成前に、**実機でのファイル選択 → `$APPDATA/models` へのコピー成功を必ず検証すること。** 検証が済むまでこの経路を「動作する」と記述してはならない。検証後は本ブロッカー節に実測日と結果を追記して解除する。
+### 検証結果（2026-07-29 実測・ブロッカー降格）
 
-**検証手順案（2026-07-28 時点で未確認）:** リポジトリの bundle GGUF を退避するとビルドが `resource path ../models/pocket-brain.gguf doesn't exist` で落ち（exit 101）、`npm run tauri:dev` は `--no-default-features` のため `check_model_exists` を欠き取込 UI へ到達できない。`check_model_exists` は `internal_model_present(&app)` を見ているため、**リポジトリの bundle ではなく実行時の `$APPDATA/models/` 配下の実体のみを削除**して ModelSetupGate を未導入状態へフォールバックさせ、取込 UI への到達を試みること。
+| 段 | 環境 | 結果 |
+|---|---|---|
+| **Tier 1** | macOS デスクトップ（非サンドボックス）<br>`npx tauri dev --features pocket-brain,secure-vault` | **GREEN** |
+| **Tier 2** | iOS シミュレータ iPhone 17 Pro（**sandbox 実効**）<br>`npx tauri ios dev --features pocket-brain,secure-vault` | **GREEN** |
+| **Tier 3** | **iOS 実機** | **未実施 — 出荷ブロッカーとして残置** |
+
+**Tier 2 の証跡（sandbox 境界を越えた完全同一性）:** 1,117,320,736 バイトが 3 地点で SHA-256 一致 `6a1a2eb6…9407e` —— リポジトリ → Files「この iPhone 内」（`group.com.apple.FileProvider.LocalStorage`・**アプリコンテナ外**）→ `$APPDATA/models/pocket-brain.gguf`。続いて `llama_model_loader: loaded meta data with 26 key-value pairs and 339 tensors from <container>/…/models/pocket-brain.gguf (version GGUF V3)` を確認（シミュレータでは `offloaded 0/29 layers to GPU` ＝ `ios_sim` の CPU フォールバック既定であり失敗ではない）。**`forbidden` / `denied` / `scope` 系エラーはログ全体で 0 件。**
+
+⇒ **`startAccessingSecurityScopedResource` → `copyFile($APPDATA 外 → $APPDATA)` は、項目 4 の縮小済み capability の下でも sandbox 実効下で成立する。** dialog プラグインのランタイム scope 拡張は生きている。
+
+**ブロッカーの現状:**
+- **F-3（LLM 結合）着工ブロッカーとしては解除。** F-3 が必要とするのは「モデルがロードできること」であり、Tier 2 がそれを満たす
+- **出荷ブロッカーとしては残置。** **リリースビルド作成前に Tier 3（実機 1 回）を必ず実施すること。** シミュレータは sandbox と security-scoped を実装するが実機と同一ではない（実機の Files は iCloud/他アプリ提供の実プロバイダを含む）。**「実機で検証した」と書けるのは Tier 3 の実測ログを得た後だけである**（LAW-22）
+
+### 検証手順（Tier 1/2 で確立・再現可能）
+
+**バンドルを壊さずに取込 UI へ到達する方法**が要点である。`internal_model_present` は `resolve_loadable_model_path` を見ており、これは**バンドル優先**。したがって AppData 側だけを空にしても、バンドルが有効な限りゲートは `exists: true` を返し、取込 UI は永久に出ない。
+
+`select_loadable_path` は**バンドルが GGUF magic 検証に失敗すれば AppData へフォールバック**する。これを使う:
+
+1. `models/pocket-brain.gguf` を **8 バイトの不正 magic ファイル**へ一時差し替え（本物は同ディレクトリに `*.gguf` 名で退避 —— `.gitignore` の `*.gguf` に載るため git を汚さない）。リソースパスは存在するので**ビルドは通る**
+2. ステージ済みコピー（`target/*/debug/models/`, iOS は `.app/assets/models/`）を削除して再ステージを強制
+3. `--features pocket-brain,secure-vault` で起動（**`llm/` は `pocket-brain` gate 配下。これを付け忘れると `check_model_exists` 自体が登録されない**）。debug ビルドは `PKB_UNSAFE_DEV_ENGINE=1` も要る（Python エンジンの設計どおりの拒否。GGUF 経路とは無関係）
+4. ログに `bundled GGUF present but invalid` → `AppData GGUF unavailable` が出れば取込 UI が出る
+5. **AppData / コンテナに旧セッションのモデルが残っていないことを必ず確認**（残っていると `exists: true` になり UI は出ない。デスクトップ・シミュレータ双方で実際に踏んだ）
+6. 検証後は本物を復元し、**復元後の SHA-256 一致まで確認**する
+
+**iOS の選択元:** シミュレータでは `…/data/Containers/Shared/AppGroup/<group.com.apple.FileProvider.LocalStorage>/File Provider Storage/` へ置くと Files「この iPhone 内」から選択できる。**アプリ自身の Documents に置いてはならない** —— ピッカーが security-scoped でない URL を返し得るため、検証したい性質そのものが消える。
 
 **不変条件:** アプリ内 HTTP/ストリームで GGUF を取得するコードを追加するな。エラー文言にパス・例外原文を出すな。欠落時は `log::error!` / stderr に存在チェックを残し、UI へは固定文言のみ。
 
