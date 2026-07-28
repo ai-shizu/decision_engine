@@ -26,6 +26,7 @@ import { EsReviewPanel } from "./interview/EsReviewPanel";
 import { InterviewEsBaseForm } from "./interview/InterviewEsBaseForm";
 import { InterviewPocketPanel } from "./interview/InterviewPocketPanel";
 import { MultistageInterviewPanel } from "./interview/MultistageInterviewPanel";
+import { TensorProfilePanel } from "./TensorProfilePanel";
 
 // M18-E: Interview tab is Coraxis-only for daily use; "legacy" restores the
 // pre-M18 Python consult-backed interview_sim/es_review/gd_sim + Narrative
@@ -966,7 +967,7 @@ function LegacyInterviewPanel() {
               {m.axis}: {m.evidence}
             </p>
           ))}
-          {/* TensorProfilePanel restored in M-2 commit */}
+          <TensorProfilePanel tensorProfile={report.tensor_profile} />
           <div className="term-row mission-result-row">
             <span className="term-source-name">実測レイテンシ (AI評価ではなく計測値)</span>
             <span className="term-value">
