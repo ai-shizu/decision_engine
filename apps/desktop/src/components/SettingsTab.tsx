@@ -210,7 +210,7 @@ export function SettingsTab({
       // appeared inert with nothing in the console to act on.
       console.error("[SettingsTab] knowledge policy save failed:", err);
       setStatusKind("error");
-      setStatus("外部検索の同意設定を保存できませんでした");
+      setStatus(uiErrorMessage("SETTINGS_SAVE"));
     } finally {
       setPolicyBusy(false);
     }

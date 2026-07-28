@@ -227,7 +227,6 @@ export function ConsultTab() {
     streamingRef.current = true;
     setStatusKind("info");
     setStatus("考え中…");
-    const sterile = uiErrorMessage("CONSULT_RESPONSE");
     try {
       const profile = readLocalFixedAttributes() ?? undefined;
       await consultWithOracleContext(
@@ -236,7 +235,7 @@ export function ConsultTab() {
           if (event.error) {
             flushChunkQueue();
             setStatusKind("error");
-            setStatus(sterile);
+            setStatus(uiErrorMessage("CONSULT_RESPONSE"));
             return;
           }
           if (event.done) {
@@ -279,7 +278,7 @@ export function ConsultTab() {
         return prev;
       });
       setStatusKind("error");
-      setStatus(sterile);
+      setStatus(uiErrorMessage("CONSULT_RESPONSE"));
     } finally {
       streamingRef.current = false;
       setBusy(false);
