@@ -110,6 +110,58 @@ pub const MUST_REJECT_SHIELD_BOUNDARY: &[&str] = &[
     "一気に一万が消えた。",
 ];
 
+/// SPEC §4.3 lexical gaps closed in F-2b (Part 1). One vector per added token
+/// / generative rule specimen. Append-only; pairs with `LEXICAL_QUANTITY` and
+/// the `数`+counter rule.
+pub const MUST_REJECT_SPEC43_LEXICAL: &[&str] = &[
+    "わずかな差で明暗が分かれた。",
+    "ひとりで耐えた。",
+    "失敗はみっつ重なった。",
+    "よっつ目の波が来た。",
+    "いつつ並んだ気配がした。",
+    "ワンの余韻が残った。",
+    "ダブルの圧力が来た。",
+    "トリプルの衝撃が走った。",
+    "大量の気配が満ちた。",
+    "大半が消えた。",
+    "多数が沈黙した。",
+    "少数が残った。",
+    "数人が離脱した。",
+];
+
+/// Idiom-family accept corpus (F-2b Part 2). Architect-authored; do not edit.
+pub const MUST_ACCEPT_IDIOM_FAMILY: &[&str] = &[
+    "一瞬の静寂が場を覆った。",
+    "視線が一斉に集まった。",
+    "迷いが一切なくなった。",
+    "一見おだやかな流れだった。",
+    "一応の決着がついた。",
+    "一連の動きが噛み合った。",
+    "その姿勢は一貫して揺らがない。",
+    "再編の一環として動いた。",
+    "読みと結果が一致した。",
+    "息を呑む静けさが残った。",
+    "場の重心が静かに移った。",
+    "決断の余熱がまだ冷めない。",
+    "誰も口を開かないまま時が流れた。",
+    "空気の色が変わったのが分かった。",
+    "手元の感触だけが確かだった。",
+    "退き際の判断が明暗を分けた。",
+];
+
+/// Idiom-boundary reject corpus (F-2b Part 2). Proves bare-`一` exemption is
+/// forbidden: the top five would go green under that lazy relaxation.
+pub const MUST_REJECT_IDIOM_BOUNDARY: &[&str] = &[
+    "一層の重さが加わった。",
+    "一体どこで崩れたのか。",
+    "全体の一部が欠けた。",
+    "一定の水準を保った。",
+    "一律に切り下げられた。",
+    "損失は二千五百に届いた。",
+    "在庫が半減して棚が空いた。",
+    "三度目の判断が場を決めた。",
+];
+
 #[cfg(test)]
 mod corpus_tests {
     use super::*;
@@ -170,6 +222,59 @@ mod corpus_tests {
             );
         }
         assert_eq!(MUST_REJECT_SHIELD_BOUNDARY.len(), 2);
+    }
+
+    #[test]
+    fn f2b_must_reject_spec43_lexical_gaps() {
+        let policy = FlavorPolicy::v1_empty();
+        for (i, sample) in MUST_REJECT_SPEC43_LEXICAL.iter().enumerate() {
+            assert!(
+                VerifiedFlavor::verify(sample, &policy).is_none(),
+                "MUST_REJECT_SPEC43_LEXICAL[{i}] unexpectedly accepted: {sample:?}"
+            );
+        }
+        assert!(
+            MUST_REJECT_SPEC43_LEXICAL.len() >= 12,
+            "expected >=12 SPEC§4.3 gap vectors, got {}",
+            MUST_REJECT_SPEC43_LEXICAL.len()
+        );
+    }
+
+    #[test]
+    fn f2b_must_accept_idiom_family() {
+        let policy = FlavorPolicy::v1_empty();
+        for (i, sample) in MUST_ACCEPT_IDIOM_FAMILY.iter().enumerate() {
+            assert!(
+                VerifiedFlavor::verify(sample, &policy).is_some(),
+                "MUST_ACCEPT_IDIOM_FAMILY[{i}] rejected: {sample:?}"
+            );
+        }
+        assert_eq!(MUST_ACCEPT_IDIOM_FAMILY.len(), 16);
+    }
+
+    #[test]
+    fn f2b_must_reject_idiom_boundary() {
+        let policy = FlavorPolicy::v1_empty();
+        for (i, sample) in MUST_REJECT_IDIOM_BOUNDARY.iter().enumerate() {
+            assert!(
+                VerifiedFlavor::verify(sample, &policy).is_none(),
+                "MUST_REJECT_IDIOM_BOUNDARY[{i}] unexpectedly accepted: {sample:?}"
+            );
+        }
+        assert_eq!(MUST_REJECT_IDIOM_BOUNDARY.len(), 8);
+    }
+
+    #[test]
+    fn f2b_hitori_de_ni_shields_against_hitori_l3() {
+        let policy = FlavorPolicy::v1_empty();
+        assert!(
+            VerifiedFlavor::verify("扉がひとりでに開いた。", &policy).is_some(),
+            "ひとりでに must be shielded while ひとり alone rejects"
+        );
+        assert!(
+            VerifiedFlavor::verify("ひとりで耐えた。", &policy).is_none(),
+            "ひとり (quantity) must still reject"
+        );
     }
 }
 
