@@ -1127,6 +1127,16 @@ LINE: 上限 16 MiB・`chunk_markdown_capped` で `source_id-p00`… に分割�
    （GGUF 取込と LINE staging に必要な動詞だけ）。
 5. 回帰: `tests-runtime/modelSetupReducer.test.ts`。`cargo test --lib` の `model_path` 単体。
 
+**🚩 出荷前必須検証（ブロッカー・2026-07-28 指揮官裁定 / commit `f38bf42`）**
+
+**対象:** ピッカー由来 GGUF → `$APPDATA/models` のコピー経路（上記 1 の `copyFile`）。
+
+**リスク:** `copyFile(sourcePath, dest)` の **source はピッカー由来の `$APPDATA` 外パス**であり、項目 4 のスコープ付き静的 allow には含まれない。この経路は `tauri-plugin-dialog` が `open()` 時に `allow_file` でランタイム scope を拡張する機構に依存している。**この依存は静的検査では検証できない — `npx tsc --noEmit` / `pytest tests/` / `npm run test:boundary` の全ゲートが GREEN のまま、実行時にのみ破損する（サイレント破壊）。** リスク増分自体は低い（縮小前の `fs:default` も `$APPDATA` 外 source を覆っておらず同じランタイム拡張に依存していた。実質の変更は宛先側の絞り込みのみ）が、破損すれば「オフラインでローカル GGUF を読み込める」というコアバリューが無言で失われる。
+
+**ブロッカー要件:** `main` ブランチへのマージ、および出荷ビルドの作成前に、**実機でのファイル選択 → `$APPDATA/models` へのコピー成功を必ず検証すること。** 検証が済むまでこの経路を「動作する」と記述してはならない。検証後は本ブロッカー節に実測日と結果を追記して解除する。
+
+**検証手順案（2026-07-28 時点で未確認）:** リポジトリの bundle GGUF を退避するとビルドが `resource path ../models/pocket-brain.gguf doesn't exist` で落ち（exit 101）、`npm run tauri:dev` は `--no-default-features` のため `check_model_exists` を欠き取込 UI へ到達できない。`check_model_exists` は `internal_model_present(&app)` を見ているため、**リポジトリの bundle ではなく実行時の `$APPDATA/models/` 配下の実体のみを削除**して ModelSetupGate を未導入状態へフォールバックさせ、取込 UI への到達を試みること。
+
 **不変条件:** アプリ内 HTTP/ストリームで GGUF を取得するコードを追加するな。エラー文言にパス・例外原文を出すな。欠落時は `log::error!` / stderr に存在チェックを残し、UI へは固定文言のみ。
 
 
