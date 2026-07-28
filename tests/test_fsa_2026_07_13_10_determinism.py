@@ -5,6 +5,7 @@ from __future__ import annotations
 import base64
 import json
 import math
+import os
 import struct
 import sys
 import zlib
@@ -17,7 +18,6 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src" / "python"))
 
 from core import consultation_engine as ce  # noqa: E402
-from core.paths import SEARCH_EXE  # noqa: E402
 from core.search_daemon import (  # noqa: E402
     SearchDaemonClient,
     SearchDaemonError,
@@ -27,9 +27,13 @@ from core.score_ranking import rank_hits  # noqa: E402
 DIM = 384
 LANES = 4
 BLOCK_BYTES = DIM * LANES * 4 + LANES * 4
-# Platform-resolved native binary (Windows: search_engine.exe, else: search_engine).
-# Same rule as core.paths.SEARCH_EXE — do not hardcode ".exe" (macOS CI/dev host).
-NATIVE_SEARCH_EXE = SEARCH_EXE
+# Resolve the native binary from the real checkout root — NOT core.paths.SEARCH_EXE.
+# conftest.py rebinds PKB_PROJECT_ROOT to a disposable sandbox before collection, so
+# SEARCH_EXE always points at the empty sandbox build/ and would permanently skip.
+# Platform suffix matches core.paths._EXE_SUFFIX (Windows .exe, else none).
+# Mirror core.paths._EXE_SUFFIX (os.name) — do not hardcode ".exe".
+_EXE_SUFFIX = ".exe" if os.name == "nt" else ""
+NATIVE_SEARCH_EXE = ROOT / "build" / f"search_engine{_EXE_SUFFIX}"
 
 
 def _require_native_search_engine() -> Path:

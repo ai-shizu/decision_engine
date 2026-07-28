@@ -20,8 +20,14 @@ def test_consult_mode_dropdown_includes_romance() -> None:
 
 
 def test_consult_calls_romance_mode() -> None:
+    # NOTE: romance analysis moved off the Python consult() IPC (which took a
+    # `mode: "romance_analysis"` payload) onto the dedicated Rust command
+    # `calculate_interaction_pulse` (apps/desktop/src-tauri/src/*psychometrics*)
+    # via lib/pocketBrain/api.ts's calculateInteractionPulse(). The FE-side
+    # gate is still the same `mode === "romance_analysis"` state check.
     tab = _read("components/ConsultTab.tsx")
-    assert 'mode: "romance_analysis"' in tab or 'mode:"romance_analysis"' in tab
+    branch = tab.split('if (mode === "romance_analysis")', 1)[1].split("return;\n    }", 1)[0]
+    assert "calculateInteractionPulse(" in branch
 
 
 def test_no_json_parse_in_romance_surface() -> None:
@@ -97,9 +103,22 @@ def test_romance_submit_removes_previous_success_message() -> None:
 
 
 def test_romance_requires_romance_analysis_in_response() -> None:
+    # NOTE: the old consult()-JSON path returned a loosely-typed blob that had
+    # to be defensively checked with `if (!res.romance_analysis)` in JS. The
+    # Rust `calculate_interaction_pulse` command instead returns a strictly
+    # typed, non-optional `CalculatePulseResult.analysis: RomanceAnalysisV1`
+    # (serde-validated before it ever reaches the FE) — a missing/malformed
+    # analysis fails at the IPC boundary and is caught by the generic `catch`
+    # below, which still clears the panel and surfaces a failure message.
     tab = _read("components/ConsultTab.tsx")
-    assert "if (!res.romance_analysis)" in tab
-    assert "解析結果を取得できませんでした" in tab
+    types = _read("lib/pocketBrain/types.ts")
+    errors = _read("lib/uiErrorMessages.ts")
+    assert re.search(r"analysis:\s*RomanceAnalysisV1;", types), (
+        "CalculatePulseResult.analysis must stay required (non-optional)"
+    )
+    assert "calculateInteractionPulse(" in tab
+    assert 'uiErrorMessage("ROMANCE_ANALYSIS")' in tab
+    assert "分析結果を確認できませんでした" in errors
 
 
 def test_romance_failure_clears_panel_and_success_message() -> None:

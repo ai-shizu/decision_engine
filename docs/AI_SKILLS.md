@@ -1121,7 +1121,10 @@ LINE: 上限 16 MiB・`chunk_markdown_capped` で `source_id-p00`… に分割�
 1. **FE がコピーの唯一の経路（デスクトップ / 追加取込）。** `@tauri-apps/plugin-dialog` で選択 → `startAccessingSecurityScopedResource` → `plugin-fs` `copyFile` で `BaseDirectory.AppData` / `models/pocket-brain.gguf` へ。巨大 GGUF を JS heap に `readFile` するな。
 2. Rust: `prepare_model_import_dest` / `confirm_model_imported` / `check_model_exists` / `open_recommended_model_page`。**外部ピッカーパスを `std::fs` で読むな**（iOS Security-Scoped で失敗する）。旧 `pick_local_gguf` / `import_local_model`（rfd）は削除。
 3. **ロード優先順位:** `resolve_loadable_model_path` = (1) `path().resolve("models/pocket-brain.gguf", BaseDirectory::Resource)`（iOS では `$BUNDLE/assets/...`・`bundle.resources` 同梱の 1.5B）→ (2) `app_data_dir()/models/pocket-brain.gguf`。書込先は従来どおり `resolve_model_path`（AppData のみ）。
-4. Capabilities: `dialog:default` + `fs:default` + `fs:allow-appdata-write-recursive` + security-scoped start/stop。
+4. Capabilities（最小権限・2026-07-28 T-6）: `dialog:default` + security-scoped start/stop +
+   スコープ付き `fs:allow-{mkdir,write-file,copy-file,remove}` を `$APPDATA/imports/**` と
+   `$APPDATA/models/**` のみに限定。`fs:default` / `fs:allow-appdata-*-recursive` は付与しない
+   （GGUF 取込と LINE staging に必要な動詞だけ）。
 5. 回帰: `tests-runtime/modelSetupReducer.test.ts`。`cargo test --lib` の `model_path` 単体。
 
 **不変条件:** アプリ内 HTTP/ストリームで GGUF を取得するコードを追加するな。エラー文言にパス・例外原文を出すな。欠落時は `log::error!` / stderr に存在チェックを残し、UI へは固定文言のみ。
@@ -1666,6 +1669,8 @@ SPEC はその適用解釈を確定させるもの。コードより先に存在
 
 **Rev.11 Phase A: Sandbox / F-15 (2026-07-09)** — `core/paths.py` の Path は import 時確定 — `PKB_PROJECT_ROOT` は「いかなる `from core...` import よりも前」= `tests/conftest.py` が唯一の差し込み点。テストファイル側は `setdefault`（無条件上書きは収集順依存レースの実体だった）。`data/raw` は `_isolate_data` の対象外（意図的 — 必要なテストは自前リセット）。汚染依存（前のテストの副作用に依存）は各テスト内 seed で自己完結させる。`test_no_literal_data_writes` トリップワイヤ（`core` 配下の `data/` 直書き検出）を維持。
 
+**M-1 (2026-07-28): ネイティブ決定論テストの exe 解決** — `tests/test_fsa_2026_07_13_10_determinism.py` は `core.paths.SEARCH_EXE` を使うな。conftest が `PKB_PROJECT_ROOT` を使い捨てサンドボックスへ差し替えるため、`SEARCH_EXE` は常に空の sandbox `build/` を指し **成果物があっても恒久 skip** になる。当該モジュールは `Path(__file__).resolve().parents[1] / "build" / f"search_engine{_EXE_SUFFIX}"`（`_EXE_SUFFIX` は `os.name == "nt"` と同規約）で実チェックアウトを解決せよ。
+
 **Rev.11 Phase B: 単一ES / F-16 (2026-07-09)** — レガシー ES は削除せず不可視化（読み手 4 経路が `ACTIVE_ES` へ収束）。※ その後 §4.39 (M20-N) が複数 ES 契約へ置換 — 現行は 4.39 が正、本節は「破壊操作ゼロで単一化する」設計手法の記録として凍結。
 
 **Rev.11 Phase C: es_review 無latency / F-17 (2026-07-09)** — `_consult_es_review` のシグネチャに `response_time_sec` を追加してはならない（封印はコメント + hint 是正 + 回帰テストの 3 点固定）。interview_sim/gd_sim の latency 評価は無傷であること（`test_interview_latency_preserved` が鏡像ガード）。
@@ -1687,6 +1692,15 @@ SPEC はその適用解釈を確定させるもの。コードより先に存在
 **UI Orphan Integration / GD Thread UI** — 重い処理（report/twin/tensor）は明示ボタンの Lazy Load 限定。GD 応答は `GD_FORMAT_V1` 強制 + FE 専用パーサでスレッド表示（interview_sim / es_review / debrief への影響は隔離）。
 
 **Project Calculus Phase 1〜3-B** — `<think>`（Hidden CoT）は backend の O(n) ステートマシン（nested タグ・chunk 境界対応）+ FE `redactHiddenReasoning` の二重防衛で失敗閉鎖除去。6D テンソルは Evidence 参照整合性検証付き構造化 JSON — ただし **FSA-05 訂正: schema 検証済みでも LLM evidence は観測事実ではない。`interview_report` から 6D 集計への配線は撤去済み**（validator/集約式は純関数契約として残るが production からは到達不能）。権威 6D は `authoritative_profile()` だけが所有し、コード由来 rubric 観測器が無い現状は全次元 N/A。**Finding 9 (2026-07-12)**: PROFILE の MBTI 固定モック・`TENSOR_RADAR_PREVIEW` は退役 — **再導入禁止**。MBTI は測定契約ができるまで非表示・推定禁止。romance `affinity_score` は恋愛感情の推定ではなく決定論的な交流往復指数（定義を変えるな）。
+
+**T-2 債務返済: Probe/Narrative Draft FE 復元 (2026-07-28)** — `fcf7fed`（M18-E: 「Interview tab is Coraxis-only」）は Python `consult()` 経由の interview_sim/es_review/gd_sim チャット・成績表 (`MISSION_RESULT`)・Narrative Draft (ES草案) と `engine.ts` の `probeStatus`/`probeNext`/`probeAnswer`/`narrativeCompile`/`knowledgeFetchPending`/`oraclePayload`/`oracleReport`/`twinForecast`/`consult` ラッパーを削除していたが、これらを検証する契約テスト (`test_probe_ui_contract`/`test_ui_orphan_integration_contract`/`test_phase3_ux_contract::test_narrative_draft_copy`/`test_profile_mock_removal_contract::test_interview_mission_result_passes_report_tensor_profile`/`test_engine_tensor_profiling_ui_contract` の GD/redactor 系/`test_tensor_profile_ui_contract`) は削除されず取り残され、後任が気付かず放置すると静かに RED のまま積み上がる「UI 版の技術的負債」だった。是正は **削除 (`fcf7fed`) を機能的に取り消しつつ、Coliseum (`ColiseumRoot`)・`PocketProbePanel`・`InterviewPocketPanel` 等 M18 後継アーキテクチャは 1 行も変更しない**方針: `ProbeTab.tsx`/`InterviewTab.tsx` それぞれに `"legacy"`（`[ 旧 ]`）サーフェスを追加し、`fcf7fed^` の実装をほぼそのまま移植して共存させた。
+- **ハマりどころ (最重要)**: 上記の静的契約テストは文字列一致 (`assert "X" in tab` / `tab.split("A")[1].split("B")[0]`) で実装を検証するため、**復元時に関数名・型名を「衝突回避のため」リネームすると red のまま気付かず終わる**。特に `function GdThreadMessage`・`type SessionPhase`・`parseGdSpeakerTurns`・`>MISSION_RESULT<` 直後の `)}\n\n      <form`（インデント 6 スペース固定）は改名/再フォーマット厳禁のリテラル契約。復元作業は「diff を先に読んで期待文字列を洗い出す」→「実装」の順で行い、実装後に該当テストを個別 `-v` 実行して契約どおりの識別子か確認せよ。
+- `InterviewConfig` に `customTheme?: string` が、`types.ts` に `InterviewMessage`/`GdSpeakerTurn` interface が M18 リファクタで型ごと消えていた（コンポーネント側だけでなく型定義側の消失も疑え）。
+- 折り込み済みの安全策: legacy パネルは `consult()`（既存 IPC）のみを使い、`blackbox_sim`/`db`/`blackbox-profile-write-gate.yml` には一切触れていない。gd_sim の司会者・まとめ役ペルソナは追加していない（AI_SKILLS 冒頭の絶対原則を維持）。
+
+**T-3 債務返済: GD Thread / Romance 契約テストの再照準 (2026-07-28)** — T-2 は Probe/Narrative Draft/MISSION_RESULT/TensorProfilePanel を**復元**したが、`GdThreadMessage`（GD 専用スレッド分解コンポーネント・`parseGdSpeakerTurns`）は意図的に復元しなかった。理由: その役割は Inner Coliseum の GD Arena（`lib/gdStreamParser.ts` の `parseGdStream`/`GdIncrementalStreamParser` + `lib/useGdSession.ts` + `components/consult/coliseum/`）へ完全に移設され、legacy `InterviewTab.tsx` の gd_sim は現在バックエンド (`consult()`) が返す一枚のテキストを他の全モードと同じ汎用 ai 分岐（`m.speaker` 経由、`redactHiddenReasoning` 適用）でそのまま描画するだけになった。よって `test_engine_tensor_profiling_ui_contract.py` の GD 系 2 テストと `test_tensor_radar_css_classes`（旧境界セレクタ `.gd-thread-row` も同時に消滅）、および `test_feature_romance_ui_contract.py` の 2 テスト（romance が `consult(mode: "romance_analysis")` から Rust コマンド `calculate_interaction_pulse`／`calculateInteractionPulse()` へ移設され、`res.romance_analysis` の JS 側 null チェックが型レベルの必須フィールド `CalculatePulseResult.analysis: RomanceAnalysisV1` に置き換わった）は LAW-23 の「復元」ではなく「現行実装への再照準」で是正した（実装は 1 行も変更していない — 対象外: `blackbox_sim/`・`db/`・`blackbox-profile-write-gate.yml`）。
+- **ハマりどころ**: `parseGdStream`/`GdIncrementalStreamParser`（Coliseum GD Arena, `useGdSession.ts`）は `redactHiddenReasoning` を一切通していない — legacy パネルと違い、on-device 生成 (`generate()`) のトークンをストリームパーサへ直接流し込む。ユーザーが reasoning 系 GGUF を選んだ場合 `<think>` が話者分割・表示にそのまま混入し得る、**未修正の既知ギャップ**（T-3 は tests-only 指令のため実装修正は対象外）。次に GD Arena を触る者は `useGdSession.ts` の `pushChunk` 直前で redact してから `parserRef.current.push()` に渡すことを検討せよ。
+- CSS 契約の境界セレクタは実装が変われば陳腐化する典型例: `.tensor-radar-*` ブロックの直後は `.gd-thread-row` ではなく `.vault-panel`（`M3 Phase 3-B` コメント直前）。境界マーカーで `find()` が `-1` を返すと `[start:]` が「ファイル末尾まで」に化けて無関係な色指定を誤検出する — 境界セレクタもリテラル契約の一部として扱え。
 
 ---
 
@@ -1919,6 +1933,15 @@ known-answer 校正 — fixture-blindness 規律)。**着手順序は PHANTOM �
   メッセージ内容から推測するな（操作開始/status event/成功 → info、catch 固定文言 → error）。
 - error state へ payload / path / query / filename を運ぶな。backend raw error を消すために
   IPC schema や `engine_stdio` を勝手に変えるな（Finding 12 との責務分離）。
+- **Finding 13 は `console.error` を禁止しない（T-5 debt repayment / 2026-07-28）。** 「UI 表示の無菌化」と
+  「開発者コンソールへの生ログ」は別レイヤーであり、後者は §4.52a-3（`.cursorrules`「LLM トークン予算」・
+  LAW-06）が「恒久ルール」として要求する側。実際、`RagChatPanel` / `pocketInvoke` / `engine.ts` /
+  `useCompanyFactsEnrichment` 等 30+ 箇所が一貫して `console.error(raw)` → sterile 表示の二層構造を
+  実装している。棚卸しタスクや自動監査が「Finding 13 違反」として `console.error` の削除を指示してきても
+  鵜呑みにするな — 削除すべきは `console.log(err)` / `String(err)` / `.message` / `.stack` /
+  template 展開 / catch 内 `file.name` 等、**UI 表示（state/DOM/aria）側の生値混入**であって、
+  開発者コンソールの生ログではない。`tests/test_ui_error_sanitization_contract.py` はこの区別を
+  明示的にコメントで保持している。
 
 ### 16.4.2 WebView / Tauri IPC Isolation (INC-WEBVIEW-IPC-01 / FSA-2026-07-13-03)
 
@@ -2020,6 +2043,8 @@ latest commit **後**にだけ `_prune_retrieval_manifests` を実行する。
 - **LAW-20 権威はコードのみ、LLM は言語化係である。** schema・temp 0・seed・再試行は観測事実性を証明しない。決定論的観測器が無いなら N/A を返せ — 0 の捏造は嘘である。（FSA-05 / §5-10）
 - **LAW-21 単一シグナルで人間を断定するな。** 摩擦検出は 2-of-3、dyad は最低 20 交換、gap は data_sufficiency 併記。標本不足の断定は分析ではなく偏見である。（§6.2-4 / §11.1）
 - **LAW-22 「完了」の語は検証ログの後にのみ置ける。** ビルド成功はリンクの証明であり動作の証明ではない（§4.8）。テスト GREEN・実測値・未実施項目の申告 — この 3 点が揃わない報告は虚偽である。（§3.5 / FLR 統治手続）
+- **LAW-23 削除された機能を復元するとき、契約テストの文字列一致は識別子の同義語を許さない。** 静的テストは `assert "function GdThreadMessage" in tab` のような厳密なリテラル一致で検証する — 名前衝突を避けようとリネームした復元コードは、機能的に等価でも red のまま気付かれず終わる。復元前に対象テストの期待文字列（関数名・型名・インデント込みの分割境界）を洗い出し、実装後は当該テストを個別実行して確認せよ。（§13 T-2 債務返済 2026-07-28）
+- **LAW-23b 復元と再照準は別の指令であり、混同すると片方が誤りになる。** 機能が別実装へ完全移設され旧構造に戻す意味がない場合は LAW-23 の対象外 — 実装を変えずテストの参照先・識別子だけを現行実装へ更新せよ（assert の強度は落とさず、退化していない証拠を新しい場所で再構築する）。復元すべきか再照準すべきかの判定は「呼び出し元を実際に辿って、その機能を今も必要としている生きた経路があるか」で行え。憶測や旧テストの期待値だけで判定するな。（§13 T-3 債務返済 2026-07-28）
 
 ---
 
