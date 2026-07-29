@@ -398,3 +398,37 @@ def test_flv_i_14_turn_path_never_blocks_on_model() -> None:
             f"kick_ambient_flavor must not invoke {banned!r} (A-4 / 関所 G)"
         )
     assert "begin_request" in code, "kick must still admit via begin_request"
+
+
+def test_flv_i_17_flavor_gate_workflow_drives_probes() -> None:
+    """FLV-I-17: seal probes and A-1 must be wired in flavor-gate.yml."""
+    path = ROOT / ".github" / "workflows" / "flavor-gate.yml"
+    assert path.is_file(), "flavor-gate.yml must exist (FLV-I-17 / T-7)"
+    text = _read(path)
+    # Jobs that turn paper guards into running electricity.
+    for job in (
+        "seal-probe:",
+        "doctest-fences:",
+        "test-floors:",
+        "feature-one-way:",
+        "a1-deletability:",
+        "flavor-live-absent:",
+    ):
+        assert job in text, f"flavor-gate.yml missing job {job!r}"
+    # Probe drivers (not merely names in comments).
+    assert "flavor_seal_probe_verified" in text
+    assert "flavor_seal_probe_checked" in text
+    assert "error\\[E0451\\]" in text or "error[E0451]" in text or "E0451" in text
+    assert "E0603" in text
+    assert "flavor_a1_deletability.sh" in text
+    assert "accepted=" in text
+    # Doctests must not be silently excluded (FLV-W-11).
+    assert "--doc" in text
+    assert not re.search(
+        r"cargo test[^\n]*--features flavor-layer[^\n]*--doc[^\n]*--lib",
+        text,
+    ), "doctest-fences must not pass --lib (excludes fences)"
+    # Floors / ignored guard (ok. alone is insufficient).
+    assert 'IGNORED" -eq 0' in text or "IGNORED" in text
+    # Positive companion required (FLV-W-06): cfg-free rustc must succeed.
+    assert "Positive companion" in text or "positive companion" in text.lower()

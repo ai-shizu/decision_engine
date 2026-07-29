@@ -2238,9 +2238,11 @@ Phase 6-A step1（`bridge::estimate_pooled`）で踏んだ、リプレイ恒等�
 
 **F-3 T-5 as-built（2026-07-29・基準 `6845a52`）:** 非同期境界 — `kick_ambient_flavor` は `begin_request` のみ。`DeliverAmbientFlavor` ワーカーメッセージで `deliver_completion` → `generate`/`finish`。`request_generate` は `#[cfg(test)]`。関所 G。FE: `BlackboxFlavorSlot`（`bxs-flavor` / `bxs-flavor-mark` / `※`、不在は `null`→描画なし）、`bxsTakeFlavor`、関所 F/E（P-4 はフレーバ TSX のみ）。D-19〜D-22。実 LLM は T-8（現状 completion=`None`）。
 
-**F-3 T-6 as-built（2026-07-29・基準 `7016892`・未コミット）:** A-1 削除可能性。`blackbox_arena/flavor_a1.rs`（W-b 内）+ bin `flavor-a1-digest` + `scripts/flavor_a1_deletability.sh`。Decide-time 系列は `Session::state_digest().short()` を submit 直前に採取（`bridge::replay_verified` / `bridge::tests::{play,scripted_intent,input_from}` の作法を再利用。**校正 suite / `CalibrationCertificate` 非変更**）。A-1-1 vs A-1-2: **52** 行バイト一致。A-1-3/A-1-4（モデル有）は T-8 待ちで未実施（take 無モデルは 52 行一致を追加実測）。D-24/25/26。workflow 配線は T-7。
+**F-3 T-6 as-built（2026-07-29・封緘 `012b97f`）:** A-1 削除可能性。`blackbox_arena/flavor_a1.rs`（W-b 内）+ bin `flavor-a1-digest` + `scripts/flavor_a1_deletability.sh`。Decide-time 系列は `Session::state_digest().short()` を submit 直前に採取（`bridge::replay_verified` / `bridge::tests::{play,scripted_intent,input_from}` の作法を再利用。**校正 suite / `CalibrationCertificate` 非変更**）。A-1-1 vs A-1-2: **52** 行バイト一致。A-1-3/A-1-4（モデル有）は T-8 待ちで未実施（take 無モデルは 52 行一致を追加実測）。D-24/25/26。
 
-**F-3 T-6b as-built（2026-07-29・基準 `7016892`・未コミット・T-6 積上）:** アーム A-1-2b（`CANNED_COMPLETION` 12×「あ」+ 毎ターン take）を恒久化。A-1-2（None）維持。**A-1-e**: `accepted` を系列長と照合（0 または不一致は exit 13）。単体 `canned_completion_is_accepted_for_headline`。`/target/` を `.gitignore` へ。D-27（予算超過・digest 一致のまま A-1-e RED）/ D-28（漢数字）/ D-29（A-1-e 削除で素通り）。実 LLM 一致は T-8 命題 (b) のみ残置。
+**F-3 T-6b as-built（2026-07-29・封緘 `012b97f`）:** アーム A-1-2b（`CANNED_COMPLETION` 12×「あ」+ 毎ターン take）を恒久化。A-1-2（None）維持。**A-1-e**: `accepted` を系列長と照合（0 または不一致は exit 13）。単体 `canned_completion_is_accepted_for_headline`。`/target/` を `.gitignore` へ。D-27（予算超過・digest 一致のまま A-1-e RED）/ D-28（漢数字）/ D-29（A-1-e 削除で素通り）。実 LLM 一致は T-8 命題 (b) のみ残置。
+
+**F-3 T-7 as-built（2026-07-30・基準 `012b97f`・未コミット）:** **新規のみ** `.github/workflows/flavor-gate.yml`（`blackbox-profile-write-gate.yml` 非改変）。jobs: `seal-probe`（E0451/E0603 + **正の伴走**）/ `doctest-fences`（`--doc`・≥30・0 ignored・result 1 本）/ `test-floors`（layer≥26 / live≥58）/ `feature-one-way`（tree llama 0 vs >0）/ `a1-deletability`（exit 0 **かつ** `accepted≠0`）/ `flavor-live-absent`（never-used 走査）。契約 `test_flv_i_17_flavor_gate_workflow_drives_probes`。変異 D-8/9/10/30/31/32。ローカル実測: seal≈5s / doctest≈14s / floors≈1s / tree≈0.3s / absent≈11s / A-1≈68s（warm release）。`--release` は未変更（debug 一致の実測なし）。T-8 未着手。
 
 生き残る掟:
 
@@ -2261,3 +2263,4 @@ Phase 6-A step1（`bridge::estimate_pooled`）で踏んだ、リプレイ恒等�
 15. **ターン経路は生成を呼ぶな（A-4 / 関所 G）。** `kick` = `begin_request` のみ。`generate`/`finish` はワーカー経路（`deliver_completion`）。同期 `request_generate` をターン経路に戻す退行は契約 RED（D-19）。
 16. **フレーバ FE は Fact と別クラス・数値非抽出（FLV-I-11 / I-05）。** 凍結リテラル `bxs-flavor` ≠ `bxs-books`。P-4 走査はフレーバ経路のみ。
 17. **A-1 は「機構が動く」と「フレーバが実在する」を別アームで示せ（T-6b）。** A-1-2 = completion `None`。A-1-2b = 作り置き Accepted + take。**A-1-e** が無ければ 2b は静かに 2 へ退化しても digest は緑のまま（D-27/D-29）。
+18. **ガードは CI で走って初めてガード（FLV-I-17 / T-7）。** 二鍵プローブ・doctest フェンス・件数下限・`0 ignored`・`cargo tree` 単方向・A-1 は人間の記憶に置くな。`--lib` と `--doc` を取り違えるな。`ok.` だけでは `#[ignore]` を見逃す。失敗期待の job に正の伴走を置け（cfg 打ち間違い／周辺破壊の偽失敗）。

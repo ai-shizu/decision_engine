@@ -1,0 +1,174 @@
+# Flavor Layer CI gate (F-3 T-7 / FLV-I-17).
+#
+# Turns the F-1–F-3 guards that previously lived only in human memory into
+# jobs: two-key seal probes, doctest fences, test floors, one-way features,
+# A-1 deletability, and flavor-live absence on the default feature set.
+#
+# Do NOT edit blackbox-profile-write-gate.yml (sealed). Pattern borrowed:
+# separate jobs so dependency / audit edges stay visible; never rely on a
+# single `test result: ok.` when binary crates can append `0 passed`.
+#
+# Grounding: docs/SPEC_FLAVOR_LAYER.md §9 / FLV-I-04 / FLV-I-17;
+# docs/FLAVOR_F3_IMPLEMENTATION_DIRECTIVE.md T-7.
+#
+# C-1: `--lib` vs `--doc` are opposites. `--lib` on doctests permanently
+# GREEN-excludes the fence suite (FLV-W-11). Floor jobs use `--lib` so there
+# is exactly one `test result:` line.
+#
+# `ok.` alone is not enough: `#[ignore]` still prints `ok.` (T-1c). Always
+# require `0 ignored` and a passed floor.
+
+name: flavor-gate
+
+on:
+  pull_request:
+  push:
+    branches: [main, master]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  # FLV-I-04 / §9.1-3: cfg-gated forge must fail with the named error code,
+  # and the same rustc without the cfg must succeed (positive companion).
+  # Without the companion, a broken tree or a mistyped cfg that fails for the
+  # wrong reason can look like a seal.
+  seal-probe:
+    runs-on: macos-14
+    defaults:
+      run:
+        working-directory: apps/desktop/src-tauri
+    steps:
+      - uses: actions/checkout@v4
+      - name: Seal probe E0451 (VerifiedFlavor brace) + positive companion
+        run: |
+          set -euo pipefail
+          OUT="$(mktemp)"
+          if cargo rustc --features flavor-layer --lib -- --cfg flavor_seal_probe_verified \
+              >"$OUT" 2>&1; then
+            echo "expected failure but compiled (flavor_seal_probe_verified)"
+            cat "$OUT"
+            exit 1
+          fi
+          cat "$OUT"
+          test "$(grep -c 'error\[E0451\]' "$OUT" || true)" -eq 1
+
+          OUT2="$(mktemp)"
+          if cargo rustc --features flavor-layer --lib -- --cfg flavor_seal_probe_checked \
+              >"$OUT2" 2>&1; then
+            echo "expected failure but compiled (flavor_seal_probe_checked)"
+            cat "$OUT2"
+            exit 1
+          fi
+          cat "$OUT2"
+          test "$(grep -c 'error\[E0603\]' "$OUT2" || true)" -eq 1
+
+          # Positive companion: cfg removed → must succeed (FLV-W-06 / §9.1-1).
+          cargo rustc --features flavor-layer --lib
+
+  # Doctest fence suite. NEVER add --lib here (FLV-W-11).
+  doctest-fences:
+    runs-on: macos-14
+    defaults:
+      run:
+        working-directory: apps/desktop/src-tauri
+    steps:
+      - uses: actions/checkout@v4
+      - name: flavor-layer doctests (fences ≥ 30, 0 ignored)
+        run: |
+          set -euo pipefail
+          OUT="$(mktemp)"
+          cargo test --features flavor-layer --doc 2>&1 | tee "$OUT"
+          RESULT_LINES="$(grep -c 'test result: ok\.' "$OUT" || true)"
+          test "$RESULT_LINES" -eq 1
+          LINE="$(grep 'test result: ok\.' "$OUT")"
+          PASSED="$(echo "$LINE" | sed -E 's/.*ok\. ([0-9]+) passed.*/\1/')"
+          IGNORED="$(echo "$LINE" | sed -E 's/.* ([0-9]+) ignored.*/\1/')"
+          test -n "$PASSED"
+          test "$PASSED" -ge 30
+          test "$IGNORED" -eq 0
+
+  # Unit floors: flavor-layer ≥ 26, flavor-live ≥ 58. --lib pins one result line.
+  test-floors:
+    runs-on: macos-14
+    defaults:
+      run:
+        working-directory: apps/desktop/src-tauri
+    steps:
+      - uses: actions/checkout@v4
+      - name: flavor-layer --lib flavor floor (≥ 26, 0 ignored)
+        run: |
+          set -euo pipefail
+          OUT="$(mktemp)"
+          cargo test --features flavor-layer --lib flavor 2>&1 | tee "$OUT"
+          RESULT_LINES="$(grep -c 'test result: ok\.' "$OUT" || true)"
+          test "$RESULT_LINES" -eq 1
+          LINE="$(grep 'test result: ok\.' "$OUT")"
+          PASSED="$(echo "$LINE" | sed -E 's/.*ok\. ([0-9]+) passed.*/\1/')"
+          IGNORED="$(echo "$LINE" | sed -E 's/.* ([0-9]+) ignored.*/\1/')"
+          test -n "$PASSED"
+          test "$PASSED" -ge 26
+          test "$IGNORED" -eq 0
+      - name: flavor-live --lib flavor floor (≥ 58, 0 ignored)
+        run: |
+          set -euo pipefail
+          OUT="$(mktemp)"
+          cargo test --features flavor-live --lib flavor 2>&1 | tee "$OUT"
+          RESULT_LINES="$(grep -c 'test result: ok\.' "$OUT" || true)"
+          test "$RESULT_LINES" -eq 1
+          LINE="$(grep 'test result: ok\.' "$OUT")"
+          PASSED="$(echo "$LINE" | sed -E 's/.*ok\. ([0-9]+) passed.*/\1/')"
+          IGNORED="$(echo "$LINE" | sed -E 's/.* ([0-9]+) ignored.*/\1/')"
+          test -n "$PASSED"
+          test "$PASSED" -ge 58
+          test "$IGNORED" -eq 0
+
+  # FLV-I-08 / I-12: cargo tree catches indirect reverse edges text scan misses.
+  feature-one-way:
+    runs-on: macos-14
+    defaults:
+      run:
+        working-directory: apps/desktop/src-tauri
+    steps:
+      - uses: actions/checkout@v4
+      - name: blackbox-sim must not pull llama; pocket-brain control > 0
+        run: |
+          set -euo pipefail
+          BBS="$(cargo tree -e features --features blackbox-sim | grep -ci llama || true)"
+          test "$BBS" -eq 0
+          PB="$(cargo tree -e features --features pocket-brain | grep -ci llama || true)"
+          test "$PB" -gt 0
+
+  # FLV-I-01 / A-1: exit 0 is not enough — accepted= must appear and be non-zero.
+  a1-deletability:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - name: A-1 deletability (digest identity + accepted ≠ 0)
+        run: |
+          set -euo pipefail
+          OUT="$(mktemp)"
+          bash scripts/flavor_a1_deletability.sh 2>&1 | tee "$OUT"
+          ACC_LINE="$(grep -Eo 'accepted=[0-9]+' "$OUT" | tail -1 || true)"
+          test -n "$ACC_LINE"
+          ACC="${ACC_LINE#accepted=}"
+          test "$ACC" -ne 0
+
+  # Control: without flavor-live, generation / slot modules stay cfg'd out
+  # (write-absent shape — never-used must not name them as dead code present).
+  flavor-live-absent:
+    runs-on: macos-14
+    defaults:
+      run:
+        working-directory: apps/desktop/src-tauri
+    steps:
+      - uses: actions/checkout@v4
+      - name: Default / blackbox-sim — flavor_gen / flavor_slot absent
+        run: |
+          set -euo pipefail
+          cargo build --features blackbox-sim --lib 2>&1 \
+            | tee /tmp/flavor-live-absent-build.log
+          MATCHES="$(grep -E 'never used' /tmp/flavor-live-absent-build.log \
+            | grep -Ei 'flavor_gen|flavor_slot' || true)"
+          test -z "$MATCHES"
