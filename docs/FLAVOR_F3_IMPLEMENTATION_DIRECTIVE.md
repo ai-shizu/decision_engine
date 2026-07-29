@@ -126,6 +126,18 @@ FlavorCorrelation { genesis_fingerprint: [u8; 8], tick: u32, template_id: Templa
 **変異ドリル D-3**: 相関照合を削除し、**P-2-2〜P-2-5 が RED になることを示す**。復元。
 **変異ドリル D-4**: busy 時の破棄をキューイングに変え、**P-3-3 が RED になることを示す**。復元。
 
+#### T-4 必須要件（T-3 監査で記録・2026-07-29）— `#![allow(dead_code)]` を外すこと
+
+T-3 は `llm/flavor_gen.rs` の冒頭に `#![allow(dead_code)]` を「T-4 のアリーナ配線まで idle」というコメント付きで置いた。**これは AI_SKILLS §20-17（C-2）の確立形どおりで正しい** —— 未配線中は `allow` ＋ 削除予定コメント、**配線後は allow を外し、CI の never-used 検査へ戻す**。
+
+**したがって T-4 では次を必須とする**:
+
+1. `llm/flavor_gen.rs` の `#![allow(dead_code)]` を**削除する**
+2. 削除後に `cargo build --features flavor-live --lib` を通し、`flavor_gen` 関連の **`never used` 警告がゼロ**であることを表明する（`blackbox-profile-write-gate.yml` の `write-gated` job が `insert_profile` に対して行っているのと同型）
+3. 外し忘れを防ぐため、契約テストで **`llm/flavor_gen.rs` に `allow(dead_code)` が存在しないこと**を走査せよ
+
+> **`allow` を残したまま配線すると、「配線済みかどうか」の検査が構造的に無効になる**（C-2 が名指しした失敗様式そのもの）。**T-4 で外さなければ、生成アダプタが実は誰からも呼ばれていない状態が永久に検出されない。**
+
 ---
 
 ### T-5 — FE 配線と視覚的区別（FLV-I-05 / FLV-I-11）
@@ -194,7 +206,12 @@ BXS の C-1（`--lib` を必ず付けよ）は正しい掟である。しかし*
 | 対象 | 下限 |
 |---|---|
 | `cargo test --features flavor-layer --lib flavor` | **26 以上**（`test result: ok.` 行が 1 本 ∧ `0 ignored`） |
+| **`cargo test --features flavor-live --lib flavor`** | **36 以上**（同上） |
 | `cargo test --features flavor-layer --doc` | **30 以上** |
+
+> **【監査役の訂正 3・2026-07-29】`flavor-layer` の下限だけでは足りない。** T-3 で追加された母集団 P-5 / P-6 / P-7 は `llm/flavor_gen.rs` に置かれ、そこは `flavor-live` gate 配下である。**したがって `flavor-layer` で走らせても 26 のまま**であり、**新規 10 件は下限保証から丸ごと漏れる**（実測: flavor-layer 26 / flavor-live 36）。
+>
+> **これは `--lib` が doctest を除外していた FLV-W-11 と同じ形である。** 「下限を課した」ことと「その下限が対象を覆っている」ことは別の命題であり、**feature 集合を取り違えると下限は素通しの飾りになる。** 監査役が T-3 のゲート表で feature を取り違えた際に発覚した。**下限を書くときは、そのコマンドで対象が実際にコンパイルされるかを必ず確認せよ。**
 
 **`0 ignored` の表明を省くな。** `#[ignore]` が付いたテストがあっても `test result:` は `ok.` と出る —— **`ok` は「全部走った」を意味しない。**
 
