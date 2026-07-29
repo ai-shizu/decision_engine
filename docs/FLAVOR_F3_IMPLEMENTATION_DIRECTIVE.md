@@ -23,8 +23,18 @@
 > **clippy の 280 は既存 RED である。** `--features flavor-layer` の有無に関わらず 280 で同一であり、`src/flavor/` に着弾するものは**一件も無い**（内訳: lib test 側の `unwrap` on Result 125 / `should not be present in production code` 78 / `unwrap` on Option 65 / `indexing may panic` 12）。
 >
 > **したがって F-3 の受入で `--all-targets` の GREEN を主張してはならない。** 受入は次の 2 点で表明せよ:
-> 1. `cargo clippy --features flavor-live --lib` が **error 0** ∧ warnings が **12 のまま** ∧ フレーバ経路への着弾が **0 件**
-> 2. `cargo clippy --features flavor-live --all-targets` の error 数が **280 のまま** ∧ `src/flavor` `src/llm/flavor_gen.rs` `src/blackbox_arena/flavor_slot.rs` への着弾が **0 件**
+> **clippy の基準値は feature 集合ごとに異なる。** 実測（`ec89b61` + T-2）:
+>
+> | コマンド | errors | warnings | フレーバ着弾 |
+> |---|---|---|---|
+> | `--features flavor-layer --lib` | **0** | **12** | **0** |
+> | `--features flavor-live --lib` | **0** | **105** | **0** |
+> | `--features flavor-layer --all-targets` | **280** | — | **0** |
+> | `--features flavor-live --all-targets` | **280** | — | **0** |
+>
+> **T-3 以降は `flavor-live` が基準となるため warnings は 105 である。** 差分で表明せよ。
+>
+> **【監査役の訂正 2・2026-07-29】** 本項は当初 `flavor-live --lib` の warnings を **12** としていたが、**12 は `flavor-layer` の値であり `flavor-live` のものではない。** `flavor-live` は `pocket-brain` を引くため `llm/` 配下が同時にコンパイルされ、実測は **105** である。**監査役が feature 集合を取り違えたまま基準値を書いた。** これは clippy ゲートに関する 2 度目の誤りであり、同じ形（**測っていない構成の数字をゲートに書く**）を繰り返している。**基準値は必ず、ゲートが実際に走る構成で測れ。**
 >
 > **【監査役の訂正・2026-07-29】** 本項は当初 `--lib` に「0 warnings / 0 errors」を要求していたが、**これは誤りであった。** `94d83ee` を stash して実測した baseline は **12 warnings**（すべて非フレーバ）であり、**書かれた日から達成不能な条件**だった。**両者とも差分（delta）で表明せよ** —— 絶対値のゼロを要求すると、達成不能な条件を満たすために無関係な既存コードへ手を入れる圧力が生まれる。それは第十律（最小介入）違反であり、diff を膨らませて監査を困難にする。
 >
@@ -170,6 +180,7 @@ BXS の C-1（`--lib` を必ず付けよ）は正しい掟である。しかし*
 | `doctest-fences`（**レトロフィット・新設**） | `cargo test --features flavor-layer --doc`。**`--lib` を付けるな**（付けた瞬間このジョブは何も検査しない）。`test result: ok.` 行が **1 本**であることと、`passed` が **30 以上**であることを表明する。**件数を下限として固定せよ** —— フェンスが静かに消えたとき、`ok` だけを見ていると気付けない |
 | `a1-deletability` | §13 の digest 恒等（`flavor-live` 有/無、モデル有/無の 4 構成） |
 | `flavor-live-absent` | 既定 feature 構成で `flavor_gen` / `flavor_slot` が**コード上不在**であることを `never used` 走査で表明（`write-absent` と同型） |
+| `feature-one-way`（**T-2 監査で必須化**） | `cargo tree -e features --features blackbox-sim \| grep -ci llama` が **0** であることと、対照群 `--features pocket-brain` が **0 より大**（実測 12）であることを対で表明 |
 
 **変異ドリル D-5**: `checked.rs` の `Checked` タプル欄を `pub(crate)` へ退行させ、**`seal-probe` job が E0603 を出さなくなる（＝ RED）ことを示す**。復元して GREEN を示す。
 **変異ドリル D-8（新設）**: `verified.rs` のフェンス doctest を 1 本削除し、**`doctest-fences` job が下限 30 を割って RED になることを示す**。復元して GREEN を示す。**`ok` だけを条件にしていると、この変異は検出されない** —— それを実演せよ。
@@ -188,6 +199,19 @@ BXS の C-1（`--lib` を必ず付けよ）は正しい掟である。しかし*
 **`0 ignored` の表明を省くな。** `#[ignore]` が付いたテストがあっても `test result:` は `ok.` と出る —— **`ok` は「全部走った」を意味しない。**
 
 **変異ドリル D-9（新設）**: `flavor/policy.rs` の `#[cfg(test)]` を `#[cfg(any())]` に差し替え、**件数下限で RED になることを示す**。復元して GREEN を示す。この変異は python 契約テストでは検出できない —— **それも併せて実演し、「どちらのガードが何を覆うか」を報告せよ。**
+
+#### T-7 必須要件 2（T-2 監査で判明）— `cargo tree` を CI へ載せること
+
+T-2 で単方向性（**指揮官が `flavor-live → blackbox-sim` を承認する際に付した唯一の絶対条件**）を守るガードが 2 つ用意された:
+
+1. `test_flv_i_12_flavor_live_not_in_default` —— `Cargo.toml` の**字面**を走査
+2. `cargo tree -e features` —— **解決済みの依存グラフ**を検査
+
+**実測: `grep -rn "cargo tree" .github/ tests/` は空である。** すなわち 2 の方は**誰も自動実行していない**。二鍵封印プローブが F-1 から F-3 まで駆動系を持たなかったのと同じ形である（FLV-W-07）。
+
+**これは飾りの重複ではない。** 1 は直接の依存辺しか見ないため、`blackbox-sim = ["X"]` かつ `X = ["pocket-brain"]` という**間接的な逆辺**を素通しする。それを捕らえられるのは 2 だけである。**絶対条件を守る唯一の手段が手動コマンドのまま T-3 以降へ進んではならない。**
+
+**変異ドリル D-10（新設）**: 間接逆辺（新 feature 経由で `blackbox-sim` に `pocket-brain` を到達させる）を作り、**契約テストは GREEN のまま `feature-one-way` job が RED になることを示せ。** 2 つのガードの守備範囲が異なることの実証である。
 **`seal-probe` には `--lib` を付けよ／`doctest-fences` には付けるな。** 両者は逆である。取り違えると片方が恒久 GREEN（何も検査しない）になる。
 
 ---
