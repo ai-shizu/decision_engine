@@ -211,3 +211,28 @@ def test_flv_i_12_flavor_live_not_in_default() -> None:
         assert banned not in layer, (
             f"flavor-layer must not depend on {banned!r} (FLV-I-08); got [{layer}]"
         )
+
+
+def test_flv_i_07_no_retry_on_guard_failure() -> None:
+    """関所 B / FLV-I-07: flavor_gen must not retry after verify/decide failure."""
+    path = TAURI / "src" / "llm" / "flavor_gen.rs"
+    assert path.is_file(), "llm/flavor_gen.rs must exist (single file, not llm/flavor/)"
+    text = _read(path)
+    # Strip line comments so ban-list prose cannot false-positive.
+    code = re.sub(r"//.*?$", "", text, flags=re.M)
+    code = re.sub(r"/\*.*?\*/", "", code, flags=re.S)
+    assert not re.search(r"\bretry\b", code, re.I), "retry identifier forbidden in flavor_gen"
+    assert not re.search(r"\bloop\b", code), "loop-based regeneration forbidden in flavor_gen"
+    assert not re.search(r"\bwhile\b", code), "while-based regeneration forbidden in flavor_gen"
+
+
+def test_flv_i_15_generation_path_never_calls_v1_empty() -> None:
+    """関所 C / FLV-I-15: generation path must use for_template, never v1_empty."""
+    path = TAURI / "src" / "llm" / "flavor_gen.rs"
+    assert path.is_file(), "llm/flavor_gen.rs must exist"
+    text = _read(path)
+    code = re.sub(r"//.*?$", "", text, flags=re.M)
+    code = re.sub(r"/\*.*?\*/", "", code, flags=re.S)
+    assert "v1_empty" not in code, (
+        "flavor_gen must not call FlavorPolicy::v1_empty (FLV-R-9 / FLV-I-15)"
+    )

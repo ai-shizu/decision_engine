@@ -2230,6 +2230,10 @@ Phase 6-A step1（`bridge::estimate_pooled`）で踏んだ、リプレイ恒等�
 
 **F-3 T-2 as-built（2026-07-29・基準 `ec89b61`）:** `flavor-live = ["flavor-layer","pocket-brain","blackbox-sim"]` を default 外に追加（FLV-I-12）。Rust コードは未追加（ガードが先）。`test_flv_i_12_flavor_live_not_in_default` + `cargo tree` 対照群（blackbox-sim→llama=0 / pocket-brain→12）。D-7-A/B/C で契約 RED。B/C では解決済みグラフも blackbox-sim→llama が 0→12 に転じた。
 
+**F-3 T-3 as-built（2026-07-29・基準 `29017c9`）:** `llm/flavor_gen.rs`（単一ファイル）。`render_prompt` / `decide` / `generate(completion: Option<&str>)`。`FlavorOutcome::{Accepted,Discarded,Unavailable}`。破棄時のみ `scan` 再走査（第二鋳造路なし）。`NO_NUMERALS_INSTRUCTION` 定数分離。P-5/P-6/P-7 + 関所 B/C。空文字列は Unavailable（P-6-7）。アリーナ未配線。clippy `flavor-live --lib` は 105 を維持（初期 +10 dead_code を module allow で吸収し T-4 待ちと明記）。
+
+**F-3 T-3b as-built（2026-07-29・基準 `9f2abd7`）:** 内容無し判定を `decide` へ移設（`raw.trim().is_empty()` → `Unavailable`）。`generate` は委譲のみ。P-6-8〜11（`decide` 直接）+ P-6-12 対照。D-15（decide 判定削除・generate 残置で P-6-7 緑／P-6-8〜11 RED）・D-16（空白含有全部弾きで P-6-12 RED）。`#![allow(dead_code)]` は未削除（T-4 の仕事）。
+
 生き残る掟:
 
 1. **二鍵封印（FLV-R-7）:** `checked::Checked(String)` のタプル欄は checked に private、`VerifiedFlavor { checked }` の欄は verified に private。crate root の波括弧構築 → **E0451**、兄弟からの `Checked(raw)` 偽造 → **E0603**。`#[cfg(flavor_seal_probe_*)]` プローブ + CI/監査の `cargo rustc --cfg ...` で理由まで検証（doctest では private→pub(crate) 退行を検出できない — FLV-W-06 / §9.1-3）。

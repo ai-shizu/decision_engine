@@ -24,6 +24,9 @@ pub mod schema;
 pub mod service;
 pub mod token_batch;
 
+#[cfg(feature = "flavor-live")]
+pub mod flavor_gen;
+
 #[cfg(all(feature = "secure-vault", target_vendor = "apple"))]
 pub mod commands_consult;
 #[cfg(all(feature = "secure-vault", target_vendor = "apple"))]
