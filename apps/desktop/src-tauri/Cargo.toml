@@ -192,6 +192,11 @@ objc2-ui-kit = { version = "=0.3.2", default-features = false, features = [
 [dev-dependencies]
 tokio = { version = "1", features = ["test-util", "macros", "rt", "time"] }
 
+[[bin]]
+name = "flavor-a1-digest"
+path = "src/bin/flavor_a1_digest.rs"
+required-features = ["blackbox-sim"]
+
 # Flavor-layer seal probes use custom --cfg flags (SPEC §9.1-3). Declare them
 # so `unexpected_cfgs` does not warn when the probes are inactive.
 [lints.rust]

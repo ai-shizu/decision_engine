@@ -66,6 +66,13 @@ pub mod blackbox_sim;
 #[cfg(feature = "blackbox-sim")]
 mod blackbox_arena;
 
+/// A-1 digest dump harness (SPEC §13 / F-3 T-6). Re-exported from the arena
+/// (wall W-b: only arena/db may import `blackbox_sim`).
+#[cfg(feature = "blackbox-sim")]
+pub mod flavor_a1_harness {
+    pub use crate::blackbox_arena::flavor_a1::*;
+}
+
 #[cfg(all(feature = "secure-vault", target_vendor = "apple"))]
 mod analytics;
 

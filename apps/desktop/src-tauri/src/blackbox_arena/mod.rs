@@ -9,3 +9,6 @@ pub(crate) mod view;
 
 #[cfg(feature = "flavor-live")]
 pub(crate) mod flavor_slot;
+
+/// A-1 Decide-time digest dump (SPEC §13 / F-3 T-6). Shell-driven via bin.
+pub mod flavor_a1;

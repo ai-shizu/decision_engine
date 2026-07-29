@@ -6,6 +6,7 @@ venv/
 
 # ビルド成果物
 build/
+/target/
 *.o
 *.obj
 

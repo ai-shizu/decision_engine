@@ -2236,7 +2236,11 @@ Phase 6-A step1（`bridge::estimate_pooled`）で踏んだ、リプレイ恒等�
 
 **F-3 T-4 as-built（2026-07-29・基準 `2b1d49e`）:** `blackbox_arena/flavor_slot.rs` — `FlavorCorrelation`（`genesis_fingerprint` ← `CampaignGenesis::digest8()` / tick / `TemplateId`）+ 単一スロット `Option<(FlavorCorrelation, VerifiedFlavor)>`。busy 時破棄（キュー無し）・照合は Rust 側 exact match・take で空・abort 後 finish は破棄。`AdvanceView` 非相乗り。`bxs_take_flavor(campaign_id)` のみ（FE は相関を送らない）。`llm/flavor_gen.rs` の `#![allow(dead_code)]` 削除。凍結母集団 P-2 / P-3 / P-8。契約 FLV-I-14 / allow 不在 / AdvanceView 走査。変異 D-3 / D-3b / D-4 / D-17 / D-18。`flavor-live --lib flavor` **57**（+16）。clippy `flavor-live --lib` **105 維持**・フレーバ経路着弾 0。`never used` の flavor_gen/flavor_slot は 0。
 
-**F-3 T-5 as-built（2026-07-29・基準 `2b1d49e`・未コミット）:** 非同期境界 — `kick_ambient_flavor` は `begin_request` のみ。`DeliverAmbientFlavor` ワーカーメッセージで `deliver_completion` → `generate`/`finish`。`request_generate` は `#[cfg(test)]`。関所 G。FE: `BlackboxFlavorSlot`（`bxs-flavor` / `bxs-flavor-mark` / `※`、不在は `null`→描画なし）、`bxsTakeFlavor`、関所 F/E（P-4 はフレーバ TSX のみ）。D-19〜D-22。実 LLM は T-8（現状 completion=`None`）。
+**F-3 T-5 as-built（2026-07-29・基準 `6845a52`）:** 非同期境界 — `kick_ambient_flavor` は `begin_request` のみ。`DeliverAmbientFlavor` ワーカーメッセージで `deliver_completion` → `generate`/`finish`。`request_generate` は `#[cfg(test)]`。関所 G。FE: `BlackboxFlavorSlot`（`bxs-flavor` / `bxs-flavor-mark` / `※`、不在は `null`→描画なし）、`bxsTakeFlavor`、関所 F/E（P-4 はフレーバ TSX のみ）。D-19〜D-22。実 LLM は T-8（現状 completion=`None`）。
+
+**F-3 T-6 as-built（2026-07-29・基準 `7016892`・未コミット）:** A-1 削除可能性。`blackbox_arena/flavor_a1.rs`（W-b 内）+ bin `flavor-a1-digest` + `scripts/flavor_a1_deletability.sh`。Decide-time 系列は `Session::state_digest().short()` を submit 直前に採取（`bridge::replay_verified` / `bridge::tests::{play,scripted_intent,input_from}` の作法を再利用。**校正 suite / `CalibrationCertificate` 非変更**）。A-1-1 vs A-1-2: **52** 行バイト一致。A-1-3/A-1-4（モデル有）は T-8 待ちで未実施（take 無モデルは 52 行一致を追加実測）。D-24/25/26。workflow 配線は T-7。
+
+**F-3 T-6b as-built（2026-07-29・基準 `7016892`・未コミット・T-6 積上）:** アーム A-1-2b（`CANNED_COMPLETION` 12×「あ」+ 毎ターン take）を恒久化。A-1-2（None）維持。**A-1-e**: `accepted` を系列長と照合（0 または不一致は exit 13）。単体 `canned_completion_is_accepted_for_headline`。`/target/` を `.gitignore` へ。D-27（予算超過・digest 一致のまま A-1-e RED）/ D-28（漢数字）/ D-29（A-1-e 削除で素通り）。実 LLM 一致は T-8 命題 (b) のみ残置。
 
 生き残る掟:
 
@@ -2256,3 +2260,4 @@ Phase 6-A step1（`bridge::estimate_pooled`）で踏んだ、リプレイ恒等�
 14. **相関は Rust 権威・単一スロット・take（FLV-I-13/I-14 / FLV-W-10）。** FE からトークンを受け取るな。busy は破棄（キュー禁止）。tick は古い／新しい双方を破棄（「古いだけ」は D-3b の穴）。`AdvanceView` 相乗り禁止（A-4）。
 15. **ターン経路は生成を呼ぶな（A-4 / 関所 G）。** `kick` = `begin_request` のみ。`generate`/`finish` はワーカー経路（`deliver_completion`）。同期 `request_generate` をターン経路に戻す退行は契約 RED（D-19）。
 16. **フレーバ FE は Fact と別クラス・数値非抽出（FLV-I-11 / I-05）。** 凍結リテラル `bxs-flavor` ≠ `bxs-books`。P-4 走査はフレーバ経路のみ。
+17. **A-1 は「機構が動く」と「フレーバが実在する」を別アームで示せ（T-6b）。** A-1-2 = completion `None`。A-1-2b = 作り置き Accepted + take。**A-1-e** が無ければ 2b は静かに 2 へ退化しても digest は緑のまま（D-27/D-29）。

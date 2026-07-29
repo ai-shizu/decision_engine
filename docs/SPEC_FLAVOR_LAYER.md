@@ -280,7 +280,7 @@ maxChars:   u16                             （テンプレートごとの上限
 
 | ID | 内容 | ガード（実装時に実名へ） |
 |---|---|---|
-| FLV-I-01 | フレーバ層削除でも全機能が動作 | **`flavor-gate.yml` job `a1-deletability`（§13 digest 恒等）** |
+| FLV-I-01 | フレーバ層削除でも全機能が動作 | **`scripts/flavor_a1_deletability.sh`**（Decide-time 系列 diff・A-1-a..d）。CI job `a1-deletability` は T-7 で `flavor-gate.yml` へ配線 |
 | FLV-I-02 | `SlotValue` は閉じた enum であり、数値・任意文字列を保持しない | `test_flv_i_02_slot_value_has_no_numeric_or_string_payload` |
 | FLV-I-03 | 権威型に `Into<SlotValue>` が存在しない | `test_flv_i_03_no_into_or_from_slot_value_for_authority_types` |
 | FLV-I-04 | `VerifiedFlavor` の構築経路が `verify` のみ（二鍵封印） | **`flavor-gate.yml` job `seal-probe`**（E0451 / E0603 を stderr で表明）+ `verified.rs` の `_fence_*` |

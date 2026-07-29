@@ -273,6 +273,21 @@ def test_advance_view_has_no_flavor_fields() -> None:
         assert banned not in body, f"AdvanceView must not carry flavor field ({banned})"
 
 
+def test_flv_i_01_a1_deletability_script_exists() -> None:
+    """FLV-I-01 / §13: A-1 proof is a shell script (not nested cargo-in-test)."""
+    path = ROOT / "scripts" / "flavor_a1_deletability.sh"
+    assert path.is_file(), "scripts/flavor_a1_deletability.sh must exist for T-7 wiring"
+    text = _read(path)
+    # Strip comments: the script may *mention* the ban without nesting cargo.
+    code = re.sub(r"#.*?$", "", text, flags=re.M)
+    assert "cargo test" not in code, "A-1 script must not nest cargo test"
+    assert "A-1-b" in text and "empty" in text.lower(), "A-1-b empty-series guard required"
+    assert "A-1-e" in text and "accepted" in text, "A-1-e accepted-count guard required"
+    assert "diff" in code, "A-1-c byte compare via diff required"
+    assert "flavor-a1-digest" in text, "must drive the digest dump binary"
+    assert "--arm canned" in text and "--arm none" in text, "A-1-2 and A-1-2b arms required"
+
+
 # ---------------------------------------------------------------------------
 # F-3 T-5 — 関所 E / F / G (LAW-23 frozen literals)
 # ---------------------------------------------------------------------------
