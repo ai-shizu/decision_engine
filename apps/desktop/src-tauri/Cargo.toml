@@ -97,6 +97,14 @@ blackbox-profile-write = ["blackbox-sim"]
 # placement correction: top-level flavor/, not llm/flavor/). NEVER add to
 # default (FLV-R-4). Generation path bridges under a separate cfg in F-3.
 flavor-layer = []
+# F-3 LLM flavor live path (docs/SPEC_FLAVOR_LAYER.md v3 §11 / FLV-I-12).
+# Pulls flavor-layer + pocket-brain + blackbox-sim so arena wiring under
+# blackbox_arena/ is meaningful (same shape as blackbox-profile-write =
+# ["blackbox-sim"]). NEVER add to default (FLV-R-4 / egress-live pattern).
+# Direction is one-way only: this feature may depend on blackbox-sim;
+# blackbox-sim must NEVER gain flavor-live / pocket-brain / flavor-layer
+# (FLV-I-08 / commander absolute condition 2026-07-29).
+flavor-live = ["flavor-layer", "pocket-brain", "blackbox-sim"]
 # M3 Phase 0+: SQLCipher + typed objc2 Keychain link gate. Keep off default
 # builds. All Apple bindings live in one objc2 type system; do not reintroduce
 # security-framework alongside them (docs/m3_action_plan.md §4.2.1).

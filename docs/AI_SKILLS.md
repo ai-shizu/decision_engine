@@ -2228,6 +2228,8 @@ Phase 6-A step1（`bridge::estimate_pooled`）で踏んだ、リプレイ恒等�
 
 **F-3 T-1c as-built（2026-07-29）:** 同契約テストを強化 —— 各 `fn p1_N_` の直前に `#[test]`（間は空白・改行のみ）∧ `policy.rs` に `#[ignore]` 不在。D-1c-A（リネーム）/ B（`#[test]` 剥がし）/ C（`#[ignore]` を `#[test]` の前）でいずれも契約 RED。Rust 側は未変更。
 
+**F-3 T-2 as-built（2026-07-29・基準 `ec89b61`）:** `flavor-live = ["flavor-layer","pocket-brain","blackbox-sim"]` を default 外に追加（FLV-I-12）。Rust コードは未追加（ガードが先）。`test_flv_i_12_flavor_live_not_in_default` + `cargo tree` 対照群（blackbox-sim→llama=0 / pocket-brain→12）。D-7-A/B/C で契約 RED。B/C では解決済みグラフも blackbox-sim→llama が 0→12 に転じた。
+
 生き残る掟:
 
 1. **二鍵封印（FLV-R-7）:** `checked::Checked(String)` のタプル欄は checked に private、`VerifiedFlavor { checked }` の欄は verified に private。crate root の波括弧構築 → **E0451**、兄弟からの `Checked(raw)` 偽造 → **E0603**。`#[cfg(flavor_seal_probe_*)]` プローブ + CI/監査の `cargo rustc --cfg ...` で理由まで検証（doctest では private→pub(crate) 退行を検出できない — FLV-W-06 / §9.1-3）。

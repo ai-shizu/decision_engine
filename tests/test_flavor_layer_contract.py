@@ -173,3 +173,41 @@ def test_flv_i_15_p1_population_is_complete() -> None:
     assert not missing, (
         f"P-1 population incomplete or not live #[test] — missing: {missing}"
     )
+
+
+def _feature_deps(name: str) -> str:
+    body = _features_table()
+    m = re.search(rf"^{re.escape(name)}\s*=\s*\[(.*?)\]", body, re.M | re.S)
+    assert m is not None, f"feature {name!r} missing from [features]"
+    return m.group(1)
+
+
+def test_flv_i_12_flavor_live_not_in_default() -> None:
+    """FLV-I-12: flavor-live exists off-default; reverse edges stay closed."""
+    body = _features_table()
+
+    # 1) flavor-live exists and pulls the three required features.
+    live = _feature_deps("flavor-live")
+    for req in ("flavor-layer", "pocket-brain", "blackbox-sim"):
+        assert req in live, f"flavor-live must include {req!r}; got [{live}]"
+
+    # 2) If a default key exists, flavor-live must not be in it (dormant when absent).
+    default = re.search(r"^default\s*=\s*\[(.*?)\]", body, re.M | re.S)
+    if default is not None:
+        assert "flavor-live" not in default.group(1), (
+            "flavor-live must not be in default features (FLV-R-4 / FLV-I-12)"
+        )
+
+    # 3) Reverse edge ban: blackbox-sim must not pull LLM / flavor features.
+    bbs = _feature_deps("blackbox-sim")
+    for banned in ("pocket-brain", "flavor-layer", "flavor-live"):
+        assert banned not in bbs, (
+            f"blackbox-sim must not depend on {banned!r} (FLV-I-08 / one-way); got [{bbs}]"
+        )
+
+    # 4) flavor-layer stays pure (no pocket-brain / flavor-live).
+    layer = _feature_deps("flavor-layer")
+    for banned in ("pocket-brain", "flavor-live"):
+        assert banned not in layer, (
+            f"flavor-layer must not depend on {banned!r} (FLV-I-08); got [{layer}]"
+        )
