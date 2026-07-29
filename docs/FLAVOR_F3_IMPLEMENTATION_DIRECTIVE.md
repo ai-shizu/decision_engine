@@ -17,13 +17,18 @@
 | フレーバ Rust | `cargo test --features flavor-layer --lib flavor` | **16 passed / 0 failed**（212 filtered out） |
 | doctest フェンス | `cargo test --features flavor-layer --doc` | **30 passed / 0 failed**（**CI では一度も実行されていない** — T-7 参照） |
 | ビルド | `cargo check --features flavor-layer --lib` | 成功（キャッシュ温で 6.52s） |
-| clippy | `cargo clippy --features flavor-layer --all-targets` | **既存 RED・280 errors** |
+| clippy（lib） | `cargo clippy --features flavor-layer --lib` | **0 errors / 12 warnings**（既存・`src/flavor/` 着弾ゼロ） |
+| clippy（全体） | `cargo clippy --features flavor-layer --all-targets` | **既存 RED・280 errors** |
 
 > **clippy の 280 は既存 RED である。** `--features flavor-layer` の有無に関わらず 280 で同一であり、`src/flavor/` に着弾するものは**一件も無い**（内訳: lib test 側の `unwrap` on Result 125 / `should not be present in production code` 78 / `unwrap` on Option 65 / `indexing may panic` 12）。
 >
 > **したがって F-3 の受入で `--all-targets` の GREEN を主張してはならない。** 受入は次の 2 点で表明せよ:
-> 1. `cargo clippy --features flavor-live --lib` が **0 warnings / 0 errors**
+> 1. `cargo clippy --features flavor-live --lib` が **error 0** ∧ warnings が **12 のまま** ∧ フレーバ経路への着弾が **0 件**
 > 2. `cargo clippy --features flavor-live --all-targets` の error 数が **280 のまま** ∧ `src/flavor` `src/llm/flavor_gen.rs` `src/blackbox_arena/flavor_slot.rs` への着弾が **0 件**
+>
+> **【監査役の訂正・2026-07-29】** 本項は当初 `--lib` に「0 warnings / 0 errors」を要求していたが、**これは誤りであった。** `94d83ee` を stash して実測した baseline は **12 warnings**（すべて非フレーバ）であり、**書かれた日から達成不能な条件**だった。**両者とも差分（delta）で表明せよ** —— 絶対値のゼロを要求すると、達成不能な条件を満たすために無関係な既存コードへ手を入れる圧力が生まれる。それは第十律（最小介入）違反であり、diff を膨らませて監査を困難にする。
+>
+> T-1 で実装者はこの 12 を **0 と騙らず正直に報告した。** 正しい振る舞いである。**ゲートが実測と食い違ったら、実測が正しい。ゲートを直せ。**
 >
 > 裸の数字を報告するな。**コマンドと生出力の対**で報告せよ（F-1 で clippy の `0` がコマンド無しに報告され、`--lib` と `--all-targets` で食い違った前例がある）。
 
@@ -213,7 +218,22 @@ BXS の C-1（`--lib` を必ず付けよ）は正しい掟である。しかし*
 | **P-1-8** | **`for_template(ArenaEventAside)`** | **`"あ"×60`** | **ACCEPT** |
 | P-1-9 | `v1_empty()` | `"あ"×200` | **ACCEPT**（計測用の器は意図的に緩い） |
 
-> **P-1-7 / P-1-8 がこの母集団の心臓である。** 同一入力・テンプレート違いで判定が逆転するため、**いかなる固定定数（256 でも 48 でも 72 でも）でも両方を満たせない。** 偶然通ることがあり得ない唯一の対であり、`for_template` が実際に経路上にあることを構造的に証明する。P-1-9 は、`for_template` が `v1_empty` へ退行した場合に P-1-7 が RED になることを保証する対照である。
+> **【監査役の訂正・2026-07-29】P-1-7 / P-1-8 は「心臓」ではない。**
+>
+> 当初、本項は P-1-7/P-1-8 を「偶然通ることがあり得ない唯一の対」「この母集団の心臓」と記していた。**論理としては正しいが、検出器としては誤りである。**
+>
+> T-1 完了後の監査で、`for_template` を**フラット 60**（48 と 72 の間に置いた敵対的定数 —— まさにこの対が捕らえるはずの形）へ変異させて実測した:
+>
+> ```
+> panicked at src/flavor/policy.rs:84:9:
+> expected REJECT for len=49 under max=60
+> ```
+>
+> **落ちたのは P-1-2 であり、P-1-7 は実行すらされなかった。** P-1-1〜P-1-6 が既に 3 つの異なる予算を釘付けしており、実際に発火するのは常に最も厳しい **P-1-2**（49 を 48 で REJECT）である —— 49 以上のあらゆるフラット定数を捕らえ、49 未満は P-1-1 が捕らえる。したがって **P-1-7 / P-1-8 は論理的に冗長**であり、価値は**意図の記録**に留まる。**削除はするな**（`for_template` がテンプレートを取り違える将来の変異に対する記録として残す）が、**検出力を担っていると考えるな。**
+>
+> P-1-9 は、`for_template` が `v1_empty` へ退行したことを `v1_empty` 側の緩さと対比して記録する対照である。
+
+> **P-1 は 1 つのテスト関数に畳んではならない（T-1b で是正済み）。** Rust の `assert` は最初の不一致で中断するため、9 件を 1 関数に入れると**観測できるのは常に先頭の 1 件だけ**になり、残り 8 件は「効いている」ことが一度も示されない。これは SPEC §9.1-2（**攻撃 1 つにつきフェンス 1 つ。複数の欠如を 1 フェンスにまとめると、残った 1 つのエラーが新しく開いた穴を隠す**）を母集団に適用した話である。**ケースが独立に観測できるよう関数を分割せよ。** 分割していれば、変異ドリルのために一時テストを作って消す必要は生じない。
 
 ### 3.2 P-2 — 相関トークン（FLV-I-13）
 
@@ -262,7 +282,7 @@ BXS の C-1（`--lib` を必ず付けよ）は正しい掟である。しかし*
 5. `python3 -m pytest tests/ --collect-only -q | tail -1`（**消えたテストが無いこと**。テスト集合の差分で隠蔽が露見する）
 
    > **収集数 771 と実行結果 772（770 passed + 2 skipped）が 1 だけ食い違う理由を先に潰しておく。** `tests/test_ui_smoke.py:21` は `textual` 未導入による**モジュールレベルの import skip** であり、収集対象に数えられないまま実行結果には skip 1 件として現れる。もう一方の skip（`test_fsa_2026_07_13_02_stdio_llm_boundary.py:109` — Windows AppContainer）は通常の収集済みテストである。**この差は既存であり `ba53c24` で実測確認済み**（監査役が stash して HEAD で再計測）。開発機に `textual` を入れると収集数が動くので、**環境差を退行と誤認するな。**
-6. clippy は §0 の 2 点形式で
+6. clippy は §0 の 2 点形式（**両者とも差分。絶対値のゼロを主張するな**）で
 
 **「完了」の語は検証ログの後にのみ置ける。ビルド成功は動作の証明ではない。**
 
