@@ -102,7 +102,23 @@ impl FlavorAmbientSlot {
         }
     }
 
-    /// Convenience: begin → `generate` → finish. Dropped when busy.
+    /// Worker path only: run `generate` once, then [`Self::finish`].
+    /// Must never be reachable from the turn path (`kick_ambient_flavor` / `advance`).
+    pub(crate) fn deliver_completion(
+        &mut self,
+        request: &FlavorRequest,
+        completion: Option<&str>,
+    ) {
+        if !self.busy {
+            return;
+        }
+        let outcome = flavor_gen::generate(request, completion);
+        self.finish(outcome);
+    }
+
+    /// Test-only sync helper (begin → generate → finish). The production turn
+    /// path must not call this — 関所 G scans `kick_ambient_flavor` for it.
+    #[cfg(test)]
     pub(crate) fn request_generate(
         &mut self,
         corr: FlavorCorrelation,
@@ -112,8 +128,7 @@ impl FlavorAmbientSlot {
         match self.begin_request(corr) {
             Admit::DroppedBusy => Admit::DroppedBusy,
             Admit::Started => {
-                let outcome = flavor_gen::generate(request, completion);
-                self.finish(outcome);
+                self.deliver_completion(request, completion);
                 Admit::Started
             }
         }

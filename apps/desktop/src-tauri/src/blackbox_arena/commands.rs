@@ -83,15 +83,22 @@ pub(crate) async fn bxs_abort(
 }
 
 /// Non-blocking ambient flavor pull. Returns `None` when idle / mismatch /
-/// already taken. Correlation is resolved in Rust from the live session.
-#[cfg(feature = "flavor-live")]
+/// already taken / `flavor-live` off. Correlation is resolved in Rust.
 #[tauri::command]
 pub(crate) async fn bxs_take_flavor(
     sim: State<'_, BlackboxSimHandle>,
     campaign_id: String,
 ) -> Result<Option<String>, SimUiErrorCode> {
-    let sim = sim.inner().clone();
-    run_blocking(move || sim.take_flavor(campaign_id)).await
+    #[cfg(feature = "flavor-live")]
+    {
+        let sim = sim.inner().clone();
+        run_blocking(move || sim.take_flavor(campaign_id)).await
+    }
+    #[cfg(not(feature = "flavor-live"))]
+    {
+        let _ = (sim, campaign_id);
+        Ok(None)
+    }
 }
 
 #[tauri::command]

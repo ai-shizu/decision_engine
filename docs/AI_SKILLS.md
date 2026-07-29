@@ -2234,7 +2234,9 @@ Phase 6-A step1（`bridge::estimate_pooled`）で踏んだ、リプレイ恒等�
 
 **F-3 T-3b as-built（2026-07-29・基準 `9f2abd7`）:** 内容無し判定を `decide` へ移設（`raw.trim().is_empty()` → `Unavailable`）。`generate` は委譲のみ。P-6-8〜11（`decide` 直接）+ P-6-12 対照。D-15（decide 判定削除・generate 残置で P-6-7 緑／P-6-8〜11 RED）・D-16（空白含有全部弾きで P-6-12 RED）。`#![allow(dead_code)]` は未削除（T-4 の仕事）。
 
-**F-3 T-4 as-built（2026-07-29・基準 `75d86a4`・未コミット）:** `blackbox_arena/flavor_slot.rs` — `FlavorCorrelation`（`genesis_fingerprint` ← `CampaignGenesis::digest8()` / tick / `TemplateId`）+ 単一スロット `Option<(FlavorCorrelation, VerifiedFlavor)>`。busy 時破棄（キュー無し）・照合は Rust 側 exact match・take で空・abort 後 finish は破棄。`AdvanceView` 非相乗り。`bxs_take_flavor(campaign_id)` のみ（FE は相関を送らない）。`llm/flavor_gen.rs` の `#![allow(dead_code)]` 削除。凍結母集団 P-2 / P-3 / P-8。契約 FLV-I-14 / allow 不在 / AdvanceView 走査。変異 D-3 / D-3b / D-4 / D-17 / D-18。`flavor-live --lib flavor` **57**（+16）。clippy `flavor-live --lib` **105 維持**・フレーバ経路着弾 0。`never used` の flavor_gen/flavor_slot は 0。FE 描画・実 LLM completion 注入は T-5。
+**F-3 T-4 as-built（2026-07-29・基準 `2b1d49e`）:** `blackbox_arena/flavor_slot.rs` — `FlavorCorrelation`（`genesis_fingerprint` ← `CampaignGenesis::digest8()` / tick / `TemplateId`）+ 単一スロット `Option<(FlavorCorrelation, VerifiedFlavor)>`。busy 時破棄（キュー無し）・照合は Rust 側 exact match・take で空・abort 後 finish は破棄。`AdvanceView` 非相乗り。`bxs_take_flavor(campaign_id)` のみ（FE は相関を送らない）。`llm/flavor_gen.rs` の `#![allow(dead_code)]` 削除。凍結母集団 P-2 / P-3 / P-8。契約 FLV-I-14 / allow 不在 / AdvanceView 走査。変異 D-3 / D-3b / D-4 / D-17 / D-18。`flavor-live --lib flavor` **57**（+16）。clippy `flavor-live --lib` **105 維持**・フレーバ経路着弾 0。`never used` の flavor_gen/flavor_slot は 0。
+
+**F-3 T-5 as-built（2026-07-29・基準 `2b1d49e`・未コミット）:** 非同期境界 — `kick_ambient_flavor` は `begin_request` のみ。`DeliverAmbientFlavor` ワーカーメッセージで `deliver_completion` → `generate`/`finish`。`request_generate` は `#[cfg(test)]`。関所 G。FE: `BlackboxFlavorSlot`（`bxs-flavor` / `bxs-flavor-mark` / `※`、不在は `null`→描画なし）、`bxsTakeFlavor`、関所 F/E（P-4 はフレーバ TSX のみ）。D-19〜D-22。実 LLM は T-8（現状 completion=`None`）。
 
 生き残る掟:
 
@@ -2252,3 +2254,5 @@ Phase 6-A step1（`bridge::estimate_pooled`）で踏んだ、リプレイ恒等�
 12. **予算の権威は `for_template` 経由で `policy.max_chars()` に届いて初めて生きる（FLV-R-9 / FLV-W-09）。** `TemplateId::max_chars` の `const fn` だけでは経路に乗らない。生成は `v1_empty()`（256）を呼ぶな — 関所 C / FLV-I-15。
 13. **アリーナ配線後に `#![allow(dead_code)]` を残すな（§20-17 C-2 / T-4）。** allow は「配線済みか」の検査を無効化する。`never used` が残るなら配線が届いていない — allow を戻して隠すな。
 14. **相関は Rust 権威・単一スロット・take（FLV-I-13/I-14 / FLV-W-10）。** FE からトークンを受け取るな。busy は破棄（キュー禁止）。tick は古い／新しい双方を破棄（「古いだけ」は D-3b の穴）。`AdvanceView` 相乗り禁止（A-4）。
+15. **ターン経路は生成を呼ぶな（A-4 / 関所 G）。** `kick` = `begin_request` のみ。`generate`/`finish` はワーカー経路（`deliver_completion`）。同期 `request_generate` をターン経路に戻す退行は契約 RED（D-19）。
+16. **フレーバ FE は Fact と別クラス・数値非抽出（FLV-I-11 / I-05）。** 凍結リテラル `bxs-flavor` ≠ `bxs-books`。P-4 走査はフレーバ経路のみ。

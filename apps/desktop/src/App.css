@@ -5334,6 +5334,25 @@ button.secondary {
   margin-bottom: var(--s2);
 }
 
+/* Ambient flavor — dimmed italic with mark; never share Fact classes (FLV-I-11). */
+.bxs-flavor {
+  margin: 0 0 var(--s3);
+  padding: var(--s2) var(--s3);
+  font-style: italic;
+  opacity: 0.72;
+  color: var(--text-muted);
+  font-size: 0.78rem;
+  line-height: 1.45;
+  border-left: 2px solid var(--border);
+}
+
+.bxs-flavor-mark {
+  margin-right: 0.4em;
+  font-style: normal;
+  opacity: 0.85;
+  letter-spacing: 0.04em;
+}
+
 .bxs-table {
   width: 100%;
   border-collapse: collapse;

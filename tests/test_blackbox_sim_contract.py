@@ -646,6 +646,7 @@ BXS_FE_GLOBS = (
     FRONTEND_SRC / "components" / "consult" / "coliseum" / "BlackboxStimulusDeck.tsx",
     FRONTEND_SRC / "components" / "consult" / "coliseum" / "BlackboxCommandConsole.tsx",
     FRONTEND_SRC / "components" / "consult" / "coliseum" / "BlackboxTurnLog.tsx",
+    FRONTEND_SRC / "components" / "consult" / "coliseum" / "BlackboxFlavorSlot.tsx",
 )
 
 BXS_FE_FORBIDDEN = [

@@ -11,6 +11,7 @@ import {
   bxsAdvance,
   bxsStartCampaign,
   bxsSubmitDecision,
+  bxsTakeFlavor,
 } from "../../../lib/blackboxArena";
 import {
   blackboxArenaReducer,
@@ -24,6 +25,7 @@ import { uiErrorMessage } from "../../../lib/uiErrorMessages";
 import type { ArenaDifficulty } from "../../../lib/parseBlackboxArena";
 import { BlackboxBooksPanel } from "./BlackboxBooksPanel";
 import { BlackboxCommandConsole } from "./BlackboxCommandConsole";
+import { BlackboxFlavorSlot } from "./BlackboxFlavorSlot";
 import { BlackboxMarketRail } from "./BlackboxMarketRail";
 import {
   BlackboxSetupPanel,
@@ -53,6 +55,8 @@ export function BlackboxArena({
     campaignIndex: "0",
     createdDate: todayIso(),
   }));
+  /** Ambient flavor prose; null is the default (draw nothing). */
+  const [flavorText, setFlavorText] = useState<string | null>(null);
   const inFlight = useRef(false);
   const observeShownAt = useRef<number | null>(null);
   const lastHalt = useRef(0);
@@ -79,6 +83,7 @@ export function BlackboxArena({
         console.error("[BlackboxArena] abort failed:", err);
       } finally {
         dispatch({ type: "sealed" });
+        setFlavorText(null);
       }
     })();
   }, [haltRequest, state.campaignId, state.sealed]);
@@ -111,6 +116,7 @@ export function BlackboxArena({
         createdDate: setup.createdDate.trim(),
       });
       dispatch({ type: "campaign_started", observation });
+      setFlavorText(null);
     } catch (err) {
       console.error("[BlackboxArena] start failed:", err);
       const code =
@@ -160,6 +166,14 @@ export function BlackboxArena({
       dispatch({ type: "submit_ok", outcome });
       const advance = await bxsAdvance(state.campaignId);
       dispatch({ type: "advance_ok", advance });
+      // Non-blocking pull after advance returns — never waits on model (A-4).
+      try {
+        const prose = await bxsTakeFlavor(state.campaignId);
+        setFlavorText(prose);
+      } catch (flavorErr) {
+        console.error("[BlackboxArena] take_flavor failed:", flavorErr);
+        setFlavorText(null);
+      }
     } catch (err) {
       console.error("[BlackboxArena] execute/advance failed:", err);
       const code =
@@ -210,6 +224,7 @@ export function BlackboxArena({
               />
             </div>
           </div>
+          <BlackboxFlavorSlot text={flavorText} />
           <BlackboxTurnLog entries={state.turnLog} />
           {state.error && (
             <p className="error-text" role="alert">

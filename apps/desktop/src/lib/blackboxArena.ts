@@ -43,7 +43,8 @@ type BlackboxIpcCommand =
   | "bxs_load_generation"
   | "bxs_estimate_profile"
   | "bxs_latest_profile"
-  | "bxs_list_profiles";
+  | "bxs_list_profiles"
+  | "bxs_take_flavor";
 
 type BlackboxParser<T> = (value: unknown) => T;
 
@@ -121,6 +122,21 @@ export function bxsAdvance(campaignId: string): Promise<AdvanceView> {
 
 export function bxsAbort(campaignId: string): Promise<void> {
   return invokeBlackbox("bxs_abort", null, { campaignId });
+}
+
+/** Non-blocking ambient flavor pull. `null` is the default (no candidate). */
+export function bxsTakeFlavor(campaignId: string): Promise<string | null> {
+  return invokeBlackbox("bxs_take_flavor", parseTakeFlavor, { campaignId });
+}
+
+function parseTakeFlavor(value: unknown): string | null {
+  if (value === null || value === undefined) {
+    return null;
+  }
+  if (typeof value !== "string") {
+    throw new Error("bxs_take_flavor: expected string | null");
+  }
+  return value;
 }
 
 /** R-9 PROFILE UI — sole IPC owner for latest blackbox profile. */

@@ -11,6 +11,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 TAURI = ROOT / "apps" / "desktop" / "src-tauri"
+DESKTOP = ROOT / "apps" / "desktop"
 CARGO_TOML = TAURI / "Cargo.toml"
 FLAVOR_DIR = TAURI / "src" / "flavor"
 LIB_RS = TAURI / "src" / "lib.rs"
@@ -270,3 +271,115 @@ def test_advance_view_has_no_flavor_fields() -> None:
     body = m.group(1).lower()
     for banned in ("flavor", "verified", "prose", "ambient"):
         assert banned not in body, f"AdvanceView must not carry flavor field ({banned})"
+
+
+# ---------------------------------------------------------------------------
+# F-3 T-5 — 関所 E / F / G (LAW-23 frozen literals)
+# ---------------------------------------------------------------------------
+
+# 関所 F — visual distinction (SPEC §6). Frozen before FE implementation.
+FLAVOR_CSS_CLASS = "bxs-flavor"
+FLAVOR_MARK_CLASS = "bxs-flavor-mark"
+FACT_CSS_CLASS = "bxs-books"  # Books panel = Fact surface
+FLAVOR_SLOT_TSX = (
+    DESKTOP / "src" / "components" / "consult" / "coliseum" / "BlackboxFlavorSlot.tsx"
+)
+FACT_BOOKS_TSX = (
+    DESKTOP / "src" / "components" / "consult" / "coliseum" / "BlackboxBooksPanel.tsx"
+)
+
+# 関所 E — P-4 forbidden patterns; scan ONLY flavor-string consumers.
+FLAVOR_FE_PATHS = (FLAVOR_SLOT_TSX,)
+P4_FORBIDDEN = [
+    r"\bNumber\s*\(",
+    r"\bparseFloat\b",
+    r"\bparseInt\b",
+    r"\bMath\.",
+    r"/\s*\\d",  # digit-class regex literals
+    r"\.match\s*\(",
+    r"dangerouslySetInnerHTML",
+]
+
+
+def _strip_ts_comments(text: str) -> str:
+    code = re.sub(r"/\*.*?\*/", "", text, flags=re.S)
+    code = re.sub(r"//.*?$", "", code, flags=re.M)
+    return code
+
+
+def _rust_fn_body(src: str, fn_name: str) -> str:
+    """Extract the body of `fn {fn_name}(...) { ... }` via brace matching."""
+    m = re.search(rf"\bfn\s+{re.escape(fn_name)}\s*\(", src)
+    assert m is not None, f"fn {fn_name} not found"
+    brace = src.find("{", m.end())
+    assert brace != -1, f"fn {fn_name}: opening brace missing"
+    depth = 0
+    for i in range(brace, len(src)):
+        ch = src[i]
+        if ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                return src[brace + 1 : i]
+    raise AssertionError(f"fn {fn_name}: unbalanced braces")
+
+
+def test_flv_i_11_flavor_slot_is_visually_distinct() -> None:
+    """関所 F / FLV-I-11: flavor uses a CSS class distinct from Fact books."""
+    assert FLAVOR_CSS_CLASS != FACT_CSS_CLASS
+    flavor = _read(FLAVOR_SLOT_TSX)
+    books = _read(FACT_BOOKS_TSX)
+    assert f'className="{FLAVOR_CSS_CLASS}"' in flavor, (
+        f"flavor slot must use frozen class {FLAVOR_CSS_CLASS!r}"
+    )
+    assert f'className="{FLAVOR_MARK_CLASS}"' in flavor, (
+        f"flavor mark must use frozen class {FLAVOR_MARK_CLASS!r}"
+    )
+    assert f'className="{FACT_CSS_CLASS}"' in books, (
+        f"Fact books panel must keep class {FACT_CSS_CLASS!r}"
+    )
+    assert f'className="{FACT_CSS_CLASS}"' not in flavor, (
+        "flavor slot must not reuse Fact books class"
+    )
+    assert f'className="{FLAVOR_CSS_CLASS}"' not in books, (
+        "Fact books must not use flavor class"
+    )
+    css = _read(DESKTOP / "src" / "App.css")
+    assert f".{FLAVOR_CSS_CLASS}" in css, "App.css must define .bxs-flavor"
+    assert "font-style: italic" in css.split(f".{FLAVOR_CSS_CLASS}", 1)[1][:400]
+
+
+def test_flv_i_05_fe_never_parses_flavor_text() -> None:
+    """関所 E / FLV-I-05: P-4 patterns absent from flavor FE paths only."""
+    for path in FLAVOR_FE_PATHS:
+        assert path.is_file(), f"flavor FE path missing: {path}"
+        code = _strip_ts_comments(_read(path))
+        # Unary plus coercing the flavor prop (e.g. +text).
+        assert not re.search(r"\{\s*\+\s*text\s*\}", code), (
+            f"{path.name}: unary + on flavor text forbidden"
+        )
+        for pattern in P4_FORBIDDEN:
+            assert re.search(pattern, code) is None, (
+                f"{path.name}: P-4 forbidden pattern {pattern!r}"
+            )
+
+
+def test_flv_i_14_turn_path_never_blocks_on_model() -> None:
+    """関所 G / FLV-I-14: kick_ambient_flavor must not call generate sync."""
+    path = TAURI / "src" / "blackbox_arena" / "handle.rs"
+    text = _read(path)
+    body = _rust_fn_body(text, "kick_ambient_flavor")
+    code = re.sub(r"//.*?$", "", body, flags=re.M)
+    code = re.sub(r"/\*.*?\*/", "", code, flags=re.S)
+    for banned in (
+        "flavor_gen::generate",
+        "request_generate",
+        "deliver_completion",
+        "LlmHandle::generate",
+        ".generate(",
+    ):
+        assert banned not in code, (
+            f"kick_ambient_flavor must not invoke {banned!r} (A-4 / 関所 G)"
+        )
+    assert "begin_request" in code, "kick must still admit via begin_request"

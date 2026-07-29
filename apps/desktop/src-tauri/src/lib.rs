@@ -455,7 +455,7 @@ pub fn run() {
             blackbox_arena::commands::bxs_advance,
             #[cfg(feature = "blackbox-sim")]
             blackbox_arena::commands::bxs_abort,
-            #[cfg(feature = "flavor-live")]
+            #[cfg(feature = "blackbox-sim")]
             blackbox_arena::commands::bxs_take_flavor,
             #[cfg(feature = "blackbox-sim")]
             blackbox_arena::commands::bxs_load_generation,

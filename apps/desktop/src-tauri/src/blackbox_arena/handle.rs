@@ -233,6 +233,11 @@ enum SimRequest {
         campaign_id: String,
         reply: SyncSender<Result<Option<String>, SimUiErrorCode>>,
     },
+    /// Off-turn ambient delivery (A-4). No reply — never blocks `advance`.
+    #[cfg(feature = "flavor-live")]
+    DeliverAmbientFlavor {
+        campaign_id: String,
+    },
 }
 
 struct Worker {
@@ -241,6 +246,9 @@ struct Worker {
     vault: Arc<Mutex<Option<VaultHandle>>>,
     #[cfg(feature = "flavor-live")]
     flavor: super::flavor_slot::FlavorAmbientSlot,
+    /// Self-queue for off-turn flavor delivery (begin on kick, finish here).
+    #[cfg(feature = "flavor-live")]
+    flavor_tx: SyncSender<SimRequest>,
 }
 
 impl Worker {
@@ -277,6 +285,10 @@ impl Worker {
                 #[cfg(feature = "flavor-live")]
                 SimRequest::TakeFlavor { campaign_id, reply } => {
                     let _ = reply.send(self.take_flavor(&campaign_id));
+                }
+                #[cfg(feature = "flavor-live")]
+                SimRequest::DeliverAmbientFlavor { campaign_id } => {
+                    self.deliver_ambient_flavor(&campaign_id);
                 }
             }
         }
@@ -398,14 +410,13 @@ impl Worker {
         Ok(AdvanceView::from_report(&report, next_observation, state))
     }
 
-    /// Fire-and-forget ambient flavor attempt after a turn (A-4: never blocks
-    /// the returned AdvanceView on LLM completion). Model-absent → Unavailable.
+    /// Turn-path ambient kick (A-4): admit the slot only. Generation runs on
+    /// [`Self::deliver_ambient_flavor`] via a queued worker message — never
+    /// inline here (関所 G / FLV-I-14).
     #[cfg(feature = "flavor-live")]
     fn kick_ambient_flavor(&mut self, campaign_id: &str) {
-        use crate::flavor::request::{
-            FlavorLocale, FlavorRequest, FlavorSchema, FlavorSlot, SlotId, SlotValue, TemplateId,
-        };
-        use super::flavor_slot::correlation_from_genesis;
+        use crate::flavor::request::TemplateId;
+        use super::flavor_slot::{correlation_from_genesis, Admit};
 
         let Some(entry) = self.sessions.get(campaign_id) else {
             return;
@@ -415,6 +426,40 @@ impl Worker {
             entry.session.turns_completed(),
             TemplateId::ArenaEventHeadline,
         );
+        match self.flavor.begin_request(corr) {
+            Admit::DroppedBusy => {}
+            Admit::Started => {
+                // Queue delivery off this call stack. On full/disconnect, clear
+                // busy without invoking the model on the turn path.
+                if self
+                    .flavor_tx
+                    .try_send(SimRequest::DeliverAmbientFlavor {
+                        campaign_id: campaign_id.to_string(),
+                    })
+                    .is_err()
+                {
+                    self.flavor
+                        .finish(crate::llm::flavor_gen::FlavorOutcome::Unavailable);
+                }
+            }
+        }
+    }
+
+    /// Worker path: model completion (T-8) or absent → `finish`. Not turn-path.
+    #[cfg(feature = "flavor-live")]
+    fn deliver_ambient_flavor(&mut self, campaign_id: &str) {
+        use crate::flavor::request::{
+            FlavorLocale, FlavorRequest, FlavorSchema, FlavorSlot, SlotId, SlotValue, TemplateId,
+        };
+
+        if !self.sessions.contains_key(campaign_id) {
+            // Aborted between kick and deliver — drop without panic.
+            if self.flavor.is_busy() {
+                self.flavor
+                    .finish(crate::llm::flavor_gen::FlavorOutcome::Unavailable);
+            }
+            return;
+        }
         let request = FlavorRequest {
             schema: FlavorSchema::V1,
             template_id: TemplateId::ArenaEventHeadline,
@@ -424,7 +469,8 @@ impl Worker {
             }],
             locale: FlavorLocale::Ja,
         };
-        let _ = self.flavor.request_generate(corr, &request, None);
+        // T-8 supplies a real completion; until then model-absent = None.
+        self.flavor.deliver_completion(&request, None);
     }
 
     #[cfg(feature = "flavor-live")]
@@ -579,12 +625,16 @@ impl BlackboxSimHandle {
         let (sender, receiver) = mpsc::sync_channel(SIM_QUEUE_CAPACITY);
         #[cfg(all(feature = "secure-vault", target_vendor = "apple"))]
         let vault: Arc<Mutex<Option<VaultHandle>>> = Arc::new(Mutex::new(None));
+        #[cfg(feature = "flavor-live")]
+        let flavor_tx = sender.clone();
         let worker = Worker {
             sessions: HashMap::new(),
             #[cfg(all(feature = "secure-vault", target_vendor = "apple"))]
             vault: Arc::clone(&vault),
             #[cfg(feature = "flavor-live")]
             flavor: super::flavor_slot::FlavorAmbientSlot::new(),
+            #[cfg(feature = "flavor-live")]
+            flavor_tx,
         };
         let spawned = thread::Builder::new()
             .name("bxs-sim-worker".to_string())

@@ -284,16 +284,16 @@ maxChars:   u16                             （テンプレートごとの上限
 | FLV-I-02 | `SlotValue` は閉じた enum であり、数値・任意文字列を保持しない | `test_flv_i_02_slot_value_has_no_numeric_or_string_payload` |
 | FLV-I-03 | 権威型に `Into<SlotValue>` が存在しない | `test_flv_i_03_no_into_or_from_slot_value_for_authority_types` |
 | FLV-I-04 | `VerifiedFlavor` の構築経路が `verify` のみ（二鍵封印） | **`flavor-gate.yml` job `seal-probe`**（E0451 / E0603 を stderr で表明）+ `verified.rs` の `_fence_*` |
-| FLV-I-05 | FE がフレーバ文字列から数値を抽出しない | **`test_flv_i_05_fe_never_parses_flavor_text`** |
+| FLV-I-05 | FE がフレーバ文字列から数値を抽出しない | **`test_flv_i_05_fe_never_parses_flavor_text`**（P-4・フレーバ TSX 限定） |
 | FLV-I-06 | フレーバが決定ログ / 権威テーブル / vault に入らない | **`test_flv_i_06_flavor_absent_from_persistence_and_decision_log`** |
 | FLV-I-07 | ガード不通過時に再試行しない | **`test_flv_i_07_no_retry_on_guard_failure`** |
 | FLV-I-08 | `blackbox-sim` は `pocket-brain` に依存しない | `test_blackbox_sim_still_independent_of_pocket_brain` |
 | **FLV-I-09** | `VerifiedFlavor` が `Deserialize` / `Default` / `Clone` / `DerefMut` を実装しない | `verified.rs` の `_fence_no_*`（正の伴走付き） |
 | **FLV-I-10** | FlavorRequest に数値が含まれない | `test_flv_i_10_flavor_request_has_no_numeric_fields` |
-| **FLV-I-11** | フレーバは視覚的に区別された表示スロットにのみ描画される | **`test_flv_i_11_flavor_slot_is_visually_distinct`**（FE 契約） |
+| **FLV-I-11** | フレーバは視覚的に区別された表示スロットにのみ描画される | **`test_flv_i_11_flavor_slot_is_visually_distinct`**（`bxs-flavor` ≠ `bxs-books`） |
 | **FLV-I-12** | `flavor-live` が default features に無く、`flavor-layer` / `blackbox-sim` の単独有効化が `pocket-brain` を引かない | **`test_flv_i_12_flavor_live_not_in_default`** |
 | **FLV-I-13** | 相関トークンが現在の（fingerprint, tick, TemplateId）と一致しないフレーバは配信されない | **`flavor_slot::tests::p2_*`（P-2-1〜7）+ P-8** |
-| **FLV-I-14** | 単一スロット。busy 時に要求が滞留せず、ゲームは LLM を待たない | **`flavor_slot::tests::p3_*` + `test_flv_i_14_flavor_slot_has_no_queue`** |
+| **FLV-I-14** | 単一スロット。busy 時に要求が滞留せず、ゲームは LLM を待たない | **`flavor_slot::tests::p3_*` + `test_flv_i_14_flavor_slot_has_no_queue` + `test_flv_i_14_turn_path_never_blocks_on_model`（関所 G）** |
 | **FLV-I-15** | テンプレート単位の文字数上限が `verify` によって実際に強制される（FLV-R-9） | **`policy::tests::for_template_budget_is_enforced_by_verify`** + `test_flv_i_15_generation_path_never_calls_v1_empty` |
 | **FLV-I-16** | 破棄率の報告が N と `Finding` 種別内訳を必ず同伴する | **`flavor_gen::measure` の出力形式テスト** |
 | **FLV-I-17** | 二鍵封印プローブと A-1 digest 恒等が CI で実際に駆動される | **`test_flv_i_17_flavor_gate_workflow_drives_probes`**（workflow 走査） |
