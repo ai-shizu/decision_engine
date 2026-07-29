@@ -25,6 +25,7 @@ EXPOSED_COMMANDS = {
     "bxs_load_generation",
     "bxs_start_campaign",
     "bxs_submit_decision",
+    "bxs_take_flavor",
     "calendar_event_dates",
     "calendar_sync_apple",
     "calendar_sync_ics",

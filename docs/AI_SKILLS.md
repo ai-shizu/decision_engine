@@ -2234,6 +2234,8 @@ Phase 6-A step1（`bridge::estimate_pooled`）で踏んだ、リプレイ恒等�
 
 **F-3 T-3b as-built（2026-07-29・基準 `9f2abd7`）:** 内容無し判定を `decide` へ移設（`raw.trim().is_empty()` → `Unavailable`）。`generate` は委譲のみ。P-6-8〜11（`decide` 直接）+ P-6-12 対照。D-15（decide 判定削除・generate 残置で P-6-7 緑／P-6-8〜11 RED）・D-16（空白含有全部弾きで P-6-12 RED）。`#![allow(dead_code)]` は未削除（T-4 の仕事）。
 
+**F-3 T-4 as-built（2026-07-29・基準 `75d86a4`・未コミット）:** `blackbox_arena/flavor_slot.rs` — `FlavorCorrelation`（`genesis_fingerprint` ← `CampaignGenesis::digest8()` / tick / `TemplateId`）+ 単一スロット `Option<(FlavorCorrelation, VerifiedFlavor)>`。busy 時破棄（キュー無し）・照合は Rust 側 exact match・take で空・abort 後 finish は破棄。`AdvanceView` 非相乗り。`bxs_take_flavor(campaign_id)` のみ（FE は相関を送らない）。`llm/flavor_gen.rs` の `#![allow(dead_code)]` 削除。凍結母集団 P-2 / P-3 / P-8。契約 FLV-I-14 / allow 不在 / AdvanceView 走査。変異 D-3 / D-3b / D-4 / D-17 / D-18。`flavor-live --lib flavor` **57**（+16）。clippy `flavor-live --lib` **105 維持**・フレーバ経路着弾 0。`never used` の flavor_gen/flavor_slot は 0。FE 描画・実 LLM completion 注入は T-5。
+
 生き残る掟:
 
 1. **二鍵封印（FLV-R-7）:** `checked::Checked(String)` のタプル欄は checked に private、`VerifiedFlavor { checked }` の欄は verified に private。crate root の波括弧構築 → **E0451**、兄弟からの `Checked(raw)` 偽造 → **E0603**。`#[cfg(flavor_seal_probe_*)]` プローブ + CI/監査の `cargo rustc --cfg ...` で理由まで検証（doctest では private→pub(crate) 退行を検出できない — FLV-W-06 / §9.1-3）。
@@ -2248,3 +2250,5 @@ Phase 6-A step1（`bridge::estimate_pooled`）で踏んだ、リプレイ恒等�
 10. **F-2b Plan B:** 開いた `数*` 集合は固定列挙ではなく `数`+助数詞（`人日回件…` / `週間`）の限定生成規則。境界は `手数`/`数える` が通り続けること（Gate D）。`ひとり` を L3 に入れるなら例外に**より長い** `ひとりでに` を対で登録。
 11. **F-2b 例外は最長形のみ。** `一貫して` / `一環として` は句形。裸の `一` を例外に入れるな — `MUST_REJECT_IDIOM_BOUNDARY` 上位 5 件が同時に緑になる（Gate C 変異ドリル）。載せない語（`一層`/`一体`/`一部`/`一定`/`一律`）の根拠は `tables.rs` にコードコメントで固定。
 12. **予算の権威は `for_template` 経由で `policy.max_chars()` に届いて初めて生きる（FLV-R-9 / FLV-W-09）。** `TemplateId::max_chars` の `const fn` だけでは経路に乗らない。生成は `v1_empty()`（256）を呼ぶな — 関所 C / FLV-I-15。
+13. **アリーナ配線後に `#![allow(dead_code)]` を残すな（§20-17 C-2 / T-4）。** allow は「配線済みか」の検査を無効化する。`never used` が残るなら配線が届いていない — allow を戻して隠すな。
+14. **相関は Rust 権威・単一スロット・take（FLV-I-13/I-14 / FLV-W-10）。** FE からトークンを受け取るな。busy は破棄（キュー禁止）。tick は古い／新しい双方を破棄（「古いだけ」は D-3b の穴）。`AdvanceView` 相乗り禁止（A-4）。

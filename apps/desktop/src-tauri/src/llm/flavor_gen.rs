@@ -1,8 +1,8 @@
-//! LLM flavor generation adapter (SPEC §11 / F-3 T-3).
+//! LLM flavor generation adapter (SPEC §11 / F-3 T-3 / T-4).
 //!
 //! Single **file** under `llm/` — never a `llm/flavor/` directory (FLV-W-08).
 //! Pure `render_prompt` / `decide` are model-free; `generate` is a thin impure
-//! wrapper. Arena wiring is T-4 — this module is not called from the arena yet.
+//! wrapper. Arena wiring is `blackbox_arena::flavor_slot` (T-4).
 //!
 //! # Seal discipline (trap 1)
 //!
@@ -10,11 +10,8 @@
 //! On discard we call `scan` a second time for `Finding` telemetry only —
 //! never a `verify_with_findings` that would mint witnesses.
 
-// Public surface is intentionally idle until T-4 arena wiring.
-#![allow(dead_code)]
-
 use crate::flavor::policy::FlavorPolicy;
-use crate::flavor::request::{FlavorRequest, SlotId, SlotValue, TemplateId};
+use crate::flavor::request::{FlavorRequest, SlotValue, TemplateId};
 use crate::flavor::scan::{self, Finding};
 use crate::flavor::verified::VerifiedFlavor;
 
@@ -110,25 +107,25 @@ fn slot_label(tag: SlotValue) -> &'static str {
     }
 }
 
-fn slot_id_for(tag: SlotValue) -> SlotId {
-    match tag {
-        SlotValue::LossSeverityHigh
-        | SlotValue::LossSeverityModerate
-        | SlotValue::LossSeverityLow => SlotId::LossSeverity,
-        SlotValue::TrendRising | SlotValue::TrendFalling | SlotValue::TrendFlat => SlotId::Trend,
-        SlotValue::PhaseSettlement
-        | SlotValue::PhaseExpansion
-        | SlotValue::PhaseContraction => SlotId::Phase,
-        SlotValue::MoodTense | SlotValue::MoodCalm | SlotValue::MoodVolatile => SlotId::Mood,
-    }
-}
-
 #[cfg(test)]
 mod tests {
     //! Frozen populations P-5 / P-6 / P-7 (LAW-25). Do not rewrite expectations.
 
     use super::*;
-    use crate::flavor::request::{FlavorLocale, FlavorSchema, FlavorSlot};
+    use crate::flavor::request::{FlavorLocale, FlavorSchema, FlavorSlot, SlotId};
+
+    fn slot_id_for(tag: SlotValue) -> SlotId {
+        match tag {
+            SlotValue::LossSeverityHigh
+            | SlotValue::LossSeverityModerate
+            | SlotValue::LossSeverityLow => SlotId::LossSeverity,
+            SlotValue::TrendRising | SlotValue::TrendFalling | SlotValue::TrendFlat => SlotId::Trend,
+            SlotValue::PhaseSettlement
+            | SlotValue::PhaseExpansion
+            | SlotValue::PhaseContraction => SlotId::Phase,
+            SlotValue::MoodTense | SlotValue::MoodCalm | SlotValue::MoodVolatile => SlotId::Mood,
+        }
+    }
 
     const ALL_TEMPLATES: &[TemplateId] = &[
         TemplateId::ArenaEventHeadline,

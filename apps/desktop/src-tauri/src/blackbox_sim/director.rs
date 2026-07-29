@@ -773,6 +773,18 @@ impl Session {
         self.genesis.fingerprint
     }
 
+    /// Borrow the frozen genesis (ambient flavor correlation / FLV-R-10).
+    #[must_use]
+    pub fn genesis(&self) -> &CampaignGenesis {
+        &self.genesis
+    }
+
+    /// Truncated genesis identity for ambient flavor correlation (FLV-R-10).
+    #[must_use]
+    pub fn genesis_digest8(&self) -> [u8; 8] {
+        self.genesis.digest8()
+    }
+
     /// Records written to the log but not yet acknowledged by a sink.
     #[must_use]
     pub fn unflushed_records(&self) -> usize {

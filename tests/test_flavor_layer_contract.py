@@ -236,3 +236,37 @@ def test_flv_i_15_generation_path_never_calls_v1_empty() -> None:
     assert "v1_empty" not in code, (
         "flavor_gen must not call FlavorPolicy::v1_empty (FLV-R-9 / FLV-I-15)"
     )
+
+
+def test_flv_i_14_flavor_slot_has_no_queue() -> None:
+    """FLV-I-14: ambient slot must not buffer requests (no VecDeque / queue)."""
+    path = TAURI / "src" / "blackbox_arena" / "flavor_slot.rs"
+    assert path.is_file(), "blackbox_arena/flavor_slot.rs must exist"
+    text = _read(path)
+    code = re.sub(r"//.*?$", "", text, flags=re.M)
+    code = re.sub(r"/\*.*?\*/", "", code, flags=re.S)
+    assert "VecDeque" not in code, "VecDeque queue buffer forbidden in flavor_slot"
+    assert not re.search(r"\bVec\s*<", code), "Vec buffer forbidden in flavor_slot"
+    assert "mpsc::" not in code and "sync_channel" not in code, (
+        "channel buffering forbidden in flavor_slot"
+    )
+
+
+def test_flavor_gen_has_no_allow_dead_code() -> None:
+    """T-4: wiring must drop #![allow(dead_code)] (AI_SKILLS §20-17 C-2)."""
+    path = TAURI / "src" / "llm" / "flavor_gen.rs"
+    text = _read(path)
+    assert "allow(dead_code)" not in text, (
+        "flavor_gen must not retain allow(dead_code) after arena wiring"
+    )
+
+
+def test_advance_view_has_no_flavor_fields() -> None:
+    """A-4: flavor must not piggy-back on AdvanceView."""
+    path = TAURI / "src" / "blackbox_arena" / "view.rs"
+    text = _read(path)
+    m = re.search(r"pub\(crate\) struct AdvanceView\s*\{(.*?)\n\}", text, re.S)
+    assert m is not None, "AdvanceView struct missing"
+    body = m.group(1).lower()
+    for banned in ("flavor", "verified", "prose", "ambient"):
+        assert banned not in body, f"AdvanceView must not carry flavor field ({banned})"

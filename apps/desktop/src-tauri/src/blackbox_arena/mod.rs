@@ -6,3 +6,6 @@
 pub(crate) mod commands;
 pub(crate) mod handle;
 pub(crate) mod view;
+
+#[cfg(feature = "flavor-live")]
+pub(crate) mod flavor_slot;

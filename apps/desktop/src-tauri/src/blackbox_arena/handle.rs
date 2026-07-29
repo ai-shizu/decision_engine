@@ -228,12 +228,19 @@ enum SimRequest {
         generation_index: u32,
         reply: SyncSender<Result<ObservationView, SimUiErrorCode>>,
     },
+    #[cfg(feature = "flavor-live")]
+    TakeFlavor {
+        campaign_id: String,
+        reply: SyncSender<Result<Option<String>, SimUiErrorCode>>,
+    },
 }
 
 struct Worker {
     sessions: HashMap<String, CampaignEntry>,
     #[cfg(all(feature = "secure-vault", target_vendor = "apple"))]
     vault: Arc<Mutex<Option<VaultHandle>>>,
+    #[cfg(feature = "flavor-live")]
+    flavor: super::flavor_slot::FlavorAmbientSlot,
 }
 
 impl Worker {
@@ -266,6 +273,10 @@ impl Worker {
                     reply,
                 } => {
                     let _ = reply.send(self.load_generation(&campaign_id, generation_index));
+                }
+                #[cfg(feature = "flavor-live")]
+                SimRequest::TakeFlavor { campaign_id, reply } => {
+                    let _ = reply.send(self.take_flavor(&campaign_id));
                 }
             }
         }
@@ -382,7 +393,58 @@ impl Worker {
             }
             None
         };
+        #[cfg(feature = "flavor-live")]
+        self.kick_ambient_flavor(campaign_id);
         Ok(AdvanceView::from_report(&report, next_observation, state))
+    }
+
+    /// Fire-and-forget ambient flavor attempt after a turn (A-4: never blocks
+    /// the returned AdvanceView on LLM completion). Model-absent → Unavailable.
+    #[cfg(feature = "flavor-live")]
+    fn kick_ambient_flavor(&mut self, campaign_id: &str) {
+        use crate::flavor::request::{
+            FlavorLocale, FlavorRequest, FlavorSchema, FlavorSlot, SlotId, SlotValue, TemplateId,
+        };
+        use super::flavor_slot::correlation_from_genesis;
+
+        let Some(entry) = self.sessions.get(campaign_id) else {
+            return;
+        };
+        let corr = correlation_from_genesis(
+            entry.session.genesis(),
+            entry.session.turns_completed(),
+            TemplateId::ArenaEventHeadline,
+        );
+        let request = FlavorRequest {
+            schema: FlavorSchema::V1,
+            template_id: TemplateId::ArenaEventHeadline,
+            slots: vec![FlavorSlot {
+                id: SlotId::Mood,
+                tag: SlotValue::MoodCalm,
+            }],
+            locale: FlavorLocale::Ja,
+        };
+        let _ = self.flavor.request_generate(corr, &request, None);
+    }
+
+    #[cfg(feature = "flavor-live")]
+    fn take_flavor(&mut self, campaign_id: &str) -> Result<Option<String>, SimUiErrorCode> {
+        use crate::flavor::request::TemplateId;
+        use super::flavor_slot::correlation_from_genesis;
+
+        let entry = self
+            .sessions
+            .get(campaign_id)
+            .ok_or(SimUiErrorCode::CampaignNotFound)?;
+        let current = correlation_from_genesis(
+            entry.session.genesis(),
+            entry.session.turns_completed(),
+            TemplateId::ArenaEventHeadline,
+        );
+        Ok(self
+            .flavor
+            .take(&current)
+            .map(|v| v.as_str().to_string()))
     }
 
     fn abort(&mut self, campaign_id: &str) -> Result<(), SimUiErrorCode> {
@@ -400,6 +462,8 @@ impl Worker {
             eprintln!("blackbox_arena: abort-time flush failed for {campaign_id}: {e:?}");
         }
         self.sessions.remove(campaign_id);
+        #[cfg(feature = "flavor-live")]
+        self.flavor.abort_campaign();
         Ok(())
     }
 
@@ -519,6 +583,8 @@ impl BlackboxSimHandle {
             sessions: HashMap::new(),
             #[cfg(all(feature = "secure-vault", target_vendor = "apple"))]
             vault: Arc::clone(&vault),
+            #[cfg(feature = "flavor-live")]
+            flavor: super::flavor_slot::FlavorAmbientSlot::new(),
         };
         let spawned = thread::Builder::new()
             .name("bxs-sim-worker".to_string())
@@ -607,6 +673,13 @@ impl BlackboxSimHandle {
             generation_index,
             reply,
         })
+    }
+
+    /// Non-blocking ambient flavor pull (FLV-R-10). Correlation is resolved
+    /// on the Rust worker from the live session — FE never supplies tokens.
+    #[cfg(feature = "flavor-live")]
+    pub(crate) fn take_flavor(&self, campaign_id: String) -> Result<Option<String>, SimUiErrorCode> {
+        self.send(|reply| SimRequest::TakeFlavor { campaign_id, reply })
     }
 
     /// R-8 two-factor write gate. Signature identical across builds.

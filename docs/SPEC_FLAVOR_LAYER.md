@@ -292,8 +292,8 @@ maxChars:   u16                             （テンプレートごとの上限
 | **FLV-I-10** | FlavorRequest に数値が含まれない | `test_flv_i_10_flavor_request_has_no_numeric_fields` |
 | **FLV-I-11** | フレーバは視覚的に区別された表示スロットにのみ描画される | **`test_flv_i_11_flavor_slot_is_visually_distinct`**（FE 契約） |
 | **FLV-I-12** | `flavor-live` が default features に無く、`flavor-layer` / `blackbox-sim` の単独有効化が `pocket-brain` を引かない | **`test_flv_i_12_flavor_live_not_in_default`** |
-| **FLV-I-13** | 相関トークンが現在の（fingerprint, tick, TemplateId）と一致しないフレーバは配信されない | **`flavor_slot::tests::stale_correlation_is_dropped`** |
-| **FLV-I-14** | 単一スロット。busy 時に要求が滞留せず、ゲームは LLM を待たない | **`flavor_slot::tests::busy_request_is_dropped_not_queued`** |
+| **FLV-I-13** | 相関トークンが現在の（fingerprint, tick, TemplateId）と一致しないフレーバは配信されない | **`flavor_slot::tests::p2_*`（P-2-1〜7）+ P-8** |
+| **FLV-I-14** | 単一スロット。busy 時に要求が滞留せず、ゲームは LLM を待たない | **`flavor_slot::tests::p3_*` + `test_flv_i_14_flavor_slot_has_no_queue`** |
 | **FLV-I-15** | テンプレート単位の文字数上限が `verify` によって実際に強制される（FLV-R-9） | **`policy::tests::for_template_budget_is_enforced_by_verify`** + `test_flv_i_15_generation_path_never_calls_v1_empty` |
 | **FLV-I-16** | 破棄率の報告が N と `Finding` 種別内訳を必ず同伴する | **`flavor_gen::measure` の出力形式テスト** |
 | **FLV-I-17** | 二鍵封印プローブと A-1 digest 恒等が CI で実際に駆動される | **`test_flv_i_17_flavor_gate_workflow_drives_probes`**（workflow 走査） |
