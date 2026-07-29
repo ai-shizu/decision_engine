@@ -2167,7 +2167,7 @@ latest commit **後**にだけ `_prune_retrieval_manifests` を実行する。
 
 — 初代リードアーキテクト Fable（2026-07-27 移譲）
 
-## 20. Target Golf — THE BLACKBOX SIMULATOR (`docs/SPEC_BLACKBOX_SIMULATOR.md`。Phase 0〜5-B 完遂 / Phase 6-A step1–7 封緘（6-B は R-11 により無期限凍結）/ フレーバ層 F-1 型骨格+封印 + F-2 ガード + F-2b 偽陰性閉塞・例外精密化 完遂)
+## 20. Target Golf — THE BLACKBOX SIMULATOR (`docs/SPEC_BLACKBOX_SIMULATOR.md`。Phase 0〜5-B 完遂 / Phase 6-A step1–7 封緘（6-B は R-11 により無期限凍結）/ フレーバ層 F-1 型骨格+封印 + F-2 ガード + F-2b 偽陰性閉塞・例外精密化 完遂 / F-3 T-1 `for_template` 予算権威 着弾・以降 HARD STOP 待ち)
 
 本節は Target Golf の設計規律と as-built の両方の要約を持つ。**正本は `docs/SPEC_BLACKBOX_SIMULATOR.md`**（§0 裁定台帳・§16 不変条件/罠台帳 `BXS-I-nn`/`BXS-W-nn`・§18〜24 各フェーズ as-built）。オフライン金融シミュレータでありながら、真の目的はプレイヤーの意思決定から損失回避・処分効果・アンカリング・過信・エスカレーション・プレッシャー下劣化の 6 バイアスを決定論的に抽出する計器である（Echo と並ぶ第二の「決定論的観測器」）。既定ビルド非包含（feature `blackbox-sim`）。
 
@@ -2218,9 +2218,15 @@ Phase 6-A step1（`bridge::estimate_pooled`）で踏んだ、リプレイ恒等�
 20. **未測定レーンは「未測定」と書け。** `value_micro: None` を 0・平均・空欄に化けさせるな。`pooled_campaigns` と `uncalibrated-instrument` 権威境界を必ず同梱（no-llm-authority 同型）。表示は整数演算のみ（`format_sufficiency` / `format_value_micro` に f64 を残すな — N-1）。
 21. **R-9 単一アクセサ:** SQL は `get_latest_profile` / `list_profiles` のみ。表示文字列は `blackbox_profile_outlet`。出口ごとの独自 SELECT 禁止。
 
-### 20.1 フレーバ層 F-1 / F-2 / F-2b as-built（2026-07-28）
+### 20.1 フレーバ層 F-1 / F-2 / F-2b as-built（2026-07-28）／F-3 T-1（2026-07-29）
 
-正本: `docs/SPEC_FLAVOR_LAYER.md` v2。配置は **`src-tauri/src/flavor/`**（`llm/` 配下ではない — `pocket-brain`/cmake 無しで封印を証明するため）。feature `flavor-layer = []`（default 外・`pocket-brain` 非依存 / FLV-R-4 / FLV-I-08）。
+正本: `docs/SPEC_FLAVOR_LAYER.md` v3（F-1/F-2/F-2b 時点は v2）。配置は **`src-tauri/src/flavor/`**（`llm/` 配下ではない — `pocket-brain`/cmake 無しで封印を証明するため）。feature `flavor-layer = []`（default 外・`pocket-brain` 非依存 / FLV-R-4 / FLV-I-08）。
+
+**F-3 T-1 as-built（2026-07-29・基準 `94d83ee`）:** `FlavorPolicy::for_template(TemplateId)` を追加。`version=1`、`max_chars=template_id.max_chars()`。`v1_empty()` は signature 凍結のまま doc で**コーパス／計測専用・生成経路呼出禁止**へ限定。凍結母集団 P-1 を固定。変異ドリル D-1 / D-2 で RED→復元 GREEN を実測。**生成経路への配線は未着手（T-3）** — 本 T は権威のコンストラクタとガードのみ。
+
+**F-3 T-1b as-built（2026-07-29・基準 `1cd179e`）:** P-1 をケース単位の 9 関数（`p1_1_`〜`p1_9_`）へ分割（SPEC §9.1-2）。`test_flv_i_15_p1_population_is_complete` が欠落を走査。D-1b（`for_template` flat 60）で分割前 RED 1 件だった観測不能ケースが複数 RED として同時観測されることを実測。実装ロジックは未変更。
+
+**F-3 T-1c as-built（2026-07-29）:** 同契約テストを強化 —— 各 `fn p1_N_` の直前に `#[test]`（間は空白・改行のみ）∧ `policy.rs` に `#[ignore]` 不在。D-1c-A（リネーム）/ B（`#[test]` 剥がし）/ C（`#[ignore]` を `#[test]` の前）でいずれも契約 RED。Rust 側は未変更。
 
 生き残る掟:
 
@@ -2235,3 +2241,4 @@ Phase 6-A step1（`bridge::estimate_pooled`）で踏んだ、リプレイ恒等�
 9. **F-2b: コーパスは仕様の標本であり仕様そのものではない。** L3 は SPEC §4.3 の列挙へ追随せよ（`わずか`/`大半`/`ひとり`/…）。偽陰性は破滅的、偽陽性は安価。**迷ったら例外に載せない。通過率のために境界を緩めない。**
 10. **F-2b Plan B:** 開いた `数*` 集合は固定列挙ではなく `数`+助数詞（`人日回件…` / `週間`）の限定生成規則。境界は `手数`/`数える` が通り続けること（Gate D）。`ひとり` を L3 に入れるなら例外に**より長い** `ひとりでに` を対で登録。
 11. **F-2b 例外は最長形のみ。** `一貫して` / `一環として` は句形。裸の `一` を例外に入れるな — `MUST_REJECT_IDIOM_BOUNDARY` 上位 5 件が同時に緑になる（Gate C 変異ドリル）。載せない語（`一層`/`一体`/`一部`/`一定`/`一律`）の根拠は `tables.rs` にコードコメントで固定。
+12. **予算の権威は `for_template` 経由で `policy.max_chars()` に届いて初めて生きる（FLV-R-9 / FLV-W-09）。** `TemplateId::max_chars` の `const fn` だけでは経路に乗らない。生成は `v1_empty()`（256）を呼ぶな — 関所 C / FLV-I-15。

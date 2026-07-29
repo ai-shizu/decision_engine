@@ -150,3 +150,26 @@ def test_two_key_modules_exist() -> None:
         assert (FLAVOR_DIR / name).is_file(), f"missing {name}"
     mod = _read(FLAVOR_DIR / "mod.rs")
     assert "#![deny(unsafe_code)]" in mod
+
+
+def test_flv_i_15_p1_population_is_complete() -> None:
+    """FLV-I-15 / T-1b+T-1c: nine live P-1 tests, not dead names (LAW-23).
+
+    T-1b closed silent deletion of `fn p1_N_`. T-1c also requires:
+    - `#[test]` immediately precedes each `fn p1_N_` (whitespace only between)
+    - no `#[ignore]` anywhere in policy.rs (permanent-skip occlusion)
+    """
+    text = _read(FLAVOR_DIR / "policy.rs")
+    assert "#[ignore]" not in text, (
+        "policy.rs must not contain #[ignore] (permanent-skip hole)"
+    )
+    # doc comment may sit above #[test]; #[test] must abut fn (no other attrs).
+    required = [f"p1_{i}_" for i in range(1, 10)]
+    missing = [
+        prefix
+        for prefix in required
+        if not re.search(rf"#\[test\]\s+fn {re.escape(prefix)}", text)
+    ]
+    assert not missing, (
+        f"P-1 population incomplete or not live #[test] — missing: {missing}"
+    )
