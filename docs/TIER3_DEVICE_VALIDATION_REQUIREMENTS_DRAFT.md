@@ -419,3 +419,113 @@ gptsol の指摘どおり、次の 2 箇所は**測っていないことを断�
 Apple の公開資料に記述が無く、**§8.3 の B − A 差分が唯一の確定手段である。**
 
 **4GB の iPhone 13 で 1.04 GiB が Jetsam 課金されるかは、実測でしか分からない。** それが Tier 3 の中心的な問いとして残った。
+
+---
+
+## 9. 第 2 弾（Q-3 / Q-5 / Q-2 / Q-6）の監査結果 — **着工前に第 0 フェーズが必要**
+
+**gptsol の第 2 弾により、実機着工を止めるべき事項が 2 件判明した。どちらも監査役が実測で確認した。**
+
+### 9.1 【ブロッカー 1】Release ではログが全滅する — G-0 が成立しない
+
+**連鎖を実測で確認した。**
+
+| 環 | 確認 |
+|---|---|
+| `#[cfg_attr(mobile, tauri::mobile_entry_point)]` | **`lib.rs:155` に実在** |
+| マクロが `run()` 前に `tauri::log_stdout()` を呼び fd 1/2 を pipe へ奪う | gptsol（Tauri 2.11.5 `Logger.swift` / `tauri-macros` mobile entry） |
+| 我々の `StderrLogger` が **全 `log::` を `eprintln!` へ変換** | **`lib.rs:109-135` で確認** |
+| Swift `Logger.enabled` の **Release 既定が `false`** → 破棄 | gptsol |
+
+そして `lib.rs:120` のコメントはこう書いている:
+
+> `idevicesyslog -p Coraxis` **already proven (this investigation) to capture** this process's raw stdout/stderr
+
+**その実績は debug ビルドのものである。**
+
+> **これは Tier 2 → Tier 3 とまったく同じ形である。** ある構成で検証したことを、別の構成でも成り立つと仮定している。**しかも今回は最も証跡が要る場面で起きている** —— Jetsam 実測はデバッガから切り離した Release でしか取れないのに、**そこでログが消える。**
+
+**`method: debugging` は export / 署名の方法であって、Swift の `#if DEBUG` を有効にするものではない。**
+
+**帰結**: **G-0 は現状の実装では Release で必ず落ちる。logger の改修が実機着工の前提である。**
+
+### 9.2 【ブロッカー 2】Xcode 直ビルドは Tauri のリソース同期を迂回する
+
+**gptsol が Q-3-c を確定させた**（Tauri CLI 2.11.4 / commit `8909f221…`）:
+
+- `ios build` / `ios dev` は Xcode 処理の前に **`inject_resources` を一度呼ぶ**
+- 最終処理は **`std::fs::copy` であり、存在・mtime・サイズ・内容による skip 分岐は無い**
+- **したがって CLI 起動なら、ステージは毎回ソースの内容へ戻る**
+- **しかし `tauri ios xcode-script` は Rust をビルドするだけで `inject_resources` を呼ばない**
+
+**これが Jul 25 の IPA が正常で Jul 29 の `.xcarchive` がスタブだった理由である。**
+
+**監査役の実測（除去前）**:
+
+| 対象 | サイズ | SHA-256 |
+|---|---:|---|
+| ソース | 1,117,320,736 | `6a1a2eb6…9407e` |
+| ステージ（`gen/apple/assets/models/`） | **8** | `af5570f5…`（8 ゼロバイトの SHA と一致） |
+| **Jul 29 `.xcarchive`** | **8** | 同上 |
+| Jul 25 `build/Payload/` | 1,117,320,736 | `6a1a2eb6…9407e` |
+
+**指揮官裁定により、汚染された 2 者は削除済み**（`gen/apple/assets/models/` と `pkb-desktop_iOS.xcarchive`。いずれも `.gitignore` の `*.gguf` 配下で git は未汚染）。
+
+**掟**: **Xcode 直接の Build / Archive を原則禁止する。** そのうえで **source → stage → archive の 3 点で SHA を止める**（§9.5）。**mtime を出荷ゲートに使うな** —— Xcode の `CpResource` は内容 SHA を依存判定に使わず、サイズ・mtime が同じなら内容が変わっても skip し得る。
+
+### 9.3 entitlement は決定的な梃子にならない — **+250 MiB のみ**
+
+gptsol が Apple 公式 IPSW の DeviceTree から `kern.max_task_pmem` / `kern.entitled_max_task_pmem` を抽出した。**iPhone 13 = `iPhone14,5` / `D17AP`**:
+
+| iOS / build | 通常 | entitlement 付き |
+|---|---:|---:|
+| 17.5.1 / 21F90 | **2098 MiB** | **2348 MiB** |
+| 18.4 / 22E240 | 2098 MiB | 2348 MiB |
+| 26.6 / 23G71 | 2098 MiB | 2348 MiB |
+
+**増分 250 MiB（+11.9%）のみ。**
+
+> **裁定 3 の判断は、実質これで決まる。** 1.04 GiB のモデルに対し素の上限は 2098 MiB —— 残り約 1 GiB が Metal・WKWebView・KV・その他の取り分である。**entitlement が買えるのは 250 MiB にすぎない。**
+>
+> **足りないなら設計側で対処するしかない**（`n_batch` / `n_ubatch` 縮小、初期化の直列化、CPU/Metal コンテキストの同時生存排除、最後に量子化）。**`n_ctx` は縮小方向のみ許容**（拡大は Jetsam への前借りとして社内規約が禁じる）。
+
+**`extended-virtual-addressing` は物理メモリも Jetsam 上限も増やさない。** しかも現行 XNU では Increased Memory Limit 自体が jumbo VA の条件に含まれるため、**重ねる実益は通常ない。** 検討条件は `mmap == MAP_FAILED` / `ENOMEM` / `KERN_NO_SPACE` / VA 断片化を観測した場合のみ。
+
+**実行時判断には固定値でなく `os_proc_available_memory()` を使う。**
+
+### 9.4 App Store — 現構成は上限内
+
+- **uncompressed app size 上限 4 GB**、Mach-O の全 `__TEXT` 合計 500 MB。**現在値（主実行体 129,351,824 B ＋ モデル 1,117,320,736 B）は上限内**
+- **cellular の 200 MB は警告であって提出拒否ではない。** 全 variant が超えるのは想定内。初回インストールは Wi-Fi 推奨と案内する
+- **App Thinning では除外されない** —— device idiom / scale / asset catalog / ODR tag を持たない通常リソースであり、**全 device variant にそのまま含まれる**
+- Bitcode は Xcode 14 以降 App Store が受理せず、本件の最適化要素ではない
+- **正本のサイズは `.app` / `.xcarchive` / IPA の単純サイズではない。** Ad Hoc export の `App Thinning Size Report.txt`、最終的には App Store Connect の `App File Sizes`
+
+### 9.5 【新設】第 0 フェーズ — 計器を直してから実機へ
+
+**G-0 の前に、G-0 を成立させるための工事が要る。**
+
+| タスク | 内容 |
+|---|---|
+| **P0-1** | **Rust ログを native OSLog へ直結**（Tauri の pipe 経由をやめる）。必須証跡は **Default 以上**（Info / Debug は Apple が十分に永続化しない）。数値は **`%{public}llu` 等の固定書式**で出す |
+| **P0-2** | **3 点 SHA ゲート** —— source / stage / archive。`expected_size` と `expected_sha` を定数化し、シェルで止める。**mtime を使うな** |
+| **P0-3** | **§5.1 手順 6 の改訂** —— 「本物を復元し SHA 一致を確認」の対象を **source だけでなく stage と archive にも広げる**。今回の残留はこの穴が生んだ |
+| **P0-4** | 回収手順の dry-run —— `log collect` / `devicectl` の `systemCrashLogs` |
+
+**プライバシー検閲の罠**: os_log は動的文字列を既定で `<private>` に潰す。**footprint のバイト数が潰れると計測不能になる。** 一方、現行の Tauri redirector は record 全体を `%{public}@` で出すため、**有効化すると panic 原文もパスも丸ごと public になる** —— これは §5.1 の不変条件（エラー文言にパス・例外原文を出すな）に反する。**native shim では「数値は固定書式の public、任意文字列は流さない」を守る。**
+
+### 9.6 Q-6 の追加見解 — 閾値は「不明」と明示された
+
+**gptsol は Q4_K_M・A15・固定版に対する CPU↔Metal logits の公開数値範囲を「存在しない」と明示した。** そのうえで校正手順を提示している:
+
+```
+W = CPU/CPU と Metal/Metal の最大反復距離
+D = calibration corpus の正常 CPU↔Metal 距離群
+T = max(D) + max( 0.25·max(D), 6·MAD(D), 3·W )
+```
+
+指標は単一ではなく **① NaN/Inf hard gate ② centered NMSE または centered cosine ③ JS divergence ④ margin-aware top-k / top-1** の組合せ。**upstream 演算子テストの `1e-7` を whole-model 出荷閾値へ流用してはならない**（第 1 弾から一貫）。
+
+API は固定版に実在を確認済み —— `get_logits`（`context.rs:237`）/ `get_logits_ith`（`:280`）/ `n_vocab`（`model.rs:568`）。**`get_logits_ith` の `i` は元の batch token offset で、この wrapper は負値を扱えない**（C API の `-1` は使えない）。
+
+**Q-6-d が重要**: logits 比較では**検出できない**破損様式が存在する（CPU/Metal 共通の loader/graph バグ、tokenizer / chat template、sampling パラメータ、stop / UTF-8 streaming、corpus 外の rare path、checkpoint 後の破損、near-tie の増幅）。**したがって目視判定（裁定 5）は維持する。** 機械判定は第二の証跡である。
