@@ -1168,9 +1168,32 @@ LINE: 上限 16 MiB・`chunk_markdown_capped` で `source_id-p00`… に分割�
 
 **不変条件:** アプリ内 HTTP/ストリームで GGUF を取得するコードを追加するな。エラー文言にパス・例外原文を出すな。欠落時は `log::error!` / stderr に存在チェックを残し、UI へは固定文言のみ。
 
-**iOS ログ（Tier 3 P0-1）:** Release では Tauri の stdout/stderr pipe が Swift `Logger.enabled=false` で破棄される。**iOS は `ios_oslog` が OSLog へ直結**する（subsystem `com.ai-shizu.pkb`、category `memory` / `model` / `panic` / `app`）。数値は `%{public}llu`、任意文字列は整形済み 1 行の `%{public}s` のみ。**デスクトップの stderr logger は維持。** foreign abort / Jetsam では Rust panic hook は走らない。
+**iOS ログ（Tier 3 P0-1 / P0-5）:** Release では Tauri の stdout/stderr pipe が Swift `Logger.enabled=false` で破棄される。**iOS は `ios_oslog` が OSLog へ直結**する（subsystem `com.ai-shizu.pkb`、category `memory` / `model` / `panic` / `app`）。数値は `%{public}llu`、任意文字列は整形済み 1 行の `%{public}s` のみ。**デスクトップの stderr logger は維持。** foreign abort / Jetsam では Rust panic hook は走らない。
 
-**Tier 3 第 0 フェーズ as-built（2026-07-30・基準 `e1aa175`・未コミット）:** P0-1 `native/ios_oslog.c` + `ios_oslog.rs`（iOS only）/ panic hook → Fault / JSONL sink `logs/tier3-checkpoints.jsonl`（checkpoint 毎 flush・256KiB rotate）。P0-2 `scripts/gguf_three_point_sha_gate.sh`（SOURCE 必須・STAGE/ARCHIVE は ABSENT≠MISMATCH）。P0-3 本節手順 6 + Xcode 直禁。P0-4 回収 dry-run は接続可能な実機が unavailable のため**未実施**。G-0 以降は未着手。
+**実機ログで検索すべき実文字列（メッセージ本文）:**
+
+| 文字列 | 意味 |
+|---|---|
+| `instrument.alive` | **起動直後の生存証明**（`install()` 完了時・category `app`・値は起動時 `phys_footprint`）。LLM 未起動でも必ず出る |
+| `phase.baseline` | LLM ベースライン footprint |
+| `phase.model_loaded` | モデルロード後 |
+| `phase.ctx_created` | コンテキスト作成後 |
+| `phase.inference` | 推論中 |
+| `phase.idle` | アイドル |
+
+**注意:** Console.app の検索窓は**メッセージ本文**を検索する。subsystem 名 `com.ai-shizu.pkb` を入れてもヒットしない。本文の上記ラベルで探せ。
+
+**ターミナルからの正しい回収（監査役実測済み）:**
+
+```bash
+# zsh では `log` が builtin。/usr/bin/log と絶対パスで呼ぶこと
+# `log stream` にデバイス指定オプションは無い（collect のみ）
+sudo /usr/bin/log collect --device-udid "<UDID>" --last 15m --output /tmp/coraxis.logarchive
+/usr/bin/log show --archive /tmp/coraxis.logarchive --level debug --style compact \
+  --predicate 'subsystem == "com.ai-shizu.pkb"'
+```
+
+**Tier 3 第 0 フェーズ as-built（2026-07-30・基準 `4b29362`・P0-5 未コミット）:** P0-1 `native/ios_oslog.c` + `ios_oslog.rs`（iOS only）/ panic hook → Fault / JSONL sink `logs/tier3-checkpoints.jsonl`。P0-2 三点 SHA ゲート。P0-3 本節手順 6 + Xcode 直禁。P0-5 `instrument.alive` を `install()` 直後に 1 行。G-0 debug は GREEN（`phase.baseline` 数値公開確認済み）。**G-0R（Release）は未着手。**
 
 
 ---

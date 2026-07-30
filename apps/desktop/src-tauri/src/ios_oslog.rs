@@ -1,9 +1,11 @@
-//! iOS-only OSLog backend for the `log` facade (Tier 3 P0-1).
+//! iOS-only OSLog backend for the `log` facade (Tier 3 P0-1 / P0-5).
 //!
 //! Bypasses Tauri's stdout/stderr pipe (Release discards it). Numbers go out
 //! as `%{public}llu` via the C shim; free-form text is sanitized + truncated
 //! and emitted only as an allowlisted `%{public}s` one-liner — never as a
 //! whole-record `%{public}@`, and never as the format string itself.
+//! `install()` always emits `instrument.alive=<phys_footprint>` (category `app`)
+//! so cold start proves the numeric path without waiting for LLM phases.
 //!
 //! # Limits
 //!
@@ -63,8 +65,17 @@ fn c_str(s: &str) -> std::ffi::CString {
 
 /// Footprint / evidence checkpoint — numbers are always public (`%{public}llu`).
 pub fn log_footprint_bytes(label: &str, bytes: u64) {
+    emit_u64(CAT_MEMORY, label, bytes);
+    jsonl_checkpoint("footprint", label, Some(bytes));
+}
+
+/// Searchable survival label (P0-5). Console.app message-body search target.
+/// Value is boot-time `phys_footprint` bytes (model not resident).
+pub const ALIVE_LABEL: &str = "instrument.alive";
+
+fn emit_u64(category: &str, label: &str, value: u64) {
     let sub = c_str(SUBSYSTEM);
-    let cat = c_str(CAT_MEMORY);
+    let cat = c_str(category);
     let lab = c_str(label);
     unsafe {
         pkb_oslog_u64(
@@ -72,10 +83,28 @@ pub fn log_footprint_bytes(label: &str, bytes: u64) {
             cat.as_ptr(),
             TYPE_DEFAULT,
             lab.as_ptr(),
-            bytes,
+            value,
         );
     }
-    jsonl_checkpoint("footprint", label, Some(bytes));
+}
+
+fn boot_phys_footprint_bytes() -> u64 {
+    #[cfg(feature = "pocket-brain")]
+    {
+        crate::monitor::phys_footprint_bytes().unwrap_or(0)
+    }
+    #[cfg(not(feature = "pocket-brain"))]
+    {
+        0
+    }
+}
+
+/// P0-5: one Default/`app` line right after `install()` so cold start proves
+/// the numeric OSLog path is alive (distinct from LLM-phase footprints).
+fn emit_instrument_alive() {
+    let bytes = boot_phys_footprint_bytes();
+    emit_u64(CAT_APP, ALIVE_LABEL, bytes);
+    jsonl_checkpoint("alive", ALIVE_LABEL, Some(bytes));
 }
 
 fn level_to_type(level: log::Level) -> u8 {
@@ -216,6 +245,8 @@ pub fn install() {
         log::set_max_level(log::LevelFilter::Debug);
     }
     install_panic_hook();
+    // Cold-start survival proof (P0-5): must run even if no LLM phase fires.
+    emit_instrument_alive();
 }
 
 fn install_panic_hook() {
