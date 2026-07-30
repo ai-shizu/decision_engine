@@ -1180,15 +1180,29 @@ LINE: 上限 16 MiB・`chunk_markdown_capped` で `source_id-p00`… に分割�
 | `phase.ctx_created` | コンテキスト作成後 |
 | `phase.inference` | 推論中 |
 | `phase.idle` | アイドル |
-| `model.n_layer` | G-1 同一性（期待 ≈ 29） |
-| `model.n_params` | G-1 パラメータ数 |
-| `model.size` | G-1 テンソル総バイト |
-| `model.meta_count` | G-1 メタデータ件数（期待 ≈ 26） |
+| `model.n_layer` | G-1 同一性。**期待 28**（GGUF の `<arch>.block_count`）。**29 ではない** —— 下記 |
+| `model.n_params` | G-1 パラメータ数（同梱 1.5B で **1,777,088,000**） |
+| `model.size` | G-1 テンソル総バイト（**1,111,370,240**。ファイルサイズ 1,117,320,736 との差 5.7 MiB はヘッダ＋メタ） |
+| `model.meta_count` | G-1 メタデータ件数。**期待 23**。**26 ではない** —— 下記 |
 | `model.n_vocab` | G-1 vocab サイズ |
 | `model.origin` | 1=バンドル / 2=AppData / 0=不明（**パスは出さない**） |
 | `model.force_cpu` | 0=Metal 既定アーム / 1=`CORAXIS_FORCE_CPU=1` CPU オラクル |
 
 **CPU オラクル（G-2）:** Xcode スキームで `CORAXIS_FORCE_CPU=1` を注入すると、load 時に `with_devices(&[])` + `with_n_gpu_layers(0)`、context 時に `with_offload_kqv(false)` + `with_op_offload(false)` の **4 点セット**が揃う。環境変数が無い／`1` 以外のときは既定 Metal（`n_gpu_layers=999`）のまま。`with_devices` 失敗時は **Metal へ黙ってフォールバックせずエラー**。
+
+> **【G-1 期待値の訂正・2026-07-30 実測】ログの文言から期待値を書くな。API が返す値を測れ。**
+>
+> 監査役は当初 `n_layer≈29` / `meta_count≈26` と書いた。**両方とも誤りである。** GGUF ヘッダを直接パースして確定させた:
+>
+> ```
+> qwen2.block_count = 28          ← model.n_layer() の権威値
+> metadata_kv_count = 26、うち配列型 3 件 → 非配列 23 件
+> tensor_count      = 339
+> ```
+>
+> - **`n_layer=28` が正しい。** Tier 2 ログの `offloaded 0/29 layers to GPU` の 29 は **`block_count + 1`**（出力層を含む `max_backend_supported_layers`）であり、層数そのものではない
+> - **`meta_count=23` が正しい。** `llama_model_meta_count()` は**配列型 KV を除外する**（`tokenizer.ggml.tokens` / `token_type` / `merges` の 3 件）。26 − 3 = 23
+> - **`339 テンソル` は Release では観測できない**（llama.cpp の C++ ログが消えるため）。**モデル同一性は `model.*` で判定する** —— それが P0-6 の存在理由である
 
 **注意:** Console.app の検索窓は**メッセージ本文**を検索する。subsystem 名 `com.ai-shizu.pkb` を入れてもヒットしない。本文の上記ラベルで探せ。
 
@@ -1197,12 +1211,30 @@ LINE: 上限 16 MiB・`chunk_markdown_capped` で `source_id-p00`… に分割�
 ```bash
 # zsh では `log` が builtin。/usr/bin/log と絶対パスで呼ぶこと
 # `log stream` にデバイス指定オプションは無い（collect のみ）
-sudo /usr/bin/log collect --device-udid "<UDID>" --last 15m --output /tmp/coraxis.logarchive
-/usr/bin/log show --archive /tmp/coraxis.logarchive --level debug --style compact \
+sudo /usr/bin/log collect --device-name "<NAME>" --last 15m --output /tmp/coraxis.logarchive
+# `log show` の verbosity は --debug / --info。--level は `log stream` 側の書式
+/usr/bin/log show --archive /tmp/coraxis.logarchive --debug --style compact \
   --predicate 'subsystem == "com.ai-shizu.pkb"'
 ```
 
-**Tier 3 第 0 フェーズ as-built（2026-07-30・基準 `e230c05`・P0-6 未コミット）:** P0-1〜P0-5 済み（Release で `instrument.alive` / `phase.*` GREEN）。P0-6-1 `model.*` 同一性ログ。P0-6-2 `CORAXIS_FORCE_CPU=1` 4 点セット。**G-1 / G-2 実測は未着手。**
+> **【USB 必須・2026-07-30 実測】`log collect` と `devicectl` は別経路である。**
+>
+> | コマンド | 経路 | 無線ペアリングで動くか |
+> |---|---|---|
+> | `xcrun devicectl`（install / launch / processes） | **CoreDevice トンネル** | **動く** |
+> | `sudo /usr/bin/log collect --device*` | **lockdown / usbmux** | **動かない —— USB 接続が要る** |
+>
+> 無線のみだと `log collect` は **`failed to create archive: Device not configured (6)`** で落ちる。`devicectl list devices` が `available (paired)` でも起きる。**判別は `xcrun xctrace list devices`** —— デバイスが `== Devices Offline ==` 側に出ていれば USB 未接続である。
+>
+> **Console.app は CoreDevice 経由で動くため USB 無しでも使える。** ターミナルで完結させたいなら **USB を繋いだまま作業せよ。**
+>
+> なお `--output` 先が既に存在すると **`File exists (17)`** で落ちる。**回収のたびに出力名を変えるか、先に消すこと。**
+
+**Tier 3 as-built（2026-07-30・`2e3c085`）:** P0-1〜P0-6 完了。**G-0R GREEN**（Release で `instrument.alive` / `phase.*` が届き、`[stderr]` 系は消失 —— Tauri Swift Logger の Release 無効化を実証）。**G-1 GREEN**（`origin=1` バンドル由来 / `n_layer=28` / `meta_count=23` / `force_cpu=0`）。
+
+**B アーム（Metal）の実測 footprint:** `model_loaded` 74.6 MiB → `inference` 180.1 MiB（RAG 経路）。**モデルのテンソルは 1,059.9 MiB あるが `phys_footprint` に計上されない** —— mmap されたファイルバック clean ページは Jetsam dirty に数えられないことの実機証明（Q-1 の回答）。**メモリを支配するのは重みではなくコンテキスト（KV / compute バッファ）である。**
+
+**G-2（CPU オラクル A アーム）と B − A 差分は未実施。**
 
 ---
 
