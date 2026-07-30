@@ -2727,6 +2727,7 @@ dependencies = [
  "base64 0.22.1",
  "block2",
  "caseless",
+ "cc",
  "csv-core",
  "ed25519-dalek",
  "encoding_rs",

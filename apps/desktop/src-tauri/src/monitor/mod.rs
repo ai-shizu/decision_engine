@@ -63,6 +63,19 @@ impl MemPhase {
     }
 }
 
+#[cfg(target_os = "ios")]
+fn phase_label(phase: MemPhase) -> &'static str {
+    match phase {
+        MemPhase::Baseline => "phase.baseline",
+        MemPhase::ModelLoaded => "phase.model_loaded",
+        MemPhase::CtxCreated => "phase.ctx_created",
+        MemPhase::Inference => "phase.inference",
+        MemPhase::Idle => "phase.idle",
+        MemPhase::EdinetFetch => "phase.edinet_fetch",
+        MemPhase::EdinetExtract => "phase.edinet_extract",
+    }
+}
+
 /// One footprint sample streamed to the frontend over `tauri::ipc::Channel`.
 #[derive(Clone, Serialize)]
 pub struct MemSample {
@@ -261,6 +274,12 @@ impl MemoryMonitor {
 
     pub fn set_phase(&self, phase: MemPhase) {
         self.phase.store(phase.as_u8(), Ordering::SeqCst);
+        #[cfg(target_os = "ios")]
+        {
+            if let Some(bytes) = phys_footprint_bytes() {
+                crate::ios_oslog::log_footprint_bytes(phase_label(phase), bytes);
+            }
+        }
     }
 
     pub fn stop(&self) -> Result<(), String> {

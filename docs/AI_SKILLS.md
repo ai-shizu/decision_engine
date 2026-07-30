@@ -1160,11 +1160,17 @@ LINE: 上限 16 MiB・`chunk_markdown_capped` で `source_id-p00`… に分割�
 3. `--features pocket-brain,secure-vault` で起動（**`llm/` は `pocket-brain` gate 配下。これを付け忘れると `check_model_exists` 自体が登録されない**）。debug ビルドは `PKB_UNSAFE_DEV_ENGINE=1` も要る（Python エンジンの設計どおりの拒否。GGUF 経路とは無関係）
 4. ログに `bundled GGUF present but invalid` → `AppData GGUF unavailable` が出れば取込 UI が出る
 5. **AppData / コンテナに旧セッションのモデルが残っていないことを必ず確認**（残っていると `exists: true` になり UI は出ない。デスクトップ・シミュレータ双方で実際に踏んだ）
-6. 検証後は本物を復元し、**復元後の SHA-256 一致まで確認**する
+6. 検証後は本物を復元し、**source / stage / archive の 3 点すべてでサイズと SHA-256 が凍結値と一致するまで確認**する。**ソースだけ直して stage / archive に 8 バイトスタブが残る事故を、2026-07-29 に実測した。** ゲートは `scripts/gguf_three_point_sha_gate.sh`（`EXPECTED_SIZE=1117320736` / `EXPECTED_SHA=6a1a2eb6…9407e`）。**mtime を使うな**（Xcode `CpResource` は内容 SHA を見ない）
+
+**ビルド経路の掟（Tier 3 / 2026-07-30）:** **Xcode 直接の Build / Archive を原則禁止する。** `tauri ios build` / `tauri ios dev` は Xcode 処理の前に `inject_resources` を呼び、ステージをソースへ戻す。一方 `tauri ios xcode-script` と Xcode 直 Archive は `inject_resources` を呼ばない —— **偽 magic スタブが stage / `.xcarchive` に残留し得る**（実測: Jul 29 archive = 8 バイト）。出荷・実機用の成果物は **Tauri CLI 経由のみ**。
 
 **iOS の選択元:** シミュレータでは `…/data/Containers/Shared/AppGroup/<group.com.apple.FileProvider.LocalStorage>/File Provider Storage/` へ置くと Files「この iPhone 内」から選択できる。**アプリ自身の Documents に置いてはならない** —— ピッカーが security-scoped でない URL を返し得るため、検証したい性質そのものが消える。
 
 **不変条件:** アプリ内 HTTP/ストリームで GGUF を取得するコードを追加するな。エラー文言にパス・例外原文を出すな。欠落時は `log::error!` / stderr に存在チェックを残し、UI へは固定文言のみ。
+
+**iOS ログ（Tier 3 P0-1）:** Release では Tauri の stdout/stderr pipe が Swift `Logger.enabled=false` で破棄される。**iOS は `ios_oslog` が OSLog へ直結**する（subsystem `com.ai-shizu.pkb`、category `memory` / `model` / `panic` / `app`）。数値は `%{public}llu`、任意文字列は整形済み 1 行の `%{public}s` のみ。**デスクトップの stderr logger は維持。** foreign abort / Jetsam では Rust panic hook は走らない。
+
+**Tier 3 第 0 フェーズ as-built（2026-07-30・基準 `e1aa175`・未コミット）:** P0-1 `native/ios_oslog.c` + `ios_oslog.rs`（iOS only）/ panic hook → Fault / JSONL sink `logs/tier3-checkpoints.jsonl`（checkpoint 毎 flush・256KiB rotate）。P0-2 `scripts/gguf_three_point_sha_gate.sh`（SOURCE 必須・STAGE/ARCHIVE は ABSENT≠MISMATCH）。P0-3 本節手順 6 + Xcode 直禁。P0-4 回収 dry-run は接続可能な実機が unavailable のため**未実施**。G-0 以降は未着手。
 
 
 ---

@@ -12,6 +12,10 @@ mod paths;
 #[doc(hidden)]
 pub mod webview_policy;
 
+/// iOS Release-safe OSLog backend (Tier 3 P0-1). Desktop keeps stderr.
+#[cfg(target_os = "ios")]
+mod ios_oslog;
+
 // M4 on-device LLM scaffold (docs/architecture_blueprint.md). Feature-gated so the
 // default desktop build is byte-identical to main. Phase 0 = module tree only;
 // command registration + State management land in Phase 1+.
@@ -108,21 +112,14 @@ use tauri::WebviewWindowBuilder;
 
 /// Minimal `log::Log` backend writing to stderr.
 ///
-/// 2026-07-24 iOS-device investigation: every `log::error!`/`log::info!` call
-/// already scattered through this codebase (`llm/model_path.rs`,
-/// `llm/service.rs`, `commands.rs`, …) was a silent no-op — the `log` facade
-/// crate does nothing at all until a concrete `Log` implementation is
-/// registered via `log::set_logger`, and none ever was. Every earlier device
-/// log capture in this investigation only ever showed llama.cpp's own C++
-/// stderr output; not one Rust-level `log::` line was ever visible, on this
-/// build or any prior one.
-///
-/// `idevicesyslog -p Coraxis` already proven (this investigation) to capture
-/// this process's raw stdout/stderr as `[stderr]`-tagged lines, so routing
-/// through `eprintln!` makes every existing and future `log::` call visible
-/// via the exact same capture method with no new dependency.
+/// Desktop / non-iOS only. On iOS, Tauri's `mobile_entry_point` steals fd 1/2
+/// and Release Swift `Logger.enabled == false` discards the pipe — so iOS
+/// installs [`ios_oslog`] instead (Tier 3 P0-1). The 2026-07-24 comment that
+/// `idevicesyslog` captures stderr remains true for **debug** only.
+#[cfg(not(target_os = "ios"))]
 struct StderrLogger;
 
+#[cfg(not(target_os = "ios"))]
 impl log::Log for StderrLogger {
     fn enabled(&self, _metadata: &log::Metadata) -> bool {
         true
@@ -140,21 +137,29 @@ impl log::Log for StderrLogger {
     fn flush(&self) {}
 }
 
+#[cfg(not(target_os = "ios"))]
 static STDERR_LOGGER: StderrLogger = StderrLogger;
 
-fn install_stderr_logger() {
-    // `set_logger` errors only if a logger was already installed (e.g. a
-    // second `run()` call in a test) — never fatal, so ignore and proceed;
-    // `set_max_level` still runs for the already-installed case too, if this
-    // is ever reached from a fresh process it always succeeds first.
-    if log::set_logger(&STDERR_LOGGER).is_ok() {
-        log::set_max_level(log::LevelFilter::Debug);
+fn install_process_logger() {
+    #[cfg(target_os = "ios")]
+    {
+        ios_oslog::install();
+    }
+    #[cfg(not(target_os = "ios"))]
+    {
+        // `set_logger` errors only if a logger was already installed (e.g. a
+        // second `run()` call in a test) — never fatal, so ignore and proceed;
+        // `set_max_level` still runs for the already-installed case too, if this
+        // is ever reached from a fresh process it always succeeds first.
+        if log::set_logger(&STDERR_LOGGER).is_ok() {
+            log::set_max_level(log::LevelFilter::Debug);
+        }
     }
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    install_stderr_logger();
+    install_process_logger();
 
     // `egress-live` builds reqwest with `rustls-no-provider`, so rustls has NO
     // compiled-in default CryptoProvider. Any TLS client constructed before one
