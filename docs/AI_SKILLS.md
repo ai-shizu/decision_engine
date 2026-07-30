@@ -1230,11 +1230,23 @@ sudo /usr/bin/log collect --device-name "<NAME>" --last 15m --output /tmp/coraxi
 >
 > なお `--output` 先が既に存在すると **`File exists (17)`** で落ちる。**回収のたびに出力名を変えるか、先に消すこと。**
 
-**Tier 3 as-built（2026-07-30・`2e3c085`）:** P0-1〜P0-6 完了。**G-0R GREEN**（Release で `instrument.alive` / `phase.*` が届き、`[stderr]` 系は消失 —— Tauri Swift Logger の Release 無効化を実証）。**G-1 GREEN**（`origin=1` バンドル由来 / `n_layer=28` / `meta_count=23` / `force_cpu=0`）。
+**Tier 3 as-built（実装 `2e3c085` / 実測記録 `9b7677c`・2026-07-30〜31）:** P0-1〜P0-6 完了。**G-0R GREEN**（Release で `instrument.alive` / `phase.*` が届き、`[stderr]` 系は消失 —— Tauri Swift Logger の Release 無効化を実証）。**G-1 GREEN**（`origin=1` バンドル由来 / `n_layer=28` / `meta_count=23` / `force_cpu=0`）。
 
 **B アーム（Metal）の実測 footprint:** `model_loaded` 74.6 MiB → `inference` 180.1 MiB（RAG 経路）。**モデルのテンソルは 1,059.9 MiB あるが `phys_footprint` に計上されない** —— mmap されたファイルバック clean ページは Jetsam dirty に数えられないことの実機証明（Q-1 の回答）。**メモリを支配するのは重みではなくコンテキスト（KV / compute バッファ）である。**
 
-**G-2（CPU オラクル A アーム）と B − A 差分は未実施。**
+**G-2 GREEN（B − A 差分・2026-07-31 実測・`9b7677c`）:** A = CPU オラクル（`CORAXIS_FORCE_CPU=1`・2 サイクル）、B = 既定 Metal（5 サイクル）。
+
+| 地点 | A（CPU） | B（Metal） | B − A |
+|---|---:|---:|---:|
+| `model_loaded` | 74.33 MiB | 74.64 MiB | **+0.31 MiB** |
+| `ctx_created#2` | 150.38 MiB | 174.98 MiB | +24.60 MiB |
+| `inference` | 201.53 MiB | 179.27 MiB | −22.26 MiB |
+
+**ロード時点の差は 0.31 MiB、対してテンソルは 1,059.9 MiB。** 単一の読みからの推論ではなく**差分**で Q-1 が確定した —— mmap 済みファイルバックの重みは **Metal の有無にかかわらず** `phys_footprint` に計上されない。
+
+**CPU フォールバックはメモリ緩和策にならない。** プリフィル増分は **CPU +51.15 MiB / 約 34.8 秒**、**Metal +4.29 MiB / 約 1.02 秒**。**メモリ不足時に `n_gpu_layers` を下げる対処は逆効果**であり、縮小すべきは `n_batch` / `n_ubatch` / `n_ctx`。なお **34 倍の速度差は U-3（Metal が実際に計算していること）への強い間接証拠**である（Release では `offloaded 29/29` を観測できないため直接観測は不可）。ピークは A 204.1 MiB / B 189.7 MiB。
+
+**残るゲート: G-3**（出力健全性・指揮官の目視 —— **本コミット時点で証跡が未記録**）**および G-5**（実プロバイダからの取込）。詳細は Tier 3 ドラフト §11。
 
 ---
 

@@ -163,8 +163,8 @@ llama.cpp は既定でモデルを **mmap** する。**バンドル内リソー�
 |---|---|---|
 | **G-0** | ログ回収 | 既知文字列が実機ログに現れる。**可視なログレベルを実名で記録** |
 | **G-1** | U-1（バンドル解決） | `resolve_loadable_model_path` が返した**実パスをログに出す**。`validate_gguf_file` 通過。**バンドル由来であること**（AppData フォールバックでないこと） |
-| **G-2** | U-2（メモリ／CPU） | `llama_model_loader: … 339 tensors`。**ロード前後の `phys_footprint_bytes()` と `os_proc_available_memory_bytes()` を数値で記録**。`FootprintBand` の到達段 |
-| **G-3** | U-3（Metal） | **`offloaded 29/29 layers to GPU`**（`0/29` なら CPU に落ちている＝ U-3 未検証）。生成が**トークンを返す**。**出力が壊れていないこと**（§3.4） |
+| **G-2** | U-2（メモリ／CPU） | **`339 tensors` は Release では観測できない**（llama.cpp の C++ ログが消えるため）—— モデル同一性は `model.*`（§11.1）で判定する。footprint は `phase.{baseline,model_loaded,ctx_created,inference,idle}` の OSLog 値で記録する（**`phys_footprint_bytes=` という文字列は出力されない**）。`FootprintBand` の到達段 |
+| **G-3** | U-3（Metal） | **`offloaded 29/29 layers to GPU` も Release では観測できない**（§11.5）—— 代替はプリフィル時間差（Metal 約 1.02 秒 / CPU 約 34.8 秒 ≒ **34 倍**）による強い間接証拠。生成が**トークンを返す**。**出力が壊れていないこと**（§3.4・**指揮官の目視**） |
 | **G-4** | フレーバ E2E | `attempts > 0` ∧ 表示スロットへ到達 ∧ **`leaked == 0`** |
 | **G-5** | U-4（取込） | §5.1 の手順で取込 UI へ到達し、**実プロバイダ（iCloud 等）から**コピー成立。3 地点 SHA-256 一致 |
 
