@@ -51,12 +51,37 @@
 
 F-3 で確立した作法を適用する —— **A-1-3（実モデル）と A-1-2b（作り置き）を分けたのと同じ操作である。**
 
-実機上で `n_gpu_layers` を **0 に強制できるデバッグ経路**を用意し、次の順で進める:
+実機上で **Metal を確実に排した経路**を用意し、次の順で進める:
 
 ```
-G-2  実機 ＋ n_gpu_layers=0（CPU）   → U-2（メモリ）だけを試す
+G-2  実機 ＋ CPU オラクル構成         → U-2（メモリ）だけを試す
 G-3  実機 ＋ n_gpu_layers=999（Metal）→ U-3（バックエンド）だけを試す
 ```
+
+> **【訂正・2026-07-29】`n_gpu_layers = 0` だけでは CPU 経路にならない。**
+>
+> 当初本ドラフトは「`n_gpu_layers` を 0 に強制する」と書いた。**これは誤りである。** gptsol の指摘を受け、固定版ソースで確認した:
+>
+> ```cpp
+> // llama-context.cpp:257-265（llama-cpp-sys-2 0.1.151 同梱）
+> for (const auto & dev : model.devices) {
+>     ggml_backend_t backend = ggml_backend_dev_init(dev.dev, nullptr);
+>     ...
+> }
+> ```
+>
+> **コンテキストは `model.devices` の全デバイスについて backend を初期化する。`n_gpu_layers` は層の *割当* にしか効かず、backend の *初期化* を抑止しない。** したがって `n_gpu_layers = 0` のままでも Metal backend は起き、Metal コンテキストバッファが確保される —— **U-2 と U-3 が分離できていない。**
+>
+> **正しい CPU オラクル構成**（4 つすべてを併用する）:
+>
+> | 設定 | API（固定版に実在を確認済み） |
+> |---|---|
+> | `model.devices` を空にする | `LlamaModelParams::with_devices(&[])`（`params.rs:515`） |
+> | 層を CPU に置く | `with_n_gpu_layers(0)` |
+> | KQV を CPU に置く | `with_offload_kqv(false)` |
+> | op offload を止める | `with_op_offload(false)` |
+>
+> **指揮官裁定 4 の `CORAXIS_FORCE_CPU=1` は、この 4 点セットを駆動するものとして実装せよ。** 層数だけを 0 にする実装は、**分離したつもりで分離していない**という本プロジェクトが最も嫌う形になる。
 
 **G-2 が落ちればメモリの問題、G-3 だけが落ちれば Metal の問題**と一意に切り分かる。まとめて試すと「実機で動かない」しか分からない。
 
@@ -265,3 +290,132 @@ pub struct LoadParams {
 「実機で動いた」と書けるのは、**バンドル由来のパスが解決され、339 テンソルがロードされ、29/29 層が Metal に乗り、生成がトークンを返し、footprint が数値として記録され、そのログが手元にある**ときだけである。
 
 **そのどれか一つでも欠けたら、欠けたと書く。**
+
+---
+
+## 8. gptsol 回答の監査結果（2026-07-29・固定版ソースで検証）
+
+**Q-1 / Q-4 の回答を受領し、監査役が `llama-cpp-2` / `llama-cpp-sys-2` **0.1.151 の実体**に対して検証した。** gptsol は llama-cpp-rs `7f0a0d9` / llama.cpp `9e3b928` を典拠として挙げたが、**我々の固定版のソースと一致していた。**
+
+### 8.1 検証できた主張
+
+| 主張 | 我々の固定版での確認 |
+|---|---|
+| no-copy 経路（`buffer_from_host_ptr` → `newBufferWithBytesNoCopy`） | **確認**。`llama-model.cpp:1500-1515` に `buffer_from_host_ptr_supported` と条件 `ml.use_mmap && use_mmap_buffer && buffer_from_host_ptr_supported && is_default_buft` |
+| **重み用の第二の 1.04 GiB backing は作られない** | **確認**（上記経路の帰結） |
+| 埋め込み MSL を実行時コンパイル・`default.metallib` 不要 | **確認**。`ggml-metal-device.m:125` に `"using embedded metal library"`、`:233 / :288` に `newLibraryWithSource:` |
+| 部分 CPU fallback は存在しない | **整合**（`recommendedMaxWorkingSetSize` に応じて層数を減らすコードは無い） |
+| ログ書式 3 行 | **確認**。`llama-model.cpp:1577`（`offloading output layer to GPU`）/ `:1580`（`offloading %d repeating layers to GPU`・引数は `n_repeating`）/ `:1585`（`offloaded %d/%d layers to GPU`） |
+| `n_gpu_layers=0` では Metal backend が起きる | **確認**。`llama-context.cpp:257-265`（§1.2 の訂正を参照） |
+| `with_devices` / デバイス列挙 API が使える | **確認**。`params.rs:515` / `lib.rs:499` |
+| Q4_K_M の内訳 169+29+141 | **整合** —— 合計 339 が我々の実測テンソル数と一致 |
+
+> **ログ書式は確認したが、中央行の値（gptsol の予測は `27`）は未確認である。** `n_repeating` の実値はモデル依存であり、**実機ログで確定する。ゲートの grep を `28` 前提で書くな。**
+
+### 8.2 最重要の裁定 — 我々のコメントは半分正しく、半分未検証だった
+
+> **no-copy は確認済み。だが「Jetsam に計上されない」は未確認。**
+
+gptsol は XNU の `phys_footprint` が `iokit_mapped` を含み、IOKit mapping は backing が clean/external かに関わらず総量を計上すると指摘した。**すなわち no-copy であることは、課金されないことを意味しない。**
+
+**`params.rs` のコメント「not counted against jetsam dirty」は、Metal を使う経路については依然として未証明である。** 保守的には **1.04 GiB が Metal 使用時に課金される前提で予算を組む**べきであり、覆せるのは実機差分のみ。
+
+**`use_mmap: true` は維持する。** 二重 backing を避け、CPU-only 時の clean/reclaimable 性質を保つため。`use_mmap: false` にすると匿名 dirty となり **約 1.04 GiB の footprint 増加が期待値**である（改悪）。
+
+### 8.3 決定的な計測 — **B − A の差分**
+
+gptsol の提案する 4 variant を採用する。**各 variant は別の cold launch で実行する。**
+
+| Variant | `use_mmap` | devices / layers | context offload |
+|---|---|---|---|
+| **A** | true | `with_devices(&[])`, GPU 0 | KQV false / op false |
+| **B** | true | Metal 明示, 999 | true / true |
+| C | false | `with_devices(&[])`, GPU 0 | false / false |
+| D | false | Metal 明示, 999 | true / true |
+
+**判定**:
+
+- **A** で `external`/`resident` が約 +1.04 GiB ∧ `phys_footprint` ほぼ不変 → raw mmap の clean 会計を確認
+- **B − A** が約 1.04 GiB 動く → **copy ではないが Metal/IOKit が alias 全量を課金**。コメントは偽
+- **B − A** が小さい → 当該 OS / 機種ではコメントの実用的前提が成立
+- **C − A** で `internal`/`footprint` が約 +1.04 GiB → `use_mmap=false` の予想どおり
+
+> **`MTLDevice.currentAllocatedSize` の 1.04 GiB 増加は copy の証明にならない**（Metal の論理リソース会計であるため）。**この罠を踏むな。**
+
+計測点: open 前 / model load 後 / context 作成後 / 最初の prefill 後 / 128-token decode 中 / 圧力・再アクセス後 / unload 後。
+
+記録項目: `TASK_VM_INFO`（`phys_footprint` `resident_size` `internal` `external` `compressed` `limit_bytes_remaining`）/ `proc_pid_rusage`（`ri_phys_footprint` `ri_pageins`）/ `os_proc_available_memory()` / `mincore()` による GGUF mapping の resident pages / Metal（`maxBufferLength` `recommendedMaxWorkingSetSize` `currentAllocatedSize` no-copy view 数）/ 全 llama.cpp ログ。
+
+### 8.4 G-3 の判定基準を強化する
+
+**`offloaded 29/29` は「重み配置の計画」の指標であって、Metal で演算されたことの証明ではない。** 未対応 tensor/op は CPU に置かれ得るし、shader/context 初期化はその後に失敗し得る。
+
+**G-3 の成功ゲートは以下を要求する**:
+
+```
+ggml_metal_library_init: using embedded metal library
+ggml_metal_device_init: has unified memory    = true
+ggml_metal_device_init: use shared buffers    = true
+load_tensors: offloaded 29/29 layers to GPU
+```
+
+∧ コンテキスト作成成功 ∧ **prefill と batch-1 decode の双方で有限 logits**（NaN/Inf は即 fail）。
+
+さらに debug 実行で `GGML_SCHED_DEBUG=1` の `## SPLIT ... MTL0`、最終権威として **Instruments Metal System Trace / GPU Capture**（固定版に `ggml_backend_metal_capture_next_compute()` が在り `/tmp/perf-metal-<pid>.gputrace` を生成できる）。
+
+### 8.5 自動 logits 判定は実装可能（§3.4 の訂正）
+
+**§3.4 は「判定器が存在しない」と書いたが、これは誤りである。** gptsol の提案する CPU/Metal logits 比較は、**単一オフライン実機で実装可能**である（`with_devices` が固定版に在ることを確認した）。
+
+手続き: 同一の固定 token ID 列を teacher-force し、sampling を通さず **full-vocab F32 logits** を prefill（batch ≥ 32）と decode（batch 1）の複数地点で比較。NaN/Inf は即 fail。NMSE/RMSE・max absolute error・cosine similarity・top-1・top-k overlap・KL/JS を記録。**2 モデルを同時に保持せず、CPU を unload してから Metal をロードする。**
+
+> **seed を揃えた生成文字列の比較は判定器にならない** —— 微小差が sampling 分岐を生むため。
+>
+> **whole-model に普遍的な閾値は存在しない。** upstream の backend-op test の NMSE `1e-7` を whole-model 閾値として盲用してはならない。CPU/CPU・Metal/Metal の反復揺らぎから校正せよ。
+>
+> **したがって「機械判定が可能」＝「目視が不要」ではない。** 指揮官の目視判定（裁定 5）は維持する。機械判定は**それを補強する第二の証跡**として位置づける。
+
+### 8.6 Jetsam 実測の作法
+
+**実際の Jetsam pass は Xcode / debugger から切り離した Release / ad hoc / TestFlight で実施し、`.ips` の reason を確認する。**
+
+- **`per-process-limit`** → `increased-memory-limit` の検討対象（指揮官裁定 3 の「不可避と証明された場合」がこれに当たる）
+- **`vm-pageshortage` / `fc-thrashing`** → **entitlement では根治しない**。全体圧力型であり、設計側の対処が必要
+
+> **裁定 3 の判断根拠は、この `.ips` の reason 文字列である。** 「OOM した」だけでは entitlement の可否を決められない。
+
+### 8.7 コメント修正の要件（実装タスクとして残す）
+
+gptsol の指摘どおり、次の 2 箇所は**測っていないことを断言している**。修正を Tier 3 実装時の要件とする。
+
+```rust
+// params.rs — 現在（断言している）
+/// Keep weights as clean, file-backed pages (not counted against jetsam dirty).
+
+// 推奨（測っていないことを書かない）
+/// Request llama.cpp's read-only mmap-backed weight path.
+/// Clean file-backed pages normally stay outside task phys_footprint, but
+/// Metal/IOKit accounting and residency must be verified on each device class.
+```
+
+```rust
+// service.rs — 現在（因果を断言している）
+/// The Simulator exposes a synthetic Metal device without the unified/shared
+/// memory capabilities llama.cpp expects for reliable quantized inference.
+
+// 推奨（未適格性確認であることを書く）
+/// Simulator Metal output has not been qualified against the CPU reference.
+/// Force CPU in Simulator; physical-device Metal is validated separately.
+```
+
+> **後者の因果関係（合成 Metal が量子化 logits を壊す）は、Apple / upstream の一次資料で確認できなかった。** 方針（Simulator を CPU に落とす）は安全側であり維持するが、**理由を断言している記述は弱めるべきである。**
+
+### 8.8 残った未知
+
+**gptsol が「不明」と明示した唯一の点**:
+
+> **mmap を Metal からアクセスした場合、いつ・どの量だけ IOKit ledger に入るか。**
+
+Apple の公開資料に記述が無く、**§8.3 の B − A 差分が唯一の確定手段である。**
+
+**4GB の iPhone 13 で 1.04 GiB が Jetsam 課金されるかは、実測でしか分からない。** それが Tier 3 の中心的な問いとして残った。
