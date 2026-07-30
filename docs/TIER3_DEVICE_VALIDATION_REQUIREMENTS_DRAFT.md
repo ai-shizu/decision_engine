@@ -529,3 +529,87 @@ T = max(D) + max( 0.25·max(D), 6·MAD(D), 3·W )
 API は固定版に実在を確認済み —— `get_logits`（`context.rs:237`）/ `get_logits_ith`（`:280`）/ `n_vocab`（`model.rs:568`）。**`get_logits_ith` の `i` は元の batch token offset で、この wrapper は負値を扱えない**（C API の `-1` は使えない）。
 
 **Q-6-d が重要**: logits 比較では**検出できない**破損様式が存在する（CPU/Metal 共通の loader/graph バグ、tokenizer / chat template、sampling パラメータ、stop / UTF-8 streaming、corpus 外の rare path、checkpoint 後の破損、near-tie の増幅）。**したがって目視判定（裁定 5）は維持する。** 機械判定は第二の証跡である。
+
+---
+
+## 10. 実機実測（2026-07-30）— **Q-1 に答えが出た**
+
+**デバイス**: iPhone 17 Pro (iPhone18,1) / `Gggzns` / **Release ビルド・デタッチ起動**
+**ビルド**: `9a7d4b1` + P0-5、`tauri ios build --features pocket-brain,secure-vault`
+**モデル**: 1,117,320,736 バイト（**1,065.6 MiB**）/ sha256 `6a1a2eb6…9407e`（3 点 SHA ゲート OK）
+
+### 10.1 G-0R — 計器は Release でも生きている（**GREEN**）
+
+```
+22:57:21.538 Df Coraxis[36716] [com.ai-shizu.pkb:app]    instrument.alive=2130600
+22:57:22.687 Df Coraxis[36716] [com.ai-shizu.pkb:memory] phase.model_loaded=78923608
+```
+
+| 命題 | 証拠 |
+|---|---|
+| Release でも OSLog シムが届く | 両行が出た |
+| プライバシー検閲を突破 | 数値が読める（`<private>` ではない） |
+| Default 型で永続化 | `Df` プレフィクス |
+| **P0-1 の仮説が正しかった** | **`[stderr]` 系が完全に消え、シム経由だけが残った** |
+
+**debug では `[stderr] llama_model_loader…` が見え、Release では消え、シムは両方で生きている。** 対照実験として完結している —— **Tauri の Swift Logger の死角は実在し、OSLog 直結がそれを埋めた。**
+
+### 10.2 フェーズ別 footprint（2 サイクルで再現）
+
+`set_phase(Inference)` は **`ctx.decode(&mut batch)` の直後**（`service.rs:1508`）。**プリフィルが完了し、重みが実際に読まれた後**の測定値である。
+
+| フェーズ | footprint | 増分 |
+|---|---:|---:|
+| `instrument.alive`（プロセス起動時） | **2.0 MiB** | — |
+| `phase.baseline`（purge 後） | **48.9 MiB** | アプリ本体＋WebView |
+| **`phase.model_loaded`** | **76.5 MiB** | **+27.6 MiB** |
+| **`phase.ctx_created`** | **130.0 MiB** | **+53.5 MiB** |
+| **`phase.inference`**（decode 完了後） | **159.9 MiB** | **+29.9 MiB** |
+| `phase.idle`（生成完了後） | **163.2 MiB** | +3.3 MiB |
+
+生ログ（2 サイクル目）:
+
+```
+23:07:02.839 phase.model_loaded=80201896
+23:07:07.226 phase.ctx_created=136251608
+23:07:08.271 phase.inference=167676168
+23:07:08.732 phase.idle=171084040
+```
+
+### 10.3 **Q-1 の回答 — 重みは `phys_footprint` に計上されない**
+
+> **1,065.6 MiB のモデルを読み切った後で、プロセス全体の footprint は 160 MiB。**
+
+**モデルロードが footprint に乗せたのは +27.6 MiB —— モデルサイズの 2.6% である。** ページテーブル・`MTLBuffer` オブジェクト・メタデータ・非 mmap 部分として説明がつく量であり、**1 GiB のコピーでも 1 GiB の課金でもない。**
+
+**`params.rs` の「Keep weights as clean, file-backed pages (not counted against jetsam dirty)」は、この機種・この構成において正しかった。** gptsol が「Apple の公開資料に記述が無く不明」とした一点に、実測が答えを出した。
+
+**§6.1 で「未検証の断言」として指摘したコメントは、これをもって裏付けられた。** ただし**コメントの書き方は改めるべきである**（§8.7 の推奨文）—— 正しい命題であっても、**測る前に事実として書いてはならない**という手続きの問題は残る。
+
+### 10.4 予想外の発見 — **主戦場は重みではなく KV / compute バッファ**
+
+**コンテキスト生成（+53.5 MiB）が、モデルロード（+27.6 MiB）より高い。**
+
+**したがって Tier 3 のメモリ予算を支配するのは重みではない。** gptsol が縮小の優先順位で `n_batch` / `n_ubatch` / `n_ctx` を量子化より上位に置いたのは正しく、**量子化を下げる必要は当面ない。**
+
+4GB 機（iPhone 13・`kern.max_task_pmem` = 2098 MiB）へ外挿すると、**160 MiB は上限の約 8%。** entitlement の +250 MiB を要する場面には遠い。
+
+### 10.5 まだ言えないこと
+
+1. **この測定が Metal 経路のものである証拠が無い。** Release では llama.cpp の C++ ログが消えるため、**`offloaded 29/29 layers to GPU` を観測していない。** 実機では `effective_n_gpu_layers` が 999 を返す**はず**だが、観測していない以上「はず」である。**これは B − A 差分が答えるべき問いそのもの**
+2. **測定機は iPhone 17 Pro であり、ベースラインの iPhone 13（4GB）ではない。** footprint の会計はカーネルの挙動なので「重みが課金されない」性質は機種に依らないはずだが、**絶対値と Jetsam 上限は機種ごとに異なる**
+
+### 10.6 実験計画の更新（指揮官裁定・2026-07-30）
+
+**§8.3 の 4 variant のうち C / D（`use_mmap=false`）はスキップする。** 重みが課金されないことが実測で判明した以上、`use_mmap=false` は**約 1 GiB の悪化が確実**であり、対照としての価値しか無い。
+
+**残すのは A と B の分離のみ:**
+
+| アーム | 構成 | 測るもの |
+|---|---|---|
+| **A** | `with_devices(&[])` ＋ `n_gpu_layers(0)` ＋ `offload_kqv(false)` ＋ `op_offload(false)` | Metal 抜きの footprint |
+| **B** | 現行（Metal 999） | 実測済み: **160 MiB** |
+
+**B − A が小さければ「Metal/IOKit も課金していない」、大きければ「Metal 経由で課金される」** —— 一問一答になる。
+
+**A の実装は P0-6 の射程である**（`LoadParams` にデバイス選択の口が無く、現状では実行できない）。

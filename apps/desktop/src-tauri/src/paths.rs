@@ -179,7 +179,14 @@ pub fn bundled_engine_name() -> &'static str {
     "pkb-engine-x86_64-unknown-linux-gnu"
 }
 
-#[cfg(not(debug_assertions))]
+/// iOS has no desktop Python sidecar; name lookup is undefined for this OS.
+/// Keep `bundled_engine_path` compiling under Release (`not(debug_assertions)`).
+#[cfg(all(not(debug_assertions), target_os = "ios"))]
+pub fn bundled_engine_path() -> Option<PathBuf> {
+    None
+}
+
+#[cfg(all(not(debug_assertions), not(target_os = "ios")))]
 pub fn bundled_engine_path() -> Option<PathBuf> {
     let exe = env::current_exe().ok()?;
     let dir = exe.parent()?;
