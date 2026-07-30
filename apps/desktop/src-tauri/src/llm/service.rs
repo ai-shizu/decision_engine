@@ -30,7 +30,9 @@ use llama_cpp_2::sampling::LlamaSampler;
 use llama_cpp_2::token::LlamaToken;
 use llama_cpp_2::TokenToStringError;
 
-use super::params::{GenerationParams, LoadParams, MAX_N_CTX, MIN_N_CTX};
+use super::params::{
+    force_cpu_oracle_enabled, GenerationParams, LoadParams, MAX_N_CTX, MIN_N_CTX,
+};
 use super::prompt::{
     build_prompt, LlmTaskId, TASK_COGNITIVE_DISTORTION_V1, TASK_INTERVIEW_EVALUATION_V1,
     TASK_KAKEIBO_V1, TASK_METACOGNITIVE_DEBRIEF_V1, TASK_RECEIPT_OCR_V1,
@@ -1371,6 +1373,9 @@ fn model_add_bos(model: &LlamaModel) -> AddBos {
 /// memory capabilities llama.cpp expects for reliable quantized inference.
 /// Keep full Metal offload on physical iOS devices, but force Simulator builds
 /// onto the host CPU so corrupted logits cannot reach the stream.
+///
+/// Never permanently zeros the on-device path — use `CORAXIS_FORCE_CPU=1` for
+/// the G-2 CPU oracle (see [`apply_force_cpu_model_params`]).
 fn effective_n_gpu_layers(requested: u32, ios_simulator: bool) -> u32 {
     if ios_simulator {
         0
@@ -1379,11 +1384,26 @@ fn effective_n_gpu_layers(requested: u32, ios_simulator: bool) -> u32 {
     }
 }
 
+/// Tier 3 P0-6-2 CPU oracle — model-params half of the 4-point set.
+///
+/// `n_gpu_layers=0` alone still lets llama.cpp init every entry in
+/// `model.devices` (Metal). Empty `with_devices(&[])` is required to suppress
+/// that. Failure must not fall back to Metal.
+fn apply_force_cpu_model_params(params: LlamaModelParams) -> Result<LlamaModelParams, String> {
+    params
+        .with_devices(&[])
+        .map_err(|e| {
+            format!("CORAXIS_FORCE_CPU: with_devices failed (refusing Metal fallback): {e}")
+        })
+        .map(|p| p.with_n_gpu_layers(0))
+}
+
 fn apply_context_device_policy(
     params: LlamaContextParams,
     ios_simulator: bool,
 ) -> LlamaContextParams {
-    if ios_simulator {
+    // Context half of the 4-point CPU oracle: KQV + op offload off.
+    if force_cpu_oracle_enabled() || ios_simulator {
         params.with_offload_kqv(false).with_op_offload(false)
     } else {
         params
@@ -1392,20 +1412,59 @@ fn apply_context_device_policy(
 
 fn load_model(backend: &LlamaBackend, path: &Path, p: &LoadParams) -> Result<LlamaModel, String> {
     super::model_path::validate_gguf_file(path)?;
-    let n_gpu_layers = effective_n_gpu_layers(
-        p.n_gpu_layers,
-        cfg!(all(target_os = "ios", target_abi = "sim")),
-    );
-    if n_gpu_layers != p.n_gpu_layers {
+    let force_cpu = force_cpu_oracle_enabled();
+    let n_gpu_layers = if force_cpu {
+        0
+    } else {
+        effective_n_gpu_layers(
+            p.n_gpu_layers,
+            cfg!(all(target_os = "ios", target_abi = "sim")),
+        )
+    };
+    if !force_cpu && n_gpu_layers != p.n_gpu_layers {
         eprintln!(
             "Coraxis LLM: iOS Simulator detected; forcing CPU inference (requested Metal layers: {})",
             p.n_gpu_layers
         );
     }
-    let params = LlamaModelParams::default()
+    let mut params = LlamaModelParams::default()
         .with_n_gpu_layers(n_gpu_layers)
         .with_use_mmap(p.use_mmap);
-    LlamaModel::load_from_file(backend, path, &params).map_err(|e| format!("model load: {e}"))
+    if force_cpu {
+        params = apply_force_cpu_model_params(params)?;
+    }
+    #[cfg(target_os = "ios")]
+    {
+        crate::ios_oslog::log_model_u64(
+            crate::ios_oslog::MODEL_FORCE_CPU,
+            if force_cpu { 1 } else { 0 },
+        );
+    }
+    let model =
+        LlamaModel::load_from_file(backend, path, &params).map_err(|e| format!("model load: {e}"))?;
+    #[cfg(target_os = "ios")]
+    {
+        log_model_identity_ios(&model, path);
+    }
+    Ok(model)
+}
+
+/// G-1: Release-visible model identity via numeric OSLog (P0-6-1).
+#[cfg(target_os = "ios")]
+fn log_model_identity_ios(model: &LlamaModel, path: &Path) {
+    use crate::ios_oslog::{
+        log_model_u64, MODEL_META_COUNT, MODEL_N_LAYER, MODEL_N_PARAMS, MODEL_N_VOCAB, MODEL_ORIGIN,
+        MODEL_SIZE,
+    };
+    log_model_u64(MODEL_N_LAYER, u64::from(model.n_layer()));
+    log_model_u64(MODEL_N_PARAMS, model.n_params());
+    log_model_u64(MODEL_SIZE, model.size());
+    log_model_u64(MODEL_META_COUNT, model.meta_count().max(0) as u64);
+    log_model_u64(MODEL_N_VOCAB, model.n_vocab().max(0) as u64);
+    log_model_u64(
+        MODEL_ORIGIN,
+        super::model_path::model_origin_code(path),
+    );
 }
 
 fn generate(
@@ -2229,9 +2288,21 @@ mod tests {
         assert!(!simulator.offload_kqv());
         assert!(!simulator.op_offload());
 
+        // On-device default (no CORAXIS_FORCE_CPU): Metal KQV/op stay on.
+        // Desktop builds never enable the oracle, so this asserts the Metal arm.
+        assert!(
+            !force_cpu_oracle_enabled(),
+            "CPU oracle must stay off unless CORAXIS_FORCE_CPU=1 on iOS"
+        );
         let device = apply_context_device_policy(LlamaContextParams::default(), false);
         assert!(device.offload_kqv());
         assert!(device.op_offload());
+    }
+
+    #[test]
+    fn on_device_effective_layers_preserve_metal_999_default() {
+        // D-40 target: permanently zeroing on-device layers must fail this.
+        assert_eq!(effective_n_gpu_layers(999, false), 999);
     }
 
     #[test]

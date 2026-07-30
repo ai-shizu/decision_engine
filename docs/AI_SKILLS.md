@@ -1180,6 +1180,15 @@ LINE: 上限 16 MiB・`chunk_markdown_capped` で `source_id-p00`… に分割�
 | `phase.ctx_created` | コンテキスト作成後 |
 | `phase.inference` | 推論中 |
 | `phase.idle` | アイドル |
+| `model.n_layer` | G-1 同一性（期待 ≈ 29） |
+| `model.n_params` | G-1 パラメータ数 |
+| `model.size` | G-1 テンソル総バイト |
+| `model.meta_count` | G-1 メタデータ件数（期待 ≈ 26） |
+| `model.n_vocab` | G-1 vocab サイズ |
+| `model.origin` | 1=バンドル / 2=AppData / 0=不明（**パスは出さない**） |
+| `model.force_cpu` | 0=Metal 既定アーム / 1=`CORAXIS_FORCE_CPU=1` CPU オラクル |
+
+**CPU オラクル（G-2）:** Xcode スキームで `CORAXIS_FORCE_CPU=1` を注入すると、load 時に `with_devices(&[])` + `with_n_gpu_layers(0)`、context 時に `with_offload_kqv(false)` + `with_op_offload(false)` の **4 点セット**が揃う。環境変数が無い／`1` 以外のときは既定 Metal（`n_gpu_layers=999`）のまま。`with_devices` 失敗時は **Metal へ黙ってフォールバックせずエラー**。
 
 **注意:** Console.app の検索窓は**メッセージ本文**を検索する。subsystem 名 `com.ai-shizu.pkb` を入れてもヒットしない。本文の上記ラベルで探せ。
 
@@ -1193,8 +1202,7 @@ sudo /usr/bin/log collect --device-udid "<UDID>" --last 15m --output /tmp/coraxi
   --predicate 'subsystem == "com.ai-shizu.pkb"'
 ```
 
-**Tier 3 第 0 フェーズ as-built（2026-07-30・基準 `4b29362`・P0-5 未コミット）:** P0-1 `native/ios_oslog.c` + `ios_oslog.rs`（iOS only）/ panic hook → Fault / JSONL sink `logs/tier3-checkpoints.jsonl`。P0-2 三点 SHA ゲート。P0-3 本節手順 6 + Xcode 直禁。P0-5 `instrument.alive` を `install()` 直後に 1 行。G-0 debug は GREEN（`phase.baseline` 数値公開確認済み）。**G-0R（Release）は未着手。**
-
+**Tier 3 第 0 フェーズ as-built（2026-07-30・基準 `e230c05`・P0-6 未コミット）:** P0-1〜P0-5 済み（Release で `instrument.alive` / `phase.*` GREEN）。P0-6-1 `model.*` 同一性ログ。P0-6-2 `CORAXIS_FORCE_CPU=1` 4 点セット。**G-1 / G-2 実測は未着手。**
 
 ---
 

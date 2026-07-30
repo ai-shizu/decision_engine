@@ -69,9 +69,26 @@ pub fn log_footprint_bytes(label: &str, bytes: u64) {
     jsonl_checkpoint("footprint", label, Some(bytes));
 }
 
+/// Model-identity / device-arm evidence (Tier 3 P0-6). Category `model`, Default.
+pub fn log_model_u64(label: &str, value: u64) {
+    emit_u64(CAT_MODEL, label, value);
+    jsonl_checkpoint("model", label, Some(value));
+}
+
 /// Searchable survival label (P0-5). Console.app message-body search target.
 /// Value is boot-time `phys_footprint` bytes (model not resident).
 pub const ALIVE_LABEL: &str = "instrument.alive";
+
+/// G-1 identity labels (P0-6-1). Values ride `%{public}llu` only.
+pub const MODEL_N_LAYER: &str = "model.n_layer";
+pub const MODEL_N_PARAMS: &str = "model.n_params";
+pub const MODEL_SIZE: &str = "model.size";
+pub const MODEL_META_COUNT: &str = "model.meta_count";
+pub const MODEL_N_VOCAB: &str = "model.n_vocab";
+/// 0=unknown, 1=bundled resource, 2=AppData import — never the raw path.
+pub const MODEL_ORIGIN: &str = "model.origin";
+/// 0=Metal path (default), 1=`CORAXIS_FORCE_CPU=1` oracle arm.
+pub const MODEL_FORCE_CPU: &str = "model.force_cpu";
 
 fn emit_u64(category: &str, label: &str, value: u64) {
     let sub = c_str(SUBSYSTEM);

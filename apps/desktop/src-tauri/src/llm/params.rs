@@ -18,6 +18,22 @@ pub const MAX_PROMPT_BYTES: usize = 1024 * 1024;
 pub const MAX_TOP_K: i32 = 200;
 pub const MAX_TEMPERATURE: f32 = 2.0;
 
+/// Xcode-scheme-injectable CPU oracle (Tier 3 G-2). Only `"1"` enables it.
+/// Absent / any other value → current Metal path unchanged.
+pub const CORAXIS_FORCE_CPU_ENV: &str = "CORAXIS_FORCE_CPU";
+
+/// True only on iOS when `CORAXIS_FORCE_CPU=1`. Desktop always false (no
+/// behavior change). Never permanently forces device Metal off.
+pub fn force_cpu_oracle_enabled() -> bool {
+    if !cfg!(target_os = "ios") {
+        return false;
+    }
+    std::env::var(CORAXIS_FORCE_CPU_ENV)
+        .ok()
+        .as_deref()
+        == Some("1")
+}
+
 #[derive(Clone, Deserialize)]
 pub struct LoadParams {
     /// Layers to offload to Metal. 999 = all.

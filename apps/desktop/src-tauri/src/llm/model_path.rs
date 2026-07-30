@@ -170,6 +170,23 @@ pub fn internal_model_present(app: &AppHandle) -> Result<bool, String> {
     Ok(resolve_loadable_model_path(app).is_ok())
 }
 
+/// Path-origin discriminator for OSLog (P0-6-1). Never logs the path itself.
+///
+/// - `1` = bundled App resource (`…/assets/models/…` or inside `.app`)
+/// - `2` = AppData / container import (`Application Support`)
+/// - `0` = unrecognized layout
+#[cfg_attr(not(target_os = "ios"), allow(dead_code))]
+pub fn model_origin_code(path: &Path) -> u64 {
+    let s = path.to_string_lossy();
+    if s.contains("Application Support") {
+        return 2;
+    }
+    if s.contains("/assets/models/") || s.contains(".app/") {
+        return 1;
+    }
+    0
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -279,5 +296,22 @@ mod tests {
         assert!(validate_gguf_reader(&mut wrong).is_err());
         let mut short = std::io::Cursor::new(b"GGU");
         assert!(validate_gguf_reader(&mut short).is_err());
+    }
+
+    #[test]
+    fn model_origin_code_distinguishes_bundle_and_appdata_without_raw_path() {
+        assert_eq!(
+            model_origin_code(Path::new(
+                "/var/containers/Bundle/Application/X/Coraxis.app/assets/models/pocket-brain.gguf"
+            )),
+            1
+        );
+        assert_eq!(
+            model_origin_code(Path::new(
+                "/var/mobile/Containers/Data/Application/Y/Library/Application Support/com.ai-shizu.pkb/models/pocket-brain.gguf"
+            )),
+            2
+        );
+        assert_eq!(model_origin_code(Path::new("/tmp/scratch.gguf")), 0);
     }
 }

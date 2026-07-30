@@ -52,7 +52,11 @@ pub fn embed_text(
     // The synthetic iOS Simulator Metal device lacks the unified/shared-memory
     // capabilities required for reliable quantized inference. Model layers are
     // forced to CPU at load time; keep K/Q/V and operation offload there too.
-    if cfg!(all(target_os = "ios", target_abi = "sim")) {
+    // `CORAXIS_FORCE_CPU=1` (G-2 oracle) uses the same context half of the
+    // 4-point set.
+    if cfg!(all(target_os = "ios", target_abi = "sim"))
+        || crate::llm::params::force_cpu_oracle_enabled()
+    {
         ctx_params = ctx_params.with_offload_kqv(false).with_op_offload(false);
     }
 
