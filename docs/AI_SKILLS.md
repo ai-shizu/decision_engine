@@ -2242,7 +2242,9 @@ Phase 6-A step1（`bridge::estimate_pooled`）で踏んだ、リプレイ恒等�
 
 **F-3 T-6b as-built（2026-07-29・封緘 `012b97f`）:** アーム A-1-2b（`CANNED_COMPLETION` 12×「あ」+ 毎ターン take）を恒久化。A-1-2（None）維持。**A-1-e**: `accepted` を系列長と照合（0 または不一致は exit 13）。単体 `canned_completion_is_accepted_for_headline`。`/target/` を `.gitignore` へ。D-27（予算超過・digest 一致のまま A-1-e RED）/ D-28（漢数字）/ D-29（A-1-e 削除で素通り）。実 LLM 一致は T-8 命題 (b) のみ残置。
 
-**F-3 T-7 as-built（2026-07-30・基準 `012b97f`・未コミット）:** **新規のみ** `.github/workflows/flavor-gate.yml`（`blackbox-profile-write-gate.yml` 非改変）。jobs: `seal-probe`（E0451/E0603 + **正の伴走**）/ `doctest-fences`（`--doc`・≥30・0 ignored・result 1 本）/ `test-floors`（layer≥26 / live≥58）/ `feature-one-way`（tree llama 0 vs >0）/ `a1-deletability`（exit 0 **かつ** `accepted≠0`）/ `flavor-live-absent`（never-used 走査）。契約 `test_flv_i_17_flavor_gate_workflow_drives_probes`。変異 D-8/9/10/30/31/32。ローカル実測: seal≈5s / doctest≈14s / floors≈1s / tree≈0.3s / absent≈11s / A-1≈68s（warm release）。`--release` は未変更（debug 一致の実測なし）。T-8 未着手。
+**F-3 T-7 as-built（2026-07-30・封緘 `223770b`）:** **新規のみ** `.github/workflows/flavor-gate.yml`（`blackbox-profile-write-gate.yml` 非改変）。jobs: `seal-probe`（E0451/E0603 + **正の伴走**）/ `doctest-fences`（`--doc`・≥30・0 ignored・result 1 本）/ `test-floors`（layer≥26 / live≥58）/ `feature-one-way`（tree llama 0 vs >0）/ `a1-deletability`（exit 0 **かつ** `accepted≠0`）/ `flavor-live-absent`（never-used 走査）。契約 `test_flv_i_17_flavor_gate_workflow_drives_probes`。変異 D-8/9/10/30/31/32。`--release` は未変更。
+
+**F-3 T-8 as-built（2026-07-30・基準 `223770b`・未コミット）:** **関所 H** — `deliver_ambient_flavor` は owned prompt を `LlmHandle::enqueue_flavor_generate` へ委譲し、完了は `AmbientFlavorReady` で sim キューへ戻す（モデル直呼び禁止）。`attach_llm` を `flavor-live` setup で配線。契約 `test_flv_i_14_delivery_never_runs_model_on_sim_worker` + D-23。**命題 (b)** — A-1-3 `--arm live` + A-1-f `attempts>0` + A-1-g digest 一致（実測 attempts=52 / accepted=52 / 系列 52）。**破棄率** — `--measure-discard A|B`（`render_prompt_ex` で指示文の有無のみ切替）。N=32: A discarded=1 / B discarded=3 / 両アーム `leaked=0`。モデル `apps/desktop/models/pocket-brain.gguf` 1,117,320,736 B SHA `6a1a2eb6…9407e`。clippy `--all-targets` **280**（T-7 報告の 281 は再現せず・本 T で 280 確定）。`flavor-live --lib` warn **104**（基準 105・−1／dead_code 減・着弾 0）。
 
 生き残る掟:
 
@@ -2264,3 +2266,5 @@ Phase 6-A step1（`bridge::estimate_pooled`）で踏んだ、リプレイ恒等�
 16. **フレーバ FE は Fact と別クラス・数値非抽出（FLV-I-11 / I-05）。** 凍結リテラル `bxs-flavor` ≠ `bxs-books`。P-4 走査はフレーバ経路のみ。
 17. **A-1 は「機構が動く」と「フレーバが実在する」を別アームで示せ（T-6b）。** A-1-2 = completion `None`。A-1-2b = 作り置き Accepted + take。**A-1-e** が無ければ 2b は静かに 2 へ退化しても digest は緑のまま（D-27/D-29）。
 18. **ガードは CI で走って初めてガード（FLV-I-17 / T-7）。** 二鍵プローブ・doctest フェンス・件数下限・`0 ignored`・`cargo tree` 単方向・A-1 は人間の記憶に置くな。`--lib` と `--doc` を取り違えるな。`ok.` だけでは `#[ignore]` を見逃す。失敗期待の job に正の伴走を置け（cfg 打ち間違い／周辺破壊の偽失敗）。
+19. **ambient 生成は sim ワーカー上で走るな（関所 H / A-4）。** `deliver_ambient_flavor` は `LlmHandle` へ委譲し、完了通知で `finish`。直呼びは契約 RED（D-23）。busy は begin〜完了の間だけが本番意味を持つ。
+20. **破棄率の母集団を著述するな（LAW-25b）。** 指示文は効率手段、安全は `verify` のみ（FLV-R-12）。`leaked≠0` は加工せず即報告。閾値は指揮官裁定（FLV-R-3）。

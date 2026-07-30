@@ -283,9 +283,11 @@ def test_flv_i_01_a1_deletability_script_exists() -> None:
     assert "cargo test" not in code, "A-1 script must not nest cargo test"
     assert "A-1-b" in text and "empty" in text.lower(), "A-1-b empty-series guard required"
     assert "A-1-e" in text and "accepted" in text, "A-1-e accepted-count guard required"
+    assert "A-1-f" in text and "attempts" in text, "A-1-f attempts guard required for live arm"
     assert "diff" in code, "A-1-c byte compare via diff required"
     assert "flavor-a1-digest" in text, "must drive the digest dump binary"
     assert "--arm canned" in text and "--arm none" in text, "A-1-2 and A-1-2b arms required"
+    assert "--arm live" in text, "A-1-3 live arm required (T-8 proposition b)"
 
 
 # ---------------------------------------------------------------------------
@@ -398,6 +400,30 @@ def test_flv_i_14_turn_path_never_blocks_on_model() -> None:
             f"kick_ambient_flavor must not invoke {banned!r} (A-4 / 関所 G)"
         )
     assert "begin_request" in code, "kick must still admit via begin_request"
+
+
+def test_flv_i_14_delivery_never_runs_model_on_sim_worker() -> None:
+    """関所 H / FLV-I-14: deliver_ambient_flavor must not call the model."""
+    path = TAURI / "src" / "blackbox_arena" / "handle.rs"
+    text = _read(path)
+    body = _rust_fn_body(text, "deliver_ambient_flavor")
+    code = re.sub(r"//.*?$", "", body, flags=re.M)
+    code = re.sub(r"/\*.*?\*/", "", code, flags=re.S)
+    for banned in (
+        "LlmHandle::generate",
+        ".generate(",
+        "flavor_gen::generate",
+        "deliver_completion",
+        "generate_chat_text",
+    ):
+        assert banned not in code, (
+            f"deliver_ambient_flavor must not invoke {banned!r} (関所 H)"
+        )
+    # Positive companion: owned-clone relay onto the LLM worker.
+    assert "enqueue_flavor_generate" in code, (
+        "deliver_ambient_flavor must enqueue onto LlmHandle (関所 H companion)"
+    )
+    assert "AmbientFlavorReady" in code or "flavor_tx" in code
 
 
 def test_flv_i_17_flavor_gate_workflow_drives_probes() -> None:

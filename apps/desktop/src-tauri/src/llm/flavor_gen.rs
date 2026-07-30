@@ -33,6 +33,12 @@ pub(crate) enum FlavorOutcome {
 /// Deterministic prompt render. No numeric literals (FLV-W-02).
 /// Single-line / no Cc: newlines are Invisible to the flavor scanner (P-5).
 pub(crate) fn render_prompt(req: &FlavorRequest) -> String {
+    render_prompt_ex(req, true)
+}
+
+/// Prompt render with optional `NO_NUMERALS_INSTRUCTION` (T-8 arm A vs B).
+/// Production always uses [`render_prompt`] (`include_no_numerals = true`).
+pub(crate) fn render_prompt_ex(req: &FlavorRequest, include_no_numerals: bool) -> String {
     let mut out = String::new();
     out.push_str("役割: アリーナの雰囲気を伝える短い散文を書く。 ");
     out.push_str("テンプレート: ");
@@ -45,8 +51,11 @@ pub(crate) fn render_prompt(req: &FlavorRequest) -> String {
         out.push_str(slot_label(slot.tag));
     }
     out.push_str("。 制約: ");
-    out.push_str(NO_NUMERALS_INSTRUCTION);
-    out.push_str(" 短く書け。事実や計器の読みを述べるな。雰囲気だけを書け。");
+    if include_no_numerals {
+        out.push_str(NO_NUMERALS_INSTRUCTION);
+        out.push(' ');
+    }
+    out.push_str("短く書け。事実や計器の読みを述べるな。雰囲気だけを書け。");
     let _ = (req.schema, req.locale); // closed enums; reserved for future locale copy
     out
 }

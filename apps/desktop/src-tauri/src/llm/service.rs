@@ -557,6 +557,15 @@ enum LlmCommand {
         tokens: Channel<TokenEvent>,
         completion: oneshot::Sender<Result<(), String>>,
     },
+    /// Arena ambient flavor (関所 H / F-3 T-8): collect chat text on this
+    /// worker, then invoke `complete` here so the sim worker is never blocked
+    /// on decode. `complete` is an owned-clone relay (typically `send`s back
+    /// onto the sim queue).
+    #[cfg(feature = "flavor-live")]
+    FlavorGenerate {
+        params: GenerationParams,
+        complete: Box<dyn FnOnce(Result<String, String>) + Send>,
+    },
     /// One-shot embedding on the worker (separate short-lived context).
     Embed {
         text: String,
@@ -958,6 +967,44 @@ impl LlmHandle {
         }
     }
 
+    /// Fire-and-forget chat generation for BLACKBOX ambient flavor (関所 H).
+    ///
+    /// Runs on the LLM worker thread. `complete` is invoked there with the
+    /// owned completion text (or `Err`) — callers must relay into the sim
+    /// queue from that closure; do **not** wait on the sim worker.
+    #[cfg(feature = "flavor-live")]
+    pub fn enqueue_flavor_generate(
+        &self,
+        prompt: String,
+        max_tokens: u32,
+        complete: Box<dyn FnOnce(Result<String, String>) + Send>,
+    ) -> Result<(), String> {
+        self.enqueue_flavor_generate_seeded(prompt, max_tokens, 0, complete)
+    }
+
+    /// Same as [`Self::enqueue_flavor_generate`] with an explicit sampler seed
+    /// (T-8 discard-rate arms need independent draws).
+    #[cfg(feature = "flavor-live")]
+    pub fn enqueue_flavor_generate_seeded(
+        &self,
+        prompt: String,
+        max_tokens: u32,
+        seed: u32,
+        complete: Box<dyn FnOnce(Result<String, String>) + Send>,
+    ) -> Result<(), String> {
+        let params = GenerationParams {
+            prompt,
+            n_ctx: 0,
+            max_tokens,
+            temp: 0.7,
+            top_k: 40,
+            top_p: 0.95,
+            seed,
+        };
+        params.validate()?;
+        self.enqueue_heavy(LlmCommand::FlavorGenerate { params, complete })
+    }
+
     /// Start a generation, streaming tokens over `tokens`, and asynchronously
     /// wait until the worker has sent its terminal event.
     /// `task_id` is the sole authority for extraction routing (not copied into params).
@@ -1178,6 +1225,23 @@ fn worker_loop(
                 };
                 monitor.set_phase(MemPhase::Idle);
                 complete_generation(result, &tokens, completion);
+            }
+            #[cfg(feature = "flavor-live")]
+            LlmCommand::FlavorGenerate { params, complete } => {
+                let cancel_epoch = governor.cancel_epoch();
+                let result = match model.as_ref() {
+                    Some(model) => generate_chat_text(
+                        &backend,
+                        model,
+                        &params,
+                        &governor,
+                        cancel_epoch,
+                        &monitor,
+                    ),
+                    None => Err("MODEL_NOT_LOADED".into()),
+                };
+                monitor.set_phase(MemPhase::Idle);
+                complete(result);
             }
             LlmCommand::IsLoaded { reply } => {
                 let _ = reply.send(model.is_some());
@@ -1593,6 +1657,116 @@ fn generate(
     }
 }
 
+/// Chat-only generation that returns owned text (関所 H ambient path).
+/// No `Channel` — the arena relays the string onto the sim queue via callback.
+#[cfg(feature = "flavor-live")]
+fn generate_chat_text(
+    backend: &LlamaBackend,
+    model: &LlamaModel,
+    g: &GenerationParams,
+    governor: &LlmMemoryGovernor,
+    cancel_epoch: u64,
+    monitor: &MemoryMonitor,
+) -> Result<String, String> {
+    g.validate()?;
+    if governor.is_cancelled_since(cancel_epoch) {
+        return Err("generation cancelled".into());
+    }
+    let prompt = render_chat_prompt(model, CHAT_SYSTEM_PROMPT, &g.prompt)?;
+    if governor.is_cancelled_since(cancel_epoch) {
+        return Err("generation cancelled".into());
+    }
+
+    let requested_ctx = g.resolved_n_ctx();
+    let trained_ctx = model.n_ctx_train();
+    if trained_ctx > 0 && requested_ctx > trained_ctx {
+        return Err(format!(
+            "requested context {requested_ctx} exceeds model context {trained_ctx}"
+        ));
+    }
+    let level = governor.degradation();
+    let scaled_ctx = (((requested_ctx as f64) * f64::from(level.context_factor())).round() as u32)
+        .clamp(MIN_N_CTX, requested_ctx);
+    let input_token_budget = scaled_ctx
+        .checked_sub(g.max_tokens)
+        .ok_or_else(|| "output token budget exceeds degraded context".to_string())?
+        as usize;
+
+    let prompt_tokens = model
+        .str_to_token(&prompt, model_add_bos(model))
+        .map_err(|e| format!("tokenize: {e}"))?;
+    if prompt_tokens.len() > input_token_budget {
+        return Err(format!(
+            "prompt exceeds context budget: {} > {input_token_budget}",
+            prompt_tokens.len()
+        ));
+    }
+    if governor.is_cancelled_since(cancel_epoch) {
+        return Err("generation cancelled".into());
+    }
+
+    let ctx_params = apply_context_device_policy(
+        LlamaContextParams::default().with_n_ctx(NonZeroU32::new(scaled_ctx)),
+        cfg!(all(target_os = "ios", target_abi = "sim")),
+    );
+    let mut ctx = model
+        .new_context(backend, ctx_params)
+        .map_err(|e| format!("context create: {e}"))?;
+    monitor.set_phase(MemPhase::CtxCreated);
+
+    let mut batch = LlamaBatch::new(prompt_tokens.len().max(1), 1);
+    let last = prompt_tokens.len().saturating_sub(1);
+    for (i, token) in prompt_tokens.iter().enumerate() {
+        batch
+            .add(*token, i as i32, &[0], i == last)
+            .map_err(|e| format!("batch add: {e}"))?;
+    }
+    if governor.is_cancelled_since(cancel_epoch) {
+        return Err("generation cancelled".into());
+    }
+    ctx.decode(&mut batch).map_err(|e| format!("decode: {e}"))?;
+    monitor.set_phase(MemPhase::Inference);
+
+    let mut sampler = if g.temp <= 0.0 {
+        LlamaSampler::greedy()
+    } else {
+        LlamaSampler::chain_simple([
+            LlamaSampler::top_k(g.top_k),
+            LlamaSampler::top_p(g.top_p, 1),
+            LlamaSampler::temp(g.temp),
+            LlamaSampler::dist(g.seed),
+        ])
+    };
+
+    let mut out = String::new();
+    let mut n_cur = batch.n_tokens();
+    let mut text_decoder = Utf8TokenDecoder::default();
+    for _seq in 0..g.max_tokens {
+        if governor.is_cancelled_since(cancel_epoch) {
+            return Err("generation cancelled".into());
+        }
+        if governor.degradation().throttle_generation() {
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        let token = sampler.sample(&ctx, batch.n_tokens() - 1);
+        if model.is_eog_token(token) {
+            break;
+        }
+        let piece_bytes =
+            token_piece_bytes(model, token).map_err(|e| format!("token decode: {e}"))?;
+        out.push_str(&text_decoder.push(&piece_bytes));
+
+        batch.clear();
+        batch
+            .add(token, n_cur, &[0], true)
+            .map_err(|e| format!("batch add: {e}"))?;
+        n_cur += 1;
+        ctx.decode(&mut batch).map_err(|e| format!("decode: {e}"))?;
+    }
+    out.push_str(&text_decoder.finish());
+    Ok(out)
+}
+
 /// Test-only EDINET coordinator harness (fake Barrier/Park worker). Shared with
 /// `commands_sim` Step 11 pipeline tests so they do not re-implement acquire.
 #[cfg(test)]
@@ -1700,6 +1874,18 @@ mod tests {
             handle.register_events(channel),
             Err("llm worker unavailable: backend unavailable".into())
         );
+    }
+
+    #[cfg(feature = "flavor-live")]
+    #[test]
+    fn enqueue_flavor_generate_rejects_unavailable_worker() {
+        let handle = LlmHandle::unavailable("backend unavailable".into());
+        let err = handle.enqueue_flavor_generate(
+            "雰囲気だけを書け。".into(),
+            16,
+            Box::new(|_| panic!("complete must not run when enqueue fails")),
+        );
+        assert!(err.is_err(), "unavailable worker must reject flavor enqueue");
     }
 
     #[test]

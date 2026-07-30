@@ -97,7 +97,10 @@ use engine::EngineManager;
 use knowledge::NetworkPolicyStore;
 #[cfg(not(mobile))]
 use tauri::webview::{DownloadEvent, NewWindowResponse};
-#[cfg(all(feature = "secure-vault", target_vendor = "apple"))]
+#[cfg(any(
+    all(feature = "secure-vault", target_vendor = "apple"),
+    feature = "flavor-live"
+))]
 use tauri::Manager;
 use tauri::RunEvent;
 #[cfg(not(mobile))]
@@ -482,6 +485,13 @@ pub fn run() {
             blackbox_arena::commands::bxs_list_profiles,
         ])
         .setup(move |app| {
+            // 関所 H: ambient flavor generation must leave the sim worker.
+            #[cfg(feature = "flavor-live")]
+            {
+                let llm = (*app.state::<crate::llm::LlmHandle>()).clone();
+                app.state::<blackbox_arena::handle::BlackboxSimHandle>()
+                    .attach_llm(llm);
+            }
             #[cfg(all(feature = "secure-vault", target_vendor = "apple"))]
             {
                 // Authentication is deliberately not started from setup. The

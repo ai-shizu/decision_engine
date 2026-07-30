@@ -21,7 +21,7 @@
 
 use std::collections::HashMap;
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, SyncSender, TrySendError};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
@@ -31,9 +31,6 @@ use crate::blackbox_sim::persist::{FlushReceipt, NullSink};
 use crate::blackbox_sim::telemetry::ActionIntent;
 
 use super::view::{map_director_error, AdvanceView, ArenaLimitsView, BooksView, ObservationView, SimUiErrorCode};
-
-#[cfg(all(feature = "secure-vault", target_vendor = "apple"))]
-use std::sync::Mutex;
 
 #[cfg(all(feature = "secure-vault", target_vendor = "apple"))]
 use crate::blackbox_sim::director::replay_session;
@@ -234,9 +231,18 @@ enum SimRequest {
         reply: SyncSender<Result<Option<String>, SimUiErrorCode>>,
     },
     /// Off-turn ambient delivery (A-4). No reply — never blocks `advance`.
+    /// Delegates model work to [`crate::llm::LlmHandle`] (関所 H); this
+    /// message only builds an owned prompt and enqueues.
     #[cfg(feature = "flavor-live")]
     DeliverAmbientFlavor {
         campaign_id: String,
+    },
+    /// Completion relay from the LLM worker back onto the sim queue (関所 H).
+    #[cfg(feature = "flavor-live")]
+    AmbientFlavorReady {
+        campaign_id: String,
+        /// `None` = model absent / error / empty → `Unavailable` via deliver.
+        completion: Option<String>,
     },
 }
 
@@ -246,9 +252,12 @@ struct Worker {
     vault: Arc<Mutex<Option<VaultHandle>>>,
     #[cfg(feature = "flavor-live")]
     flavor: super::flavor_slot::FlavorAmbientSlot,
-    /// Self-queue for off-turn flavor delivery (begin on kick, finish here).
+    /// Self-queue for off-turn flavor delivery kick + LLM completion relay.
     #[cfg(feature = "flavor-live")]
     flavor_tx: SyncSender<SimRequest>,
+    /// LLM handle for ambient generation (関所 H). Attached after spawn.
+    #[cfg(feature = "flavor-live")]
+    llm: Arc<Mutex<Option<crate::llm::LlmHandle>>>,
 }
 
 impl Worker {
@@ -289,6 +298,13 @@ impl Worker {
                 #[cfg(feature = "flavor-live")]
                 SimRequest::DeliverAmbientFlavor { campaign_id } => {
                     self.deliver_ambient_flavor(&campaign_id);
+                }
+                #[cfg(feature = "flavor-live")]
+                SimRequest::AmbientFlavorReady {
+                    campaign_id,
+                    completion,
+                } => {
+                    self.finish_ambient_flavor(&campaign_id, completion);
                 }
             }
         }
@@ -445,12 +461,15 @@ impl Worker {
         }
     }
 
-    /// Worker path: model completion (T-8) or absent → `finish`. Not turn-path.
+    /// Worker path (関所 H): build owned prompt, enqueue on `LlmHandle`, return.
+    /// Must **not** call the model or `flavor_gen::generate` here — completion
+    /// arrives as [`SimRequest::AmbientFlavorReady`].
     #[cfg(feature = "flavor-live")]
     fn deliver_ambient_flavor(&mut self, campaign_id: &str) {
         use crate::flavor::request::{
             FlavorLocale, FlavorRequest, FlavorSchema, FlavorSlot, SlotId, SlotValue, TemplateId,
         };
+        use crate::llm::flavor_gen;
 
         if !self.sessions.contains_key(campaign_id) {
             // Aborted between kick and deliver — drop without panic.
@@ -469,8 +488,67 @@ impl Worker {
             }],
             locale: FlavorLocale::Ja,
         };
-        // T-8 supplies a real completion; until then model-absent = None.
-        self.flavor.deliver_completion(&request, None);
+        // Owned prompt crosses the thread boundary (AI_SKILLS §20-5 relay).
+        let prompt = flavor_gen::render_prompt(&request);
+        let llm = self
+            .llm
+            .lock()
+            .ok()
+            .and_then(|guard| guard.clone());
+        let Some(llm) = llm else {
+            self.flavor
+                .finish(crate::llm::flavor_gen::FlavorOutcome::Unavailable);
+            return;
+        };
+        let tx = self.flavor_tx.clone();
+        let cid = campaign_id.to_string();
+        // Headline budget is 48 chars; 64 tokens is ample headroom.
+        const FLAVOR_MAX_TOKENS: u32 = 64;
+        if llm
+            .enqueue_flavor_generate(
+                prompt,
+                FLAVOR_MAX_TOKENS,
+                Box::new(move |result| {
+                    let completion = result.ok().filter(|s| !s.trim().is_empty());
+                    // Block on the sim queue if full — never leave the slot busy.
+                    let _ = tx.send(SimRequest::AmbientFlavorReady {
+                        campaign_id: cid,
+                        completion,
+                    });
+                }),
+            )
+            .is_err()
+        {
+            self.flavor
+                .finish(crate::llm::flavor_gen::FlavorOutcome::Unavailable);
+        }
+    }
+
+    /// LLM-thread completion landed on the sim queue (関所 H).
+    #[cfg(feature = "flavor-live")]
+    fn finish_ambient_flavor(&mut self, campaign_id: &str, completion: Option<String>) {
+        use crate::flavor::request::{
+            FlavorLocale, FlavorRequest, FlavorSchema, FlavorSlot, SlotId, SlotValue, TemplateId,
+        };
+
+        if !self.sessions.contains_key(campaign_id) {
+            if self.flavor.is_busy() {
+                self.flavor
+                    .finish(crate::llm::flavor_gen::FlavorOutcome::Unavailable);
+            }
+            return;
+        }
+        let request = FlavorRequest {
+            schema: FlavorSchema::V1,
+            template_id: TemplateId::ArenaEventHeadline,
+            slots: vec![FlavorSlot {
+                id: SlotId::Mood,
+                tag: SlotValue::MoodCalm,
+            }],
+            locale: FlavorLocale::Ja,
+        };
+        self.flavor
+            .deliver_completion(&request, completion.as_deref());
     }
 
     #[cfg(feature = "flavor-live")]
@@ -614,6 +692,8 @@ struct Inner {
     sender: SyncSender<SimRequest>,
     #[cfg(all(feature = "secure-vault", target_vendor = "apple"))]
     vault: Arc<Mutex<Option<VaultHandle>>>,
+    #[cfg(feature = "flavor-live")]
+    llm: Arc<Mutex<Option<crate::llm::LlmHandle>>>,
 }
 
 impl BlackboxSimHandle {
@@ -627,6 +707,8 @@ impl BlackboxSimHandle {
         let vault: Arc<Mutex<Option<VaultHandle>>> = Arc::new(Mutex::new(None));
         #[cfg(feature = "flavor-live")]
         let flavor_tx = sender.clone();
+        #[cfg(feature = "flavor-live")]
+        let llm: Arc<Mutex<Option<crate::llm::LlmHandle>>> = Arc::new(Mutex::new(None));
         let worker = Worker {
             sessions: HashMap::new(),
             #[cfg(all(feature = "secure-vault", target_vendor = "apple"))]
@@ -635,6 +717,8 @@ impl BlackboxSimHandle {
             flavor: super::flavor_slot::FlavorAmbientSlot::new(),
             #[cfg(feature = "flavor-live")]
             flavor_tx,
+            #[cfg(feature = "flavor-live")]
+            llm: Arc::clone(&llm),
         };
         let spawned = thread::Builder::new()
             .name("bxs-sim-worker".to_string())
@@ -651,6 +735,8 @@ impl BlackboxSimHandle {
                 sender,
                 #[cfg(all(feature = "secure-vault", target_vendor = "apple"))]
                 vault,
+                #[cfg(feature = "flavor-live")]
+                llm,
             }),
         }
     }
@@ -659,6 +745,15 @@ impl BlackboxSimHandle {
     pub(crate) fn attach_vault(&self, vault: VaultHandle) {
         if let Ok(mut slot) = self.inner.vault.lock() {
             *slot = Some(vault);
+        }
+    }
+
+    /// Wire the pocket-brain worker so ambient flavor generation leaves the
+    /// sim thread (関所 H / A-4).
+    #[cfg(feature = "flavor-live")]
+    pub(crate) fn attach_llm(&self, handle: crate::llm::LlmHandle) {
+        if let Ok(mut slot) = self.inner.llm.lock() {
+            *slot = Some(handle);
         }
     }
 
