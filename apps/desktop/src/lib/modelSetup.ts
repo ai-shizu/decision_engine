@@ -113,6 +113,60 @@ export function openRecommendedModelPage(): Promise<void> {
 }
 
 /**
+ * Send a precise failure to the Rust log (OSLog on iOS). The on-screen message
+ * stays the fixed sentence required by AI_SKILLS §5.1 — this is the developer
+ * channel that sentence used to destroy. Never throws: a diagnostic must not
+ * replace the failure it is describing.
+ */
+export async function reportImportDiagnostic(
+  step: string,
+  detail: string,
+): Promise<void> {
+  try {
+    await invoke("report_import_diagnostic", { step, detail });
+  } catch {
+    /* diagnostics are best-effort by design */
+  }
+}
+
+/**
+ * Provider shape of the picked URL — which Files backend handed it to us — using
+ * fixed markers only. The raw path is deliberately not logged: it can carry
+ * account and filename detail, and §5.1 forbids putting it in user-visible text.
+ * Which provider it came from is the part that actually discriminates a
+ * simulator-only success (Tier 2) from a real-provider failure.
+ */
+export function describeSourceShape(p: string): string {
+  const markers: [string, string][] = [
+    ["/Mobile Documents/", "icloud"],
+    ["/File Provider Storage/", "fileprovider"],
+    ["/Inbox/", "inbox"],
+    ["/tmp/", "tmp"],
+    ["/Downloads/", "downloads"],
+    ["/var/mobile/Containers/Data/", "appcontainer"],
+  ];
+  const hit = markers.find(([m]) => p.includes(m));
+  const segments = p.split("/").filter(Boolean).length;
+  const ext = p.slice(p.lastIndexOf(".") + 1).toLowerCase();
+  return `provider=${hit ? hit[1] : "other"} segments=${segments} ext=${ext} len=${p.length}`;
+}
+
+/**
+ * Run one import step, naming it if it throws. Without this every failure
+ * arrived as one indistinguishable sentence; the step marker is what turns a
+ * device re-run into a diagnosis instead of another guess.
+ */
+async function withStep<T>(name: string, fn: () => Promise<T>): Promise<T> {
+  try {
+    return await fn();
+  } catch (e) {
+    const detail = e instanceof Error ? e.message : String(e);
+    await reportImportDiagnostic(name, detail);
+    throw e;
+  }
+}
+
+/**
  * Dialog → Security-Scoped access → copyFile into AppData/models/pocket-brain.gguf
  * → Rust confirm. Never loads the whole GGUF into JS heap.
  */
@@ -123,12 +177,22 @@ export async function importLocalGgufViaFs(options?: {
     throw new Error("not tauri");
   }
 
-  const selected = await open({
-    multiple: false,
-    directory: false,
-    filters: [{ name: "GGUF model", extensions: ["gguf"] }],
-    title: "Coraxis — ローカル GGUF を選択",
-  });
+  const selected = await withStep("dialog", () =>
+    open({
+      multiple: false,
+      directory: false,
+      filters: [{ name: "GGUF model", extensions: ["gguf"] }],
+      title: "Coraxis — ローカル GGUF を選択",
+      // Required, not cosmetic. The picker defaults to `copy`, which makes iOS
+      // duplicate the whole GGUF into our own container tmp and hand back a URL
+      // we already own — not security-scoped, so `startAccessingSecurityScoped
+      // Resource` fails on it (measured on device: provider=tmp). `scoped`
+      // leaves the file in place with system-managed access, which is what §5.1
+      // describes, and avoids a 1.1 GB duplicate that the API docs make *our*
+      // responsibility to delete.
+      fileAccessMode: "scoped",
+    }),
+  );
   if (selected === null) {
     return false;
   }
@@ -137,26 +201,47 @@ export async function importLocalGgufViaFs(options?: {
     return false;
   }
 
+  // Which Files provider handed us this URL, recorded before anything can fail.
+  // Tier 2 only ever exercised the simulator's local provider.
+  await reportImportDiagnostic("source_shape", describeSourceShape(sourcePath));
+
   options?.onProgress?.(5);
-  const dest = await prepareModelImportDest();
+  const dest = await withStep("prepare_dest", () => prepareModelImportDest());
   options?.onProgress?.(15);
 
-  await mkdir("models", {
-    baseDir: BaseDirectory.AppData,
-    recursive: true,
-  });
+  await withStep("mkdir", () =>
+    mkdir("models", {
+      baseDir: BaseDirectory.AppData,
+      recursive: true,
+    }),
+  );
 
   let scoped = false;
   try {
-    await startAccessingSecurityScopedResource(sourcePath);
-    scoped = true;
+    // Non-fatal by design. Under `scoped` this succeeds; under a `copy`-mode URL
+    // (our own container tmp) it fails even though access is already ours. A
+    // throw here aborted the whole import before the copy was ever attempted —
+    // that, not the copy, is what failed on device. If access is genuinely
+    // missing the failure now surfaces at `copy` with the OS error attached,
+    // which is strictly more informative than dying one step early.
+    try {
+      await startAccessingSecurityScopedResource(sourcePath);
+      scoped = true;
+    } catch (e) {
+      await reportImportDiagnostic(
+        "scope_start_skipped",
+        e instanceof Error ? e.message : String(e),
+      );
+    }
     options?.onProgress?.(25);
     // Prefer relative AppData dest so scope stays inside $APPDATA.
-    await copyFile(sourcePath, dest.relativePath, {
-      toPathBaseDir: BaseDirectory.AppData,
-    });
+    await withStep("copy", () =>
+      copyFile(sourcePath, dest.relativePath, {
+        toPathBaseDir: BaseDirectory.AppData,
+      }),
+    );
     options?.onProgress?.(90);
-    await confirmModelImported();
+    await withStep("confirm", () => confirmModelImported());
     // Best-effort warm load — file is already confirmed in AppData.
     try {
       await invoke("brain_load_gguf", {

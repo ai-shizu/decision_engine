@@ -277,6 +277,8 @@ pub fn run() {
             #[cfg(feature = "pocket-brain")]
             llm::commands_model_setup::open_recommended_model_page,
             #[cfg(feature = "pocket-brain")]
+            llm::commands_model_setup::report_import_diagnostic,
+            #[cfg(feature = "pocket-brain")]
             coliseum::commands::assign_interview_turn_ids,
             #[cfg(feature = "pocket-brain")]
             coliseum::commands::seal_interview_evaluation,

@@ -7,6 +7,7 @@ import {
   checkModelExists,
   importLocalGgufViaFs,
   openRecommendedModelPage,
+  reportImportDiagnostic,
 } from "../lib/modelSetup";
 import {
   INITIAL_MODEL_SETUP,
@@ -87,6 +88,10 @@ export function ModelSetupGate({ onReady }: ModelSetupGateProps) {
       dispatch({ type: "import_done" });
     } catch (err) {
       const raw = err instanceof Error ? err.message : String(err);
+      // Backstop: `withStep` names anything thrown inside the import sequence, but
+      // a throw from outside it would otherwise still vanish into the fixed
+      // sentence below. The user-facing wording is unchanged (§5.1).
+      void reportImportDiagnostic("unhandled", raw);
       dispatch({ type: "import_error", message: softImportError(raw) });
     }
   }

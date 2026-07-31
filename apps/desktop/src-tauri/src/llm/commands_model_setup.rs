@@ -49,6 +49,7 @@ pub fn check_model_exists(app: AppHandle) -> Result<ModelExistsStatus, String> {
 #[tauri::command]
 pub fn prepare_model_import_dest(app: AppHandle) -> Result<ModelImportDest, String> {
     let path = resolve_model_path(&app)?;
+    log::info!("import.step dest_ready");
     Ok(ModelImportDest {
         absolute_path: path.to_string_lossy().into_owned(),
         relative_path: MODEL_RELATIVE_PATH.to_string(),
@@ -59,7 +60,42 @@ pub fn prepare_model_import_dest(app: AppHandle) -> Result<ModelImportDest, Stri
 #[tauri::command]
 pub fn confirm_model_imported(app: AppHandle) -> Result<(), String> {
     let path = resolve_model_path(&app)?;
+    // Record the copied length before validating. `validate_gguf_file` checks only
+    // the four-byte magic, so a copy truncated by ENOSPC or an interrupted
+    // security-scoped read passes it and is accepted as a good import. Size is the
+    // only evidence that distinguishes "copied" from "copied completely", and
+    // without this line a partial import is indistinguishable from a whole one.
+    match std::fs::metadata(&path) {
+        Ok(m) => log::info!("import.step confirm_size bytes={}", m.len()),
+        Err(e) => log::error!("import.diag step=confirm_stat detail={e}"),
+    }
     validate_gguf_file(&path)
+}
+
+/// Developer diagnostic sink for the frontend import path (Tier 3 G-5).
+///
+/// The UI deliberately shows one fixed sentence (§5.1 invariant: no paths, no raw
+/// exceptions on screen). The consequence was that the *precise* failure — a scope
+/// denial, ENOSPC, a plugin-fs error — never left the webview, and no OSLog record
+/// of it existed anywhere. A device import could fail with literally nothing to
+/// read. This routes the frontend's error text to `log::error!`, which on iOS is
+/// the OSLog backend, while the on-screen wording is unchanged.
+///
+/// Control characters are stripped and both fields are truncated: the OSLog shim
+/// caps a record at 192 bytes, so an untruncated detail would silently push the
+/// step marker out of the line it is meant to label.
+#[tauri::command]
+pub fn report_import_diagnostic(step: String, detail: String) -> Result<(), String> {
+    let step: String = step.chars().filter(|c| !c.is_control()).take(32).collect();
+    let detail: String = detail
+        .chars()
+        .filter(|c| !c.is_control())
+        .take(110)
+        .collect();
+    // Emitted at error level so it survives any collection that filters below it;
+    // the step marker, not the level, says whether this line is a failure.
+    log::error!("import.diag step={step} detail={detail}");
+    Ok(())
 }
 
 /// Open the recommended model page in the system browser (no in-app fetch).
