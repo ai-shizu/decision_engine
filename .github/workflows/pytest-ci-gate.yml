@@ -63,23 +63,14 @@ jobs:
           python -m pip install textual
           python -c "import textual, pytest, numpy; print('textual', textual.__version__); print('pytest', pytest.__version__); print('numpy', numpy.__version__)"
 
-      # F-3 §変異ドリル (floor) — temporary. Drop one absolute-isolation file (must RED).
-      - name: Drop one 絶対孤立 file (floor mutation)
-        run: |
-          set -euo pipefail
-          rm -f tests/test_manifest_persistence_isolation.py
-          echo "removed tests/test_manifest_persistence_isolation.py"
-          ls tests/test_e0a_egress_lockdown.py tests/test_fsa_2026_07_13_01_offline_boundary.py
-          test ! -f tests/test_manifest_persistence_isolation.py
-
       - name: 絶対孤立 floor (≥ 22 collected, failures == 0, allowlist EMPTY)
         run: |
           set -euo pipefail
           OUT="$(mktemp)"
+          # F-3 floor mutation (temporary): omit the third file so collected < 22.
           python -m pytest \
             tests/test_e0a_egress_lockdown.py \
             tests/test_fsa_2026_07_13_01_offline_boundary.py \
-            tests/test_manifest_persistence_isolation.py \
             -rs --tb=short 2>&1 | tee "$OUT"
           COLLECTED="$(grep -E '^collected [0-9]+ items' "$OUT" | head -1 | sed -E 's/^collected ([0-9]+) items.*/\1/')"
           echo "絶対孤立 collected=${COLLECTED} (floor >= 22)"
