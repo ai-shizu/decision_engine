@@ -485,6 +485,12 @@ impl Worker {
         // Read the market the player is looking at, so the prompt stops being
         // the same sentence on every turn.
         let request = ambient_flavor_request(mood_for_market(entry.session.market()));
+        // Read before the borrow ends: an independent draw per turn is the
+        // other half of breaking the constant output (Tier 3 §14.3).
+        let seed = ambient_flavor_seed(
+            entry.session.genesis_digest8(),
+            entry.session.turns_completed(),
+        );
         // Owned prompt crosses the thread boundary (AI_SKILLS §20-5 relay).
         let prompt = flavor_gen::render_prompt(&request);
         let llm = self
@@ -502,9 +508,10 @@ impl Worker {
         // Headline budget is 48 chars; 64 tokens is ample headroom.
         const FLAVOR_MAX_TOKENS: u32 = 64;
         if llm
-            .enqueue_flavor_generate(
+            .enqueue_flavor_generate_seeded(
                 prompt,
                 FLAVOR_MAX_TOKENS,
+                seed,
                 Box::new(move |result| {
                     let completion = result.ok().filter(|s| !s.trim().is_empty());
                     // Block on the sim queue if full — never leave the slot busy.
@@ -919,6 +926,30 @@ pub(crate) fn ambient_flavor_request(
     }
 }
 
+/// Sampler seed for one ambient generation.
+///
+/// The live path pinned this at 0 on every call (`enqueue_flavor_generate`),
+/// so a given prompt yielded exactly one draw — 52 generations on device
+/// produced 52 identical strings and the numeral guard was never handed
+/// anything to reject. The seeded entry point already existed for precisely
+/// this reason; its own doc says T-8's discard-rate arms "need independent
+/// draws". It had simply never been wired to the arena.
+///
+/// Deterministic in (campaign, tick) rather than random, on purpose. Varying
+/// is what breaks the collapse; reproducible is what keeps a surprising line
+/// investigable instead of a one-off nobody can retrieve.
+#[cfg_attr(not(feature = "flavor-live"), allow(dead_code))]
+pub(crate) fn ambient_flavor_seed(genesis_digest8: [u8; 8], turns: u32) -> u32 {
+    let g = u32::from_le_bytes([
+        genesis_digest8[0],
+        genesis_digest8[1],
+        genesis_digest8[2],
+        genesis_digest8[3],
+    ]);
+    g.wrapping_mul(2_654_435_761)
+        .wrapping_add(turns.wrapping_mul(9973).wrapping_add(1))
+}
+
 /// Numeric codes for the arena's terminal state (Tier 3 follow-up to §13.5).
 ///
 /// Returns `(sealed, dead_reason)`. `dead_reason` is `0` unless the session is
@@ -1018,6 +1049,27 @@ mod tests {
         );
         // Before the first observation: unchanged default.
         assert_eq!(mood_for_market(None), SlotValue::MoodCalm);
+    }
+
+    /// Seed 0 on every call is the defect this replaces, so the property under
+    /// test is that consecutive turns never draw the same seed. Reproducibility
+    /// is asserted too: the same campaign and tick must give the same seed, or
+    /// an odd line on device could never be retrieved.
+    #[test]
+    fn ambient_seed_varies_per_turn_and_repeats_only_for_the_same_turn() {
+        let g: [u8; 8] = [7, 200, 3, 91, 0, 0, 0, 0];
+        let seeds: Vec<u32> = (0..64).map(|t| ambient_flavor_seed(g, t)).collect();
+
+        let mut sorted = seeds.clone();
+        sorted.sort_unstable();
+        sorted.dedup();
+        assert_eq!(sorted.len(), seeds.len(), "64 turns must give 64 seeds");
+
+        // Reproducible for the same (campaign, tick).
+        assert_eq!(ambient_flavor_seed(g, 17), ambient_flavor_seed(g, 17));
+        // A different campaign must not replay the same prose sequence.
+        let other: [u8; 8] = [8, 200, 3, 91, 0, 0, 0, 0];
+        assert_ne!(ambient_flavor_seed(g, 17), ambient_flavor_seed(other, 17));
     }
 
     /// Distinct moods must reach the prompt as distinct text. If they rendered
