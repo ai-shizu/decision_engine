@@ -1119,6 +1119,9 @@ LINE: 上限 16 MiB・`chunk_markdown_capped` で `source_id-p00`… に分割�
 
 **as-built (rev 2026-07-23 — iOS 同梱):**
 1. **FE がコピーの唯一の経路（デスクトップ / 追加取込）。** `@tauri-apps/plugin-dialog` で選択 → `startAccessingSecurityScopedResource` → `plugin-fs` `copyFile` で `BaseDirectory.AppData` / `models/pocket-brain.gguf` へ。巨大 GGUF を JS heap に `readFile` するな。
+   - **🚩 `open()` には `fileAccessMode: "scoped"` を必ず渡せ（2026-07-31 実機で確定）。** 既定は **`copy`** であり、iOS 側 Swift が `asCopy: args.fileAccessMode == .scoped ? false : true` を評価するため、**ピッカーは 1.1GB の GGUF を自アプリの container tmp へ複製し、「自分が既に所有している URL」を返す。** その URL は security-scoped ではないので `startAccessingSecurityScopedResource` が**正しく失敗する** —— これを致命扱いすると**コピーに到達する前に取込が死ぬ**。実機の失敗はこれ 1 点だった（`import.diag step=scope_start`）。
+   - **`copy` 既定のもう 1 つの害:** 複製の削除は **API 契約上「呼び出し側の責任」** であり、失敗のたびに tmp へ 1.1GB の孤児が積む。`scoped` は原本を動かさないので複製自体が生じない。
+   - **`startAccessingSecurityScopedResource` の失敗を致命にするな。** 失敗しても `copyFile` を試みれば、権限が本当に無い場合は **OS エラー付きで `copy` 段に顕在化する**（1 段手前で死ぬより情報量が多い）。両ピッカーモードで動く。
 2. Rust: `prepare_model_import_dest` / `confirm_model_imported` / `check_model_exists` / `open_recommended_model_page`。**外部ピッカーパスを `std::fs` で読むな**（iOS Security-Scoped で失敗する）。旧 `pick_local_gguf` / `import_local_model`（rfd）は削除。
 3. **ロード優先順位:** `resolve_loadable_model_path` = (1) `path().resolve("models/pocket-brain.gguf", BaseDirectory::Resource)`（iOS では `$BUNDLE/assets/...`・`bundle.resources` 同梱の 1.5B）→ (2) `app_data_dir()/models/pocket-brain.gguf`。書込先は従来どおり `resolve_model_path`（AppData のみ）。
 4. Capabilities（最小権限・2026-07-28 T-6）: `dialog:default` + security-scoped start/stop +
@@ -1139,15 +1142,17 @@ LINE: 上限 16 MiB・`chunk_markdown_capped` で `source_id-p00`… に分割�
 |---|---|---|
 | **Tier 1** | macOS デスクトップ（非サンドボックス）<br>`npx tauri dev --features pocket-brain,secure-vault` | **GREEN** |
 | **Tier 2** | iOS シミュレータ iPhone 17 Pro（**sandbox 実効**）<br>`npx tauri ios dev --features pocket-brain,secure-vault` | **GREEN** |
-| **Tier 3** | **iOS 実機** | **未実施 — 出荷ブロッカーとして残置** |
+| **Tier 3** | **iOS 実機** iPhone 17 Pro `Gggzns`（Release・`devicectl` デタッチ起動） | **GREEN（2026-07-31・G-5）** |
 
 **Tier 2 の証跡（sandbox 境界を越えた完全同一性）:** 1,117,320,736 バイトが 3 地点で SHA-256 一致 `6a1a2eb6…9407e` —— リポジトリ → Files「この iPhone 内」（`group.com.apple.FileProvider.LocalStorage`・**アプリコンテナ外**）→ `$APPDATA/models/pocket-brain.gguf`。続いて `llama_model_loader: loaded meta data with 26 key-value pairs and 339 tensors from <container>/…/models/pocket-brain.gguf (version GGUF V3)` を確認（シミュレータでは `offloaded 0/29 layers to GPU` ＝ `ios_sim` の CPU フォールバック既定であり失敗ではない）。**`forbidden` / `denied` / `scope` 系エラーはログ全体で 0 件。**
 
 ⇒ **`startAccessingSecurityScopedResource` → `copyFile($APPDATA 外 → $APPDATA)` は、項目 4 の縮小済み capability の下でも sandbox 実効下で成立する。** dialog プラグインのランタイム scope 拡張は生きている。
 
-**ブロッカーの現状:**
-- **F-3（LLM 結合）着工ブロッカーとしては解除。** F-3 が必要とするのは「モデルがロードできること」であり、Tier 2 がそれを満たす
-- **出荷ブロッカーとしては残置。** **リリースビルド作成前に Tier 3（実機 1 回）を必ず実施すること。** シミュレータは sandbox と security-scoped を実装するが実機と同一ではない（実機の Files は iCloud/他アプリ提供の実プロバイダを含む）。**「実機で検証した」と書けるのは Tier 3 の実測ログを得た後だけである**（LAW-22）
+**ブロッカーの現状: 解除済み（2026-07-31）。**
+- **F-3（LLM 結合）着工ブロッカー**: 2026-07-29 に解除（Tier 2 が「モデルがロードできること」を満たす）
+- **出荷ブロッカー**: **Tier 3 実機 G-5 GREEN により解除。** 下記「G-5 実機実測」を参照
+
+> **⚠ Tier 2 の「成立する」は実機では成立しなかった。** 上の Tier 2 証跡は正しいが、**シミュレータでは `startAccessingSecurityScopedResource` が成功する経路しか踏んでいなかった。** 実機では**ピッカーが既定で非 security-scoped な URL を返し**、同じコードが落ちた（次項）。**「Tier 2 GREEN だから実機も通る」と読むな** —— それこそが Tier 3 を必須にしていた理由である。
 
 ### 検証手順（Tier 1/2 で確立・再現可能）
 
@@ -1187,6 +1192,8 @@ LINE: 上限 16 MiB・`chunk_markdown_capped` で `source_id-p00`… に分割�
 | `model.n_vocab` | G-1 vocab サイズ |
 | `model.origin` | 1=バンドル / 2=AppData / 0=不明（**パスは出さない**） |
 | `model.force_cpu` | 0=Metal 既定アーム / 1=`CORAXIS_FORCE_CPU=1` CPU オラクル |
+| `import.step` | G-5 取込の進行（`dest_ready` / `confirm_size bytes=…`）。`log::info!` は **`TYPE_DEFAULT`** に写るので **`--debug` 無しでも残る** |
+| `import.diag` | G-5 取込の失敗と文脈（`step=source_shape` / `scope_start` / `copy` / `confirm` / `unhandled`）。**ラベルは `import.diag` に統一** —— `import.fail` 等を混ぜると `grep -E 'import\.(step\|diag)'` から漏れる |
 
 **CPU オラクル（G-2）:** Xcode スキームで `CORAXIS_FORCE_CPU=1` を注入すると、load 時に `with_devices(&[])` + `with_n_gpu_layers(0)`、context 時に `with_offload_kqv(false)` + `with_op_offload(false)` の **4 点セット**が揃う。環境変数が無い／`1` 以外のときは既定 Metal（`n_gpu_layers=999`）のまま。`with_devices` 失敗時は **Metal へ黙ってフォールバックせずエラー**。
 
@@ -1224,7 +1231,9 @@ sudo /usr/bin/log collect --device-name "<NAME>" --last 15m --output /tmp/coraxi
 > | `xcrun devicectl`（install / launch / processes） | **CoreDevice トンネル** | **動く** |
 > | `sudo /usr/bin/log collect --device*` | **lockdown / usbmux** | **動かない —— USB 接続が要る** |
 >
-> 無線のみだと `log collect` は **`failed to create archive: Device not configured (6)`** で落ちる。`devicectl list devices` が `available (paired)` でも起きる。**判別は `xcrun xctrace list devices`** —— デバイスが `== Devices Offline ==` 側に出ていれば USB 未接続である。
+> 無線のみだと `log collect` は **`failed to create archive: Device not configured (6)`** で落ちる。`devicectl list devices` が `available (paired)` でも起きる。**判別は `xcrun xctrace list devices`** —— デバイスが `== Devices Offline ==` 側に出れば `log collect` 経路は使えない。
+>
+> > **【訂正・2026-07-31 実測】`xctrace` の `Offline` を「USB 未接続」と読むな。** USB を挿してもデバイスは `== Devices Offline ==` に出続けたが、**`devicectl` は install / launch のたびに `Acquired tunnel connection to device` を出して成功した**（`transport=wired` / `tunnelState=disconnected` でも）。**`xctrace` が語るのは lockdown/usbmux 経路の可用性だけで、CoreDevice の可用性ではない。** USB の物理的な実在を見たいなら **`ioreg -p IOUSB -l | grep -i iphone`**（`iPhone@… IOUSBHostDevice … active` が出る）。**`system_profiler SPUSBDataType` はこの環境で 0 行を返す＝検出器として死んでいるので、その沈黙を根拠にするな。**
 >
 > **Console.app は CoreDevice 経由で動くため USB 無しでも使える。** ターミナルで完結させたいなら **USB を繋いだまま作業せよ。**
 >
@@ -1246,7 +1255,32 @@ sudo /usr/bin/log collect --device-name "<NAME>" --last 15m --output /tmp/coraxi
 
 **CPU フォールバックはメモリ緩和策にならない。** プリフィル増分は **CPU +51.15 MiB / 約 34.8 秒**、**Metal +4.29 MiB / 約 1.02 秒**。**メモリ不足時に `n_gpu_layers` を下げる対処は逆効果**であり、縮小すべきは `n_batch` / `n_ubatch` / `n_ctx`。なお **34 倍の速度差は U-3（Metal が実際に計算していること）への強い間接証拠**である（Release では `offloaded 29/29` を観測できないため直接観測は不可）。ピークは A 204.1 MiB / B 189.7 MiB。
 
-**残るゲート: G-3**（出力健全性・指揮官の目視 —— **本コミット時点で証跡が未記録**）**および G-5**（実プロバイダからの取込）。詳細は Tier 3 ドラフト §11。
+**G-3 GREEN（2026-07-30〜31・指揮官と前任監査役による目視）:** B アーム（Metal）の出力は**日本語として完全に成立**し、文字化け・無限ループ・意味の崩壊はいずれも無し。A アーム（CPU）と並置比較しても明らかな破綻は無かった。**判定器が存在しないことを認めたうえでの人間判定である**（LAW-20 / §3.4）。プリフィル 34 倍の速度差（§11.5）と併せ、U-3 は「Metal が計算している」「出力が壊れていない」の両面で満たされた。
+
+**G-5 GREEN（2026-07-31・実機 iPhone 17 Pro）:** 取込 UI 到達 → 実プロバイダから取込成立 → `model.origin=2`。**根本原因はピッカーの `fileAccessMode` 既定 `copy`**（as-built 項目 1 の 🚩 を見よ）。証跡:
+
+```
+import.diag step=source_shape detail=provider=other segments=10 ext=gguf len=134
+import.step dest_ready
+import.step confirm_size bytes=1117320736
+model.origin=2   （n_layer=28 / n_params=1777088000 / size=1111370240 / meta_count=23 / n_vocab=151936）
+```
+
+**`scope_start` の診断行が「出ない」ことが肯定的証拠である** —— 直前の失敗実行では同じ行が出ていた。`startAccessingSecurityScopedResource` は**真に security-scoped な URL でしか成功しない**ため、その沈黙が「アプリサンドボックス外の実プロバイダ由来」を積極的に主張する。
+
+**3 地点 SHA-256 一致は端末実バイト列で確認した:**
+
+```bash
+xcrun devicectl device copy from --device <id> --domain-type appDataContainer \
+  --domain-identifier com.ai-shizu.pkb \
+  --source "Library/Application Support/com.ai-shizu.pkb/models/pocket-brain.gguf" \
+  --destination /tmp/pulled.gguf
+shasum -a 256 /tmp/pulled.gguf   # → 6a1a2eb6…9407e（凍結値と一致）
+```
+
+> **サイズ一致で妥協するな。** `validate_gguf_file` は**先頭 4 バイトの magic しか見ない**ので、`ENOSPC` で切り詰められたコピーも「正常な取込」として通る。`confirm_size` はその穴を塞ぐ計器であり、**端末から実ファイルを吸い出して SHA を取る手段が存在する以上、状況証拠で終わらせる理由は無い。** 一覧は `devicectl device info files --subdirectory <path>`（**`--path` ではない**）。
+>
+> **限界の明示:** `provider=other` はマーカー集合が提供元を同定できなかったことを意味する。**security-scoped 由来であることは証明されたが、「iCloud Drive から」と名指しで書ける証拠ではない。**
 
 ---
 
