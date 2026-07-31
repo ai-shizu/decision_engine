@@ -67,10 +67,10 @@ jobs:
         run: |
           set -euo pipefail
           OUT="$(mktemp)"
-          # F-3 floor mutation (temporary): omit the third file so collected < 22.
           python -m pytest \
             tests/test_e0a_egress_lockdown.py \
             tests/test_fsa_2026_07_13_01_offline_boundary.py \
+            tests/test_manifest_persistence_isolation.py \
             -rs --tb=short 2>&1 | tee "$OUT"
           COLLECTED="$(grep -E '^collected [0-9]+ items' "$OUT" | head -1 | sed -E 's/^collected ([0-9]+) items.*/\1/')"
           echo "絶対孤立 collected=${COLLECTED} (floor >= 22)"
