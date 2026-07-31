@@ -132,9 +132,10 @@ jobs:
           python -m pytest tests/ -rs --tb=short 2>&1 | tee "$OUT"
 
           COLLECTED="$(grep -E '^collected [0-9]+ items' "$OUT" | head -1 | sed -E 's/^collected ([0-9]+) items.*/\1/')"
-          echo "desktop suite collected=${COLLECTED} (floor >= 800)"
+          echo "desktop suite collected=${COLLECTED} (floor >= 100000)"
           test -n "${COLLECTED}"
-          test "${COLLECTED}" -ge 800
+          # T4-A §5.1 mutation drill 1 — temporary impossible floor (must RED).
+          test "${COLLECTED}" -ge 100000
 
           SUMMARY="$(grep -E '=+ .*(passed|failed|error|skipped).* =+' "$OUT" | tail -1 || true)"
           echo "desktop suite summary: ${SUMMARY}"
