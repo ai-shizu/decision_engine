@@ -1,0 +1,173 @@
+# T4-A — pytest CI gate (desktop suite + 絶対孤立).
+#
+# Turns the two ROADMAP §14 stop conditions into jobs that actually run:
+#   - app-owned socket / absolute-isolation AST scans (release stop)
+#   - desktop suite (merge stop)
+#
+# Grounding: docs/T4A_PYTEST_CI_GATE_DIRECTIVE.md
+# Pattern borrowed from flavor-gate: floors, never silence, never || true.
+#
+# Why conda-forge numpy (not pip): PyPI macOS wheels link Accelerate.
+# tests/test_fsa_2026_07_13_10_determinism.py's perturbation fixture is
+# calibrated to a 1-ULP NumPy gap (OpenBLAS / measured anaconda 2.1.3).
+# Accelerate yields 2 ULP and fails test_sub_1e7_float_drift. Matching the
+# measured BLAS is required for A-2; pip-on-macOS is a different machine.
+#
+# Why bash build.sh --skip-py: without build/search_engine, FSA-10
+# determinism tests pytest.skip (3 unknowns). Unknown skips fail this gate
+# by design — so the native artifact must be present, not skipped away.
+#
+# GGUF placeholder: NOT created. pytest is pure Python and does not enter
+# build.rs; confirmed green without the stub (see T4-A report).
+
+name: pytest-ci-gate
+
+on:
+  pull_request:
+  push:
+    branches: [main, master]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  # ------------------------------------------------------------------
+  # 絶対孤立 — ROADMAP §14 highest-severity release stop.
+  # Independent job so the name is visible on the PR checks surface and
+  # deleting any of the three files drops the collected floor.
+  # ------------------------------------------------------------------
+  absolute-isolation:
+    name: 絶対孤立
+    runs-on: macos-14
+    defaults:
+      run:
+        shell: bash -el {0}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: conda-incubator/setup-miniconda@v3
+        with:
+          python-version: "3.13"
+          activate-environment: pkb-pytest
+          auto-activate-base: false
+          channels: conda-forge
+          channel-priority: strict
+
+      - name: Install pytest / numpy (conda-forge) / textual
+        run: |
+          set -euo pipefail
+          conda install -y -c conda-forge "numpy=2.1.3" "pytest=8.3.4"
+          python -m pip install textual
+          python -c "import textual, pytest, numpy; print('textual', textual.__version__); print('pytest', pytest.__version__); print('numpy', numpy.__version__)"
+
+      - name: 絶対孤立 floor (≥ 22 collected, failures == 0)
+        run: |
+          set -euo pipefail
+          OUT="$(mktemp)"
+          python -m pytest \
+            tests/test_e0a_egress_lockdown.py \
+            tests/test_fsa_2026_07_13_01_offline_boundary.py \
+            tests/test_manifest_persistence_isolation.py \
+            -rs --tb=short 2>&1 | tee "$OUT"
+          COLLECTED="$(grep -E '^collected [0-9]+ items' "$OUT" | head -1 | sed -E 's/^collected ([0-9]+) items.*/\1/')"
+          echo "絶対孤立 collected=${COLLECTED} (floor >= 22)"
+          test -n "${COLLECTED}"
+          test "${COLLECTED}" -ge 22
+          SUMMARY="$(grep -E '=+ .*(passed|failed|error|skipped).* =+' "$OUT" | tail -1 || true)"
+          echo "絶対孤立 summary: ${SUMMARY}"
+          if echo "${SUMMARY}" | grep -Eq '[0-9]+ failed|[0-9]+ error'; then
+            echo "絶対孤立: failures/errors != 0"
+            exit 1
+          fi
+
+  # ------------------------------------------------------------------
+  # desktop suite — ROADMAP §14 merge stop.
+  # ------------------------------------------------------------------
+  desktop-suite:
+    name: desktop suite
+    runs-on: macos-14
+    defaults:
+      run:
+        shell: bash -el {0}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: conda-incubator/setup-miniconda@v3
+        with:
+          python-version: "3.13"
+          activate-environment: pkb-pytest
+          auto-activate-base: false
+          channels: conda-forge
+          channel-priority: strict
+
+      - name: Install pytest / numpy (conda-forge) / textual
+        run: |
+          set -euo pipefail
+          conda install -y -c conda-forge "numpy=2.1.3" "pytest=8.3.4"
+          python -m pip install textual
+          python -c "import textual, pytest, numpy; print('textual', textual.__version__); print('pytest', pytest.__version__); print('numpy', numpy.__version__)"
+          # Refuse Accelerate-backed wheels (FSA-10 1-ULP fixture).
+          python - <<'PY'
+          import numpy as np
+          blas = np.show_config("dicts")["Build Dependencies"]["blas"]
+          name = str(blas.get("name") or "").lower()
+          print("blas:", blas)
+          assert "accelerate" not in name, blas
+          PY
+
+      - name: Build native search_engine (FSA-10 must not skip)
+        run: |
+          set -euo pipefail
+          bash build.sh --skip-py
+          test -x build/search_engine
+          file build/search_engine
+          uname -m
+          file build/search_engine | grep -E 'arm64|x86_64'
+
+      - name: desktop suite floor (≥ 800 collected) + skip uniqueness
+        run: |
+          set -euo pipefail
+          OUT="$(mktemp)"
+          python -m pytest tests/ -rs --tb=short 2>&1 | tee "$OUT"
+
+          COLLECTED="$(grep -E '^collected [0-9]+ items' "$OUT" | head -1 | sed -E 's/^collected ([0-9]+) items.*/\1/')"
+          echo "desktop suite collected=${COLLECTED} (floor >= 800)"
+          test -n "${COLLECTED}"
+          test "${COLLECTED}" -ge 800
+
+          SUMMARY="$(grep -E '=+ .*(passed|failed|error|skipped).* =+' "$OUT" | tail -1 || true)"
+          echo "desktop suite summary: ${SUMMARY}"
+          if echo "${SUMMARY}" | grep -Eq '[0-9]+ failed|[0-9]+ error'; then
+            echo "desktop suite: failures/errors != 0"
+            exit 1
+          fi
+
+          echo "=== SKIP enumeration (every skip, reason-bearing) ==="
+          SKIP_LINES="$(grep -E '^SKIPPED' "$OUT" || true)"
+          if [ -z "${SKIP_LINES}" ]; then
+            echo "(no SKIPPED lines in short summary)"
+          else
+            printf '%s\n' "${SKIP_LINES}"
+          fi
+
+          ALLOWED_REASON='Windows AppContainer pipe contract'
+          UNKNOWN=0
+          while IFS= read -r line; do
+            [ -z "${line}" ] && continue
+            if ! printf '%s\n' "${line}" | grep -qF "${ALLOWED_REASON}"; then
+              echo "UNKNOWN SKIP — failing job: ${line}"
+              UNKNOWN=1
+            fi
+          done <<< "${SKIP_LINES}"
+
+          # Silence uniqueness: name what this runner did NOT measure.
+          echo "NOT MEASURED: Windows AppContainer pipe contract — this job runs on macos-14; the platform-boundary test cannot be exercised here. A green skip count is not evidence that the Windows pipe contract holds."
+
+          # textual must not appear as a skip (dependency must be present).
+          if printf '%s\n' "${SKIP_LINES}" | grep -qi 'textual'; then
+            echo "textual skip present — dependency install failed to make ui_smoke runnable"
+            exit 1
+          fi
+
+          test "${UNKNOWN}" -eq 0

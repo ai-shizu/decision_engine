@@ -473,6 +473,20 @@ cargo check
 は pytest 非経由 import 時の後方互換用で、pytest 下では conftest が先に env
 を確定させ no-op に縮退する。
 
+**T4-A as-built（2026-07-31）— pytest CI ゲート:** 正本 `docs/T4A_PYTEST_CI_GATE_DIRECTIVE.md`。
+新規のみ `.github/workflows/pytest-ci-gate.yml`（既存 4 WF 無改変）。jobs:
+`絶対孤立`（3 ファイル・collected ≥ 22・failures == 0）/
+`desktop suite`（collected ≥ 800・`-rs` 全 skip 列挙・許容 skip は
+`Windows AppContainer pipe contract` のみ・それ以外で RED・許容 skip は
+`NOT MEASURED` 明示）。`textual` 必須 install（環境欠落 skip の恒久化禁止）。
+ランナー `macos-14`。依存は conda-forge `numpy=2.1.3` + `pytest=8.3.4` +
+pip `textual`（**PyPI macOS wheel は Accelerate 連結で FSA-10 の 1-ULP 床を壊す** —
+実測: conda OpenBLAS diff=5.96e-8 GREEN / pip Accelerate diff=2.38e-7 RED）。
+`bash build.sh --skip-py` 必須（`search_engine` 不在だと FSA-10 が 3 unknown skip）。
+GGUF スタブは不要（pytest は `build.rs` を通らない — スタブ無しで GREEN を実測）。
+件数は床で表明（厳密一致禁止）。沈黙の一意性: 「測って 0」と「測っていない」を
+ログで区別せよ。
+
 報告には「何を変えたか」「なぜか」「何で検証したか」を必ず含めろ。テストが通らないまま完了と言うことは、いかなる理由があっても禁止する。
 
 ---
@@ -2387,3 +2401,4 @@ Phase 6-A step1（`bridge::estimate_pooled`）で踏んだ、リプレイ恒等�
 18. **ガードは CI で走って初めてガード（FLV-I-17 / T-7）。** 二鍵プローブ・doctest フェンス・件数下限・`0 ignored`・`cargo tree` 単方向・A-1 は人間の記憶に置くな。`--lib` と `--doc` を取り違えるな。`ok.` だけでは `#[ignore]` を見逃す。失敗期待の job に正の伴走を置け（cfg 打ち間違い／周辺破壊の偽失敗）。
 19. **ambient 生成は sim ワーカー上で走るな（関所 H / A-4）。** `deliver_ambient_flavor` は `LlmHandle` へ委譲し、完了通知で `finish`。直呼びは契約 RED（D-23）。busy は begin〜完了の間だけが本番意味を持つ。
 20. **破棄率の母集団を著述するな（LAW-25b）。** 指示文は効率手段、安全は `verify` のみ（FLV-R-12）。`leaked≠0` は加工せず即報告。閾値は指揮官裁定（FLV-R-3）。
+21. **pytest も CI で走って初めてガード（T4-A / ROADMAP §14）。** 絶対孤立 3 ファイルは独立 job + collected 床。desktop suite は collected ≥ 800 床 + 未知 skip RED。`textual` 欠落 skip を CI で固定するな。PyPI macOS `numpy`（Accelerate）は FSA-10 を壊す — conda-forge OpenBLAS を測れ。`search_engine` 不在の skip も未知扱い。GGUF スタブは pytest 経路では不要（要否は実測で言え）。
