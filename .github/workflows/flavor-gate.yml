@@ -50,8 +50,15 @@ jobs:
       # exist, and a valid header would let something mistake this for a model.
       - name: Create GGUF placeholder for bundle.resources
         run: |
-          mkdir -p apps/desktop/models
-          printf 'NOTGGUF\n' > apps/desktop/models/pocket-brain.gguf
+          set -euo pipefail
+          # Absolute: every job here sets `working-directory: apps/desktop/src-tauri`,
+          # so a workspace-relative mkdir lands in the wrong tree and the build
+          # still dies on the same "doesn't exist" line, one layer removed from
+          # the cause. Verify the file afterwards so a wrong path fails HERE
+          # rather than surfacing later as an unrelated-looking build error.
+          mkdir -p "$GITHUB_WORKSPACE/apps/desktop/models"
+          printf 'NOTGGUF\n' > "$GITHUB_WORKSPACE/apps/desktop/models/pocket-brain.gguf"
+          ls -l "$GITHUB_WORKSPACE/apps/desktop/models/pocket-brain.gguf"
       - name: Seal probe E0451 (VerifiedFlavor brace) + positive companion
         run: |
           set -euo pipefail
@@ -95,8 +102,15 @@ jobs:
       # exist, and a valid header would let something mistake this for a model.
       - name: Create GGUF placeholder for bundle.resources
         run: |
-          mkdir -p apps/desktop/models
-          printf 'NOTGGUF\n' > apps/desktop/models/pocket-brain.gguf
+          set -euo pipefail
+          # Absolute: every job here sets `working-directory: apps/desktop/src-tauri`,
+          # so a workspace-relative mkdir lands in the wrong tree and the build
+          # still dies on the same "doesn't exist" line, one layer removed from
+          # the cause. Verify the file afterwards so a wrong path fails HERE
+          # rather than surfacing later as an unrelated-looking build error.
+          mkdir -p "$GITHUB_WORKSPACE/apps/desktop/models"
+          printf 'NOTGGUF\n' > "$GITHUB_WORKSPACE/apps/desktop/models/pocket-brain.gguf"
+          ls -l "$GITHUB_WORKSPACE/apps/desktop/models/pocket-brain.gguf"
       - name: flavor-layer doctests (fences ≥ 30, 0 ignored)
         run: |
           set -euo pipefail
@@ -128,8 +142,15 @@ jobs:
       # exist, and a valid header would let something mistake this for a model.
       - name: Create GGUF placeholder for bundle.resources
         run: |
-          mkdir -p apps/desktop/models
-          printf 'NOTGGUF\n' > apps/desktop/models/pocket-brain.gguf
+          set -euo pipefail
+          # Absolute: every job here sets `working-directory: apps/desktop/src-tauri`,
+          # so a workspace-relative mkdir lands in the wrong tree and the build
+          # still dies on the same "doesn't exist" line, one layer removed from
+          # the cause. Verify the file afterwards so a wrong path fails HERE
+          # rather than surfacing later as an unrelated-looking build error.
+          mkdir -p "$GITHUB_WORKSPACE/apps/desktop/models"
+          printf 'NOTGGUF\n' > "$GITHUB_WORKSPACE/apps/desktop/models/pocket-brain.gguf"
+          ls -l "$GITHUB_WORKSPACE/apps/desktop/models/pocket-brain.gguf"
       - name: flavor-layer --lib flavor floor (≥ 26, 0 ignored)
         run: |
           set -euo pipefail
@@ -174,8 +195,15 @@ jobs:
       # exist, and a valid header would let something mistake this for a model.
       - name: Create GGUF placeholder for bundle.resources
         run: |
-          mkdir -p apps/desktop/models
-          printf 'NOTGGUF\n' > apps/desktop/models/pocket-brain.gguf
+          set -euo pipefail
+          # Absolute: every job here sets `working-directory: apps/desktop/src-tauri`,
+          # so a workspace-relative mkdir lands in the wrong tree and the build
+          # still dies on the same "doesn't exist" line, one layer removed from
+          # the cause. Verify the file afterwards so a wrong path fails HERE
+          # rather than surfacing later as an unrelated-looking build error.
+          mkdir -p "$GITHUB_WORKSPACE/apps/desktop/models"
+          printf 'NOTGGUF\n' > "$GITHUB_WORKSPACE/apps/desktop/models/pocket-brain.gguf"
+          ls -l "$GITHUB_WORKSPACE/apps/desktop/models/pocket-brain.gguf"
       - name: blackbox-sim must not pull llama; pocket-brain control > 0
         run: |
           set -euo pipefail
@@ -198,8 +226,15 @@ jobs:
       # exist, and a valid header would let something mistake this for a model.
       - name: Create GGUF placeholder for bundle.resources
         run: |
-          mkdir -p apps/desktop/models
-          printf 'NOTGGUF\n' > apps/desktop/models/pocket-brain.gguf
+          set -euo pipefail
+          # Absolute: every job here sets `working-directory: apps/desktop/src-tauri`,
+          # so a workspace-relative mkdir lands in the wrong tree and the build
+          # still dies on the same "doesn't exist" line, one layer removed from
+          # the cause. Verify the file afterwards so a wrong path fails HERE
+          # rather than surfacing later as an unrelated-looking build error.
+          mkdir -p "$GITHUB_WORKSPACE/apps/desktop/models"
+          printf 'NOTGGUF\n' > "$GITHUB_WORKSPACE/apps/desktop/models/pocket-brain.gguf"
+          ls -l "$GITHUB_WORKSPACE/apps/desktop/models/pocket-brain.gguf"
       - name: A-1 deletability (digest identity + accepted ≠ 0)
         run: |
           set -euo pipefail
@@ -228,8 +263,15 @@ jobs:
       # exist, and a valid header would let something mistake this for a model.
       - name: Create GGUF placeholder for bundle.resources
         run: |
-          mkdir -p apps/desktop/models
-          printf 'NOTGGUF\n' > apps/desktop/models/pocket-brain.gguf
+          set -euo pipefail
+          # Absolute: every job here sets `working-directory: apps/desktop/src-tauri`,
+          # so a workspace-relative mkdir lands in the wrong tree and the build
+          # still dies on the same "doesn't exist" line, one layer removed from
+          # the cause. Verify the file afterwards so a wrong path fails HERE
+          # rather than surfacing later as an unrelated-looking build error.
+          mkdir -p "$GITHUB_WORKSPACE/apps/desktop/models"
+          printf 'NOTGGUF\n' > "$GITHUB_WORKSPACE/apps/desktop/models/pocket-brain.gguf"
+          ls -l "$GITHUB_WORKSPACE/apps/desktop/models/pocket-brain.gguf"
       - name: Default / blackbox-sim — flavor_gen / flavor_slot absent
         run: |
           set -euo pipefail
