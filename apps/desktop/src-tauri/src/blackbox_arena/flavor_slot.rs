@@ -68,6 +68,11 @@ pub(crate) struct FlavorGateCounters {
     /// unaudited guard is indistinguishable from an absent one, and F-3 showed
     /// the model does emit numerals for the guard to catch.
     pub leaked: u64,
+    /// Kicks refused because the slot was already in flight. Counted so that a
+    /// slot stuck busy is visible: once stalled it silently drops every later
+    /// kick, and without this the log is identical to "the arena never
+    /// advanced".
+    pub dropped_busy: u64,
 }
 
 impl FlavorAmbientSlot {
@@ -92,12 +97,30 @@ impl FlavorAmbientSlot {
         if self.is_busy() {
             // Invariant: nothing is buffered while busy (P-3-3).
             debug_assert_eq!(self.pending_queue_len(), 0);
+            self.counters.dropped_busy += 1;
+            Self::emit_one("flavor.dropped_busy", self.counters.dropped_busy);
             return Admit::DroppedBusy;
         }
         self.busy = true;
         self.in_flight = Some(corr);
         self.counters.attempts += 1;
+        // Emitted at admit, not only from `finish`. A generation that is
+        // admitted but never completes would otherwise leave no trace at all,
+        // making "entered the path and stalled" indistinguishable from "never
+        // entered the path" — an ambiguity that already cost one device
+        // session, where an empty log was the only evidence available.
+        Self::emit_one("flavor.attempts", self.counters.attempts);
         Admit::Started
+    }
+
+    /// Single numeric OSLog line. Reuses the `%{public}llu` path P0-6 proved
+    /// survives Release; a no-op off iOS, where the host tests read `counters()`
+    /// directly instead.
+    fn emit_one(label: &str, value: u64) {
+        #[cfg(target_os = "ios")]
+        crate::ios_oslog::log_model_u64(label, value);
+        #[cfg(not(target_os = "ios"))]
+        let _ = (label, value);
     }
 
     /// G-4 evidence accessor (also the seam host tests assert on).
@@ -156,6 +179,7 @@ impl FlavorAmbientSlot {
             log_model_u64("flavor.discarded", self.counters.discarded);
             log_model_u64("flavor.unavailable", self.counters.unavailable);
             log_model_u64("flavor.leaked", self.counters.leaked);
+            log_model_u64("flavor.dropped_busy", self.counters.dropped_busy);
         }
     }
 
@@ -281,6 +305,10 @@ mod tests {
         assert_eq!(slot.begin_request(current()), Admit::Started);
         assert_eq!(slot.begin_request(current()), Admit::DroppedBusy);
         assert_eq!(slot.counters().attempts, 1);
+        // Counted separately so a slot stuck in flight is still visible: every
+        // later kick is dropped, and `attempts` alone would stay frozen at 1
+        // exactly as it would if the arena had never advanced again.
+        assert_eq!(slot.counters().dropped_busy, 1);
     }
 
     fn req(tid: TemplateId) -> FlavorRequest {
