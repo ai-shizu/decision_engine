@@ -1255,6 +1255,8 @@ sudo /usr/bin/log collect --device-name "<NAME>" --last 15m --output /tmp/coraxi
 
 **CPU フォールバックはメモリ緩和策にならない。** プリフィル増分は **CPU +51.15 MiB / 約 34.8 秒**、**Metal +4.29 MiB / 約 1.02 秒**。**メモリ不足時に `n_gpu_layers` を下げる対処は逆効果**であり、縮小すべきは `n_batch` / `n_ubatch` / `n_ctx`。なお **34 倍の速度差は U-3（Metal が実際に計算していること）への強い間接証拠**である（Release では `offloaded 29/29` を観測できないため直接観測は不可）。ピークは A 204.1 MiB / B 189.7 MiB。
 
+**G-4 GREEN（2026-07-31・実機 BlackboxArena）:** `attempts=4` / `accepted=4` / **`leaked=0`** / `unavailable=0` —— 実機 Metal 経路で LLM が 4 回生成し、全てがガードとベルト再スキャンを通過して表示スロットへ着弾。**操作経路は INTERVIEW → `[ GD ]` → BlackboxArena のターン advance であり、CONSULT ではない**（`flavor_slot` は `blackbox_arena::handle` が `kick_ambient_flavor` で駆動する。CONSULT からは到達しない —— これを確かめずに操作を指示して実機セッションを 1 回失った）。**残件 2 件は Tier 3 ドラフト §13.3 / §13.4** —— **`discarded=0`（ガードは実機で一度も撃っていない）** と **スロット到達済みテキストが FE に描画されない**（`take()` が単発で、生成完了 267ms より前に呼ばれ、次ターンでは tick 不一致で破棄される）。**「実機でフレーバが表示された」と書ける証拠は無い。**
+
 **G-3 GREEN（2026-07-30〜31・指揮官と前任監査役による目視）:** B アーム（Metal）の出力は**日本語として完全に成立**し、文字化け・無限ループ・意味の崩壊はいずれも無し。A アーム（CPU）と並置比較しても明らかな破綻は無かった。**判定器が存在しないことを認めたうえでの人間判定である**（LAW-20 / §3.4）。プリフィル 34 倍の速度差（§11.5）と併せ、U-3 は「Metal が計算している」「出力が壊れていない」の両面で満たされた。
 
 **G-5 GREEN（2026-07-31・実機 iPhone 17 Pro）:** 取込 UI 到達 → 実プロバイダから取込成立 → `model.origin=2`。**根本原因はピッカーの `fileAccessMode` 既定 `copy`**（as-built 項目 1 の 🚩 を見よ）。証跡:
