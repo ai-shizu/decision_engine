@@ -474,7 +474,7 @@ cargo check
 を確定させ no-op に縮退する。
 
 **T4-A as-built（2026-07-31）— pytest CI ゲート:** 正本 `docs/T4A_PYTEST_CI_GATE_DIRECTIVE.md`。
-新規のみ `.github/workflows/pytest-ci-gate.yml`（既存 4 WF 無改変）。jobs:
+新規のみ `.github/workflows/pytest-ci-gate.yml`（既存 4 WF 無改変・`git diff` 0）。jobs:
 `絶対孤立`（3 ファイル・collected ≥ 22・failures == 0）/
 `desktop suite`（collected ≥ 800・`-rs` 全 skip 列挙・許容 skip は
 `Windows AppContainer pipe contract` のみ・それ以外で RED・許容 skip は
@@ -486,6 +486,12 @@ pip `textual`（**PyPI macOS wheel は Accelerate 連結で FSA-10 の 1-ULP 床
 GGUF スタブは不要（pytest は `build.rs` を通らない — スタブ無しで GREEN を実測）。
 件数は床で表明（厳密一致禁止）。沈黙の一意性: 「測って 0」と「測っていない」を
 ログで区別せよ。
+PR #1 実測: GREEN run `30634329499` / `30635611570`
+（805 passed, 1 skipped=Windows, collected=806 / 絶対孤立 22）。
+§5.1 変異: floor≥100000 → RED `30634690717`（collected=806 で exit 1）;
+unknown skip → 初回 `_t4a_*.py` は pytest 非収集で偽 GREEN `30634947990`
+（ハマりどころ）→ `test_*.py` で RED `30635314072`
+（`UNKNOWN SKIP — MUTATION_UNKNOWN_SKIP`）→ 復元 GREEN。
 
 報告には「何を変えたか」「なぜか」「何で検証したか」を必ず含めろ。テストが通らないまま完了と言うことは、いかなる理由があっても禁止する。
 
