@@ -406,6 +406,10 @@ impl Worker {
             .get_mut(campaign_id)
             .ok_or(SimUiErrorCode::CampaignNotFound)?;
         let state = entry.session.state();
+        // Read while `entry` is still borrowed: the terminal branch calls
+        // `self.flush` first, which needs `&mut self` and ends this borrow.
+        #[cfg(target_os = "ios")]
+        let turns_completed = entry.session.turns_completed();
         let next_observation = if matches!(state, crate::blackbox_sim::fsm::SessionState::Active { .. }) {
             entry
                 .session
@@ -419,6 +423,8 @@ impl Worker {
             if let Err(e) = self.flush(campaign_id) {
                 eprintln!("blackbox_arena: final flush failed for {campaign_id}: {e:?}");
             }
+            #[cfg(target_os = "ios")]
+            log_arena_terminal_ios(state, turns_completed);
             None
         };
         #[cfg(feature = "flavor-live")]
@@ -880,6 +886,52 @@ impl BlackboxSimHandle {
     }
 }
 
+/// Numeric codes for the arena's terminal state (Tier 3 follow-up to §13.5).
+///
+/// Returns `(sealed, dead_reason)`. `dead_reason` is `0` unless the session is
+/// `Dead`, which is **not** an ordinary ending: it is reachable only via
+/// `SessionEvent::CorruptionDetected`, i.e. an invariant breach. A campaign
+/// runs `CAMPAIGN_TICKS` (13 × 4 = 52), so a stop well before that is a fault
+/// rather than exhaustion — and `turns_completed` is logged beside these codes
+/// precisely so the two can be told apart without inference.
+///
+/// Kept free of `cfg(target_os)` so the mapping is asserted by host tests. The
+/// same shape as `sanitize_one_liner` had, whose iOS-only test never ran once
+/// and asserted something false for months.
+pub(crate) const fn arena_terminal_codes(
+    state: crate::blackbox_sim::fsm::SessionState,
+) -> (u64, u64) {
+    use crate::blackbox_sim::fsm::{FailureReason, SessionState};
+    match state {
+        SessionState::Genesis | SessionState::Active { .. } => (0, 0),
+        SessionState::Sealed => (1, 0),
+        SessionState::Dead { reason } => (
+            1,
+            match reason {
+                FailureReason::AccountingBreach => 1,
+                FailureReason::SnapshotDigestMismatch => 2,
+                FailureReason::ReplayDivergence => 3,
+                FailureReason::InternalInvariantBroken => 4,
+            },
+        ),
+    }
+}
+
+/// Release-visible terminal evidence. The arena's own diagnostics are
+/// `eprintln!`, which iOS Release discards (G-0R) — so a campaign that died of
+/// an invariant breach was indistinguishable, on device, from one the operator
+/// simply stopped advancing. This is the same hole G-5's import and G-4's
+/// flavor each fell into, closed the same way: numeric OSLog through the path
+/// P0-6 proved survives.
+#[cfg(target_os = "ios")]
+fn log_arena_terminal_ios(state: crate::blackbox_sim::fsm::SessionState, turns: u32) {
+    use crate::ios_oslog::log_model_u64;
+    let (sealed, reason) = arena_terminal_codes(state);
+    log_model_u64("arena.sealed", sealed);
+    log_model_u64("arena.dead_reason", reason);
+    log_model_u64("arena.turns_completed", u64::from(turns));
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -890,6 +942,40 @@ mod tests {
         match r {
             Ok(v) => v,
             Err(e) => unreachable!("test setup failed: {e:?}"),
+        }
+    }
+
+    /// The device reports these codes; nothing on hardware proves the mapping
+    /// behind them. Asserted here, where tests actually run.
+    #[test]
+    fn arena_terminal_codes_separate_a_clean_end_from_an_invariant_breach() {
+        use crate::blackbox_sim::fsm::{FailureReason, TurnPhase};
+
+        // Running: no terminal evidence at all.
+        assert_eq!(arena_terminal_codes(SessionState::Genesis), (0, 0));
+        assert_eq!(
+            arena_terminal_codes(SessionState::Active {
+                phase: TurnPhase::Observe
+            }),
+            (0, 0)
+        );
+
+        // Completed the campaign: sealed, but nothing died.
+        assert_eq!(arena_terminal_codes(SessionState::Sealed), (1, 0));
+
+        // Every failure reason must be distinguishable — a single "it died"
+        // bit would leave the device log unable to name which invariant broke.
+        for (reason, code) in [
+            (FailureReason::AccountingBreach, 1),
+            (FailureReason::SnapshotDigestMismatch, 2),
+            (FailureReason::ReplayDivergence, 3),
+            (FailureReason::InternalInvariantBroken, 4),
+        ] {
+            assert_eq!(
+                arena_terminal_codes(SessionState::Dead { reason }),
+                (1, code),
+                "{reason:?} must map to its own code"
+            );
         }
     }
 
