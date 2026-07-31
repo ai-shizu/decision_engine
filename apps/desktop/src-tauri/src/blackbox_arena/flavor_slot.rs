@@ -5,7 +5,9 @@
 //! requests; there is no queue.
 
 use crate::blackbox_sim::genesis::CampaignGenesis;
+use crate::flavor::policy::FlavorPolicy;
 use crate::flavor::request::{FlavorRequest, TemplateId};
+use crate::flavor::scan;
 use crate::flavor::verified::VerifiedFlavor;
 use crate::llm::flavor_gen::{self, FlavorOutcome};
 
@@ -46,6 +48,26 @@ pub(crate) struct FlavorAmbientSlot {
     in_flight: Option<FlavorCorrelation>,
     /// Set by [`Self::abort_campaign`]; next [`Self::finish`] discards.
     cancelled: bool,
+    /// G-4 counters (Tier 3). Previously these existed only in the host-side
+    /// `flavor_a1` harness, which emits with `println!` and never runs on a
+    /// device — so G-4's stated criteria were unobservable on the only build
+    /// that matters. These are the production equivalents.
+    counters: FlavorGateCounters,
+}
+
+/// Running totals for the G-4 gate, measured on the production path.
+#[derive(Debug, Default, Clone, Copy)]
+pub(crate) struct FlavorGateCounters {
+    pub attempts: u64,
+    pub accepted: u64,
+    pub discarded: u64,
+    pub unavailable: u64,
+    /// Accepted values that still carried a finding when re-scanned. This is a
+    /// **belt**: `decide()` is supposed to make it structurally impossible, so
+    /// any non-zero value means the guard did not hold on real hardware. An
+    /// unaudited guard is indistinguishable from an absent one, and F-3 showed
+    /// the model does emit numerals for the guard to catch.
+    pub leaked: u64,
 }
 
 impl FlavorAmbientSlot {
@@ -74,7 +96,14 @@ impl FlavorAmbientSlot {
         }
         self.busy = true;
         self.in_flight = Some(corr);
+        self.counters.attempts += 1;
         Admit::Started
+    }
+
+    /// G-4 evidence accessor (also the seam host tests assert on).
+    #[must_use]
+    pub(crate) fn counters(&self) -> FlavorGateCounters {
+        self.counters
     }
 
     /// Complete the in-flight request. Latest Accepted overwrites `held`.
@@ -91,14 +120,42 @@ impl FlavorAmbientSlot {
         }
         match outcome {
             FlavorOutcome::Accepted(flavor) => {
+                self.counters.accepted += 1;
+                // Belt: re-scan what the guard already accepted. `decide()` only
+                // returns Accepted when verify passes, so this should always be
+                // clean — which is exactly why it is worth measuring rather than
+                // asserting. Mirrors the harness check in `flavor_a1`.
+                let policy = FlavorPolicy::for_template(corr.template_id);
+                if !scan::scan(flavor.as_str(), &policy).is_clean() {
+                    self.counters.leaked += 1;
+                }
                 // Latest-wins overwrite (P-8).
                 self.held = Some((corr, flavor));
             }
             FlavorOutcome::Discarded(findings) => {
+                self.counters.discarded += 1;
                 // Telemetry material for §14; keep the field live.
                 let _finding_count = findings.len();
             }
-            FlavorOutcome::Unavailable => {}
+            FlavorOutcome::Unavailable => {
+                self.counters.unavailable += 1;
+            }
+        }
+        self.emit_gate_counters();
+    }
+
+    /// Stamp the running totals so G-4 can be judged from a Release device log.
+    /// Numeric OSLog only — the same `%{public}llu` path P0-6 proved survives a
+    /// Release build, reused rather than reinvented.
+    fn emit_gate_counters(&self) {
+        #[cfg(target_os = "ios")]
+        {
+            use crate::ios_oslog::log_model_u64;
+            log_model_u64("flavor.attempts", self.counters.attempts);
+            log_model_u64("flavor.accepted", self.counters.accepted);
+            log_model_u64("flavor.discarded", self.counters.discarded);
+            log_model_u64("flavor.unavailable", self.counters.unavailable);
+            log_model_u64("flavor.leaked", self.counters.leaked);
         }
     }
 
@@ -188,6 +245,42 @@ mod tests {
     fn store(slot: &mut FlavorAmbientSlot, c: FlavorCorrelation) {
         assert_eq!(slot.begin_request(c), Admit::Started);
         slot.finish(FlavorOutcome::Accepted(accepted_flavor()));
+    }
+
+    /// G-4 counters are measured on the production path, so they must be
+    /// verifiable where tests actually run. The device only *reports* these
+    /// numbers; nothing on a device proves the arithmetic behind them, and an
+    /// iOS-gated test would run nowhere at all.
+    #[test]
+    fn gate_counters_track_each_outcome_and_belt_stays_clean() {
+        let mut slot = FlavorAmbientSlot::new();
+        assert_eq!(slot.counters().attempts, 0);
+
+        store(&mut slot, current());
+        let c = slot.counters();
+        assert_eq!((c.attempts, c.accepted), (1, 1));
+        // The belt: `decide()` accepted it, so a re-scan must find nothing.
+        assert_eq!(c.leaked, 0, "guard accepted a value that fails re-scan");
+
+        assert_eq!(slot.begin_request(current()), Admit::Started);
+        slot.finish(FlavorOutcome::Unavailable);
+        assert_eq!(slot.counters().unavailable, 1);
+
+        assert_eq!(slot.begin_request(current()), Admit::Started);
+        slot.finish(FlavorOutcome::Discarded(Vec::new()));
+        let c = slot.counters();
+        assert_eq!((c.attempts, c.discarded, c.leaked), (3, 1, 0));
+    }
+
+    /// A dropped request is not an attempt: busy-drops never reach `generate`,
+    /// so counting them would inflate `attempts` and make G-4's `attempts > 0`
+    /// satisfiable without a single generation having run.
+    #[test]
+    fn busy_drop_is_not_counted_as_an_attempt() {
+        let mut slot = FlavorAmbientSlot::new();
+        assert_eq!(slot.begin_request(current()), Admit::Started);
+        assert_eq!(slot.begin_request(current()), Admit::DroppedBusy);
+        assert_eq!(slot.counters().attempts, 1);
     }
 
     fn req(tid: TemplateId) -> FlavorRequest {
