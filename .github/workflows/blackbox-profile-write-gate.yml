@@ -38,6 +38,17 @@ jobs:
         working-directory: apps/desktop/src-tauri
     steps:
       - uses: actions/checkout@v4
+      # `tauri.conf.json` lists ../models/pocket-brain.gguf under bundle.resources
+      # and the real 1.1 GB file is gitignored (*.gguf), so build.rs aborts with
+      # `resource path ... doesn't exist` before a single test compiles. That is
+      # why every job of this gate failed on its first ever run — the gate was not
+      # merely unrun, it was unrunnable on any fresh checkout.
+      # Deliberately NOT valid GGUF magic: build.rs only requires the path to
+      # exist, and a valid header would let something mistake this for a model.
+      - name: Create GGUF placeholder for bundle.resources
+        run: |
+          mkdir -p apps/desktop/models
+          printf 'NOTGGUF\n' > apps/desktop/models/pocket-brain.gguf
       - name: PHANTOM-BOT calibration suite (factor B)
         run: |
           set -euo pipefail
@@ -63,6 +74,17 @@ jobs:
         working-directory: apps/desktop/src-tauri
     steps:
       - uses: actions/checkout@v4
+      # `tauri.conf.json` lists ../models/pocket-brain.gguf under bundle.resources
+      # and the real 1.1 GB file is gitignored (*.gguf), so build.rs aborts with
+      # `resource path ... doesn't exist` before a single test compiles. That is
+      # why every job of this gate failed on its first ever run — the gate was not
+      # merely unrun, it was unrunnable on any fresh checkout.
+      # Deliberately NOT valid GGUF magic: build.rs only requires the path to
+      # exist, and a valid header would let something mistake this for a model.
+      - name: Create GGUF placeholder for bundle.resources
+        run: |
+          mkdir -p apps/desktop/models
+          printf 'NOTGGUF\n' > apps/desktop/models/pocket-brain.gguf
       - name: Write-gated lib tests (factor A after B)
         run: |
           set -euo pipefail
@@ -86,6 +108,17 @@ jobs:
         working-directory: apps/desktop/src-tauri
     steps:
       - uses: actions/checkout@v4
+      # `tauri.conf.json` lists ../models/pocket-brain.gguf under bundle.resources
+      # and the real 1.1 GB file is gitignored (*.gguf), so build.rs aborts with
+      # `resource path ... doesn't exist` before a single test compiles. That is
+      # why every job of this gate failed on its first ever run — the gate was not
+      # merely unrun, it was unrunnable on any fresh checkout.
+      # Deliberately NOT valid GGUF magic: build.rs only requires the path to
+      # exist, and a valid header would let something mistake this for a model.
+      - name: Create GGUF placeholder for bundle.resources
+        run: |
+          mkdir -p apps/desktop/models
+          printf 'NOTGGUF\n' > apps/desktop/models/pocket-brain.gguf
       - name: Default feature set (no blackbox-profile-write)
         run: |
           set -euo pipefail
