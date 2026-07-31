@@ -884,7 +884,12 @@ impl BlackboxSimHandle {
 ///
 /// A jump outranks the regime — a shock is volatile whether or not the regime
 /// has caught up with it yet.
-#[cfg_attr(not(feature = "flavor-live"), allow(dead_code))]
+///
+/// Gated on `flavor-live`, not merely `allow(dead_code)`: this body names
+/// `crate::flavor`, which exists only under `flavor-layer`. `blackbox_arena`
+/// itself compiles under `blackbox-sim` alone, so an ungated body breaks that
+/// feature set outright — E0433, not a warning.
+#[cfg(feature = "flavor-live")]
 pub(crate) fn mood_for_market(
     market: Option<crate::blackbox_sim::market::MarketTickView>,
 ) -> crate::flavor::request::SlotValue {
@@ -908,7 +913,7 @@ pub(crate) fn mood_for_market(
 /// Only `template_id` is load-bearing at decide time (`decide` takes the
 /// template, never the slots), so a market that moves between the kick and the
 /// completion changes the wording of the prompt and nothing about the verdict.
-#[cfg_attr(not(feature = "flavor-live"), allow(dead_code))]
+#[cfg(feature = "flavor-live")]
 pub(crate) fn ambient_flavor_request(
     mood: crate::flavor::request::SlotValue,
 ) -> crate::flavor::request::FlavorRequest {
@@ -938,7 +943,11 @@ pub(crate) fn ambient_flavor_request(
 /// Deterministic in (campaign, tick) rather than random, on purpose. Varying
 /// is what breaks the collapse; reproducible is what keeps a surprising line
 /// investigable instead of a one-off nobody can retrieve.
-#[cfg_attr(not(feature = "flavor-live"), allow(dead_code))]
+///
+/// Gated with its siblings: only the `flavor-live` path calls it, and leaving
+/// it compiled elsewhere would mean a function nobody can reach — the
+/// zero-caller shape this project keeps deleting.
+#[cfg(feature = "flavor-live")]
 pub(crate) fn ambient_flavor_seed(genesis_digest8: [u8; 8], turns: u32) -> u32 {
     let g = u32::from_le_bytes([
         genesis_digest8[0],
@@ -1012,6 +1021,10 @@ mod tests {
     /// The mood was hardcoded, so the prompt never changed and — with the
     /// sampler seed also fixed — 52 device generations produced one string.
     /// Every branch must be reachable, or the collapse simply moves.
+    ///
+    /// Gated with the code it covers: `SlotValue` lives behind `flavor-layer`,
+    /// and `cargo test` compiles this module under `blackbox-sim` alone.
+    #[cfg(feature = "flavor-live")]
     #[test]
     fn mood_is_read_from_the_market_and_every_branch_is_reachable() {
         use crate::blackbox_sim::market::{MarketTickView, Regime};
@@ -1055,6 +1068,7 @@ mod tests {
     /// test is that consecutive turns never draw the same seed. Reproducibility
     /// is asserted too: the same campaign and tick must give the same seed, or
     /// an odd line on device could never be retrieved.
+    #[cfg(feature = "flavor-live")]
     #[test]
     fn ambient_seed_varies_per_turn_and_repeats_only_for_the_same_turn() {
         let g: [u8; 8] = [7, 200, 3, 91, 0, 0, 0, 0];
@@ -1075,6 +1089,10 @@ mod tests {
     /// Distinct moods must reach the prompt as distinct text. If they rendered
     /// identically the derivation would be decorative and the output space
     /// would stay collapsed.
+    ///
+    /// Also names `crate::llm::flavor_gen`, which is behind `pocket-brain` —
+    /// two features away from the set this module minimally compiles under.
+    #[cfg(feature = "flavor-live")]
     #[test]
     fn distinct_moods_render_distinct_prompts() {
         use crate::flavor::request::SlotValue;
