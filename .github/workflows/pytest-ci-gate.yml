@@ -19,7 +19,9 @@
 #
 # GGUF placeholder: NOT created. pytest is pure Python and does not enter
 # build.rs; confirmed green without the stub (see T4-A report).
-
+#
+# F-3: 絶対孤立 allowlist is EMPTY — any SKIPPED line fails that job.
+# F-4: NOT MEASURED is conditional on observing the Windows skip.
 name: pytest-ci-gate
 
 on:
@@ -61,7 +63,7 @@ jobs:
           python -m pip install textual
           python -c "import textual, pytest, numpy; print('textual', textual.__version__); print('pytest', pytest.__version__); print('numpy', numpy.__version__)"
 
-      - name: 絶対孤立 floor (≥ 22 collected, failures == 0)
+      - name: 絶対孤立 floor (≥ 22 collected, failures == 0, allowlist EMPTY)
         run: |
           set -euo pipefail
           OUT="$(mktemp)"
@@ -80,6 +82,26 @@ jobs:
             echo "絶対孤立: failures/errors != 0"
             exit 1
           fi
+
+          # F-3: allowlist is intentionally EMPTY. These three files are
+          # platform-independent AST / offline / manifest boundary scans
+          # (ROADMAP §14 release stop). Any skip — including ones that would
+          # be tolerated in desktop suite — fails this job. Do NOT reuse the
+          # desktop-suite allowlist logic; empty is the specification.
+          echo "=== 絶対孤立 SKIP enumeration (allowlist EMPTY by design) ==="
+          SKIP_LINES="$(grep -E '^SKIPPED' "$OUT" || true)"
+          if [ -z "${SKIP_LINES}" ]; then
+            echo "(no SKIPPED lines — allowlist empty, as required)"
+          else
+            printf '%s\n' "${SKIP_LINES}"
+            echo "UNKNOWN SKIP — 絶対孤立 allowlist is empty; any skip fails the job"
+            exit 1
+          fi
+          if echo "${SUMMARY}" | grep -Eq '[0-9]+ skipped'; then
+            echo "絶対孤立: summary reports skipped != 0 (allowlist empty)"
+            exit 1
+          fi
+          echo "絶対孤立: skip count == 0 (measured; allowlist empty)"
 
   # ------------------------------------------------------------------
   # desktop suite — ROADMAP §14 merge stop.
@@ -161,8 +183,13 @@ jobs:
             fi
           done <<< "${SKIP_LINES}"
 
-          # Silence uniqueness: name what this runner did NOT measure.
-          echo "NOT MEASURED: Windows AppContainer pipe contract — this job runs on macos-14; the platform-boundary test cannot be exercised here. A green skip count is not evidence that the Windows pipe contract holds."
+          # F-4: NOT MEASURED only when the Windows skip was actually observed.
+          # Unconditional "not measured" is the same empty evidence this gate exists to refuse.
+          if printf '%s\n' "${SKIP_LINES}" | grep -qF "${ALLOWED_REASON}"; then
+            echo "NOT MEASURED: Windows AppContainer pipe contract — this job runs on macos-14; the platform-boundary test was skipped and therefore not exercised. A green skip count is not evidence that the Windows pipe contract holds."
+          else
+            echo "MEASURED ABSENCE: Windows AppContainer pipe contract skip was NOT observed in this run. Either the test ran on this runner, or the skip marker was removed — do not claim 'not measured' without detecting the skip."
+          fi
 
           # textual must not appear as a skip (dependency must be present).
           if printf '%s\n' "${SKIP_LINES}" | grep -qi 'textual'; then

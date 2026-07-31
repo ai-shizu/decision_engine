@@ -1042,3 +1042,44 @@ attempts 49 + dropped_busy 3              = 52 = turns_completed ✓
 | **走っていて、届いていて、常に同じものを届けている** | 二重ハードコード（mood ＋ seed 0）による出力空間の 1 点への収縮 |
 
 **三つ目が最も危険である。** `attempts` も `accepted` も `leaked` も健全に見え、経路は動き、出力も届く。**外から見て正常と区別がつかない。** A-1-f と同型であり、**計器を増やさなければ永久に発見されなかった。**
+
+---
+
+## 16. T4-A pytest CI ゲート — 実測ログ（DoD から移設）
+
+> DoD（`AI_SKILLS.md` §3.5）は性質だけを述べる。件数・run ID は陳腐化するのでここに置く。
+> 正本指示: `docs/T4A_PYTEST_CI_GATE_DIRECTIVE.md` / `docs/T4A_REMEDIATION_DIRECTIVE_F2_F4.md`。
+
+### 16.1 初回ゲート着弾（commit `d87a5d0`）
+
+| 項目 | 実測 |
+|---|---|
+| GREEN run（初回） | `30634329499` |
+| GREEN run（復元 `8137aae`） | `30635611570` |
+| desktop suite | collected=806 / 805 passed / 1 skipped（Windows AppContainer） |
+| 絶対孤立 | collected=22 / 22 passed / 0 skipped |
+| textual | 8.2.8（skip #1 消滅） |
+| numpy | conda-forge 2.1.3（OpenBLAS 系・Accelerate 拒否） |
+| GGUF スタブ | 不要（スタブ無しで GREEN） |
+
+### 16.2 §5.1 変異ドリル（desktop suite）
+
+| 変異 | run | 結果 |
+|---|---|---|
+| floor ≥ 100000 | `30634690717` | RED — `collected=806 (floor >= 100000)` exit 1 |
+| unknown skip（`_t4a_*.py`） | `30634947990` | **偽 GREEN** — pytest 非収集 |
+| unknown skip（`test_*.py`） | `30635314072` | RED — `UNKNOWN SKIP — MUTATION_UNKNOWN_SKIP` |
+| 復元 | `30635611570` on `8137aae` | GREEN |
+
+### 16.3 ゲートが捕まえた本物（`6c05c99`）
+
+DoD 節へ `805 passed` 等の固定スナップショットを焼いた結果、
+`tests/test_dod_boundary_contract.py::test_ai_skills_dod_has_no_fixed_snapshots` が
+先端で RED。**ゲート初日に本人のコミットを落とした。** 数値は本節へ移設（F-2）。
+
+### 16.4 BLAS 感度（開発機実測）
+
+| 環境 | score gap | FSA-10 |
+|---|---|---|
+| conda OpenBLAS | 5.96e-8（1 ULP） | GREEN |
+| pip Accelerate | 2.38e-7（2 ULP） | RED |
