@@ -63,6 +63,27 @@ jobs:
           python -m pip install textual
           python -c "import textual, pytest, numpy; print('textual', textual.__version__); print('pytest', pytest.__version__); print('numpy', numpy.__version__)"
 
+      # F-3 §変異ドリル — temporary. Inject skip into absolute-isolation corpus (must RED).
+      - name: Inject skip into 絶対孤立 corpus (mutation drill)
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+          p = Path("tests/test_e0a_egress_lockdown.py")
+          text = p.read_text(encoding="utf-8")
+          needle = "def test_e0a_ast_physical_lockdown"
+          assert needle in text, "mutation target missing"
+          text = text.replace(
+              needle,
+              '@pytest.mark.skip(reason="F3_MUTATION_UNKNOWN_SKIP")\n'
+              + needle,
+              1,
+          )
+          p.write_text(text, encoding="utf-8")
+          print("injected skip into", p)
+          PY
+          grep -n "F3_MUTATION_UNKNOWN_SKIP" tests/test_e0a_egress_lockdown.py
+
       - name: 絶対孤立 floor (≥ 22 collected, failures == 0, allowlist EMPTY)
         run: |
           set -euo pipefail
