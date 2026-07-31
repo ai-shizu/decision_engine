@@ -18,6 +18,7 @@ import {
   initialBlackboxArenaState,
 } from "../../../lib/blackboxArenaReducer";
 import { buildIntentFromDraft } from "../../../lib/blackboxDraftIntent";
+import { pollForFlavor } from "../../../lib/flavorPoll";
 import { BlackboxIntentError } from "../../../lib/blackboxIntent";
 import { blackboxUiErrorMessage } from "../../../lib/blackboxUiError";
 import { todayIso } from "../../../lib/dateUtils";
@@ -60,6 +61,45 @@ export function BlackboxArena({
   const inFlight = useRef(false);
   const observeShownAt = useRef<number | null>(null);
   const lastHalt = useRef(0);
+  /**
+   * Generation counter for the ambient flavor poll. Bumping it supersedes any
+   * poll still running, which is what keeps a late arrival from painting prose
+   * onto a turn it does not belong to.
+   */
+  const flavorPollId = useRef(0);
+
+  // Supersede any in-flight poll on unmount so it cannot setState afterwards.
+  useEffect(
+    () => () => {
+      flavorPollId.current += 1;
+    },
+    [],
+  );
+
+  /**
+   * Fire-and-forget: never awaited on the turn path, so the arena stays
+   * responsive and A-4's "never waits on the model" still holds. The value
+   * lands ~267ms after `advance` returns, which a single pull always missed.
+   */
+  function pullFlavorForCurrentTick(campaignId: string): void {
+    flavorPollId.current += 1;
+    const myId = flavorPollId.current;
+    void pollForFlavor({
+      take: () => bxsTakeFlavor(campaignId),
+      sleep: (ms) =>
+        new Promise<void>((resolve) => {
+          setTimeout(resolve, ms);
+        }),
+      cancelled: () => flavorPollId.current !== myId,
+    })
+      .then((prose) => {
+        if (flavorPollId.current !== myId) return;
+        if (prose !== null) setFlavorText(prose);
+      })
+      .catch((flavorErr: unknown) => {
+        console.error("[BlackboxArena] take_flavor failed:", flavorErr);
+      });
+  }
 
   useEffect(() => {
     onCampaignIdChange?.(state.campaignId);
@@ -83,6 +123,9 @@ export function BlackboxArena({
         console.error("[BlackboxArena] abort failed:", err);
       } finally {
         dispatch({ type: "sealed" });
+        // Supersede first: a poll landing after the halt must not repaint prose
+        // onto a sealed campaign.
+        flavorPollId.current += 1;
         setFlavorText(null);
       }
     })();
@@ -116,6 +159,8 @@ export function BlackboxArena({
         createdDate: setup.createdDate.trim(),
       });
       dispatch({ type: "campaign_started", observation });
+      // A poll from a previous campaign must not paint into the new one.
+      flavorPollId.current += 1;
       setFlavorText(null);
     } catch (err) {
       console.error("[BlackboxArena] start failed:", err);
@@ -166,14 +211,11 @@ export function BlackboxArena({
       dispatch({ type: "submit_ok", outcome });
       const advance = await bxsAdvance(state.campaignId);
       dispatch({ type: "advance_ok", advance });
+      // Prose belongs to the tick that produced it. Clear the previous line
+      // before polling so a stale one cannot linger over the new turn.
+      setFlavorText(null);
       // Non-blocking pull after advance returns — never waits on model (A-4).
-      try {
-        const prose = await bxsTakeFlavor(state.campaignId);
-        setFlavorText(prose);
-      } catch (flavorErr) {
-        console.error("[BlackboxArena] take_flavor failed:", flavorErr);
-        setFlavorText(null);
-      }
+      pullFlavorForCurrentTick(state.campaignId);
     } catch (err) {
       console.error("[BlackboxArena] execute/advance failed:", err);
       const code =
