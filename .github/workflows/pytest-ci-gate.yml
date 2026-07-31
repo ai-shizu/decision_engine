@@ -125,6 +125,18 @@ jobs:
           uname -m
           file build/search_engine | grep -E 'arm64|x86_64'
 
+      # T4-A §5.1 mutation drill 2 — temporary unknown skip (must RED). Remove next commit.
+      - name: Inject unknown skip (mutation drill 2)
+        run: |
+          set -euo pipefail
+          cat > tests/_t4a_mutation_unknown_skip.py <<'PY'
+          import pytest
+
+          @pytest.mark.skip(reason="MUTATION_UNKNOWN_SKIP")
+          def test_t4a_mutation_unknown_skip() -> None:
+              assert False
+          PY
+
       - name: desktop suite floor (≥ 800 collected) + skip uniqueness
         run: |
           set -euo pipefail
@@ -132,10 +144,9 @@ jobs:
           python -m pytest tests/ -rs --tb=short 2>&1 | tee "$OUT"
 
           COLLECTED="$(grep -E '^collected [0-9]+ items' "$OUT" | head -1 | sed -E 's/^collected ([0-9]+) items.*/\1/')"
-          echo "desktop suite collected=${COLLECTED} (floor >= 100000)"
+          echo "desktop suite collected=${COLLECTED} (floor >= 800)"
           test -n "${COLLECTED}"
-          # T4-A §5.1 mutation drill 1 — temporary impossible floor (must RED).
-          test "${COLLECTED}" -ge 100000
+          test "${COLLECTED}" -ge 800
 
           SUMMARY="$(grep -E '=+ .*(passed|failed|error|skipped).* =+' "$OUT" | tail -1 || true)"
           echo "desktop suite summary: ${SUMMARY}"
