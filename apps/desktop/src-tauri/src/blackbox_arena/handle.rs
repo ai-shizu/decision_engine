@@ -472,28 +472,19 @@ impl Worker {
     /// arrives as [`SimRequest::AmbientFlavorReady`].
     #[cfg(feature = "flavor-live")]
     fn deliver_ambient_flavor(&mut self, campaign_id: &str) {
-        use crate::flavor::request::{
-            FlavorLocale, FlavorRequest, FlavorSchema, FlavorSlot, SlotId, SlotValue, TemplateId,
-        };
         use crate::llm::flavor_gen;
 
-        if !self.sessions.contains_key(campaign_id) {
+        let Some(entry) = self.sessions.get(campaign_id) else {
             // Aborted between kick and deliver — drop without panic.
             if self.flavor.is_busy() {
                 self.flavor
                     .finish(crate::llm::flavor_gen::FlavorOutcome::Unavailable);
             }
             return;
-        }
-        let request = FlavorRequest {
-            schema: FlavorSchema::V1,
-            template_id: TemplateId::ArenaEventHeadline,
-            slots: vec![FlavorSlot {
-                id: SlotId::Mood,
-                tag: SlotValue::MoodCalm,
-            }],
-            locale: FlavorLocale::Ja,
         };
+        // Read the market the player is looking at, so the prompt stops being
+        // the same sentence on every turn.
+        let request = ambient_flavor_request(mood_for_market(entry.session.market()));
         // Owned prompt crosses the thread boundary (AI_SKILLS §20-5 relay).
         let prompt = flavor_gen::render_prompt(&request);
         let llm = self
@@ -533,26 +524,16 @@ impl Worker {
     /// LLM-thread completion landed on the sim queue (関所 H).
     #[cfg(feature = "flavor-live")]
     fn finish_ambient_flavor(&mut self, campaign_id: &str, completion: Option<String>) {
-        use crate::flavor::request::{
-            FlavorLocale, FlavorRequest, FlavorSchema, FlavorSlot, SlotId, SlotValue, TemplateId,
-        };
-
-        if !self.sessions.contains_key(campaign_id) {
+        let Some(entry) = self.sessions.get(campaign_id) else {
             if self.flavor.is_busy() {
                 self.flavor
                     .finish(crate::llm::flavor_gen::FlavorOutcome::Unavailable);
             }
             return;
-        }
-        let request = FlavorRequest {
-            schema: FlavorSchema::V1,
-            template_id: TemplateId::ArenaEventHeadline,
-            slots: vec![FlavorSlot {
-                id: SlotId::Mood,
-                tag: SlotValue::MoodCalm,
-            }],
-            locale: FlavorLocale::Ja,
         };
+        // Same builder as the prompt side. Only `template_id` reaches `decide`,
+        // so a market that moved since the kick cannot change the verdict.
+        let request = ambient_flavor_request(mood_for_market(entry.session.market()));
         self.flavor
             .deliver_completion(&request, completion.as_deref());
     }
@@ -886,6 +867,58 @@ impl BlackboxSimHandle {
     }
 }
 
+/// Mood tag derived from the market the player is actually looking at.
+///
+/// This was hardcoded to `MoodCalm`, in both the prompt and the decide-side
+/// request, so `render_prompt` produced a byte-identical prompt on every turn.
+/// Together with the sampler seed fixed at 0 that collapsed the output space to
+/// a single point: 52 generations on device produced 52 identical strings, and
+/// the numeral guard was never once handed anything to reject (Tier 3 §14).
+///
+/// A jump outranks the regime — a shock is volatile whether or not the regime
+/// has caught up with it yet.
+#[cfg_attr(not(feature = "flavor-live"), allow(dead_code))]
+pub(crate) fn mood_for_market(
+    market: Option<crate::blackbox_sim::market::MarketTickView>,
+) -> crate::flavor::request::SlotValue {
+    use crate::blackbox_sim::market::Regime;
+    use crate::flavor::request::SlotValue;
+    match market {
+        Some(m) if m.jump_occurred => SlotValue::MoodVolatile,
+        Some(m) => match m.regime {
+            Regime::Stress => SlotValue::MoodTense,
+            Regime::Calm => SlotValue::MoodCalm,
+        },
+        // Before the first observation there is no market to read; calm is the
+        // same default this code already had.
+        None => SlotValue::MoodCalm,
+    }
+}
+
+/// The ambient request, built in one place so the prompt side and the
+/// decide side cannot drift apart.
+///
+/// Only `template_id` is load-bearing at decide time (`decide` takes the
+/// template, never the slots), so a market that moves between the kick and the
+/// completion changes the wording of the prompt and nothing about the verdict.
+#[cfg_attr(not(feature = "flavor-live"), allow(dead_code))]
+pub(crate) fn ambient_flavor_request(
+    mood: crate::flavor::request::SlotValue,
+) -> crate::flavor::request::FlavorRequest {
+    use crate::flavor::request::{
+        FlavorLocale, FlavorRequest, FlavorSchema, FlavorSlot, SlotId, TemplateId,
+    };
+    FlavorRequest {
+        schema: FlavorSchema::V1,
+        template_id: TemplateId::ArenaEventHeadline,
+        slots: vec![FlavorSlot {
+            id: SlotId::Mood,
+            tag: mood,
+        }],
+        locale: FlavorLocale::Ja,
+    }
+}
+
 /// Numeric codes for the arena's terminal state (Tier 3 follow-up to §13.5).
 ///
 /// Returns `(sealed, dead_reason)`. `dead_reason` is `0` unless the session is
@@ -943,6 +976,64 @@ mod tests {
             Ok(v) => v,
             Err(e) => unreachable!("test setup failed: {e:?}"),
         }
+    }
+
+    /// The mood was hardcoded, so the prompt never changed and — with the
+    /// sampler seed also fixed — 52 device generations produced one string.
+    /// Every branch must be reachable, or the collapse simply moves.
+    #[test]
+    fn mood_is_read_from_the_market_and_every_branch_is_reachable() {
+        use crate::blackbox_sim::market::{MarketTickView, Regime};
+        use crate::flavor::request::SlotValue;
+
+        fn view(regime: Regime, jump_occurred: bool) -> MarketTickView {
+            MarketTickView {
+                tick: 1,
+                regime,
+                commodity_price_minor: 0,
+                equity_index_centi: 0,
+                demand_index_micro: 0,
+                rate_bp: 0,
+                jump_occurred,
+            }
+        }
+
+        assert_eq!(
+            mood_for_market(Some(view(Regime::Calm, false))),
+            SlotValue::MoodCalm
+        );
+        assert_eq!(
+            mood_for_market(Some(view(Regime::Stress, false))),
+            SlotValue::MoodTense
+        );
+        // A jump outranks the regime in both directions — a shock is volatile
+        // even while the regime still reads calm.
+        assert_eq!(
+            mood_for_market(Some(view(Regime::Calm, true))),
+            SlotValue::MoodVolatile
+        );
+        assert_eq!(
+            mood_for_market(Some(view(Regime::Stress, true))),
+            SlotValue::MoodVolatile
+        );
+        // Before the first observation: unchanged default.
+        assert_eq!(mood_for_market(None), SlotValue::MoodCalm);
+    }
+
+    /// Distinct moods must reach the prompt as distinct text. If they rendered
+    /// identically the derivation would be decorative and the output space
+    /// would stay collapsed.
+    #[test]
+    fn distinct_moods_render_distinct_prompts() {
+        use crate::flavor::request::SlotValue;
+        use crate::llm::flavor_gen::render_prompt;
+
+        let calm = render_prompt(&ambient_flavor_request(SlotValue::MoodCalm));
+        let tense = render_prompt(&ambient_flavor_request(SlotValue::MoodTense));
+        let volatile = render_prompt(&ambient_flavor_request(SlotValue::MoodVolatile));
+        assert_ne!(calm, tense, "calm and tense must not share a prompt");
+        assert_ne!(calm, volatile, "calm and volatile must not share a prompt");
+        assert_ne!(tense, volatile, "tense and volatile must not share a prompt");
     }
 
     /// The device reports these codes; nothing on hardware proves the mapping
