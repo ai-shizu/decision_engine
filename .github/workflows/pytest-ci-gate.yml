@@ -125,21 +125,6 @@ jobs:
           uname -m
           file build/search_engine | grep -E 'arm64|x86_64'
 
-      # T4-A §5.1 mutation drill 2 — temporary unknown skip (must RED). Remove next commit.
-      # Prior attempt used `_t4a_*.py` which pytest does not collect (not test_*.py).
-      - name: Inject unknown skip (mutation drill 2)
-        run: |
-          set -euo pipefail
-          cat > tests/test_t4a_mutation_unknown_skip.py <<'PY'
-          import pytest
-
-          @pytest.mark.skip(reason="MUTATION_UNKNOWN_SKIP")
-          def test_t4a_mutation_unknown_skip() -> None:
-              assert False
-          PY
-          test -f tests/test_t4a_mutation_unknown_skip.py
-          python -m pytest tests/test_t4a_mutation_unknown_skip.py --collect-only -q
-
       - name: desktop suite floor (≥ 800 collected) + skip uniqueness
         run: |
           set -euo pipefail
