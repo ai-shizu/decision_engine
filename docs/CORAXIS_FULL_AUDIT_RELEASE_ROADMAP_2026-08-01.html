@@ -1,0 +1,788 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <title>CORAXIS // Full Audit &amp; Release Roadmap // 2026-08-01</title>
+  <style>
+    :root {
+      --bg: #050806;
+      --panel: #09110c;
+      --panel-2: #0d1811;
+      --line: #274332;
+      --line-hot: #4a795b;
+      --text: #d6e5da;
+      --muted: #8ba095;
+      --green: #77e09b;
+      --cyan: #63dbe5;
+      --amber: #f1c75b;
+      --red: #ff6c73;
+      --white: #f4f7f5;
+      --ink: #050806;
+      --mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+      --sans: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--text);
+      font-family: var(--sans);
+      line-height: 1.55;
+    }
+    body::before {
+      content: "";
+      position: fixed;
+      inset: 0;
+      pointer-events: none;
+      background-image:
+        linear-gradient(rgba(119, 224, 155, .035) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(119, 224, 155, .025) 1px, transparent 1px);
+      background-size: 28px 28px;
+      opacity: .55;
+      z-index: -1;
+    }
+    a { color: var(--cyan); text-underline-offset: 3px; }
+    a:hover { color: var(--white); }
+    code, kbd, .mono { font-family: var(--mono); }
+    code {
+      color: #b8ebc8;
+      overflow-wrap: anywhere;
+    }
+    h1, h2, h3, h4 { margin: 0; font-family: var(--mono); letter-spacing: .035em; }
+    h2 { font-size: clamp(1.15rem, 2vw, 1.55rem); }
+    h3 { font-size: 1rem; }
+    p { margin: .55rem 0; }
+    button, input { font: inherit; }
+
+    .shell { width: min(1680px, calc(100% - 28px)); margin: 0 auto; }
+    .topline { height: 4px; background: var(--green); }
+    .hero {
+      border: 1px solid var(--line-hot);
+      border-top: 0;
+      background: #071009;
+      padding: clamp(22px, 4vw, 48px);
+      position: relative;
+      overflow: hidden;
+    }
+    .hero::after {
+      content: "CORAXIS // RELEASE CONTROL";
+      position: absolute;
+      right: 20px;
+      bottom: 14px;
+      color: rgba(119, 224, 155, .09);
+      font: 700 clamp(1.5rem, 5vw, 5rem)/1 var(--mono);
+      white-space: nowrap;
+      pointer-events: none;
+    }
+    .eyebrow { color: var(--green); font: 700 .78rem/1.4 var(--mono); letter-spacing: .16em; }
+    h1 { font-size: clamp(2rem, 6vw, 5.25rem); line-height: .96; color: var(--white); margin: 18px 0; }
+    .hero-sub { max-width: 980px; color: #b9c9bf; font-size: 1rem; position: relative; z-index: 1; }
+    .hero-meta, .status-strip { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 22px; position: relative; z-index: 1; }
+    .chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 7px;
+      min-height: 30px;
+      padding: 4px 10px;
+      border: 1px solid var(--line-hot);
+      background: #0a160e;
+      color: #bcd0c2;
+      font: 700 .72rem/1.2 var(--mono);
+      letter-spacing: .04em;
+    }
+    .chip.red { color: var(--red); border-color: #7f3439; background: #190b0d; }
+    .chip.green { color: var(--green); }
+    .chip.amber { color: var(--amber); border-color: #6f5c27; }
+    .chip.cyan { color: var(--cyan); border-color: #27636a; }
+
+    .sticky-nav {
+      position: sticky;
+      top: 0;
+      z-index: 20;
+      display: flex;
+      gap: 0;
+      overflow-x: auto;
+      border: 1px solid var(--line);
+      border-top: 0;
+      background: rgba(5, 8, 6, .96);
+      backdrop-filter: blur(10px);
+    }
+    .sticky-nav a {
+      flex: 0 0 auto;
+      padding: 11px 14px;
+      border-right: 1px solid var(--line);
+      color: var(--muted);
+      text-decoration: none;
+      font: 700 .7rem/1 var(--mono);
+      letter-spacing: .08em;
+    }
+    .sticky-nav a:hover { color: var(--green); background: var(--panel-2); }
+
+    main { padding: 24px 0 64px; }
+    section.panel {
+      border: 1px solid var(--line);
+      background: rgba(9, 17, 12, .94);
+      margin: 18px 0;
+    }
+    .section-head {
+      display: flex;
+      justify-content: space-between;
+      gap: 18px;
+      align-items: flex-start;
+      border-bottom: 1px solid var(--line);
+      padding: 18px 20px;
+      background: #0a140d;
+    }
+    .section-kicker { color: var(--green); font: 700 .68rem/1.3 var(--mono); letter-spacing: .14em; margin-bottom: 6px; }
+    .section-body { padding: 20px; }
+    .section-note { max-width: 720px; color: var(--muted); font-size: .86rem; text-align: right; }
+
+    .verdict {
+      display: grid;
+      grid-template-columns: minmax(210px, .7fr) minmax(0, 2fr);
+      border: 1px solid #7f3439;
+      background: #13090b;
+    }
+    .verdict-code {
+      display: grid;
+      place-items: center;
+      padding: 26px;
+      border-right: 1px solid #7f3439;
+      color: var(--red);
+      font: 900 clamp(2rem, 5vw, 4.2rem)/1 var(--mono);
+      letter-spacing: .08em;
+    }
+    .verdict-copy { padding: 22px; }
+    .verdict-copy strong { color: var(--white); }
+
+    .grid { display: grid; gap: 12px; }
+    .grid.cols-4 { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+    .grid.cols-3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+    .grid.cols-2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .metric, .card {
+      border: 1px solid var(--line);
+      background: var(--panel-2);
+      padding: 14px;
+      min-width: 0;
+    }
+    .metric .value { color: var(--white); font: 800 clamp(1.3rem, 3vw, 2.2rem)/1 var(--mono); }
+    .metric .label { color: var(--muted); font: 700 .68rem/1.4 var(--mono); margin-top: 9px; text-transform: uppercase; }
+    .metric.good { border-top: 3px solid var(--green); }
+    .metric.bad { border-top: 3px solid var(--red); }
+    .metric.warn { border-top: 3px solid var(--amber); }
+    .metric.info { border-top: 3px solid var(--cyan); }
+    .card h3 { color: var(--white); margin-bottom: 8px; }
+    .card p, .card li { color: #adbbb2; font-size: .88rem; }
+    .card ul { margin: 8px 0 0; padding-left: 1.1rem; }
+
+    .stop-list { counter-reset: stop; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+    .stop {
+      counter-increment: stop;
+      display: grid;
+      grid-template-columns: 42px 1fr;
+      gap: 12px;
+      border: 1px solid #633036;
+      background: #12090b;
+      padding: 12px;
+    }
+    .stop::before { content: counter(stop, decimal-leading-zero); color: var(--red); font: 800 1.2rem/1.3 var(--mono); }
+    .stop strong { color: var(--white); display: block; }
+    .stop span { color: #b99fa2; font-size: .83rem; }
+
+    .legend { display: flex; flex-wrap: wrap; gap: 8px; }
+    .sev {
+      display: inline-flex;
+      min-width: 40px;
+      justify-content: center;
+      padding: 3px 7px;
+      border: 1px solid currentColor;
+      font: 800 .68rem/1.2 var(--mono);
+    }
+    .sev-p0 { color: var(--red); }
+    .sev-p1 { color: var(--amber); }
+    .sev-p2 { color: var(--cyan); }
+    .sev-nm { color: #c5a4ff; }
+
+    .table-wrap { width: 100%; overflow-x: auto; border: 1px solid var(--line); }
+    table { border-collapse: collapse; width: 100%; min-width: 980px; background: #070d09; }
+    th, td { padding: 10px 11px; border-right: 1px solid var(--line); border-bottom: 1px solid var(--line); text-align: left; vertical-align: top; }
+    th { position: sticky; top: 40px; z-index: 3; background: #101d14; color: var(--green); font: 800 .68rem/1.3 var(--mono); letter-spacing: .06em; }
+    td { color: #acbbb1; font-size: .79rem; }
+    td strong { color: var(--white); font-size: .84rem; }
+    tr:hover td { background: #0c1710; }
+    tr[hidden] { display: none; }
+    .evidence { display: block; margin-top: 5px; color: #86a08f; }
+    .done { color: #c7d9cc; }
+    .instrument { color: var(--cyan); }
+    .owner { color: var(--amber); font-family: var(--mono); }
+    .finding-id { color: var(--white); font: 800 .73rem/1.3 var(--mono); white-space: nowrap; }
+
+    .filters {
+      display: grid;
+      grid-template-columns: minmax(220px, 1fr) auto;
+      gap: 10px;
+      align-items: center;
+      margin-bottom: 12px;
+    }
+    .filters input {
+      width: 100%;
+      min-height: 42px;
+      border: 1px solid var(--line-hot);
+      background: #050a07;
+      color: var(--white);
+      padding: 9px 12px;
+      outline: none;
+      font-family: var(--mono);
+    }
+    .filters input:focus { border-color: var(--green); }
+    .filter-buttons { display: flex; flex-wrap: wrap; gap: 6px; }
+    .filter-buttons button {
+      border: 1px solid var(--line-hot);
+      background: #0a150e;
+      color: var(--muted);
+      padding: 8px 10px;
+      cursor: pointer;
+      font: 800 .7rem/1 var(--mono);
+    }
+    .filter-buttons button[aria-pressed="true"] { background: var(--green); color: var(--ink); border-color: var(--green); }
+    .countline { color: var(--muted); font: 700 .72rem/1.4 var(--mono); margin: 7px 0 14px; }
+    .finding-group { margin-top: 22px; }
+    .finding-group h3 { color: var(--green); border-left: 4px solid var(--green); padding-left: 10px; margin: 0 0 8px; }
+
+    .flow {
+      display: grid;
+      grid-template-columns: 1fr 48px 1fr 48px 1fr 48px 1fr;
+      align-items: stretch;
+      gap: 0;
+    }
+    .flow-node {
+      border: 1px solid var(--line-hot);
+      background: #0b1710;
+      padding: 15px;
+      min-height: 135px;
+    }
+    .flow-node.blocked { border-color: #74383d; background: #150a0c; }
+    .flow-node h3 { color: var(--white); }
+    .flow-node p { color: var(--muted); font-size: .8rem; }
+    .flow-arrow { display: grid; place-items: center; color: var(--green); font: 900 1.7rem/1 var(--mono); }
+    .convergence {
+      margin-top: 12px;
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 8px;
+    }
+    .convergence .lane { border: 1px solid var(--line); border-top: 3px solid var(--cyan); padding: 11px; background: #08110b; }
+    .convergence .lane strong { color: var(--white); font-family: var(--mono); }
+    .convergence .lane span { display: block; color: var(--muted); font-size: .76rem; margin-top: 5px; }
+
+    .tier { border-left: 5px solid var(--green); }
+    .tier.t5 { border-left-color: var(--cyan); }
+    .tier.t6 { border-left-color: var(--amber); }
+    .tier-banner {
+      display: grid;
+      grid-template-columns: minmax(160px, .55fr) minmax(0, 2fr);
+      border-bottom: 1px solid var(--line);
+    }
+    .tier-code { padding: 22px; background: #0c1a11; color: var(--green); font: 900 clamp(1.5rem, 4vw, 3rem)/1 var(--mono); }
+    .t5 .tier-code { color: var(--cyan); }
+    .t6 .tier-code { color: var(--amber); }
+    .tier-copy { padding: 20px; }
+    .tier-copy h2 { color: var(--white); }
+    .tier-copy p { color: var(--muted); font-size: .86rem; }
+    .action-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; padding: 14px; }
+    .action {
+      border: 1px solid var(--line);
+      background: #08110b;
+      padding: 14px;
+      position: relative;
+    }
+    .action-id { color: var(--green); font: 800 .72rem/1.3 var(--mono); }
+    .t5 .action-id { color: var(--cyan); }
+    .t6 .action-id { color: var(--amber); }
+    .action h3 { color: var(--white); margin: 6px 0 8px; }
+    .action-meta { display: grid; grid-template-columns: 90px 1fr; gap: 5px 10px; font-size: .78rem; margin: 9px 0; }
+    .action-meta dt { color: var(--muted); font-family: var(--mono); }
+    .action-meta dd { margin: 0; color: #c0cec4; }
+    .checklist { list-style: none; padding: 0; margin: 10px 0 0; }
+    .checklist li { position: relative; padding: 5px 0 5px 25px; color: #b5c4ba; font-size: .8rem; border-top: 1px dashed #203526; }
+    .checklist li::before { content: "□"; position: absolute; left: 2px; color: var(--green); font-family: var(--mono); }
+    .t5 .checklist li::before { color: var(--cyan); }
+    .t6 .checklist li::before { color: var(--amber); }
+    .exit-gate { margin: 0 14px 14px; border: 2px solid var(--line-hot); background: #0b1710; padding: 16px; }
+    .exit-gate h3 { color: var(--white); }
+    .exit-gate .checklist { columns: 2; column-gap: 32px; }
+    .exit-gate .checklist li { break-inside: avoid; }
+
+    .matrix td:first-child { color: var(--white); font-weight: 700; }
+    .pass { color: var(--green); font-weight: 800; }
+    .fail { color: var(--red); font-weight: 800; }
+    .warn-text { color: var(--amber); font-weight: 800; }
+    .nm { color: #c5a4ff; font-weight: 800; }
+
+    .rules { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+    .rule { border: 1px solid var(--line-hot); background: #0b1710; padding: 15px; }
+    .rule .n { color: var(--green); font: 900 1.5rem/1 var(--mono); }
+    .rule strong { display: block; color: var(--white); margin: 8px 0; }
+    .rule p { color: var(--muted); font-size: .82rem; }
+
+    footer { border-top: 1px solid var(--line); color: var(--muted); padding: 24px 0 50px; font-size: .78rem; }
+    .print-note { display: none; }
+
+    @media (max-width: 1100px) {
+      .grid.cols-4, .grid.cols-3 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .flow { grid-template-columns: 1fr; }
+      .flow-arrow { min-height: 38px; transform: rotate(90deg); }
+      .convergence { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .action-grid { grid-template-columns: 1fr; }
+    }
+    @media (max-width: 720px) {
+      .shell { width: min(100% - 14px, 1680px); }
+      .hero { padding: 22px 15px; }
+      .section-head, .tier-banner { grid-template-columns: 1fr; display: grid; }
+      .section-note { text-align: left; }
+      .section-body { padding: 12px; }
+      .verdict { grid-template-columns: 1fr; }
+      .verdict-code { border-right: 0; border-bottom: 1px solid #7f3439; }
+      .grid.cols-4, .grid.cols-3, .grid.cols-2, .stop-list, .rules, .convergence { grid-template-columns: 1fr; }
+      .filters { grid-template-columns: 1fr; }
+      .exit-gate .checklist { columns: 1; }
+      th { top: 38px; }
+    }
+    @media print {
+      body { background: white; color: black; }
+      body::before, .sticky-nav, .filters, .filter-buttons { display: none !important; }
+      .shell { width: 100%; }
+      section.panel, .hero, .metric, .card, .action, .exit-gate, table, th, td { background: white !important; color: black !important; border-color: #555 !important; }
+      h1, h2, h3, h4, strong, code, .owner, .done, .instrument { color: black !important; }
+      tr[hidden] { display: table-row; }
+      .print-note { display: block; }
+      a { color: black; text-decoration: none; }
+    }
+  </style>
+</head>
+<body>
+  <div class="topline"></div>
+  <header class="hero shell">
+    <div class="eyebrow">FIELD AUDIT // RELEASE CONTROL // STATIC + EXECUTED EVIDENCE</div>
+    <h1>CORAXIS<br>FULL AUDIT</h1>
+    <p class="hero-sub">Tier 3実機検証完了後のコードベース全面監査、および App Store 1.0 Standalone／desktop配布までの依存関係付きリリース・ロードマップ。推測ではなく、リポジトリ内の実装・仕様・テスト・ワークフローと、この監査で実行したゲートだけを証拠にする。</p>
+    <div class="hero-meta">
+      <span class="chip red">RELEASE: HOLD / DO NOT SHIP</span>
+      <span class="chip green">TIER 3: VERIFIED CARRY-FORWARD</span>
+      <span class="chip amber">TIER 4: PARTIAL / NOT RELEASE-COMPLETE</span>
+      <span class="chip mono">HEAD 78b80f068ec38a8b13dcc0b77236db3730188aba</span>
+      <span class="chip mono">BRANCH feature/m20-mobile-ui-optimization</span>
+      <span class="chip mono">AUDIT 2026-08-01 JST</span>
+    </div>
+  </header>
+
+  <nav class="sticky-nav shell" aria-label="監査ナビゲーション">
+    <a href="#situation">00 / 判定</a>
+    <a href="#baseline">01 / 実測</a>
+    <a href="#coverage">02 / CI対応</a>
+    <a href="#findings">03 / 全課題</a>
+    <a href="#dependency">04 / 依存フロー</a>
+    <a href="#tier4">05 / Tier 4</a>
+    <a href="#tier5">06 / Tier 5</a>
+    <a href="#tier6">07 / Tier 6</a>
+    <a href="#go-no-go">08 / 発射条件</a>
+  </nav>
+
+  <main class="shell">
+    <section class="panel" id="situation">
+      <div class="section-head">
+        <div><div class="section-kicker">00 // COMMAND DECISION</div><h2>監査判定</h2></div>
+        <div class="section-note">Tier 3の成功を否定しない。Tier 3で測った機能が、同一来歴の本番成果物でも成立することがまだ接続されていないため、配布だけを停止する。</div>
+      </div>
+      <div class="section-body">
+        <div class="verdict">
+          <div class="verdict-code">HOLD</div>
+          <div class="verdict-copy">
+            <p><strong>現HEADから署名済み配布物を生成・実機投入してはならない。</strong></p>
+            <p>理由は単一障害ではない。タグ／手動リリースが必須ゲートと独立している、iOS本番archive経路が存在しない、production plistへ開発LAN/ATS例外が混入している、モデル完全性が4-byte magicに退化する、PIIがWebView localStorageへ平文保存される、そして「未取得」を0／Nominal／readyへ変換する複数の計器が残る。</p>
+            <p>解除条件は本書の Tier 4 Exit、Tier 5 Exit、Tier 6 Launch Gate の順番を飛ばさず、すべてを同一immutable SHAと署名付き証跡へ結合すること。</p>
+          </div>
+        </div>
+
+        <div class="status-strip">
+          <span class="chip green">FACT: worktree clean at audit snapshot</span>
+          <span class="chip green">FACT: code TODO/FIXME/HACK/todo!/unimplemented! = 0</span>
+          <span class="chip cyan"><span id="finding-count">—</span> audit register entries</span>
+          <span class="chip amber">external branch protection / current remote runs = NOT MEASURED</span>
+        </div>
+
+        <div class="stop-list" style="margin-top:16px">
+          <div class="stop"><div><strong>CI成功と配布物の因果がない</strong><span>tag/manual buildはpytest・frontend・Rust・flavor・blackboxの同一SHA成功を確認せず開始できる。</span></div></div>
+          <div class="stop"><div><strong>iOS production laneがない</strong><span>App Store方式のarchive/export/sign/uploadがなく、現ExportOptionsはdebugging。</span></div></div>
+          <div class="stop"><div><strong>本番plistが開発構成</strong><span>LAN permission、任意WebContent load、RFC1918 HTTP例外が生成済みRelease入力へ残る。</span></div></div>
+          <div class="stop"><div><strong>モデルidentityが閉じていない</strong><span>runtimeはpocket-brain.gguf、署名planは別名7B、import検証はmagicのみ。</span></div></div>
+          <div class="stop"><div><strong>沈黙が一意でない</strong><span>feature absent／IPC故障、正常zero-hit／native障害、sensor正常／取得不能が同じ状態へ潰れる。</span></div></div>
+          <div class="stop"><div><strong>PII保護境界を迂回</strong><span>誕生日・性別・身長・体重・住所・勤務先がlocalStorageへ平文JSON保存される。</span></div></div>
+        </div>
+
+        <div class="rules" style="margin-top:16px">
+          <div class="rule"><span class="n">01</span><strong>計器を先に置く</strong><p>全修正は route／reason／validity／CID／artifact SHA を先に記録し、failure injectionで計器が発火することをRED→GREENで示してから挙動を変える。</p></div>
+          <div class="rule"><span class="n">02</span><strong>沈黙を一意にする</strong><p>正常な経路外、取消、未搭載、取得不能、timeout、corruptionを異なる固定codeにする。空値・0・Nominal・readyで代用しない。</p></div>
+          <div class="rule"><span class="n">03</span><strong>来歴なしを投入しない</strong><p>実機・TestFlight・desktop配布へ入るbytesは、同一SHA required checks、入力digest、builder、toolchain、署名、SBOMを機械照合できるものだけ。</p></div>
+        </div>
+      </div>
+    </section>
+
+    <section class="panel" id="baseline">
+      <div class="section-head">
+        <div><div class="section-kicker">01 // MEASURED BASELINE</div><h2>監査時の実測基線</h2></div>
+        <div class="section-note">PASSはそのコマンドが測った範囲だけを意味する。skip、feature非搭載、package外、別toolchainを暗黙の成功へ昇格しない。</div>
+      </div>
+      <div class="section-body">
+        <div class="grid cols-4">
+          <div class="metric good"><div class="value">804 / 2</div><div class="label">pytest passed / skipped</div></div>
+          <div class="metric good"><div class="value">22 / 22</div><div class="label">absolute isolation</div></div>
+          <div class="metric good"><div class="value">35 / 296</div><div class="label">TS boundary suites / assertions</div></div>
+          <div class="metric good"><div class="value">212</div><div class="label">Rust default lib passed</div></div>
+          <div class="metric good"><div class="value">529</div><div class="label">pocket-brain + secure-vault lib</div></div>
+          <div class="metric good"><div class="value">564 / 617</div><div class="label">blackbox max / flavor-live</div></div>
+          <div class="metric bad"><div class="value">95</div><div class="label">rustfmt files with diff</div></div>
+          <div class="metric bad"><div class="value">60 + 344</div><div class="label">strict clippy lib / test warnings</div></div>
+          <div class="metric warn"><div class="value">588.20 kB</div><div class="label">initial JS chunk; Vite warning</div></div>
+          <div class="metric bad"><div class="value">133 / 674</div><div class="label">SBOM components with non-hex SHA-512 content</div></div>
+          <div class="metric info"><div class="value">1,117,320,736</div><div class="label">GGUF bytes; local 3-point SHA matched</div></div>
+          <div class="metric warn"><div class="value">NOT MEASURED</div><div class="label">packaged sandbox runtime behavior</div></div>
+        </div>
+
+        <div class="table-wrap" style="margin-top:14px">
+          <table class="matrix">
+            <thead><tr><th>検証</th><th>結果</th><th>事実上の境界</th></tr></thead>
+            <tbody>
+              <tr><td><code>python -m pytest tests/ -q -rs</code></td><td class="pass">804 PASS / 2 SKIP</td><td>local環境ではTextual未導入とWindows AppContainerがskip。製品sidecar Python 3.12.10 / NumPy 2.5.1とは別環境。</td></tr>
+              <tr><td><code>npm run test:boundary</code></td><td class="pass">35 suites / 296 PASS</td><td>pure runtime boundary。React component/E2Eは含まない。</td></tr>
+              <tr><td><code>npx tsc --noEmit</code> / <code>npm run build</code></td><td class="pass">PASS</td><td>buildは588.20 kB chunk警告。性能合否budgetは未定義。</td></tr>
+              <tr><td><code>cargo test --locked --lib</code></td><td class="pass">212 PASS</td><td>default feature。production iOS feature/SKUは定義されていない。</td></tr>
+              <tr><td><code>cargo test --locked --features pocket-brain,secure-vault --lib</code></td><td class="pass">529 PASS</td><td>host lib tests。iOS target-only OSLog testはcompile対象外。</td></tr>
+              <tr><td><code>cargo test --locked --features flavor-live --lib</code></td><td class="pass">617 PASS</td><td>real 1.1GB model A1 inferenceはGitHub-hosted CIで未計測。</td></tr>
+              <tr><td><code>cargo check/test --features egress-live</code></td><td class="fail">COMPILE FAIL</td><td><code>edinet_discovery.rs</code>が<code>crate::db</code>を参照する一方、dbはsecure-vault cfg。Standalone releaseはegress-live offだが宣言featureは壊れている。</td></tr>
+              <tr><td><code>cargo fmt --all -- --check</code></td><td class="fail">FAIL</td><td>95 files。strict gate導入前に現行差分を解消する必要がある。</td></tr>
+              <tr><td><code>cargo clippy ... -D warnings</code></td><td class="fail">FAIL</td><td>lib 60、lib-test 344 warning errors。警告をallowで隠す方式は不可。</td></tr>
+              <tr><td><code>os_sandbox_runtime::native_tcp_socket_probe</code></td><td class="nm">NOT MEASURED</td><td>App Sandbox entitlementが無いhostでは「skip」とstderrへ出してRust上は<code>ok</code>を返す。</td></tr>
+              <tr><td>Tier 3 iPhone 17 Pro</td><td class="pass">CARRY-FORWARD</td><td>attempts=49 / accepted=47 / discarded=2 / unavailable=0 / leaked=0 / dropped_busy=3、turns_completed=52。先行T18/T19停止は未再現、dead_reason計器あり。</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <section class="panel" id="coverage">
+      <div class="section-head">
+        <div><div class="section-kicker">02 // TEST TO CI MAP</div><h2>テスト存在とCI実行の対応</h2></div>
+        <div class="section-note">「テストがある」と「本番bytesの先行ゲートで走る」を分離した表。</div>
+      </div>
+      <div class="section-body">
+        <div class="table-wrap">
+          <table class="matrix">
+            <thead><tr><th>対象</th><th>local実測</th><th>PR CI</th><th>tag/release predecessor</th><th>判定</th></tr></thead>
+            <tbody>
+              <tr><td>Python全体</td><td class="pass">804 pass / 2 skip</td><td>macOS Python 3.13</td><td>なし</td><td class="fail">shipping runtime・Windows・release SHA未接続</td></tr>
+              <tr><td>絶対孤立3ファイル</td><td class="pass">22 / 22</td><td>floor 22 / skip 0</td><td>なし</td><td class="warn-text">PR gateは有効、配布物へ未接続</td></tr>
+              <tr><td>TS boundary</td><td class="pass">35 suites / 296</td><td>なし</td><td>なし</td><td class="fail">CI未実行</td></tr>
+              <tr><td>TypeScript compile / Vite build</td><td class="pass">PASS / PASS</td><td>なし</td><td>buildのみ</td><td class="fail">型・境界gateなしでbundle可能</td></tr>
+              <tr><td>Rust default + production features</td><td class="pass">212 / 529 / 564 / 617</td><td>部分feature/filter</td><td>testなし</td><td class="fail">SKU matrix・件数floorなし</td></tr>
+              <tr><td>fmt / strict clippy</td><td class="fail">RED</td><td>なし</td><td>なし</td><td class="fail">現行負債を先に返済</td></tr>
+              <tr><td>real GGUF A1</td><td>Tier 3実機で測定</td><td>placeholder → exit 0</td><td>なし</td><td class="fail">CI上で到達不能</td></tr>
+              <tr><td>Windows AppContainer</td><td class="nm">host skip</td><td>macOS skip</td><td>Windows buildはtestなし</td><td class="fail">未計測</td></tr>
+              <tr><td>iOS target/archive</td><td>過去Tier 3実機</td><td>なし</td><td>workflowなし</td><td class="fail">本番archive未計測</td></tr>
+              <tr><td>署名済みpackage smoke</td><td class="nm">未実行</td><td>なし</td><td>なし</td><td class="fail">install/start/model/health/uninstall未計測</td></tr>
+              <tr><td>performance/stress</td><td><code>benchmark.py</code>は非収集</td><td>なし</td><td>なし</td><td class="fail">non-zero workload・SLAなし</td></tr>
+              <tr><td>branch protection / required checks</td><td colspan="3" class="nm">repository外設定のため静的監査では確認不能</td><td class="nm">NOT MEASURED（不存在とは断定しない）</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <section class="panel" id="findings">
+      <div class="section-head">
+        <div><div class="section-kicker">03 // COMPLETE AUDIT REGISTER</div><h2>全課題・技術的負債</h2></div>
+        <div class="section-note">各行にコード事実、責任ロール、先行計器、機械判定できる完了条件を記載。個人名はリポジトリにないため、ownerは職能ロールで指定する。</div>
+      </div>
+      <div class="section-body">
+        <div class="legend" aria-label="重大度凡例">
+          <span class="sev sev-p0">P0</span><span class="chip">release blocker</span>
+          <span class="sev sev-p1">P1</span><span class="chip">Tier 5/6 exit blocker</span>
+          <span class="sev sev-p2">P2</span><span class="chip">scoped debt / claim-dependent</span>
+          <span class="sev sev-nm">NM</span><span class="chip">external state not measured</span>
+        </div>
+        <div class="filters" style="margin-top:14px">
+          <label><span class="mono" style="display:block;color:var(--muted);font-size:.68rem;margin-bottom:5px">SEARCH REGISTER</span><input id="finding-search" type="search" placeholder="ID / file / issue / owner / completion condition"></label>
+          <div class="filter-buttons" role="group" aria-label="重大度フィルター">
+            <button type="button" data-filter="all" aria-pressed="true">ALL</button>
+            <button type="button" data-filter="p0" aria-pressed="false">P0</button>
+            <button type="button" data-filter="p1" aria-pressed="false">P1</button>
+            <button type="button" data-filter="p2" aria-pressed="false">P2</button>
+            <button type="button" data-filter="nm" aria-pressed="false">NM</button>
+          </div>
+        </div>
+        <div class="countline" id="visible-count">—</div>
+
+        <div class="finding-group">
+          <h3>R // CI・BUILD・SUPPLY CHAIN</h3>
+          <div class="table-wrap">
+            <table class="finding-table">
+              <thead><tr><th>ID</th><th>課題 / コード事実</th><th>Owner</th><th>計器 → 完了条件</th></tr></thead>
+              <tbody>
+                <tr class="finding-row" data-sev="p0"><td><span class="sev sev-p0">P0</span><br><span class="finding-id">R-01</span></td><td><strong>release buildがrequired checksと同一SHAで接続されない。</strong><span class="evidence"><a href="../.github/workflows/build-macos.yml#L3">build-macos.yml:3-6</a> / <a href="../.github/workflows/build-windows.yml#L3">build-windows.yml:3-6</a> はtag/manualから独立起動。pytest/flavor/blackbox run ID・SHA照合なし。</span></td><td class="owner">Release Engineering<br>Supply Chain</td><td><span class="instrument">先行計器:</span> source SHA、required-check run IDs、builder、input digestsをprovenanceへ。<br><span class="done">完了:</span> gate失敗／SHA差替えmutationでbuild・uploadが必ずRED。</td></tr>
+                <tr class="finding-row" data-sev="p0"><td><span class="sev sev-p0">P0</span><br><span class="finding-id">R-02</span></td><td><strong>frontend/Rustの一般品質ゲートがCIにない。厳格候補は現時点でRED。</strong><span class="evidence"><a href="../apps/desktop/package.json#L7">package.json:7-15</a> のboundary、tsc、build、default/full Rust、fmt、clippyをrelease predecessorで実行しない。監査実測: rustfmt 95 files、clippy 60+344。</span></td><td class="owner">CI/QA<br>Rust + FE</td><td><span class="instrument">先行計器:</span> suite/test/ignored/warning counts。<br><span class="done">完了:</span> 35/296 boundary、全SKU Rust floors、fmt 0、strict clippy 0を同一SHA required checks化。</td></tr>
+                <tr class="finding-row" data-sev="p0"><td><span class="sev sev-p0">P0</span><br><span class="finding-id">R-03</span></td><td><strong>pytest環境と配布sidecar環境が異なる。</strong><span class="evidence"><a href="../.github/workflows/pytest-ci-gate.yml#L51">pytest-ci-gate.yml:51-64</a> はPython 3.13 / NumPy 2.1.3 / floating Textual。<a href="../apps/desktop/scripts/build-sidecar.sh#L42">build-sidecar.sh:42-57</a> はPython 3.12.10、sidecar lockはNumPy 2.5.1。</span></td><td class="owner">Python Platform<br>CI</td><td><span class="instrument">先行計器:</span> interpreter/dependency/BLAS manifest digest。<br><span class="done">完了:</span> shipping lockと同じ環境で全pytest、環境digest 2回一致、unknown skip 0。</td></tr>
+                <tr class="finding-row" data-sev="p1"><td><span class="sev sev-p1">P1</span><br><span class="finding-id">R-04</span></td><td><strong>pytest CIの依存来歴が固定されない。</strong><span class="evidence"><a href="../.github/workflows/pytest-ci-gate.yml#L49">pytest-ci-gate.yml:49,51,63,116,118,130</a>: <code>checkout@v4</code>、<code>setup-miniconda@v3</code>、patch未固定Python、unhashed <code>pip install textual</code>。</span></td><td class="owner">Supply Chain<br>CI</td><td><span class="instrument">先行計器:</span> action SHA / lock digest scanner。<br><span class="done">完了:</span> mutable action tag・unhashed install・patch-floating runtimeを静的gateが拒否。</td></tr>
+                <tr class="finding-row" data-sev="p0"><td><span class="sev sev-p0">P0</span><br><span class="finding-id">R-05</span></td><td><strong>Windows AppContainer named-pipe契約はCIで未計測。</strong><span class="evidence"><a href="../tests/test_fsa_2026_07_13_02_stdio_llm_boundary.py#L109">test...stdio_llm_boundary.py:109</a> は非Windows skip。pytest jobはmacOSのみで、Windows buildはpytestなし。</span></td><td class="owner">Windows Security<br>CI</td><td><span class="instrument">先行計器:</span> OS build、pipe namespace、DACL/SID result。<br><span class="done">完了:</span> Windows ARM64で1 pass / 0 skip、DACL/SID mutationがRED。</td></tr>
+                <tr class="finding-row" data-sev="p0"><td><span class="sev sev-p0">P0</span><br><span class="finding-id">R-06</span></td><td><strong>real GGUF A-1 gateがCIで常時「未計測green」。</strong><span class="evidence"><a href="../.github/workflows/flavor-gate.yml#L227">flavor-gate.yml:227-254</a> は8-byte <code>NOTGGUF</code>を作り、<code>accepted != 0 was NOT measured</code>後にexit 0。</span></td><td class="owner">Model/ML<br>Rust Runtime</td><td><span class="instrument">先行計器:</span> model SHA/size/metadata、attempts/accepted/discarded/leaked/digest。<br><span class="done">完了:</span> protected real-model laneでaccepted&gt;0必須。不在・placeholder・hash mutationはRED。</td></tr>
+                <tr class="finding-row" data-sev="p1"><td><span class="sev sev-p1">P1</span><br><span class="finding-id">R-07</span></td><td><strong>GGUF三点SHA scriptはrelease modeでfail-closedでなくworkflowから呼ばれない。</strong><span class="evidence"><a href="../scripts/gguf_three_point_sha_gate.sh#L61">gguf_three_point_sha_gate.sh:61-80</a>: stage/archive欠落を通知後exit 0。契約testは文字列検査のみ。</span></td><td class="owner">Release Engineering<br>Model Owner</td><td><span class="instrument">先行計器:</span> source/stage/archive receipts。<br><span class="done">完了:</span> release modeは3点必須、欠落・1-byte mutationを各地点でRED、receiptをartifactへ。</td></tr>
+                <tr class="finding-row" data-sev="p0"><td><span class="sev sev-p0">P0</span><br><span class="finding-id">R-08</span></td><td><strong>clean checkoutのTauri build入力に実GGUFがなく、公式workflowはbuild前にstageしない。</strong><span class="evidence"><a href="../apps/desktop/src-tauri/tauri.conf.json#L52">tauri.conf.json:52-54</a> はgitignored resourceを必須化。<a href="../.github/workflows/build-macos.yml#L80">build-macos.yml:80-122</a> はTauri build後に外部model treeをcopy。</span></td><td class="owner">Release Engineering<br>Model Owner</td><td><span class="instrument">先行計器:</span> trusted asset manifestとpre-build stage receipt。<br><span class="done">完了:</span> clean checkout→stage→build→archive展開の同一SHA。欠落buildは開始前RED。</td></tr>
+                <tr class="finding-row" data-sev="p0"><td><span class="sev sev-p0">P0</span><br><span class="finding-id">R-09</span></td><td><strong>build.rsが欠落sidecarを52-byte dev placeholderで自動生成し、I/O失敗も無視。</strong><span class="evidence"><a href="../apps/desktop/src-tauri/build.rs#L14">build.rs:14-29</a>。base Tauri configはそのpathをexternalBinとしてbundle。</span></td><td class="owner">Build/Release<br>Rust</td><td><span class="instrument">先行計器:</span> sidecar size/hash/marker/source receipt。<br><span class="done">完了:</span> release profileで自動生成禁止、欠落即fail、archive内hashを署名manifestと照合。</td></tr>
+                <tr class="finding-row" data-sev="p0"><td><span class="sev sev-p0">P0</span><br><span class="finding-id">R-10</span></td><td><strong>production feature/SKU集合が定義されず、release buildは<code>--features</code>なし。</strong><span class="evidence"><a href="../apps/desktop/src-tauri/Cargo.toml#L77">Cargo.toml:77-124</a> の機能はopt-in。FEはPocketBrain/Vaultを常時mountし、欠落commandをsoft catch。</span></td><td class="owner">Lead Architect<br>Release</td><td><span class="instrument">先行計器:</span> machine-readable SKU manifest、FE invoke↔handler inventory。<br><span class="done">完了:</span> 各platform明示feature allowlist、capability handshake、invoke/handler差分0。</td></tr>
+                <tr class="finding-row" data-sev="p0"><td><span class="sev sev-p0">P0</span><br><span class="finding-id">R-11</span></td><td><strong>iOS build/check/archive/TestFlight workflowが存在しない。</strong><span class="evidence"><code>.github/workflows</code>に<code>tauri ios build</code>、App Store archive/export/uploadなし。<a href="../apps/desktop/src-tauri/gen/apple/ExportOptions.plist#L5">ExportOptions.plist:5-7</a> は<code>debugging</code>。</span></td><td class="owner">iOS Release<br>CI</td><td><span class="instrument">先行計器:</span> runner/toolchain/profile/team/feature/model receipts。<br><span class="done">完了:</span> Tauri CLI唯一入口、distribution-signed IPA、nested signature/plist/entitlement検査、同一SHA upload。</td></tr>
+                <tr class="finding-row" data-sev="p0"><td><span class="sev sev-p0">P0</span><br><span class="finding-id">R-12</span></td><td><strong>artifact manifestにbuild来歴がない。</strong><span class="evidence"><a href="../apps/desktop/src-tauri/src/artifact_auth.rs#L48">artifact_auth.rs:48-65</a> のmanifestはpath/hash/size/kind/key/schema中心で、source commit、workflow/run、builder、toolchain、passed gatesを持たない。</span></td><td class="owner">Supply Chain<br>Security</td><td><span class="instrument">先行計器:</span> signed provenance envelope。<br><span class="done">完了:</span> artifact SHAからsource SHA・inputs・builder・gate run IDsへ逆引き可能、改竄でverify RED。</td></tr>
+                <tr class="finding-row" data-sev="p0"><td><span class="sev sev-p0">P0</span><br><span class="finding-id">R-13</span></td><td><strong>配布物のOS-level受理をゲート化していない。</strong><span class="evidence"><a href="../.github/workflows/build-macos.yml#L92">build-macos.yml:92-110</a> はcodesignのみでnotary/staple/spctlなし。WindowsにAuthenticode sign/chain/timestamp verifyなし。iOS distribution laneなし。</span></td><td class="owner">Platform Release<br>Security</td><td><span class="instrument">先行計器:</span> notary ticket、staple、Gatekeeper、Authenticode chain/timestamp、IPA signatures。<br><span class="done">完了:</span> 最終配布bytesへ全verify receiptを結合。</td></tr>
+                <tr class="finding-row" data-sev="p0"><td><span class="sev sev-p0">P0</span><br><span class="finding-id">R-14</span></td><td><strong>SBOMのhash表現が不正かつ配布native assetsを網羅しない。</strong><span class="evidence"><a href="../scripts/generate_release_sbom.py#L65">generate_release_sbom.py:65-72</a> はnpm SRI base64をCycloneDX SHA contentへそのまま出力。監査実測674 components中133非hex。GGUF/llama/search/font/licenseのcomponent化もなし。</span></td><td class="owner">Supply Chain<br>Release</td><td><span class="instrument">先行計器:</span> pinned CycloneDX validator、distribution-tree↔SBOM双方向照合。<br><span class="done">完了:</span> hash length/hex全件valid、unregistered file 0、missing component 0、license unknown 0。</td></tr>
+                <tr class="finding-row" data-sev="p1"><td><span class="sev sev-p1">P1</span><br><span class="finding-id">R-15</span></td><td><strong>依存脆弱性・license・secret・static security scanがCIにない。</strong><span class="evidence"><code>cargo audit/deny</code>、npm/pip audit、CodeQL、secret scan、license scanを呼ぶworkflowなし。</span></td><td class="owner">AppSec<br>Supply Chain</td><td><span class="instrument">先行計器:</span> pinned advisory DB timestamp/digest、allowlist owner/expiry。<br><span class="done">完了:</span> critical/high unresolved 0、license unknown 0、secret findings 0。</td></tr>
+                <tr class="finding-row" data-sev="p1"><td><span class="sev sev-p1">P1</span><br><span class="finding-id">R-16</span></td><td><strong>再現性比較はsidecarだけで、app/frontend/search/native assets/installer全体を比較しない。</strong><span class="evidence"><a href="../.github/workflows/build-macos.yml#L59">build-macos.yml:59-70</a> はunsigned sidecarのみ2回cmp。</span></td><td class="owner">Release Engineering</td><td><span class="instrument">先行計器:</span> unsigned canonical tree manifestsと許容差分。<br><span class="done">完了:</span> clean build 2回でunsigned inputs一致、署名後差分は署名領域allowlistだけ。</td></tr>
+                <tr class="finding-row" data-sev="p1"><td><span class="sev sev-p1">P1</span><br><span class="finding-id">R-17</span></td><td><strong>suite大量削除とreal-daemon欠落をgreenにできる。</strong><span class="evidence"><a href="../apps/desktop/scripts/run-boundary-tests.sh#L40">run-boundary-tests.sh:40-78</a> のfloorは1 suite。<a href="../tests/test_search_daemon.py#L388">test_search_daemon.py:388-392,442-446</a> はexe不在でprint+return。</span></td><td class="owner">CI/QA</td><td><span class="instrument">先行計器:</span> source/compiled suite count、assertion/test floors、skip reasons。<br><span class="done">完了:</span> baseline deletion mutation、exe deletion mutationがRED。</td></tr>
+                <tr class="finding-row" data-sev="p1"><td><span class="sev sev-p1">P1</span><br><span class="finding-id">R-18</span></td><td><strong>署名済みpackage後のinstall/start/model/health/uninstall smokeがない。</strong><span class="evidence">release workflowsはbuild・uploadで終了し、実packageからsandboxed processを起動しない。</span></td><td class="owner">Release QA<br>Platform</td><td><span class="instrument">先行計器:</span> package SHA、install receipt、process/capability/model origin、health CID。<br><span class="done">完了:</span> signed packageを隔離runnerへ導入し、固定smoke全成功後だけpublish。</td></tr>
+                <tr class="finding-row" data-sev="nm"><td><span class="sev sev-nm">NM</span><br><span class="finding-id">R-19</span></td><td><strong>branch protection、required checks、environment approval、最新remote runはrepository外。</strong><span class="evidence">静的監査からは存在・有効性を確認不能。不在とは断定しない。</span></td><td class="owner">Repository Admin<br>Release</td><td><span class="instrument">先行計器:</span> GitHub設定export/API receipt。<br><span class="done">完了:</span> protected default branch、required exact check names、signed tag/environment rulesをartifact化してdrift監視。</td></tr>
+                <tr class="finding-row" data-sev="p1"><td><span class="sev sev-p1">P1</span><br><span class="finding-id">R-20</span></td><td><strong>version 0.1.0が複数正本へ重複し同期gateがない。</strong><span class="evidence"><a href="../apps/desktop/package.json#L4">package.json:4</a>、<a href="../apps/desktop/src-tauri/Cargo.toml#L3">Cargo.toml:3</a>、tauri config、Apple project/Info、<a href="../scripts/generate_release_sbom.py#L127">SBOM script:127-136</a>。</span></td><td class="owner">Release Engineering</td><td><span class="instrument">先行計器:</span> canonical release version sourceとartifact inventory。<br><span class="done">完了:</span> tag/version/build number全一致、1箇所mutationでgate RED。</td></tr>
+                <tr class="finding-row" data-sev="p2"><td><span class="sev sev-p2">P2</span><br><span class="finding-id">R-21</span></td><td><strong><code>egress-live</code>単独featureがcompile不能。</strong><span class="evidence"><code>edinet_discovery.rs</code>が<code>crate::db</code>を参照する一方、dbはsecure-vault限定。Standalone releaseはegress-live offだが、宣言featureの依存closureが不正。</span></td><td class="owner">Rust Architecture</td><td><span class="instrument">先行計器:</span> supported/unsupported feature matrix。<br><span class="done">完了:</span> feature削除または依存を型として表現し、宣言された全組合せがcheck PASS。</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <div class="finding-group">
+          <h3>I // iOS・APP STORE CONFIGURATION</h3>
+          <div class="table-wrap">
+            <table class="finding-table">
+              <thead><tr><th>ID</th><th>課題 / コード事実</th><th>Owner</th><th>計器 → 完了条件</th></tr></thead>
+              <tbody>
+                <tr class="finding-row" data-sev="p0"><td><span class="sev sev-p0">P0</span><br><span class="finding-id">I-01</span></td><td><strong>Release plistへ開発LAN/ATS例外が無条件混入。</strong><span class="evidence"><a href="../apps/desktop/src-tauri/Info.ios.plist#L10">Info.ios.plist:10-63</a> はDEV onlyコメントの下にLocalNetworking、ArbitraryLoadsInWebContent、RFC1918/localhost例外、Local Network usage。生成plistにも同一値。</span></td><td class="owner">iOS Release<br>Security</td><td><span class="instrument">先行計器:</span> archive展開plist key inventory。<br><span class="done">完了:</span> Release IPAでATS exception/dev URL/HMR/LNP key 0、Debugでは必要keyだけ。</td></tr>
+                <tr class="finding-row" data-sev="p0"><td><span class="sev sev-p0">P0</span><br><span class="finding-id">I-02</span></td><td><strong><code>PrivacyInfo.xcprivacy</code>が追跡ファイルに存在しない。</strong><span class="evidence"><code>git ls-files</code> / filesystem scanで0。<a href="ROADMAP_IOS_TAURI_V2.md#L427">ROADMAP:427,457,1070</a> はcanonical sourceとarchive inclusionを要求。</span></td><td class="owner">Privacy<br>iOS Release</td><td><span class="instrument">先行計器:</span> manifest schema/reason API scanner。<br><span class="done">完了:</span> canonical manifest→clean generation→IPA内存在、schema valid、used APIとreason差分0。</td></tr>
+                <tr class="finding-row" data-sev="p0"><td><span class="sev sev-p0">P0</span><br><span class="finding-id">I-03</span></td><td><strong>輸出コンプライアンスを根拠なしに<code>false</code>固定。</strong><span class="evidence"><a href="../apps/desktop/src-tauri/Info.ios.plist#L64">Info.ios.plist:64-65</a> と生成plist。<a href="ROADMAP_IOS_TAURI_V2.md#L1083">ROADMAP:1083-1085</a> は法務根拠なしの固定を禁止。</span></td><td class="owner">Legal/Export<br>iOS Release</td><td><span class="instrument">先行計器:</span> decision record ID / reviewer / jurisdictions / crypto inventory。<br><span class="done">完了:</span> approved recordとplist/App Store回答が機械一致。不一致でarchive/upload禁止。</td></tr>
+                <tr class="finding-row" data-sev="p0"><td><span class="sev sev-p0">P0</span><br><span class="finding-id">I-04</span></td><td><strong>generated targetは<code>TARGETED_DEVICE_FAMILY="1,2"</code>。</strong><span class="evidence"><a href="../apps/desktop/src-tauri/gen/apple/pkb-desktop.xcodeproj/project.pbxproj#L435">project.pbxproj:435,478</a>。DoDはarchive <code>UIDeviceFamily=[1]</code>のみ。</span></td><td class="owner">iOS Release<br>QA</td><td><span class="instrument">先行計器:</span> build settings + IPA UIDeviceFamily receipt。<br><span class="done">完了:</span> canonical generatorが1を出し、clean regenerate/Release IPAも[1]。</td></tr>
+                <tr class="finding-row" data-sev="p0"><td><span class="sev sev-p0">P0</span><br><span class="finding-id">I-05</span></td><td><strong>8GB eligibility Option Aのcapabilityが設定されない。</strong><span class="evidence"><a href="../apps/desktop/src-tauri/gen/apple/project.yml#L47">project.yml:47</a> は<code>[arm64, metal]</code>のみ。<a href="ROADMAP_IOS_TAURI_V2.md#L164">ROADMAP:164-169</a> は<code>iphone-performance-gaming-tier</code>で最低eligible classを固定。</span></td><td class="owner">Product/Architecture<br>iOS</td><td><span class="instrument">先行計器:</span> archive capability listとsupported-device export。<br><span class="done">完了:</span> approved eligibility decisionをconfigへ固定し、非eligible deviceがinstall対象に現れない。</td></tr>
+                <tr class="finding-row" data-sev="p1"><td><span class="sev sev-p1">P1</span><br><span class="finding-id">I-06</span></td><td><strong>canonical generatorと生成Xcode projectがdrift。</strong><span class="evidence"><a href="../apps/desktop/src-tauri/gen/apple/project.yml#L1">project.yml:1-14,47,57-58</a> はname pkb-desktop / PRODUCT_NAME PKB / capability不足 / 0.1.0。pbxprojはCoraxis、team固定、device family 1,2。<code>gen/apple</code>はdisposable規律。</span></td><td class="owner">iOS Build<br>Release</td><td><span class="instrument">先行計器:</span> clean regeneration diff allowlist。<br><span class="done">完了:</span> canonical inputsだけから同一projectを再生し、手編集drift 0。</td></tr>
+                <tr class="finding-row" data-sev="p0"><td><span class="sev sev-p0">P0</span><br><span class="finding-id">I-07</span></td><td><strong>App Store export/uploadとsubmission dossierが実装されない。</strong><span class="evidence">Tauri App Store export、IPA upload、TestFlight laneなし。privacy/support URL、age rating、review notes、screenshot metadataの追跡成果物もrepositoryにない。</span></td><td class="owner">App Review Ops<br>Product/Legal</td><td><span class="instrument">先行計器:</span> versioned dossier schemaとrequired-field validator。<br><span class="done">完了:</span> metadata/URLs/legal/review steps全項目valid、同一RC SHA/model hashを参照。</td></tr>
+                <tr class="finding-row" data-sev="p1"><td><span class="sev sev-p1">P1</span><br><span class="finding-id">I-08</span></td><td><strong>userPresence/永続SQLCipher/Data Protection/backup/recoveryの物理端末matrixがCI証跡化されない。</strong><span class="evidence"><a href="AI_SKILLS.md#L656">AI_SKILLS:656</a> は実機往復、create/reopen/wrong-key、plaintext scan、Data Protection、backup exclusion等を残件として列挙。host wrong-key testは存在するがdevice release laneなし。</span></td><td class="owner">iOS Security<br>Persistence QA</td><td><span class="instrument">先行計器:</span> device/OS/build SHA/fault point/receipt。<br><span class="done">完了:</span> automated physical-device crash/keychain/storage matrixが全GREEN、plaintext canary 0。</td></tr>
+                <tr class="finding-row" data-sev="p1"><td><span class="sev sev-p1">P1</span><br><span class="finding-id">I-09</span></td><td><strong>Tier 3 checkpoint JSONLのmkdir/rotate/open/write/flush失敗が沈黙。</strong><span class="evidence"><a href="../apps/desktop/src-tauri/src/ios_oslog.rs#L201">ios_oslog.rs:201-234</a> は全I/O Resultを破棄。</span></td><td class="owner">Observability<br>iOS Runtime</td><td><span class="instrument">先行計器:</span> monotonic sequence、durability status、fixed failure code。<br><span class="done">完了:</span> permission/disk-full/rename/write/flush faultでfailure signalが必ず残り、eventなしと区別。</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <div class="finding-group">
+          <h3>S // RUNTIME・SECURITY・SILENCE UNIQUENESS</h3>
+          <div class="table-wrap">
+            <table class="finding-table">
+              <thead><tr><th>ID</th><th>課題 / コード事実</th><th>Owner</th><th>計器 → 完了条件</th></tr></thead>
+              <tbody>
+                <tr class="finding-row" data-sev="p0"><td><span class="sev sev-p0">P0</span><br><span class="finding-id">S-01</span></td><td><strong>iOS OSLog絶対path redactorが機能しない。</strong><span class="evidence"><a href="../apps/desktop/src-tauri/src/ios_oslog.rs#L151">ios_oslog.rs:151-183</a> は通常文字ごとにslash depthを0へ戻す。監査再現: raw path残存、<code>&lt;path&gt;</code>なし。testはmodule全体がiOS cfgのためhost CI対象外。</span></td><td class="owner">Security/Privacy<br>Observability</td><td><span class="instrument">先行計器:</span> target-independent redactor corpus。<br><span class="done">完了:</span> /Users、/var/mobile、iCloud/FileProvider、email、URL fixturesのraw marker 0、Release OSLog exportも0。</td></tr>
+                <tr class="finding-row" data-sev="p0"><td><span class="sev sev-p0">P0</span><br><span class="finding-id">S-02</span></td><td><strong>個人属性をWebView localStorageへ平文JSON保存し、write failureを無視。</strong><span class="evidence"><a href="../apps/desktop/src/lib/settingsLocalCache.ts#L7">settingsLocalCache.ts:7-32,44-50</a>: birthday/gender/height/weight/address/occupation。</span></td><td class="owner">Security/Data<br>FE</td><td><span class="instrument">先行計器:</span> storage inventory/migration/write receipt。<br><span class="done">完了:</span> vault/protected storageへ移行、legacy key削除、lock後localStorage PII scan 0、quota failureで成功表示0。</td></tr>
+                <tr class="finding-row" data-sev="p0"><td><span class="sev sev-p0">P0</span><br><span class="finding-id">S-03</span></td><td><strong>model validationは4-byte magicのみでtruncated copyを受理し、署名対象identityとも不一致。</strong><span class="evidence"><a href="../apps/desktop/src-tauri/src/llm/model_path.rs#L139">model_path.rs:139-165</a>、<a href="../apps/desktop/src-tauri/src/llm/commands_model_setup.rs#L59">commands_model_setup.rs:59-72</a>。runtime <code>pocket-brain.gguf</code>に対し<a href="../apps/desktop/artifact-plan.production.json">artifact plan</a>は別名7B。</span></td><td class="owner">Model Runtime<br>Security</td><td><span class="instrument">先行計器:</span> signed identity manifest (hash/size/arch/quant/role/license)。<br><span class="done">完了:</span> temp copy→hash verify→atomic rename。truncation/same-magic wrong model/ENOSPC/tamper全拒否。</td></tr>
+                <tr class="finding-row" data-sev="p0"><td><span class="sev sev-p0">P0</span><br><span class="finding-id">S-04</span></td><td><strong>model checkの全failureをfeature absentへ潰してmain UIを解放。</strong><span class="evidence"><a href="../apps/desktop/src/lib/modelSetup.ts#L89">modelSetup.ts:89-100</a> catch→null、<a href="../apps/desktop/src/components/ModelSetupGate.tsx#L33">ModelSetupGate:33-56</a> null→unavailable→onReady。</span></td><td class="owner">FE Runtime<br>Rust IPC</td><td><span class="instrument">先行計器:</span> backend capability + typed outcome/cause code/CID。<br><span class="done">完了:</span> missing/malformed/timeout/backend error各fixtureでready 0、診断event exactly 1。</td></tr>
+                <tr class="finding-row" data-sev="p0"><td><span class="sev sev-p0">P0</span><br><span class="finding-id">S-05</span></td><td><strong>engine未readyでも3秒後に「準備完了」。mobile/runtime判定もviewport幅。</strong><span class="evidence"><a href="../apps/desktop/src/App.tsx#L121">App.tsx:121-179</a> fail-open、<a href="../apps/desktop/src/lib/useIsNarrowViewport.ts#L3">useIsNarrowViewport.ts:3-21</a> はmax-width 768pxのみ。</span></td><td class="owner">FE Runtime<br>Platform</td><td><span class="instrument">先行計器:</span> platform/capability/health state machineとtimeout code。<br><span class="done">完了:</span> positive healthなしにreadyへ遷移0、767/769px desktop・wide iPad・sidecar crash matrix全一致。</td></tr>
+                <tr class="finding-row" data-sev="p0"><td><span class="sev sev-p0">P0</span><br><span class="finding-id">S-06</span></td><td><strong>memory/thermal計器の取得不能を0/Nominalへ変換。</strong><span class="evidence"><a href="../apps/desktop/src-tauri/src/monitor/probe.rs#L8">probe.rs:8-48</a>はNone、<a href="../apps/desktop/src-tauri/src/monitor/mod.rs#L203">monitor/mod.rs:203-204,314,384,426</a>で0、<a href="../apps/desktop/src-tauri/src/monitor/apple_sensors.rs#L91">apple_sensors.rs:91-149</a> unknown/install failureをNominal/return。</span></td><td class="owner">Runtime Observability</td><td><span class="instrument">先行計器:</span> valid/unavailable/error/backend/install-status counters。<br><span class="done">完了:</span> None/unknown/source-null注入で0/Nominal発行0、閾値判定停止＋explicit unavailable。</td></tr>
+                <tr class="finding-row" data-sev="p1"><td><span class="sev sev-p1">P1</span><br><span class="finding-id">S-07</span></td><td><strong>端末別であるべきmemory threshold/load policyが固定。</strong><span class="evidence"><a href="../apps/desktop/src/components/PocketBrainPanel.tsx#L24">PocketBrainPanel.tsx:24-26,77</a> はA17 Pro/8GB用4.8GiB、<code>n_gpu_layers:999</code>、mmap trueを全platformへ。request 500msはAppleで5sへclamp。</span></td><td class="owner">Model Performance<br>Runtime</td><td><span class="instrument">先行計器:</span> device/model/policy-source/peak/headroom/purge receipts。<br><span class="done">完了:</span> measured device-class policy、最低eligible matrixでheadroom DoD・jetsam 0。</td></tr>
+                <tr class="finding-row" data-sev="p1"><td><span class="sev sev-p1">P1</span><br><span class="finding-id">S-08</span></td><td><strong>JS async failureの中央計器がなくcatch後沈黙する経路が複数。</strong><span class="evidence">GlobalErrorBoundaryはrender errorのみ。<code>window.onerror/unhandledrejection</code>なし。auto-unlock、malformed lifecycle event、foreground subprobe、window operation等にsilent catch/drop。</span></td><td class="owner">FE Observability<br>Security</td><td><span class="instrument">先行計器:</span> structured sink <code>{operation,outcome,cause_code,cid}</code>。<br><span class="done">完了:</span> rejection/malformed/timeout各注入でUI stateとterminal event 1:1、unhandled 0。</td></tr>
+                <tr class="finding-row" data-sev="p1"><td><span class="sev sev-p1">P1</span><br><span class="finding-id">S-09</span></td><td><strong>native検索障害と正常zero-hitが同じ空結果になる。</strong><span class="evidence"><a href="../src/python/core/consultation_engine.py#L633">consultation_engine.py:633-712</a> はdaemon start/search/oneshot failureを空へ落としてNumPy fallback。route/reason未記録。</span></td><td class="owner">C++ Search<br>Python Runtime</td><td><span class="instrument">先行計器:</span> route=daemon|oneshot|numpy、reason、returncode、hit count、ISA/OpenMP。<br><span class="done">完了:</span> 各faultでterminal route event exactly 1、release native-route比率gate。</td></tr>
+                <tr class="finding-row" data-sev="p1"><td><span class="sev sev-p1">P1</span><br><span class="finding-id">S-10</span></td><td><strong>authority型LLM出力がschemaなし生成へsilent fallback。</strong><span class="evidence"><a href="../src/python/core/llm_backend.py#L269">llm_backend.py:269-289</a> はstructured RuntimeError後に<code>--json-schema</code>なしgenerateを再実行。testも二回目を仕様固定。</span></td><td class="owner">LLM Runtime<br>Safety</td><td><span class="instrument">先行計器:</span> attempt_kind/result_origin/reason_code。<br><span class="done">完了:</span> authority outputでunconstrained child 0、schema failureはfixed unavailable。</td></tr>
+                <tr class="finding-row" data-sev="p1"><td><span class="sev sev-p1">P1</span><br><span class="finding-id">S-11</span></td><td><strong>production semantic embedding経路が現在のrelease環境から到達不能。</strong><span class="evidence"><a href="../src/python/core/pipeline.py#L137">pipeline.py:137-158</a> はauth required時に<code>PKB_EMBEDDING_MODEL_DIR</code>なしでHashedNgramへ。<a href="../apps/desktop/src-tauri/src/engine.rs#L732">engine.rs:732-768</a> env_clear後に同変数を設定せず、artifact planにもembedding_modelなし。</span></td><td class="owner">ML Runtime<br>Release</td><td><span class="instrument">先行計器:</span> backend/artifact SHA/dim/fallback_reason。<br><span class="done">完了:</span> signed semantic artifactを配線するかhashedを正式仕様化しKAT承認。想定backendのsilent fallback 0。</td></tr>
+                <tr class="finding-row" data-sev="p1"><td><span class="sev sev-p1">P1</span><br><span class="finding-id">S-12</span></td><td><strong>OpenMP欠落のserial C++ buildがrelease成功扱い。</strong><span class="evidence"><a href="../build.sh#L70">build.sh:70-97</a> はwarning後fallback。search ready eventはneon/openmpを返すがPythonはmax_k以外を破棄。benchmarkはCI外。</span></td><td class="owner">C++ Performance<br>CI</td><td><span class="instrument">先行計器:</span> compiler/flags/ISA/OpenMP runtime manifest、nonzero benchmark。<br><span class="done">完了:</span> approved backend以外RED、fixed corpus p50/p95/QPS floors。</td></tr>
+                <tr class="finding-row" data-sev="p0"><td><span class="sev sev-p0">P0</span><br><span class="finding-id">S-13</span></td><td><strong>複数永続化経路がcrash-safe/transactionalでない。</strong><span class="evidence"><a href="../src/python/core/pipeline.py#L203">pipeline.py:203-254</a> binary直書き＋meta別write、facade LINE append、固定tmp replace、profile複数file別commit。</span></td><td class="owner">Persistence Architecture</td><td><span class="instrument">先行計器:</span> transaction/generation/fault-point/recovery outcome。<br><span class="done">完了:</span> 全write boundary kill testで旧世代か新世代の完全状態のみ、N並行writer欠落/重複0。</td></tr>
+                <tr class="finding-row" data-sev="p1"><td><span class="sev sev-p1">P1</span><br><span class="finding-id">S-14</span></td><td><strong>desktop engine IPCは全commandを1本のmutexで最終responseまで直列化。</strong><span class="evidence"><a href="../apps/desktop/src-tauri/src/engine.rs#L526">engine.rs:526-619</a>。I/O deadlineはあるがmutex acquire timeoutなし。</span></td><td class="owner">Runtime Architecture</td><td><span class="instrument">先行計器:</span> queue depth、mutex wait、active command、p95/p99、CID。<br><span class="done">完了:</span> long consult中もhealth/control上限内。測定後にbounded admissionまたはchannel分離。</td></tr>
+                <tr class="finding-row" data-sev="p1"><td><span class="sev sev-p1">P1</span><br><span class="finding-id">S-15</span></td><td><strong>SQLCipher storage pragmasの失敗を無視し、DoDの<code>temp_store=MEMORY</code>を設定しない。</strong><span class="evidence"><a href="../apps/desktop/src-tauri/src/db/connection.rs#L126">connection.rs:126-152</a>: auto_vacuum/synchronous Result破棄、temp_storeなし。ROADMAP storage matrixはruntime実体検査を要求。</span></td><td class="owner">Persistence Security</td><td><span class="instrument">先行計器:</span> effective pragma/cipher compile-options receipt。<br><span class="done">完了:</span> release DBでexact値をqueryし不一致hard fail、plaintext WAL/temp scan 0。</td></tr>
+                <tr class="finding-row" data-sev="p1"><td><span class="sev sev-p1">P1</span><br><span class="finding-id">S-16</span></td><td><strong>engine diagnostic log sinkのopen/append/read failureが外から観測不能。</strong><span class="evidence"><a href="../apps/desktop/src-tauri/src/engine.rs#L1130">engine.rs:1130-1153</a> はwriter openを<code>.ok()</code>、append errorでwriter=None、read errorでbreak。drain継続は安全だが診断欠落理由がない。</span></td><td class="owner">Runtime Observability</td><td><span class="instrument">先行計器:</span> sink status/drop counter/terminal reason。<br><span class="done">完了:</span> log sink faultで別の固定health signal、eventなしと書込失敗を区別。</td></tr>
+                <tr class="finding-row" data-sev="p1"><td><span class="sev sev-p1">P1</span><br><span class="finding-id">S-17</span></td><td><strong>macOS entitlementが広く、最終exact allowlistで検査されない。</strong><span class="evidence"><a href="../apps/desktop/src-tauri/entitlements.plist#L5">entitlements.plist:5-10</a> はallow-unsigned-executable-memoryとdisable-library-validation。CIはsandbox/network有無だけ。</span></td><td class="owner">macOS Security<br>Runtime</td><td><span class="instrument">先行計器:</span> signed Release A/B load testとexact entitlement dictionary。<br><span class="done">完了:</span> 不要なら除去、必要なら脅威モデル承認。archive allowlist差分0。</td></tr>
+                <tr class="finding-row" data-sev="p1"><td><span class="sev sev-p1">P1</span><br><span class="finding-id">S-18</span></td><td><strong>OS sandbox runtime probeが「未適用」をRust test PASSへ変換。</strong><span class="evidence"><a href="../apps/desktop/src-tauri/tests/os_sandbox_runtime.rs#L25">os_sandbox_runtime.rs:25-81</a> はentitlement未active時にstderr <code>skip...</code>後return。cargo上はok。</span></td><td class="owner">Platform Security<br>CI</td><td><span class="instrument">先行計器:</span> entitlement-active markerとpackaged-app probe receipt。<br><span class="done">完了:</span> release laneではinactive/skipをRED、sandboxed signed package内でdenyを実測。</td></tr>
+                <tr class="finding-row" data-sev="p1"><td><span class="sev sev-p1">P1</span><br><span class="finding-id">S-19</span></td><td><strong>search daemon scratch cleanupに二重起動race。</strong><span class="evidence"><a href="../src/python/core/search_daemon.py#L141">search_daemon.py:141-156</a> は同directoryの別PID scratchを生存確認なしでunlink。POSIXでは相手の作成直後windowを消せる。</span></td><td class="owner">Python/C++ Runtime</td><td><span class="instrument">先行計器:</span> PID alive/age/nonce/lock ownership event。<br><span class="done">完了:</span> barrier制御2-process反復でlive unlink 0、両daemon ready/search。</td></tr>
+                <tr class="finding-row" data-sev="p2"><td><span class="sev sev-p2">P2</span><br><span class="finding-id">S-20</span></td><td><strong>C++ index/daemon parserが宣言invariantを全検査しない。</strong><span class="evidence"><a href="../src/cpp/search_engine.cpp#L390">search_engine.cpp:390-403</a> はreserved=0、num_blocks式、padding/duplicate IDsを未検査。known-keys契約に対しunknown/duplicate/overflow/trailing JSON拒否なし。</span></td><td class="owner">C++ Security</td><td><span class="instrument">先行計器:</span> mutation/fuzz corpusとdistinct sterile error codes。<br><span class="done">完了:</span> 全invalid header/JSON拒否、daemon生存、valid KAT不変。</td></tr>
+                <tr class="finding-row" data-sev="p1"><td><span class="sev sev-p1">P1</span><br><span class="finding-id">S-21</span></td><td><strong>React component/E2E/accessibilityの自動基盤がない。</strong><span class="evidence"><a href="../apps/desktop/package.json#L17">package.json:17-30</a> にVitest/Jest/Playwright/Testing Libraryなし。35 boundary suitesはpure logic中心。</span></td><td class="owner">Frontend QA</td><td><span class="instrument">先行計器:</span> deterministic invoke adapter、component/E2E/a11y result schema。<br><span class="done">完了:</span> startup/error/viewport/storage/model/vault/device simulator matrix、0 ignored、floors固定。</td></tr>
+                <tr class="finding-row" data-sev="p2"><td><span class="sev sev-p2">P2</span><br><span class="finding-id">S-22</span></td><td><strong>frontend初期bundle性能budgetがない。</strong><span class="evidence">Vite実測588.20 kB（gzip 174.21 kB）で&gt;500 kB warning。Appは主要tabをstatic import。</span></td><td class="owner">FE Performance</td><td><span class="instrument">先行計器:</span> cold start、parse/evaluate、TTI、WebView peak memory。<br><span class="done">完了:</span> 最低端末で測ったbudgetを承認後CI化。code splitは計測後。</td></tr>
+                <tr class="finding-row" data-sev="p1"><td><span class="sev sev-p1">P1</span><br><span class="finding-id">S-23</span></td><td><strong>production bundleにmock/default preview経路が残る。</strong><span class="evidence"><a href="../apps/desktop/src/components/consult/coliseum/ColiseumArena.tsx#L27">ColiseumArena.tsx:27-151</a> はmock transcript/tactics、<a href="../apps/desktop/src/components/consult/coliseum/ColiseumDebrief.tsx#L45">Debrief:45-92,255-260</a> はmock scores/artifact。現GDはFROZEN overlay下だがDOMへmount。</span></td><td class="owner">Product<br>Frontend</td><td><span class="instrument">先行計器:</span> production capability/mock-string inventory。<br><span class="done">完了:</span> ship scope決定、production archive/E2Eでfixture strings 0、未実装surfaceはunmounted。</td></tr>
+                <tr class="finding-row" data-sev="p2"><td><span class="sev sev-p2">P2</span><br><span class="finding-id">S-24</span></td><td><strong>dev/fallback TUI profilerがchild非zeroでも「分析完了」。</strong><span class="evidence"><a href="../src/python/ui_tui/app.py#L686">ui_tui/app.py:686-706</a> はsubprocess returncodeを確認しない。</span></td><td class="owner">Python UX</td><td><span class="instrument">先行計器:</span> spawn/timeout/returncode terminal outcome。<br><span class="done">完了:</span> nonzero/timeout/spawn failureでcompletion event 0、固定理由表示。</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <div class="finding-group">
+          <h3>D // KNOWN DEBT・HARDCODE・APPROXIMATION</h3>
+          <div class="table-wrap">
+            <table class="finding-table">
+              <thead><tr><th>ID</th><th>課題 / コード事実</th><th>Owner</th><th>計器 → 完了条件</th></tr></thead>
+              <tbody>
+                <tr class="finding-row" data-sev="p1"><td><span class="sev sev-p1">P1</span><br><span class="finding-id">D-01</span></td><td><strong>Apple Calendar testが実ユーザーDBから隔離されない。</strong><span class="evidence"><a href="TASK_APPLE_CALENDAR_TEST_HERMETICITY.md">TASK_APPLE_CALENDAR_TEST_HERMETICITY.md</a> は状態「未着手」。実DBがあるhostでcustom path期待に既定探索結果が混入。</span></td><td class="owner">Python QA</td><td><span class="instrument">先行計器:</span> explicit/default rootsの注入receipt。<br><span class="done">完了:</span> real Calendar data有/無の2環境fixtureで同一結果、host HOME参照0。</td></tr>
+                <tr class="finding-row" data-sev="p2"><td><span class="sev sev-p2">P2</span><br><span class="finding-id">D-02</span></td><td><strong><code>github_commits</code> / <code>leetcode_solved</code> laneはimporter未実装で常時mask=0。</strong><span class="evidence"><a href="../src/python/core/tensor_store.py#L87">tensor_store.py:87-90,640</a>。明示的未測定でありsilent zeroではない。</span></td><td class="owner">Product Analytics</td><td><span class="instrument">先行計器:</span> lane coverage/source receipt。<br><span class="done">完了:</span> 1.0 claimから除外、またはimporter＋coverage gate後にだけ提示。</td></tr>
+                <tr class="finding-row" data-sev="p2"><td><span class="sev sev-p2">P2</span><br><span class="finding-id">D-03</span></td><td><strong>dyad <code>spend_tagged</code>未実装でOIIは固定3項合成。</strong><span class="evidence"><a href="../src/python/core/digital_twin.py#L618">digital_twin.py:618-620</a> は<code>spend_component_available=False</code>を返す。</span></td><td class="owner">Analytics Product</td><td><span class="instrument">先行計器:</span> component availability/sample coverage。<br><span class="done">完了:</span> UI/審査claimが3項のみと一致、または4項実装後にcoverage&gt;0 gate。</td></tr>
+                <tr class="finding-row" data-sev="p2"><td><span class="sev sev-p2">P2</span><br><span class="finding-id">D-04</span></td><td><strong>calendar private hoursを1件1.5時間で近似。</strong><span class="evidence"><a href="../src/python/core/tensor_store.py#L92">tensor_store.py:92-98</a>。終了時刻がなく実測時間ではない。</span></td><td class="owner">Analytics Product</td><td><span class="instrument">先行計器:</span> observed/proxy flag、duration coverage。<br><span class="done">完了:</span> UIがproxyと明示しcoverage返却、またはduration実データへ置換。</td></tr>
+                <tr class="finding-row" data-sev="p1"><td><span class="sev sev-p1">P1</span><br><span class="finding-id">D-05</span></td><td><strong>macOS x86 ISA baselineが文書とbuildで矛盾。</strong><span class="evidence"><a href="../build.sh#L58">build.sh:58-63</a> は<code>-march=x86-64-v3</code>、履歴文書はv2。</span></td><td class="owner">Desktop Architecture<br>C++</td><td><span class="instrument">先行計器:</span> canonical ISA policy、binary feature receipt、oldest-device probe。<br><span class="done">完了:</span> 最古supported Intelでillegal-instruction 0、KAT/benchmark PASS、docs/build一致。</td></tr>
+                <tr class="finding-row" data-sev="p2"><td><span class="sev sev-p2">P2</span><br><span class="finding-id">D-06</span></td><td><strong>PowerShell runtime version未固定。</strong><span class="evidence"><a href="../build.ps1#L16">build.ps1:16</a> はPowerShell 7の<code>??</code>を使用。Windows workflowはshell versionを検証しない。</span></td><td class="owner">Windows Release</td><td><span class="instrument">先行計器:</span> pwsh executable/version receipt。<br><span class="done">完了:</span> expected major未満でbuild前RED、workflow/toolchain manifestへ記録。</td></tr>
+                <tr class="finding-row" data-sev="p2"><td><span class="sev sev-p2">P2</span><br><span class="finding-id">D-07</span></td><td><strong>Extractionのdefault sinkはclipboard previewのみ。</strong><span class="evidence"><a href="../apps/desktop/src/lib/extractionSink.ts">extractionSink.ts:1-6</a> はDB/localStorage/IndexedDBをscope外と明示。durable extractionを製品claimするなら不一致。</span></td><td class="owner">Product/Data<br>Frontend</td><td><span class="instrument">先行計器:</span> scope flagとsink receipt。<br><span class="done">完了:</span> 1.0 claimをclipboard-onlyへ一致、またはvault receipt＋round-tripを実装。</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="panel" id="dependency">
+      <div class="section-head">
+        <div><div class="section-kicker">04 // DEPENDENCY CONTROL</div><h2>リリース依存フロー</h2></div>
+        <div class="section-note">日付ではなく証拠の依存で進める。各Tierのexit receiptが次Tierの唯一の入力。</div>
+      </div>
+      <div class="section-body">
+        <div class="flow" aria-label="Tier dependency flow">
+          <div class="flow-node blocked"><h3>NOW // HOLD</h3><p>Tier 3 evidenceは保全。release bytes生成・実機投入・TestFlight uploadは停止。</p><span class="sev sev-p0">P0 OPEN</span></div>
+          <div class="flow-arrow">→</div>
+          <div class="flow-node"><h3>TIER 4 // PROVE</h3><p>全ゲート、計器、asset identity、iOS config、signed provenanceを同一SHAへ閉じる。</p><span class="sev sev-p1">CI/CD PERMANENT</span></div>
+          <div class="flow-arrow">→</div>
+          <div class="flow-node"><h3>TIER 5 // BREAK</h3><p>署名候補をdevice/fault/stress/crash/egress/a11y matrixへ投入し、失敗経路を自動で破壊する。</p><span class="sev sev-p2">INTEGRATION + STRESS</span></div>
+          <div class="flow-arrow">→</div>
+          <div class="flow-node"><h3>TIER 6 // RELEASE</h3><p>保護tagから再現可能な署名配布物を生成し、TestFlight/App Review/desktop releaseへ送る。</p><span class="sev sev-p1">SIGNED DELIVERY</span></div>
+        </div>
+        <div class="convergence">
+          <div class="lane"><strong>T4-A QUALITY</strong><span>Python shipping env / Windows / TS / Rust / fmt / clippy / floors</span></div>
+          <div class="lane"><strong>T4-B PROVENANCE</strong><span>model / sidecar / SBOM / version / exact SHA / signatures</span></div>
+          <div class="lane"><strong>T4-C SILENCE</strong><span>typed outcomes / sensor validity / route metrics / redaction / PII</span></div>
+          <div class="lane"><strong>T4-D iOS CONFIG</strong><span>release plist / privacy manifest / eligibility / export / archive lane</span></div>
+        </div>
+        <p class="mono" style="text-align:center;color:var(--green);margin-top:14px">T4-A ∧ T4-B ∧ T4-C ∧ T4-D → TIER 4 EXIT RECEIPT → TIER 5</p>
+      </div>
+    </section>
+
+    <section class="panel tier" id="tier4">
+      <div class="tier-banner">
+        <div class="tier-code">TIER 4</div>
+        <div class="tier-copy"><h2>CI/CDの恒久化と計器の修復</h2><p>目的: 「green」の意味を、本番bytes・同一SHA・測定済み経路へ限定する。動作修正より先に、failureが必ず固有codeとreceiptを残す構造を作る。</p></div>
+      </div>
+      <div class="action-grid">
+        <article class="action"><span class="action-id">T4-01 // EVIDENCE CONTRACT</span><h3>署名付き来歴schemaを先に固定</h3><dl class="action-meta"><dt>OWNER</dt><dd>Release Engineering + Supply Chain</dd><dt>DEPENDS</dt><dd>none</dd><dt>COVERS</dt><dd>R-01, R-12, R-19</dd></dl><ul class="checklist"><li>source SHA、tree dirty flag、workflow/run、builder、toolchain、input/output digests、required check IDsをschema化。</li><li>branch protection/environment設定をAPI exportし、外部不変条件として署名receiptへ。</li><li>署名・SHA・gate state各mutationでverifyがRED。</li></ul></article>
+        <article class="action"><span class="action-id">T4-02 // REQUIRED QUALITY WORKFLOW</span><h3>全言語ゲートを同一reusable workflowへ統合</h3><dl class="action-meta"><dt>OWNER</dt><dd>CI/QA + Python/Rust/FE</dd><dt>DEPENDS</dt><dd>T4-01</dd><dt>COVERS</dt><dd>R-02〜R-05, R-17, D-01</dd></dl><ul class="checklist"><li>shipping Python 3.12.10/lock/BLASで全pytest、Windows ARM64 laneでAppContainer skip 0。</li><li>boundary 35/296以上、tsc、Vite、Rust default + exact SKU features、test/ignored floors。</li><li>rustfmt debt95とclippy debt60+344を解消し、0をrequired gate化。</li><li>Apple Calendar rootsを注入し、host HOME非依存。</li></ul></article>
+        <article class="action"><span class="action-id">T4-03 // HERMETIC TOOLCHAIN</span><h3>actions・runtime・依存・security DBを固定</h3><dl class="action-meta"><dt>OWNER</dt><dd>Supply Chain + AppSec</dd><dt>DEPENDS</dt><dd>T4-01</dd><dt>COVERS</dt><dd>R-03, R-04, R-15, D-06</dd></dl><ul class="checklist"><li>全actionをfull SHA、Python patch、Textual等test depsをhash lock。</li><li>PowerShell major、Rust/Node/Python/Xcode/SDKをmachine receipt化。</li><li>pinned audit/license/secret scanners。allowlistはownerとexpiry必須。</li><li>clean env 2回でdependency manifest digest一致。</li></ul></article>
+        <article class="action"><span class="action-id">T4-04 // NO VACUOUS GREEN</span><h3>経路外を成功にしない</h3><dl class="action-meta"><dt>OWNER</dt><dd>CI + Model + Platform Security</dd><dt>DEPENDS</dt><dd>T4-02</dd><dt>COVERS</dt><dd>R-06, R-07, R-17, S-18</dd></dl><ul class="checklist"><li>real-model protected laneでA1 accepted&gt;0。モデルなしはRED。</li><li>GGUF SHA gateをaudit/release mode分離。releaseはsource/stage/archive必須。</li><li>packaged sandbox probeはentitlement inactive/skipをRED。</li><li>suite/executable deletion mutationを恒久fixture化。</li></ul></article>
+        <article class="action"><span class="action-id">T4-05 // ASSET IDENTITY &amp; SKU</span><h3>model・sidecar・feature集合を単一manifestへ</h3><dl class="action-meta"><dt>OWNER</dt><dd>Lead Architect + Model/Release</dd><dt>DEPENDS</dt><dd>T4-01, T4-03</dd><dt>COVERS</dt><dd>R-08〜R-10, S-03, S-11</dd></dl><ul class="checklist"><li>platform SKU feature allowlist、FE invoke↔handler inventory、capability handshakeを生成。</li><li>model hash/size/role/arch/quant/licenseとembedding artifactをsigned manifestへ。</li><li>clean checkoutでassetをbuild前stage。sidecar/model placeholder生成をReleaseで禁止。</li><li>archive展開後にmanifestとの双方向照合。unknown/missing 0。</li></ul></article>
+        <article class="action"><span class="action-id">T4-06 // UNIQUE SILENCE</span><h3>正常・未搭載・取消・障害を型で分離</h3><dl class="action-meta"><dt>OWNER</dt><dd>Runtime Observability + FE</dd><dt>DEPENDS</dt><dd>T4-01</dd><dt>COVERS</dt><dd>S-01, S-04〜S-10, S-16, I-09</dd></dl><ul class="checklist"><li>typed outcome + cause_code + CID + terminal counterをRust/TS/Python共通schemaへ。</li><li>model check、engine ready、sensor、native search、LLM schema、checkpoint/log sinkのfault injection。</li><li>OSLog redactorをtarget-independent化し、PII/path corpusをhost CI＋Release deviceでscan。</li><li>各operationはterminal event exactly 1。0/Nominal/ready/emptyへの代替0。</li></ul></article>
+        <article class="action"><span class="action-id">T4-07 // DATA BOUNDARY</span><h3>PIIと永続化をvault generationへ閉じる</h3><dl class="action-meta"><dt>OWNER</dt><dd>Security/Data + Persistence</dd><dt>DEPENDS</dt><dd>T4-06</dd><dt>COVERS</dt><dd>S-02, S-13, S-15</dd></dl><ul class="checklist"><li>localStorage PIIをprotected vaultへ移行し、legacy keyをreceipt付き削除。</li><li>direct write/append/fixed tmpをversioned generation/journal＋atomic publishへ。</li><li>effective SQLCipher pragmas/temp_store/cipher optionsをqueryし、不一致hard fail。</li><li>全write boundary kill/concurrency tests。plaintext DB/WAL/temp scan 0。</li></ul></article>
+        <article class="action"><span class="action-id">T4-08 // NATIVE ROUTE INTEGRITY</span><h3>search・embedding・C++の実経路を測る</h3><dl class="action-meta"><dt>OWNER</dt><dd>C++/Python Runtime + ML</dd><dt>DEPENDS</dt><dd>T4-05, T4-06</dd><dt>COVERS</dt><dd>S-09〜S-12, S-19, S-20, D-05</dd></dl><ul class="checklist"><li>route/backend/ISA/OpenMP/compiler/fallback reason/hit countをterminal receiptへ。</li><li>embedding policyを正式化し、想定semantic経路のfallback_count=0。</li><li>C++ header/JSON mutation+fuzz、two-daemon barrier race、oldest Intel KAT。</li><li>nonzero benchmarkをmac arm64/x86_64、Windows ARM64へ。</li></ul></article>
+        <article class="action"><span class="action-id">T4-09 // iOS CANONICAL CONFIG</span><h3>DebugとReleaseを分離し、generatorを正本化</h3><dl class="action-meta"><dt>OWNER</dt><dd>iOS Release + Privacy/Legal</dd><dt>DEPENDS</dt><dd>T4-03</dd><dt>COVERS</dt><dd>I-01〜I-06</dd></dl><ul class="checklist"><li>Release plistからATS/LAN/dev keysを除去。Debugだけに必要例外。</li><li>PrivacyInfo canonical source＋schema/reason scanner。</li><li>UIDeviceFamily=[1]、approved eligibility capability、version/team/signing設定をgeneratorへ。</li><li>export compliance decision recordとplistを一致。clean regenerate diff 0。</li></ul></article>
+        <article class="action"><span class="action-id">T4-10 // RELEASE LANES</span><h3>iOS・macOS・Windowsをquality workflowの後段へ</h3><dl class="action-meta"><dt>OWNER</dt><dd>Platform Release + Supply Chain</dd><dt>DEPENDS</dt><dd>T4-02〜T4-09</dd><dt>COVERS</dt><dd>R-11〜R-16, R-18, R-20, I-07</dd></dl><ul class="checklist"><li>iOSはTauri CLI唯一入口でApp Store export、mac/Windowsも同一provenance schema。</li><li>SBOM hash修正＋native assets/licenses網羅、version/tag/build number同期。</li><li>notary/staple/spctl、Authenticode chain/timestamp、IPA nested signatures。</li><li>signed package post-build smoke後だけartifact upload。</li></ul></article>
+      </div>
+      <div class="exit-gate"><h3>TIER 4 EXIT // 次段へ渡せる条件</h3><ul class="checklist"><li>P0 findingが0。</li><li>全required checksが同一immutable SHAでGREEN。</li><li>branch protection/exportがreceipt化。</li><li>real GGUF A1がaccepted&gt;0でGREEN。</li><li>shipping Python/Windows/TS/Rust/fmt/clippyがGREEN。</li><li>model/sidecar/embedding/SKU manifestが署名済み。</li><li>Release plist/Privacy manifest/UIDeviceFamily/eligibilityがarchive scanで一致。</li><li>OSLog/PII/sensor/ready/fallback fault matrixが一意なterminal eventを出す。</li><li>SBOM schema valid・distribution tree差分0。</li><li>provenance verifierのnegative drillsが全RED。</li></ul></div>
+    </section>
+
+    <section class="panel tier t5" id="tier5">
+      <div class="tier-banner">
+        <div class="tier-code">TIER 5</div>
+        <div class="tier-copy"><h2>機能結合・故障注入・ストレステスト</h2><p>目的: Tier 4で作った計器を使い、署名候補を壊す。修正は測定後。物理端末の操作も自動harnessと機械判定log parserを正本にし、手動確認を合否の唯一根拠にしない。</p></div>
+      </div>
+      <div class="action-grid">
+        <article class="action"><span class="action-id">T5-01 // PACKAGED E2E</span><h3>署名候補そのものを起動</h3><dl class="action-meta"><dt>OWNER</dt><dd>Release QA + Platform</dd><dt>DEPENDS</dt><dd>Tier 4 Exit</dd><dt>MEASURE</dt><dd>install/start/capability/model/vault/health/uninstall receipts</dd></dl><ul class="checklist"><li>macOS/Windows signed installersとiOS signed IPAをfresh stateへ自動導入。</li><li>account/cloudなしで7 tab・全release commandのsmoke。</li><li>package SHAとruntime-reported SHA/SKU/model SHA一致。</li></ul></article>
+        <article class="action"><span class="action-id">T5-02 // CONTRACT PARITY</span><h3>desktop/iOS/Python/Rust/TSの意味論一致</h3><dl class="action-meta"><dt>OWNER</dt><dd>Architecture + QA</dd><dt>DEPENDS</dt><dd>T5-01</dd><dt>MEASURE</dt><dd>command/schema/error/cancel/golden digests</dd></dl><ul class="checklist"><li>全Tauri command exact schemaとfixed errorをinventory比較。</li><li>desktop Python 3.12.10↔iOS backendのcanonical hash/ranking/profile/prompt parity。</li><li>C++/Rust search top-k、384D embedding normalization、dirty generation/DERIVED_STALE。</li></ul></article>
+        <article class="action"><span class="action-id">T5-03 // STORAGE &amp; RECOVERY</span><h3>暗号・Keychain・crash境界を破壊</h3><dl class="action-meta"><dt>OWNER</dt><dd>Persistence Security + iOS QA</dd><dt>DEPENDS</dt><dd>T5-01, T4-07</dd><dt>MEASURE</dt><dd>fault point / tx / old-or-new generation / plaintext scans</dd></dl><ul class="checklist"><li>userPresence create/get/cancel/delete、create/reopen/wrong-key/corrupt/truncated WAL/low disk。</li><li>DB/Keychain anchor、DeviceSigner、archive export/importの全instruction crash matrix。</li><li>Application Support/Documents/tmp/staging/backupのplaintext canary 0、backup exclusion/Data Protection exact。</li><li>PendingVault、tamper/replay/path traversal/symlink/zip-bomb/regressionを全拒否。</li></ul></article>
+        <article class="action"><span class="action-id">T5-04 // MODEL LIFECYCLE</span><h3>LLM trust・品質・jetsam・privacy</h3><dl class="action-meta"><dt>OWNER</dt><dd>Model Runtime + Performance + Privacy</dd><dt>DEPENDS</dt><dd>T5-01, T4-05, T4-06</dd><dt>MEASURE</dt><dd>device/model/prompt hash/footprint/thermal/cancel/deactivation</dd></dl><ul class="checklist"><li>最低eligible iPhone、最低eligible iPad compatibility、代表最新端末。</li><li>cold/warm、max prompt/output、load/unload反復、cancel/lock/background/memory warning。</li><li>thermal nominal/fair/serious/critical、Low Power、Metal submission/command buffer cutoff。</li><li>wrong role/signature/hash/size/corrupt/symlink拒否。prompt/token OSLog/crash data 0。</li><li>Pocket Brain Japanese rubricとGBNF schema validity 100%。</li></ul></article>
+        <article class="action"><span class="action-id">T5-05 // ABSOLUTE ISOLATION</span><h3>offlineを三面で証明</h3><dl class="action-meta"><dt>OWNER</dt><dd>Platform Security + Network Lab</dd><dt>DEPENDS</dt><dd>T5-01</dd><dt>MEASURE</dt><dd>symbol/capability/permission + runtime packet/port/DNS receipts</dd></dl><ul class="checklist"><li>IPA/app processでsocket/listener/connect/DNS/Bonjour/LNP/camera/network entitlement/XPC 0。</li><li>Wi-Fi/Bluetooth/cellular on/off両方で全interface app-owned network bytes 0。</li><li>機内モードでrecord/consult/profile/import/export/restore/model inference完走。</li><li>dev URL/HMR/dev CSP/ATS exceptions 0。</li></ul></article>
+        <article class="action"><span class="action-id">T5-06 // STRESS &amp; CONCURRENCY</span><h3>計測後にcapacityを固定</h3><dl class="action-meta"><dt>OWNER</dt><dd>Runtime Architecture + Performance</dd><dt>DEPENDS</dt><dd>T5-02〜T5-05</dd><dt>MEASURE</dt><dd>queue/p95/p99/QPS/peak/headroom/error conservation</dd></dl><ul class="checklist"><li>long consult中のhealth/control、bounded queue、timeout/recovery outcome。</li><li>two-daemon、N parallel import/writer、low-disk、crash/restartを反復。</li><li>native route比率、OpenMP/ISA、search p50/p95/QPSをnonzero corpusで測る。</li><li>最初の測定baselineを承認してからregression ceiling/floor化。</li></ul></article>
+        <article class="action"><span class="action-id">T5-07 // UI &amp; ACCESSIBILITY</span><h3>全supported surfaceを自動走査</h3><dl class="action-meta"><dt>OWNER</dt><dd>Frontend QA + Accessibility</dd><dt>DEPENDS</dt><dd>T5-01</dd><dt>MEASURE</dt><dd>screenshots/AX tree/layout overflow/interaction latency</dd></dl><ul class="checklist"><li>safe area、orientation、keyboard/dictation、VoiceOver、Dynamic Type、Bold/Contrast/Reduce Motion。</li><li>44×44、tablist manual activation、busy中input/scroll、listener cleanup。</li><li>BIZ UDGothic hash/license/UIAppFonts/fallback 0、network font request 0。</li><li>production mock strings 0。cold start/TTI/memory測定後bundle budgetを固定。</li></ul></article>
+        <article class="action"><span class="action-id">T5-08 // RELEASE CANDIDATE FREEZE</span><h3>壊した後の同一bytesを二度作る</h3><dl class="action-meta"><dt>OWNER</dt><dd>Release Engineering + QA</dd><dt>DEPENDS</dt><dd>T5-01〜T5-07</dd><dt>MEASURE</dt><dd>two-build canonical tree + signed RC manifest</dd></dl><ul class="checklist"><li>unsigned canonical archiveを2回buildし、許容差分外0。</li><li>全fault/stress/device receiptsをRC SHAへ結合。</li><li>known limitation（単一端末集中、coherent rollback非保証等）をdossierへ。</li></ul></article>
+      </div>
+      <div class="exit-gate"><h3>TIER 5 EXIT // RELEASE CANDIDATE ACCEPTANCE</h3><ul class="checklist"><li>signed packaged E2E全platform GREEN。</li><li>全release command parity差分0。</li><li>storage/recovery crash matrix GREEN。</li><li>plaintext canary 0、wrong-key/tamper hard fail。</li><li>最低端末jetsam再現0、footprint DoD達成。</li><li>network bytes/symbol/capability/permission 0。</li><li>model quality/GBNF gates達成。</li><li>a11y/layout/device matrix GREEN。</li><li>mock fixture strings 0。</li><li>stress budgets確定後regression 0。</li><li>RC provenance・SBOM・receipts完全。</li></ul></div>
+    </section>
+
+    <section class="panel tier t6" id="tier6">
+      <div class="tier-banner">
+        <div class="tier-code">TIER 6</div>
+        <div class="tier-copy"><h2>最終デプロイ・審査・配布</h2><p>目的: Tier 5で受理したRC SHA以外から配布物を作れないようにし、App Store/TestFlight/desktop distributionのすべてへ同じ来歴を持ち込む。</p></div>
+      </div>
+      <div class="action-grid">
+        <article class="action"><span class="action-id">T6-01 // PROTECTED RELEASE INPUT</span><h3>RC SHAを保護tagへ封緘</h3><dl class="action-meta"><dt>OWNER</dt><dd>Release Commander + Repository Admin</dd><dt>DEPENDS</dt><dd>Tier 5 Exit</dd><dt>MEASURE</dt><dd>tag signature / required checks / environment approval</dd></dl><ul class="checklist"><li>annotated signed tagがTier 5 RC SHAをexact参照。</li><li>release environmentは同SHA receiptsをverify後だけkey access。</li><li>manual arbitrary ref buildを配布publish経路から排除。</li></ul></article>
+        <article class="action"><span class="action-id">T6-02 // SIGNED ARTIFACTS</span><h3>最終archiveを生成・再検査</h3><dl class="action-meta"><dt>OWNER</dt><dd>Platform Release + Security</dd><dt>DEPENDS</dt><dd>T6-01</dd><dt>MEASURE</dt><dd>DMG/NSIS/IPA SHA + OS trust receipts</dd></dl><ul class="checklist"><li>macOS notary accepted/stapled/spctl、Windows Authenticode chain/timestamp、iOS distribution/nested signatures。</li><li>model/sidecar/fonts/privacy/plist/entitlements/UIDeviceFamily/SBOMを最終bytesから再検査。</li><li>artifact hashesとprovenanceをrelease recordへ。</li></ul></article>
+        <article class="action"><span class="action-id">T6-03 // REVIEW DOSSIER</span><h3>審査・privacy・legal情報をRCへ結合</h3><dl class="action-meta"><dt>OWNER</dt><dd>App Review Ops + Legal/Privacy + Product</dd><dt>DEPENDS</dt><dd>T6-02</dd><dt>MEASURE</dt><dd>dossier validator / URL reachability / approved record IDs</dd></dl><ul class="checklist"><li>Privacy Policy/Support URL、age rating、accessibility、export decision、SBOM/license。</li><li>完全offline、on-device model/runtime/native value、iPad compatibility手順。</li><li>logical delete限界、single-device/export freshness、coherent rollback非保証。</li><li>review notesのmodel SHA/versionがRCと一致。</li></ul></article>
+        <article class="action"><span class="action-id">T6-04 // TESTFLIGHT</span><h3>internal→externalを同一RCで通過</h3><dl class="action-meta"><dt>OWNER</dt><dd>iOS Release QA</dd><dt>DEPENDS</dt><dd>T6-02, T6-03</dd><dt>MEASURE</dt><dd>App Store processing/build ID/device automation receipts</dd></dl><ul class="checklist"><li>internal processing後、automated install/E2E/device matrixを再実行。</li><li>external Beta Review information/full-access resourcesをdossierから生成。</li><li>修正が必要なら新SHAとしてTier 4から再入場。RC bytesへの手直し禁止。</li></ul></article>
+        <article class="action"><span class="action-id">T6-05 // APP REVIEW &amp; DESKTOP RELEASE</span><h3>審査提出とdesktop公開</h3><dl class="action-meta"><dt>OWNER</dt><dd>Release Commander + App Review Ops</dd><dt>DEPENDS</dt><dd>T6-04</dd><dt>MEASURE</dt><dd>submission/release IDs + public artifact SHA</dd></dl><ul class="checklist"><li>App Review提出bytesはTestFlight受理RCと同一build。</li><li>desktop artifactsも同じsource SHA/gatesを参照。</li><li>public download/App Store recordとsigned provenanceを照合。</li></ul></article>
+        <article class="action"><span class="action-id">T6-06 // LAUNCH &amp; ROLLBACK</span><h3>段階公開と署名済みrollback</h3><dl class="action-meta"><dt>OWNER</dt><dd>Release Commander + Incident Response</dd><dt>DEPENDS</dt><dd>T6-05</dd><dt>MEASURE</dt><dd>release state / crash reports / support signals / rollback hash</dd></dl><ul class="checklist"><li>go/no-go receiptを全ownerが署名。欠落は自動NO-GO。</li><li>配布後のprivacy-preserving crash/support intakeをcause codeへ集約。</li><li>rollbackは既検証・署名済みartifactだけ。緊急手build禁止。</li><li>修正releaseはTier 4へ戻り、同じ全gateを再通過。</li></ul></article>
+      </div>
+      <div class="exit-gate"><h3>TIER 6 EXIT // PRODUCTION RELEASE COMPLETE</h3><ul class="checklist"><li>protected RC SHA以外の配布artifact 0。</li><li>OS trust checks全GREEN。</li><li>App Store dossier validator全GREEN。</li><li>TestFlight同一RC device matrix GREEN。</li><li>App Review acceptedまたは明示された再入場状態。</li><li>desktop公開artifact SHA/provenance一致。</li><li>rollback artifactと手順が事前検証済み。</li><li>post-release intakeがPIIなしcause codeで動作。</li></ul></div>
+    </section>
+
+    <section class="panel" id="go-no-go">
+      <div class="section-head">
+        <div><div class="section-kicker">08 // FINAL LAUNCH AUTHORITY</div><h2>最終 Go / No-Go 判定</h2></div>
+        <div class="section-note">以下はAND条件。ひとつでも欠ければNO-GO。人間の「たぶん大丈夫」は条件に含めない。</div>
+      </div>
+      <div class="section-body">
+        <div class="grid cols-3">
+          <div class="card"><h3>PROVENANCE</h3><ul><li>source SHA = gate SHA = artifact provenance SHA</li><li>worktree clean / protected signed tag</li><li>all required run IDs GREEN</li><li>input/output digests signed</li></ul></div>
+          <div class="card"><h3>SECURITY</h3><ul><li>PII localStorage 0</li><li>OSLog raw path/secret 0</li><li>network bytes/capability/permission 0</li><li>model/sidecar/embedding identity exact</li></ul></div>
+          <div class="card"><h3>QUALITY</h3><ul><li>shipping Python/Windows/TS/Rust gates GREEN</li><li>fmt/clippy RED debt 0</li><li>component/E2E/a11y/device/stress GREEN</li><li>skip/ignored/NOT MEASURED 0 in release matrix</li></ul></div>
+          <div class="card"><h3>DATA</h3><ul><li>SQLCipher/keychain/Data Protection receipts</li><li>plaintext canary 0</li><li>crash/recovery matrix GREEN</li><li>backup exclusion/archive rollback constraints documented</li></ul></div>
+          <div class="card"><h3>STORE / DISTRIBUTION</h3><ul><li>Privacy manifest/plist/export/UIDeviceFamily valid</li><li>notary/staple/AuthentiCode/IPA signatures valid</li><li>TestFlight accepted same RC</li><li>dossier/legal/privacy metadata approved</li></ul></div>
+          <div class="card"><h3>MODEL / PERFORMANCE</h3><ul><li>real-model A1 accepted&gt;0</li><li>quality rubric + GBNF 100%</li><li>lowest-device jetsam 0 / headroom pass</li><li>native route/ISA/OpenMP/perf budgets pass</li></ul></div>
+        </div>
+        <div class="verdict" style="margin-top:14px">
+          <div class="verdict-code">NOW: NO-GO</div>
+          <div class="verdict-copy"><p><strong>解除する主体:</strong> Release Commander。ただし裁量でのoverrideは禁止。Tier 4/5/6 exit receiptsをprovenance verifierが受理したときだけGOへ遷移する。</p><p><strong>再入場規則:</strong> RC後に1 byteでも変われば新しいSHAとしてTier 4 required workflowからやり直す。署名済み成果物への手動差替え、Xcode直接Archive、ローカル手buildの実機投入は禁止。</p></div>
+        </div>
+      </div>
+    </section>
+
+    <section class="panel" id="scope">
+      <div class="section-head">
+        <div><div class="section-kicker">09 // EVIDENCE BOUNDARY</div><h2>監査範囲と断定しない事項</h2></div>
+        <div class="section-note">コード事実と外部状態の境界を保つ。</div>
+      </div>
+      <div class="section-body grid cols-2">
+        <div class="card"><h3>確認したもの</h3><ul><li>708 tracked files、CI workflows、Python/C++、Rust/Tauri、TypeScript/React、iOS生成設定、仕様・incident/history文書。</li><li>HEAD/branch/worktree、主要test/build/check、feature matrices、GGUF三点、SBOM output shape。</li><li>過去監査のfindingは現文書上RESOLVED。今回のregisterは現在コードを再監査した結果。</li><li>コード領域にTODO/FIXME/HACK/XXX/todo!/unimplemented!は確認されなかった。</li></ul></div>
+        <div class="card"><h3>外部のため未確認</h3><ul><li>GitHub branch protection、required checks、environment reviewers、secret存在、最新remote run結果。</li><li>Apple Developer/App Store Connect membership、App ID ownership、実privacy/support URLs、法務承認。</li><li>現在のnotary/App Review状態、実配布チャンネル。</li><li>これらは「不存在」ではなくNOT MEASURED。Tier 4でAPI/export receiptを取る。</li></ul></div>
+      </div>
+    </section>
+  </main>
+
+  <footer class="shell">
+    <p class="mono">CORAXIS // FULL AUDIT // HEAD 78b80f068ec38a8b13dcc0b77236db3730188aba // 2026-08-01 JST</p>
+    <p>この文書は単一HTMLで、外部フォント・CDN・network fetchを使用しない。検索／重大度filterは表示補助であり、全findingは静的DOM内に保持される。</p>
+    <p class="print-note">印刷時はfilter状態に関係なく全findingを出力する。</p>
+  </footer>
+
+  <script>
+    (() => {
+      const rows = Array.from(document.querySelectorAll(".finding-row"));
+      const search = document.getElementById("finding-search");
+      const buttons = Array.from(document.querySelectorAll("[data-filter]"));
+      const visibleCount = document.getElementById("visible-count");
+      const totalCount = document.getElementById("finding-count");
+      let severity = "all";
+
+      function apply() {
+        const query = (search.value || "").trim().toLocaleLowerCase("ja");
+        let visible = 0;
+        rows.forEach((row) => {
+          const sevMatch = severity === "all" || row.dataset.sev === severity;
+          const textMatch = !query || row.textContent.toLocaleLowerCase("ja").includes(query);
+          row.hidden = !(sevMatch && textMatch);
+          if (!row.hidden) visible += 1;
+        });
+        visibleCount.textContent = `VISIBLE ${visible} / TOTAL ${rows.length}`;
+      }
+
+      totalCount.textContent = String(rows.length);
+      search.addEventListener("input", apply);
+      buttons.forEach((button) => {
+        button.addEventListener("click", () => {
+          severity = button.dataset.filter;
+          buttons.forEach((candidate) => candidate.setAttribute("aria-pressed", String(candidate === button)));
+          apply();
+        });
+      });
+      apply();
+    })();
+  </script>
+</body>
+</html>
