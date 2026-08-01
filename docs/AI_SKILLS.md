@@ -500,11 +500,25 @@ Info.plist / embedded.mobileprovision / pocket-brain.gguf の**明示スコー�
 21..27 = S-1..S-7 RED / 28 = signing UNKNOWN（fail-closed）。
 `get-task-allow` は Release 署名でのみ違反、Dev では許容。文字列走査は
 `grep -a`（`strings` 禁止）— CIDR（`10.0.0.0/8` 等）と `localhost:port` を
-`://`+`:port` 無しでも検出。現行アーカイブは S-4/S-5 RED（ATS/LAN plist +
-バイナリ内 Vite HMR 文字列）・S-1/S-2/S-3/S-6/S-7 GREEN が正しい初期状態。
-`Info.ios.plist` の修正と CI 恒久化は本ゲートの射程外（指揮官裁定）。
+`://`+`:port` 無しでも検出。
 
-**T4-B ハマりどころ:**
+**T4-B-2 as-built（2026-08-01）— Info.plist / devCsp の Dev·Release 分岐:**
+正本 `docs/T4B2_INFO_PLIST_DEV_RELEASE_SPLIT_DIRECTIVE.md`。
+- Release 正本: `Info.ios.plist`（ATS / LocalNetwork **キー不在**）+
+  `tauri.ios.conf.json` が `devCsp: null` / `devUrl: null`（RFC 7396 で
+  base `tauri.conf.json` の dev 文字列を iOS 成果物から除去）。
+- Dev 正本: `Info.ios.dev.plist`（ATS + CIDR + `NSLocalNetworkUsageDescription`）+
+  `tauri.ios.dev.conf.json`。標準入口:
+  `npm run tauri:ios-dev -- --features pocket-brain,secure-vault`
+  （`scripts/tauri-ios-dev.sh` が `--config src-tauri/tauri.ios.dev.conf.json` を付与。
+  default feature 無し — features 省略は不完全構成）。
+- `tauri ios build` は overlay を渡さない。ゲート
+  `scripts/ios_archive_scan.sh` は**無改変**のまま Release 再ビルド後 exit 0。
+- 空の ATS 辞書を残すな — キーの**不在**が要件。Xcode Build Phase フックと
+  `gen/apple/**` を機構にするな（disposable）。
+- **実機 HMR は指揮官検証**（実装者は V-2 解決設定まで。実機未確認と明記）。
+
+**T4-B / T4-B-2 ハマりどころ:**
 1. `codesign -dv` では Authority 行が出ない — `-dvvv` が必要。Authority 欠落を
    DEV と推測で通すな（provision 推論か UNKNOWN で落とせ）。
 2. BSD `grep -c` と `-o` の併用は under-count する — ヒット数は
@@ -512,6 +526,11 @@ Info.plist / embedded.mobileprovision / pocket-brain.gguf の**明示スコー�
 3. 旧手検査の `://(10|172|192)…:port` は CIDR と `localhost:1420` の両方に盲目。
 4. 変異ドリルの GGUF シンボリックリンクは**絶対パス**で張れ — 相対だと
    ABSENT に化けて復元ドリルが偽 RED になる。
+5. **Tauri の Info.plist マージは追加のみで削除しない。** 過去に ATS を注入した
+   `gen/apple/.../Info.plist` は、ソースを浄化しただけでは赤のまま残る。
+   分岐機構はソース側（`Info.ios*.plist` + `--config`）に置き、汚染済み
+   gen は disposable として一度キー除去してから Release を取り直せ。
+6. XML コメントに `--` を含めるな（`--config` 等）— plist が well-formed でなくなる。
 
 報告には「何を変えたか」「なぜか」「何で検証したか」を必ず含めろ。テストが通らないまま完了と言うことは、いかなる理由があっても禁止する。
 
@@ -641,7 +660,7 @@ python3 -c "import platform; print(platform.machine())"  # Python 自体のア�
 2. `gen/apple` は disposable — `tauri ios init` 生成物を手編集で育てるな。
 3. mobile では sidecar を `start()` するな（`#[cfg(not(mobile))]` が desktop 経路を byte-identical に保つ）。`build.rs` は ios TARGET で engine placeholder を作らない。
 4. desktop の `create:false` は iOS で webview 未生成になる — `tauri.ios.conf.json` の `app.windows[0].create: true` で上書き（base を書き換えるな）。
-5. ホスト要件: Xcode 本体 + CocoaPods + iOS Simulator runtime（`xcodebuild -downloadPlatform iOS`）+ Rust targets `aarch64-apple-ios{,-sim}`。`tauri ios dev --open` は Xcode を開くだけ — デバイス名を引数に渡せ。
+5. ホスト要件: Xcode 本体 + CocoaPods + iOS Simulator runtime（`xcodebuild -downloadPlatform iOS`）+ Rust targets `aarch64-apple-ios{,-sim}`。正規の iOS Dev 入口は `npm run tauri:ios-dev -- --features pocket-brain,secure-vault`（`--config src-tauri/tauri.ios.dev.conf.json` 付与。default feature 無し）。`npm run tauri:ios-dev -- --features pocket-brain,secure-vault --open` は Xcode を開くだけ — デバイス名を引数に渡せ。素の `tauri ios dev` は overlay を読まず HMR 用 ATS/CSP が欠ける（T4-B-2）。
 
 ### 4.5 M5 Phase 1 — GBNF 構造化抽出の純 Rust 層 (2026-07-18)
 
@@ -941,7 +960,7 @@ dead_code / unused warning 殲滅の到達点: iOS sim `cargo check` **warning 0
 
 ### 4.22 M19-A — iOS build config audit (2026-07-20)
 
-正本 `docs/M19_IOS_BUILD_AUDIT.md`。`tauri.ios.conf.json` = bash ビルド・`create:true`・`externalBin:[]`・`minimumSystemVersion=17.0`・`infoPlist: Info.ios.plist`。`Info.ios.plist` が権限記述の唯一の正本（`gen/apple` 手編集禁止）。未使用の「将来用」権限キーを置くな。iOS entitlements 空 dict はコンテナ内 I/O のみなら正当 — network entitlement 追加禁止。
+正本 `docs/M19_IOS_BUILD_AUDIT.md`。`tauri.ios.conf.json` = bash ビルド・`create:true`・`externalBin:[]`・`minimumSystemVersion=17.0`・`infoPlist: Info.ios.plist`（**Release 浄化済み** — ATS/LocalNetwork キー不在。Dev HMR 用は `Info.ios.dev.plist` + `tauri.ios.dev.conf.json`、標準入口 `npm run tauri:ios-dev -- --features pocket-brain,secure-vault`。T4-B-2）。`gen/apple` 手編集禁止。未使用の「将来用」権限キーを置くな。iOS entitlements 空 dict はコンテナ内 I/O のみなら正当 — network entitlement 追加禁止。
 
 ### 4.23 M19-B — iOS App Sandbox `user_data_root` (2026-07-20)
 
@@ -1181,7 +1200,7 @@ LINE: 上限 16 MiB・`chunk_markdown_capped` で `source_id-p00`… に分割�
 | 段 | 環境 | 結果 |
 |---|---|---|
 | **Tier 1** | macOS デスクトップ（非サンドボックス）<br>`npx tauri dev --features pocket-brain,secure-vault` | **GREEN** |
-| **Tier 2** | iOS シミュレータ iPhone 17 Pro（**sandbox 実効**）<br>`npx tauri ios dev --features pocket-brain,secure-vault` | **GREEN** |
+| **Tier 2** | iOS シミュレータ iPhone 17 Pro（**sandbox 実効**）<br>`npx tauri ios dev --features pocket-brain,secure-vault`（**T4-B-2以前の履歴**であり、現在の正規入口は `npm run tauri:ios-dev -- --features pocket-brain,secure-vault`） | **GREEN** |
 | **Tier 3** | **iOS 実機** iPhone 17 Pro `Gggzns`（Release・`devicectl` デタッチ起動） | **GREEN（2026-07-31・G-5）** |
 
 **Tier 2 の証跡（sandbox 境界を越えた完全同一性）:** 1,117,320,736 バイトが 3 地点で SHA-256 一致 `6a1a2eb6…9407e` —— リポジトリ → Files「この iPhone 内」（`group.com.apple.FileProvider.LocalStorage`・**アプリコンテナ外**）→ `$APPDATA/models/pocket-brain.gguf`。続いて `llama_model_loader: loaded meta data with 26 key-value pairs and 339 tensors from <container>/…/models/pocket-brain.gguf (version GGUF V3)` を確認（シミュレータでは `offloaded 0/29 layers to GPU` ＝ `ios_sim` の CPU フォールバック既定であり失敗ではない）。**`forbidden` / `denied` / `scope` 系エラーはログ全体で 0 件。**

@@ -1,0 +1,68 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>NSFaceIDUsageDescription</key>
+	<string>Vaultの自動解錠および、機密性の高いプロンプトデータの保護にFace IDを使用します。</string>
+	<!-- M20 データ連携 Part 2: EventKit 予定読み取り (read-only)。 -->
+	<key>NSCalendarsFullAccessUsageDescription</key>
+	<string>Coraxisのコンテキストに予定を取り込むため、カレンダーへのフルアクセスを使用します。</string>
+	<!-- Physical-device tauri ios dev only: WKWebView must reach Mac Vite on LAN.
+	     Release loads bundled frontendDist (no LAN). Not an egress / cloud path.
+	     If the OS dialog was denied once: Settings > Privacy and Security > Local Network
+	     > Coraxis ON, then force-quit and relaunch (code cannot re-prompt).
+	     iOS 17+: ATS blocks bare IP HTTP by default. LocalNetworking + WebContent
+	     exception cover Vite at http://LAN-IP:1420 (DEV only).
+	     Loaded only when tauri.ios.dev.conf.json is merged via CLI config flag. -->
+	<key>NSAppTransportSecurity</key>
+	<dict>
+		<key>NSAllowsLocalNetworking</key>
+		<true/>
+		<key>NSAllowsArbitraryLoadsInWebContent</key>
+		<true/>
+		<key>NSExceptionDomains</key>
+		<dict>
+			<!-- RFC1918 + link-local — DHCP-stable ranges for `tauri ios dev` LAN IP. -->
+			<key>192.168.0.0/16</key>
+			<dict>
+				<key>NSExceptionAllowsInsecureHTTPLoads</key>
+				<true/>
+				<key>NSIncludesSubdomains</key>
+				<true/>
+			</dict>
+			<key>10.0.0.0/8</key>
+			<dict>
+				<key>NSExceptionAllowsInsecureHTTPLoads</key>
+				<true/>
+				<key>NSIncludesSubdomains</key>
+				<true/>
+			</dict>
+			<key>172.16.0.0/12</key>
+			<dict>
+				<key>NSExceptionAllowsInsecureHTTPLoads</key>
+				<true/>
+				<key>NSIncludesSubdomains</key>
+				<true/>
+			</dict>
+			<key>169.254.0.0/16</key>
+			<dict>
+				<key>NSExceptionAllowsInsecureHTTPLoads</key>
+				<true/>
+				<key>NSIncludesSubdomains</key>
+				<true/>
+			</dict>
+			<key>localhost</key>
+			<dict>
+				<key>NSExceptionAllowsInsecureHTTPLoads</key>
+				<true/>
+				<key>NSIncludesSubdomains</key>
+				<true/>
+			</dict>
+		</dict>
+	</dict>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>開発時のみ、同じ Wi‑Fi 上の Mac（Vite :1420）へ接続するためにローカルネットワークを使います。「許可」を選んでください。拒否した場合は 設定 → プライバシーとセキュリティ → ローカルネットワーク で Coraxis をオンにし、アプリを再起動してください。</string>
+	<key>ITSAppUsesNonExemptEncryption</key>
+	<false/>
+</dict>
+</plist>

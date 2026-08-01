@@ -435,8 +435,7 @@ In an isolated app container:
 8. background/foreground the app and prove the connection closes, key bytes are
    zeroized, and re-entry requires OS authentication;
 9. run `cargo check` default, `cargo check --features secure-vault`, Rust tests,
-   TypeScript checks, and `cargo tauri ios dev ... -f secure-vault` or the exact
-   equivalent xcodebuild link/deploy command.
+   TypeScript checks, and `npm run tauri:ios-dev -- --features secure-vault`.
 
 ### 4.4 Phase 0 acceptance and stop conditions
 
