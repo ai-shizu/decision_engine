@@ -490,6 +490,29 @@ GGUF スタブは不要（pytest は `build.rs` を通らない）。件数は**
 「測っていない」をログで区別せよ。run ID・実測件数は
 `docs/TIER3_DEVICE_VALIDATION_REQUIREMENTS_DRAFT.md` §16 へ移した。
 
+**T4-B as-built（2026-08-01）— iOS アーカイブ走査ゲート:** 正本
+`docs/T4B_ARCHIVE_SCAN_GATE_DIRECTIVE.md`。新規のみ
+`scripts/ios_archive_scan.sh`（`gguf_three_point_sha_gate.sh` と
+`.github/workflows/` 5 本は無改変）。S-1..S-7 を Mach-O /
+Info.plist / embedded.mobileprovision / pocket-brain.gguf の**明示スコープ**で
+検査し、各検査の前に陽性対照を必ず発火（対照失敗 = exit 1・本番を測る資格なし）。
+緑の意味はスコープ列挙とセット。ABSENT は measured-0 と区別。exit:
+21..27 = S-1..S-7 RED / 28 = signing UNKNOWN（fail-closed）。
+`get-task-allow` は Release 署名でのみ違反、Dev では許容。文字列走査は
+`grep -a`（`strings` 禁止）— CIDR（`10.0.0.0/8` 等）と `localhost:port` を
+`://`+`:port` 無しでも検出。現行アーカイブは S-4/S-5 RED（ATS/LAN plist +
+バイナリ内 Vite HMR 文字列）・S-1/S-2/S-3/S-6/S-7 GREEN が正しい初期状態。
+`Info.ios.plist` の修正と CI 恒久化は本ゲートの射程外（指揮官裁定）。
+
+**T4-B ハマりどころ:**
+1. `codesign -dv` では Authority 行が出ない — `-dvvv` が必要。Authority 欠落を
+   DEV と推測で通すな（provision 推論か UNKNOWN で落とせ）。
+2. BSD `grep -c` と `-o` の併用は under-count する — ヒット数は
+   `grep -aoE … | wc -l`（zero-match 時の grep exit 1 は `|| true` で pipefail から守れ）。
+3. 旧手検査の `://(10|172|192)…:port` は CIDR と `localhost:1420` の両方に盲目。
+4. 変異ドリルの GGUF シンボリックリンクは**絶対パス**で張れ — 相対だと
+   ABSENT に化けて復元ドリルが偽 RED になる。
+
 報告には「何を変えたか」「なぜか」「何で検証したか」を必ず含めろ。テストが通らないまま完了と言うことは、いかなる理由があっても禁止する。
 
 ---
