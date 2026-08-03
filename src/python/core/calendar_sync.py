@@ -17,7 +17,7 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 from .calendar_manager import load_calendar, save_calendar
-from .paths import CALENDAR_IMPORT_ICS, PROJECT_ROOT as ROOT
+from .paths import CALENDAR_IMPORT_ICS
 
 MergeMode = str  # "append" | "overwrite"
 CalendarEvents = dict[str, list[dict]]

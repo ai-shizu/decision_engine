@@ -31,3 +31,19 @@ pub fn phys_footprint_bytes() -> Option<u64> {
 pub fn phys_footprint_bytes() -> Option<u64> {
     None
 }
+
+/// Current process-available memory reported by the Apple kernel.
+#[cfg(target_vendor = "apple")]
+pub fn os_proc_available_memory_bytes() -> Option<u64> {
+    #[link(name = "System", kind = "dylib")]
+    extern "C" {
+        fn os_proc_available_memory() -> usize;
+    }
+    let value = unsafe { os_proc_available_memory() };
+    (value > 0).then_some(value as u64)
+}
+
+#[cfg(not(target_vendor = "apple"))]
+pub fn os_proc_available_memory_bytes() -> Option<u64> {
+    None
+}

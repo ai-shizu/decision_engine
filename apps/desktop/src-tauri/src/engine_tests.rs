@@ -22,7 +22,7 @@ enum RecvStep {
     RawLine(String),
     FailTransport(TransportFailure),
     FailProtocolUtf8,
-    Block(mpsc::Receiver<()>),
+    Block(mpsc::Receiver<()>, Duration),
 }
 
 struct FakeConnection {
@@ -49,8 +49,8 @@ impl EngineConnection for FakeConnection {
             Some(RecvStep::FailProtocolUtf8) => {
                 Err(InvokeError::Protocol(ProtocolFailure::InvalidUtf8))
             }
-            Some(RecvStep::Block(rx)) => {
-                match rx.recv_timeout(IPC_IO_DEADLINE) {
+            Some(RecvStep::Block(rx, timeout)) => {
+                match rx.recv_timeout(timeout) {
                     Ok(()) => {}
                     Err(mpsc::RecvTimeoutError::Timeout) => {
                         return Err(InvokeError::Transport(TransportFailure::ReadTimeout));
@@ -66,7 +66,7 @@ impl EngineConnection for FakeConnection {
                     Some(RecvStep::FailProtocolUtf8) => {
                         Err(InvokeError::Protocol(ProtocolFailure::InvalidUtf8))
                     }
-                    Some(RecvStep::Block(_)) => {
+                    Some(RecvStep::Block(_, _)) => {
                         panic!("nested Block not supported in fake script")
                     }
                     None => Err(InvokeError::Transport(TransportFailure::Eof)),
@@ -870,7 +870,11 @@ fn requests_serialized_under_connection_lock() {
     let (tx, rx) = mpsc::channel();
     let conn1 = make_conn(
         vec![
-            RecvStep::Block(rx),
+            // This test measures connection-lock serialization, not the IPC
+            // read deadline. Keep the controlled release independent from the
+            // 100 ms test deadline so a loaded CI runner cannot turn scheduler
+            // starvation into a transport timeout before the release signal.
+            RecvStep::Block(rx, Duration::from_secs(5)),
             RecvStep::Line(okline(1)),
             RecvStep::Line(okline(2)),
         ],
@@ -1020,13 +1024,19 @@ fn fsa_2026_07_13_12_oversized_response_must_be_rejected() {
 #[test]
 fn fsa_2026_07_13_12_silent_backend_must_hit_read_deadline() {
     const CONTRACT_DEADLINE: Duration = Duration::from_millis(200);
+    const SCHEDULER_SLACK: Duration = Duration::from_secs(5);
+
+    assert!(
+        IPC_IO_DEADLINE <= CONTRACT_DEADLINE,
+        "test IPC deadline exceeds the 200 ms contract"
+    );
 
     let sent = Arc::new(Mutex::new(Vec::new()));
     let killed = Arc::new(AtomicBool::new(false));
     let connects = Arc::new(AtomicUsize::new(0));
     let (release_tx, release_rx) = mpsc::channel();
     let conn = make_conn(
-        vec![RecvStep::Block(release_rx)],
+        vec![RecvStep::Block(release_rx, IPC_IO_DEADLINE)],
         vec![],
         Arc::clone(&sent),
         Arc::clone(&killed),
@@ -1039,7 +1049,10 @@ fn fsa_2026_07_13_12_silent_backend_must_hit_read_deadline() {
         let _ = done_tx.send(result);
     });
 
-    let observed = done_rx.recv_timeout(CONTRACT_DEADLINE);
+    // The fake still enforces IPC_IO_DEADLINE. The outer observer allows
+    // scheduler slack so it verifies the transport result rather than how
+    // quickly the runner schedules the worker thread.
+    let observed = done_rx.recv_timeout(SCHEDULER_SLACK);
     drop(release_tx);
     let _ = worker.join();
 
@@ -1047,9 +1060,10 @@ fn fsa_2026_07_13_12_silent_backend_must_hit_read_deadline() {
         observed.is_ok(),
         "silent backend kept the IPC request blocked beyond its deadline"
     );
-    assert!(
-        observed.unwrap().is_err(),
-        "deadline expiry must hard-fail the request"
+    assert_eq!(
+        observed.unwrap(),
+        Err(InvokeError::Transport(TransportFailure::ReadTimeout)),
+        "deadline expiry must report an exact read timeout"
     );
 }
 

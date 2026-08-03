@@ -20,7 +20,7 @@ from .durable_persistence import (
     durable_atomic_write_text,
     read_json_file,
 )
-from .paths import CALENDAR_JSON, DIARY_MD, PROJECT_ROOT as ROOT
+from .paths import CALENDAR_JSON, DIARY_MD
 
 _DATE_HEADING = re.compile(r"^##\s+(\d{4}-\d{2}-\d{2})\s*$")
 _TIME_PATTERN = re.compile(r"^\d{1,2}:\d{2}$")

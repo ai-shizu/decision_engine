@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "PKB",
+  "productName": "Coraxis",
   "version": "0.1.0",
   "identifier": "com.ai-shizu.pkb",
   "build": {
@@ -13,7 +13,7 @@
     "windows": [
       {
         "label": "main",
-        "title": "PKB",
+        "title": "Coraxis",
         "width": 1200,
         "height": 800,
         "create": false,
@@ -31,8 +31,8 @@
   "bundle": {
     "active": true,
     "targets": ["nsis"],
-    "shortDescription": "Personal Knowledge Base — 完全オフライン意思決定支援",
-    "longDescription": "日記・予定・家計簿・AI相談を統合し、ローカル LLM で意思決定を支援するデスクトップアプリ。外部 API は使用しません。",
+    "shortDescription": "Coraxis — 完全オフライン意思決定支援",
+    "longDescription": "Coraxis は日記・予定・家計簿・AI相談を統合し、ローカル LLM で意思決定を支援するデスクトップアプリです。外部 API は使用しません。",
     "externalBin": [
       "binaries/pkb-engine"
     ],
@@ -48,6 +48,9 @@
       "icons/128x128@2x.png",
       "icons/icon.icns",
       "icons/icon.ico"
-    ]
+    ],
+    "resources": {
+      "../models/pocket-brain.gguf": "models/pocket-brain.gguf"
+    }
   }
 }

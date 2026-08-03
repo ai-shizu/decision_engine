@@ -8,6 +8,7 @@
 
 /* Begin PBXBuildFile section */
 		03B7376CA2D12CFEFDA3B202 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 347805749B3D39BFC77E9F48 /* Assets.xcassets */; };
+		17215C4E4413E3DFC3F33D8D /* LocalAuthentication.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = D8D6BAA6D688B7759D69A486 /* LocalAuthentication.framework */; };
 		1735727BEA94E33552D24CEF /* CoreGraphics.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 11B66B8144AAD4938D443C90 /* CoreGraphics.framework */; };
 		1FC9EC8B4CC0A8E7B06337AC /* libapp.a in Frameworks */ = {isa = PBXBuildFile; fileRef = E1C4A6FFB59DAAFA4EDFBA66 /* libapp.a */; };
 		287DD22AB1797D5E85D68FAA /* assets in Resources */ = {isa = PBXBuildFile; fileRef = 359616079650F14B0403E3CD /* assets */; };
@@ -27,51 +28,58 @@
 		0CD0577103CB48AD9773BAD7 /* QuartzCore.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = QuartzCore.framework; path = System/Library/Frameworks/QuartzCore.framework; sourceTree = SDKROOT; };
 		0D71B4AE587DFFBD79D29152 /* Accelerate.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Accelerate.framework; path = System/Library/Frameworks/Accelerate.framework; sourceTree = SDKROOT; };
 		0F3964A5C4BDBF93AC716035 /* pkb-desktop_iOS.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = "pkb-desktop_iOS.entitlements"; sourceTree = "<group>"; };
-		0F8687C1616DC783211642CE /* lib.rs */ = {isa = PBXFileReference; path = lib.rs; sourceTree = "<group>"; };
+		0F8687C1616DC783211642CE /* lib.rs */ = {isa = PBXFileReference; lastKnownFileType = text; path = lib.rs; sourceTree = "<group>"; };
 		11B66B8144AAD4938D443C90 /* CoreGraphics.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = CoreGraphics.framework; path = System/Library/Frameworks/CoreGraphics.framework; sourceTree = SDKROOT; };
 		1202AE46455F3240195984C3 /* Metal.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Metal.framework; path = System/Library/Frameworks/Metal.framework; sourceTree = SDKROOT; };
-		172AE807900932695206676F /* policy_store.rs */ = {isa = PBXFileReference; path = policy_store.rs; sourceTree = "<group>"; };
-		1E3308809C1FA122730A5A35 /* service.rs */ = {isa = PBXFileReference; path = service.rs; sourceTree = "<group>"; };
-		284E3EA450CECC9ACE97CD2C /* main.rs */ = {isa = PBXFileReference; path = main.rs; sourceTree = "<group>"; };
+		172AE807900932695206676F /* policy_store.rs */ = {isa = PBXFileReference; lastKnownFileType = text; path = policy_store.rs; sourceTree = "<group>"; };
+		1E3308809C1FA122730A5A35 /* service.rs */ = {isa = PBXFileReference; lastKnownFileType = text; path = service.rs; sourceTree = "<group>"; };
+		284E3EA450CECC9ACE97CD2C /* main.rs */ = {isa = PBXFileReference; lastKnownFileType = text; path = main.rs; sourceTree = "<group>"; };
 		299778ED9B66A924BAFD4ED4 /* LaunchScreen.storyboard */ = {isa = PBXFileReference; lastKnownFileType = file.storyboard; path = LaunchScreen.storyboard; sourceTree = "<group>"; };
-		2C99FFF0A9D80A02C64F859B /* pkb-sandbox-probe.rs */ = {isa = PBXFileReference; path = "pkb-sandbox-probe.rs"; sourceTree = "<group>"; };
+		2C99FFF0A9D80A02C64F859B /* pkb-sandbox-probe.rs */ = {isa = PBXFileReference; lastKnownFileType = text; path = "pkb-sandbox-probe.rs"; sourceTree = "<group>"; };
+		2F768DCC9D9F71BCED9BD31B /* schema.rs */ = {isa = PBXFileReference; lastKnownFileType = text; path = schema.rs; sourceTree = "<group>"; };
 		347805749B3D39BFC77E9F48 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		359616079650F14B0403E3CD /* assets */ = {isa = PBXFileReference; lastKnownFileType = folder; path = assets; sourceTree = SOURCE_ROOT; };
-		40F35766290BE515ADF3771B /* net_gateway.rs */ = {isa = PBXFileReference; path = net_gateway.rs; sourceTree = "<group>"; };
-		47C4863C6265AD7B67EF6635 /* paths.rs */ = {isa = PBXFileReference; path = paths.rs; sourceTree = "<group>"; };
-		4AD8A98CB523BAA8BC148637 /* pii_snapshot.rs */ = {isa = PBXFileReference; path = pii_snapshot.rs; sourceTree = "<group>"; };
-		4B26D4E71E5FC66544CAF203 /* webview_policy.rs */ = {isa = PBXFileReference; path = webview_policy.rs; sourceTree = "<group>"; };
-		4B99AB8FC192E29A42FF8F12 /* commands_llm.rs */ = {isa = PBXFileReference; path = commands_llm.rs; sourceTree = "<group>"; };
-		511B88B9AE14372BEC7B1C7A /* model_path.rs */ = {isa = PBXFileReference; path = model_path.rs; sourceTree = "<group>"; };
-		513022C945746ABE7E076784 /* params.rs */ = {isa = PBXFileReference; path = params.rs; sourceTree = "<group>"; };
-		51D1228BCDCD24E395F6D361 /* orchestrator.rs */ = {isa = PBXFileReference; path = orchestrator.rs; sourceTree = "<group>"; };
-		5320698AA48FC28D4182BF26 /* attestation.rs */ = {isa = PBXFileReference; path = attestation.rs; sourceTree = "<group>"; };
-		5A42EB6DCAB22E27E53341FD /* dual_run.rs */ = {isa = PBXFileReference; path = dual_run.rs; sourceTree = "<group>"; };
-		5C7DBB39C59D37FDE82E5083 /* pkb-desktop_iOS.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = "pkb-desktop_iOS.app"; sourceTree = BUILT_PRODUCTS_DIR; };
-		5D84FC76FE865D43D5D62254 /* fsm.rs */ = {isa = PBXFileReference; path = fsm.rs; sourceTree = "<group>"; };
-		60598D53A7BF8B0BFE584A51 /* render_guard.rs */ = {isa = PBXFileReference; path = render_guard.rs; sourceTree = "<group>"; };
+		40F35766290BE515ADF3771B /* net_gateway.rs */ = {isa = PBXFileReference; lastKnownFileType = text; path = net_gateway.rs; sourceTree = "<group>"; };
+		47C4863C6265AD7B67EF6635 /* paths.rs */ = {isa = PBXFileReference; lastKnownFileType = text; path = paths.rs; sourceTree = "<group>"; };
+		4AD8A98CB523BAA8BC148637 /* pii_snapshot.rs */ = {isa = PBXFileReference; lastKnownFileType = text; path = pii_snapshot.rs; sourceTree = "<group>"; };
+		4B26D4E71E5FC66544CAF203 /* webview_policy.rs */ = {isa = PBXFileReference; lastKnownFileType = text; path = webview_policy.rs; sourceTree = "<group>"; };
+		4B99AB8FC192E29A42FF8F12 /* commands_llm.rs */ = {isa = PBXFileReference; lastKnownFileType = text; path = commands_llm.rs; sourceTree = "<group>"; };
+		4C229030FF15ABBC454A5E01 /* kakeibo_v1.gbnf */ = {isa = PBXFileReference; lastKnownFileType = text; path = kakeibo_v1.gbnf; sourceTree = "<group>"; };
+		511B88B9AE14372BEC7B1C7A /* model_path.rs */ = {isa = PBXFileReference; lastKnownFileType = text; path = model_path.rs; sourceTree = "<group>"; };
+		513022C945746ABE7E076784 /* params.rs */ = {isa = PBXFileReference; lastKnownFileType = text; path = params.rs; sourceTree = "<group>"; };
+		51D1228BCDCD24E395F6D361 /* orchestrator.rs */ = {isa = PBXFileReference; lastKnownFileType = text; path = orchestrator.rs; sourceTree = "<group>"; };
+		5320698AA48FC28D4182BF26 /* attestation.rs */ = {isa = PBXFileReference; lastKnownFileType = text; path = attestation.rs; sourceTree = "<group>"; };
+		5A42EB6DCAB22E27E53341FD /* dual_run.rs */ = {isa = PBXFileReference; lastKnownFileType = text; path = dual_run.rs; sourceTree = "<group>"; };
+		5C7DBB39C59D37FDE82E5083 /* Coraxis.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Coraxis.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		5D84FC76FE865D43D5D62254 /* fsm.rs */ = {isa = PBXFileReference; lastKnownFileType = text; path = fsm.rs; sourceTree = "<group>"; };
+		60598D53A7BF8B0BFE584A51 /* render_guard.rs */ = {isa = PBXFileReference; lastKnownFileType = text; path = render_guard.rs; sourceTree = "<group>"; };
 		60E97AB2D3437D88806B1C82 /* WebKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = WebKit.framework; path = System/Library/Frameworks/WebKit.framework; sourceTree = SDKROOT; };
 		617A3EB0D9E4BC2225140A9C /* main.mm */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.objcpp; path = main.mm; sourceTree = "<group>"; };
 		68CB68B5021CC67B1DED848F /* UIKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = UIKit.framework; path = System/Library/Frameworks/UIKit.framework; sourceTree = SDKROOT; };
-		6A651946D07A03E110BBD6DF /* os_sandbox.rs */ = {isa = PBXFileReference; path = os_sandbox.rs; sourceTree = "<group>"; };
-		71E3D35EEDC01259C1303E69 /* engine_tests.rs */ = {isa = PBXFileReference; path = engine_tests.rs; sourceTree = "<group>"; };
-		75C811F5FF54FE7403912D85 /* mod.rs */ = {isa = PBXFileReference; path = mod.rs; sourceTree = "<group>"; };
-		7F93EC6A66D182E9F5E1A5A8 /* dns_guard.rs */ = {isa = PBXFileReference; path = dns_guard.rs; sourceTree = "<group>"; };
-		8A111BBA1A2DCA28A39A1D3D /* ipc_contract.rs */ = {isa = PBXFileReference; path = ipc_contract.rs; sourceTree = "<group>"; };
+		6A651946D07A03E110BBD6DF /* os_sandbox.rs */ = {isa = PBXFileReference; lastKnownFileType = text; path = os_sandbox.rs; sourceTree = "<group>"; };
+		71E3D35EEDC01259C1303E69 /* engine_tests.rs */ = {isa = PBXFileReference; lastKnownFileType = text; path = engine_tests.rs; sourceTree = "<group>"; };
+		75C811F5FF54FE7403912D85 /* mod.rs */ = {isa = PBXFileReference; lastKnownFileType = text; path = mod.rs; sourceTree = "<group>"; };
+		7B963A39EDD0B919FDE09D7D /* mod.rs */ = {isa = PBXFileReference; lastKnownFileType = text; path = mod.rs; sourceTree = "<group>"; };
+		7F93EC6A66D182E9F5E1A5A8 /* dns_guard.rs */ = {isa = PBXFileReference; lastKnownFileType = text; path = dns_guard.rs; sourceTree = "<group>"; };
+		8A111BBA1A2DCA28A39A1D3D /* ipc_contract.rs */ = {isa = PBXFileReference; lastKnownFileType = text; path = ipc_contract.rs; sourceTree = "<group>"; };
 		8B521E1165E62112FCC1555F /* bindings.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = bindings.h; sourceTree = "<group>"; };
-		9868BF528D518053606C1ED6 /* commands.rs */ = {isa = PBXFileReference; path = commands.rs; sourceTree = "<group>"; };
-		A65AD16339592F226899830E /* artifact_auth.rs */ = {isa = PBXFileReference; path = artifact_auth.rs; sourceTree = "<group>"; };
+		9833FBD1E4D21231B45EF19D /* commands_db.rs */ = {isa = PBXFileReference; lastKnownFileType = text; path = commands_db.rs; sourceTree = "<group>"; };
+		9868BF528D518053606C1ED6 /* commands.rs */ = {isa = PBXFileReference; lastKnownFileType = text; path = commands.rs; sourceTree = "<group>"; };
+		A65AD16339592F226899830E /* artifact_auth.rs */ = {isa = PBXFileReference; lastKnownFileType = text; path = artifact_auth.rs; sourceTree = "<group>"; };
+		B126C5A49F5DA259E3AA9110 /* keychain_probe.rs */ = {isa = PBXFileReference; lastKnownFileType = text; path = keychain_probe.rs; sourceTree = "<group>"; };
+		B3AF304CB077057B9B13CB1F /* prompt.rs */ = {isa = PBXFileReference; lastKnownFileType = text; path = prompt.rs; sourceTree = "<group>"; };
 		B5A5593D1149BEC8D271540B /* Security.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Security.framework; path = System/Library/Frameworks/Security.framework; sourceTree = SDKROOT; };
 		BAEE1955C54C4108D5083502 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
 		BF7A34A7509F2B0ADE206529 /* MetalKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = MetalKit.framework; path = System/Library/Frameworks/MetalKit.framework; sourceTree = SDKROOT; };
-		CB1D463C678CA9BC8DD4C0EE /* probe.rs */ = {isa = PBXFileReference; path = probe.rs; sourceTree = "<group>"; };
-		CC3895C3A5B783926983B690 /* canonicalize.rs */ = {isa = PBXFileReference; path = canonicalize.rs; sourceTree = "<group>"; };
-		D008535E835A49D61B88A1B7 /* mod.rs */ = {isa = PBXFileReference; path = mod.rs; sourceTree = "<group>"; };
-		DDED864292765BCED8078FB9 /* engine.rs */ = {isa = PBXFileReference; path = engine.rs; sourceTree = "<group>"; };
+		CB1D463C678CA9BC8DD4C0EE /* probe.rs */ = {isa = PBXFileReference; lastKnownFileType = text; path = probe.rs; sourceTree = "<group>"; };
+		CC3895C3A5B783926983B690 /* canonicalize.rs */ = {isa = PBXFileReference; lastKnownFileType = text; path = canonicalize.rs; sourceTree = "<group>"; };
+		D008535E835A49D61B88A1B7 /* mod.rs */ = {isa = PBXFileReference; lastKnownFileType = text; path = mod.rs; sourceTree = "<group>"; };
+		D8D6BAA6D688B7759D69A486 /* LocalAuthentication.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = LocalAuthentication.framework; path = System/Library/Frameworks/LocalAuthentication.framework; sourceTree = SDKROOT; };
+		DDED864292765BCED8078FB9 /* engine.rs */ = {isa = PBXFileReference; lastKnownFileType = text; path = engine.rs; sourceTree = "<group>"; };
 		E1C4A6FFB59DAAFA4EDFBA66 /* libapp.a */ = {isa = PBXFileReference; lastKnownFileType = archive.ar; path = libapp.a; sourceTree = "<group>"; };
-		E281496B579BFBC75FB3D6BC /* mod.rs */ = {isa = PBXFileReference; path = mod.rs; sourceTree = "<group>"; };
+		E281496B579BFBC75FB3D6BC /* mod.rs */ = {isa = PBXFileReference; lastKnownFileType = text; path = mod.rs; sourceTree = "<group>"; };
 		E3E09C338062E96BB56F4250 /* libapp.a */ = {isa = PBXFileReference; lastKnownFileType = archive.ar; path = libapp.a; sourceTree = "<group>"; };
-		F18C32FB8CFADC0927C8EF4E /* pkb-artifact-manifest.rs */ = {isa = PBXFileReference; path = "pkb-artifact-manifest.rs"; sourceTree = "<group>"; };
+		F18C32FB8CFADC0927C8EF4E /* pkb-artifact-manifest.rs */ = {isa = PBXFileReference; lastKnownFileType = text; path = "pkb-artifact-manifest.rs"; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -86,6 +94,7 @@
 				58630A9EF027449284BD5AAC /* Accelerate.framework in Frameworks */,
 				C11F42EC2CF580D9F4A9628D /* QuartzCore.framework in Frameworks */,
 				A0551B40297A87DF18ED2B84 /* Security.framework in Frameworks */,
+				17215C4E4413E3DFC3F33D8D /* LocalAuthentication.framework in Frameworks */,
 				91DEA1C7F3F6383EB3B38B8D /* UIKit.framework in Frameworks */,
 				93A7D661072070588E8CAAB3 /* WebKit.framework in Frameworks */,
 			);
@@ -127,9 +136,21 @@
 				75C811F5FF54FE7403912D85 /* mod.rs */,
 				511B88B9AE14372BEC7B1C7A /* model_path.rs */,
 				513022C945746ABE7E076784 /* params.rs */,
+				B3AF304CB077057B9B13CB1F /* prompt.rs */,
+				2F768DCC9D9F71BCED9BD31B /* schema.rs */,
 				1E3308809C1FA122730A5A35 /* service.rs */,
+				5AEF32A6FBC23A3BF969051D /* assets */,
 			);
 			path = llm;
+			sourceTree = "<group>";
+		};
+		41F842DC9BC092A1A89154A2 /* db */ = {
+			isa = PBXGroup;
+			children = (
+				B126C5A49F5DA259E3AA9110 /* keychain_probe.rs */,
+				7B963A39EDD0B919FDE09D7D /* mod.rs */,
+			);
+			path = db;
 			sourceTree = "<group>";
 		};
 		4AF761F3C7128405DD08D50A /* knowledge */ = {
@@ -150,12 +171,21 @@
 			path = knowledge;
 			sourceTree = "<group>";
 		};
+		5AEF32A6FBC23A3BF969051D /* assets */ = {
+			isa = PBXGroup;
+			children = (
+				4C229030FF15ABBC454A5E01 /* kakeibo_v1.gbnf */,
+			);
+			path = assets;
+			sourceTree = "<group>";
+		};
 		5DC82AA189942119845E0664 /* Frameworks */ = {
 			isa = PBXGroup;
 			children = (
 				0D71B4AE587DFFBD79D29152 /* Accelerate.framework */,
 				11B66B8144AAD4938D443C90 /* CoreGraphics.framework */,
 				E1C4A6FFB59DAAFA4EDFBA66 /* libapp.a */,
+				D8D6BAA6D688B7759D69A486 /* LocalAuthentication.framework */,
 				1202AE46455F3240195984C3 /* Metal.framework */,
 				BF7A34A7509F2B0ADE206529 /* MetalKit.framework */,
 				0CD0577103CB48AD9773BAD7 /* QuartzCore.framework */,
@@ -179,6 +209,7 @@
 			isa = PBXGroup;
 			children = (
 				A65AD16339592F226899830E /* artifact_auth.rs */,
+				9833FBD1E4D21231B45EF19D /* commands_db.rs */,
 				9868BF528D518053606C1ED6 /* commands.rs */,
 				71E3D35EEDC01259C1303E69 /* engine_tests.rs */,
 				DDED864292765BCED8078FB9 /* engine.rs */,
@@ -189,6 +220,7 @@
 				47C4863C6265AD7B67EF6635 /* paths.rs */,
 				4B26D4E71E5FC66544CAF203 /* webview_policy.rs */,
 				C41BA6E749A43D238E597CB6 /* bin */,
+				41F842DC9BC092A1A89154A2 /* db */,
 				4AF761F3C7128405DD08D50A /* knowledge */,
 				3AEDD95D4B63E01C378A7BAA /* llm */,
 				3825605288B0E07C52B31705 /* monitor */,
@@ -256,16 +288,9 @@
 		FE854A39B0C8BB49259426CD /* Products */ = {
 			isa = PBXGroup;
 			children = (
-				5C7DBB39C59D37FDE82E5083 /* pkb-desktop_iOS.app */,
+				5C7DBB39C59D37FDE82E5083 /* Coraxis.app */,
 			);
 			name = Products;
-			sourceTree = "<group>";
-		};
-		"TEMP_2EF480C4-8E61-43CF-9F92-881C833A658A" /* x86_64 */ = {
-			isa = PBXGroup;
-			children = (
-			);
-			path = x86_64;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
@@ -288,7 +313,7 @@
 			packageProductDependencies = (
 			);
 			productName = "pkb-desktop_iOS";
-			productReference = 5C7DBB39C59D37FDE82E5083 /* pkb-desktop_iOS.app */;
+			productReference = 5C7DBB39C59D37FDE82E5083 /* Coraxis.app */;
 			productType = "com.apple.product-type.application";
 		};
 /* End PBXNativeTarget section */
@@ -299,8 +324,6 @@
 			attributes = {
 				BuildIndependentTargetsInParallel = YES;
 				LastUpgradeCheck = 1430;
-				TargetAttributes = {
-				};
 			};
 			buildConfigurationList = 956D1F93E2DD3201FA03CB4B /* Build configuration list for PBXProject "pkb-desktop" */;
 			developmentRegion = en;
@@ -375,12 +398,11 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ALWAYS_EMBED_SWIFT_STANDARD_LIBRARIES = YES;
-				ARCHS = (
-					arm64,
-				);
+				ARCHS = arm64;
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_ENTITLEMENTS = "pkb-desktop_iOS/pkb-desktop_iOS.entitlements";
 				CODE_SIGN_IDENTITY = "iPhone Developer";
+				DEVELOPMENT_TEAM = 4SZG59FV5K;
 				ENABLE_BITCODE = NO;
 				ENABLE_USER_SCRIPT_SANDBOXING = NO;
 				"EXCLUDED_ARCHS[sdk=iphoneos*]" = x86_64;
@@ -393,10 +415,22 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				"LIBRARY_SEARCH_PATHS[arch=arm64]" = "$(inherited) $(PROJECT_DIR)/Externals/arm64/$(CONFIGURATION) $(SDKROOT)/usr/lib/swift $(DEVELOPER_DIR)/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift/$(PLATFORM_NAME) $(DEVELOPER_DIR)/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift-5.0/$(PLATFORM_NAME)";
-				"LIBRARY_SEARCH_PATHS[arch=x86_64]" = "$(inherited) $(PROJECT_DIR)/Externals/x86_64/$(CONFIGURATION) $(SDKROOT)/usr/lib/swift $(DEVELOPER_DIR)/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift/$(PLATFORM_NAME) $(DEVELOPER_DIR)/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift-5.0/$(PLATFORM_NAME)";
+				"LIBRARY_SEARCH_PATHS[arch=arm64]" = (
+					"$(inherited)",
+					"$(PROJECT_DIR)/Externals/arm64/$(CONFIGURATION)",
+					"$(SDKROOT)/usr/lib/swift",
+					"$(DEVELOPER_DIR)/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift/$(PLATFORM_NAME)",
+					"$(DEVELOPER_DIR)/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift-5.0/$(PLATFORM_NAME)",
+				);
+				"LIBRARY_SEARCH_PATHS[arch=x86_64]" = (
+					"$(inherited)",
+					"$(PROJECT_DIR)/Externals/x86_64/$(CONFIGURATION)",
+					"$(SDKROOT)/usr/lib/swift",
+					"$(DEVELOPER_DIR)/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift/$(PLATFORM_NAME)",
+					"$(DEVELOPER_DIR)/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift-5.0/$(PLATFORM_NAME)",
+				);
 				PRODUCT_BUNDLE_IDENTIFIER = com.ai-shizu.pkb;
-				PRODUCT_NAME = "PKB";
+				PRODUCT_NAME = "Coraxis";
 				SDKROOT = iphoneos;
 				TARGETED_DEVICE_FAMILY = "1,2";
 				VALID_ARCHS = arm64;
@@ -407,12 +441,11 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ALWAYS_EMBED_SWIFT_STANDARD_LIBRARIES = YES;
-				ARCHS = (
-					arm64,
-				);
+				ARCHS = arm64;
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_ENTITLEMENTS = "pkb-desktop_iOS/pkb-desktop_iOS.entitlements";
 				CODE_SIGN_IDENTITY = "iPhone Developer";
+				DEVELOPMENT_TEAM = 4SZG59FV5K;
 				ENABLE_BITCODE = NO;
 				ENABLE_USER_SCRIPT_SANDBOXING = NO;
 				"EXCLUDED_ARCHS[sdk=iphoneos*]" = x86_64;
@@ -425,10 +458,22 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				"LIBRARY_SEARCH_PATHS[arch=arm64]" = "$(inherited) $(PROJECT_DIR)/Externals/arm64/$(CONFIGURATION) $(SDKROOT)/usr/lib/swift $(DEVELOPER_DIR)/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift/$(PLATFORM_NAME) $(DEVELOPER_DIR)/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift-5.0/$(PLATFORM_NAME)";
-				"LIBRARY_SEARCH_PATHS[arch=x86_64]" = "$(inherited) $(PROJECT_DIR)/Externals/x86_64/$(CONFIGURATION) $(SDKROOT)/usr/lib/swift $(DEVELOPER_DIR)/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift/$(PLATFORM_NAME) $(DEVELOPER_DIR)/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift-5.0/$(PLATFORM_NAME)";
+				"LIBRARY_SEARCH_PATHS[arch=arm64]" = (
+					"$(inherited)",
+					"$(PROJECT_DIR)/Externals/arm64/$(CONFIGURATION)",
+					"$(SDKROOT)/usr/lib/swift",
+					"$(DEVELOPER_DIR)/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift/$(PLATFORM_NAME)",
+					"$(DEVELOPER_DIR)/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift-5.0/$(PLATFORM_NAME)",
+				);
+				"LIBRARY_SEARCH_PATHS[arch=x86_64]" = (
+					"$(inherited)",
+					"$(PROJECT_DIR)/Externals/x86_64/$(CONFIGURATION)",
+					"$(SDKROOT)/usr/lib/swift",
+					"$(DEVELOPER_DIR)/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift/$(PLATFORM_NAME)",
+					"$(DEVELOPER_DIR)/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift-5.0/$(PLATFORM_NAME)",
+				);
 				PRODUCT_BUNDLE_IDENTIFIER = com.ai-shizu.pkb;
-				PRODUCT_NAME = "PKB";
+				PRODUCT_NAME = "Coraxis";
 				SDKROOT = iphoneos;
 				TARGETED_DEVICE_FAMILY = "1,2";
 				VALID_ARCHS = arm64;
@@ -480,7 +525,7 @@
 				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
 				GCC_WARN_UNUSED_FUNCTION = YES;
 				GCC_WARN_UNUSED_VARIABLE = YES;
-				IPHONEOS_DEPLOYMENT_TARGET = 14.0;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
 				MTL_ENABLE_DEBUG_INFO = NO;
 				MTL_FAST_MATH = YES;
 				PRODUCT_NAME = "$(TARGET_NAME)";
@@ -542,7 +587,7 @@
 				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
 				GCC_WARN_UNUSED_FUNCTION = YES;
 				GCC_WARN_UNUSED_VARIABLE = YES;
-				IPHONEOS_DEPLOYMENT_TARGET = 14.0;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
 				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
 				MTL_FAST_MATH = YES;
 				ONLY_ACTIVE_ARCH = YES;

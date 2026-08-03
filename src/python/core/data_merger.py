@@ -21,8 +21,6 @@ from __future__ import annotations
 import re
 from datetime import datetime, timedelta
 
-from .paths import DIARY_MD, LINE_HISTORY, PROJECT_ROOT as ROOT
-
 IDLE_CLOSE = timedelta(minutes=30)
 
 # T-24 (IMP-2): is_self 判定の失敗 (T-21) はセッションが「返信待ち」のまま

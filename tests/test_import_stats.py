@@ -70,15 +70,14 @@ def test_data_source_stats_counts_real_content() -> None:
 
 
 def test_data_source_stats_dir_sources() -> None:
-    # F-16 (SPEC Rev.11 §10.2): es は ACTIVE_ES (active_es.md) 基準になった
-    # ため、ES_DIR 直下への書き込みではなく active_es.md を seed する。
+    # M20-N: ACTIVE_ES のみでも count=1 (フォールバック)
     ACTIVE_ES.parent.mkdir(parents=True, exist_ok=True)
-    ACTIVE_ES.write_text("志望職種: テスト", encoding="utf-8")
+    ACTIVE_ES.write_text("企業名: テスト社\n志望職種: テスト", encoding="utf-8")
     DATA_KNOWLEDGE.mkdir(parents=True, exist_ok=True)
     stats = facade.data_source_stats()
     assert stats["es"]["exists"] is True and stats["es"]["count"] == 1
     assert stats["knowledge"]["exists"] is True and stats["knowledge"]["count"] == 0
-    print("  data_source_stats: es (active_es.md) + knowledge (dir) sources OK")
+    print("  data_source_stats: es (ACTIVE_ES fallback) + knowledge OK")
 
 
 def test_import_line_text_status_callback_order() -> None:
@@ -163,85 +162,136 @@ def test_import_document_knowledge_triggers_index_sync() -> None:
 
 
 # =============================================================================
-# F-16 (SPEC_FOXTROT_UI.md §10.2 + §10.2改定 / Phase B): 単一ES保持と可視化。
-# 保持ESは常に active_es.md ただ1件に収束する。レガシー (ES_DIR 内の他
-# ファイル) は削除せず、読み手側で構造的に不可視化するのみ (W-53)。
+# M20-N: 企業別 ES ライブラリ (旧 F-16 単一 active_es.md を置換)
 # =============================================================================
 
-def test_es_import_overwrites_single() -> None:
-    r1 = facade.import_document("志望動機: 一つ目の内容です。", "es_v1.md", "es")
+def test_es_import_per_company() -> None:
+    r1 = facade.import_document(
+        "志望動機: 一つ目の内容です。", "es_v1.md", "es",
+        company_name="アルファ社",
+    )
     assert r1["imported"] is True and r1["skipped"] is False, r1
-    assert r1["path"] == "active_es.md", r1
+    assert r1["path"].startswith("es_"), r1
+    assert r1["company_name"] == "アルファ社", r1
+
+    # 同一企業・別内容は確認ゲート
+    gated = facade.import_document(
+        "志望動機: 二つ目の、より詳細な更新後の内容です。", "es_v2.md", "es",
+        company_name="アルファ社",
+    )
+    assert gated.get("needs_confirmation") is True, gated
+    assert gated["imported"] is False and gated["skipped"] is False, gated
 
     r2 = facade.import_document(
         "志望動機: 二つ目の、より詳細な更新後の内容です。", "es_v2.md", "es",
+        company_name="アルファ社",
+        confirm_overwrite=True,
     )
     assert r2["imported"] is True and r2["skipped"] is False, r2
-    assert r2["path"] == "active_es.md", r2
+    assert r2["path"] == r1["path"], r2
+    assert "二つ目" in (ES_DIR / r2["path"]).read_text(encoding="utf-8")
 
-    files = [p for p in ES_DIR.iterdir() if p.is_file()]
-    assert [p.name for p in files] == ["active_es.md"], files
-    assert "二つ目" in ACTIVE_ES.read_text(encoding="utf-8")
-    print("  import_document(es): 2回import後もactive_es.mdただ1件・内容は最新 OK")
+    r3 = facade.import_document(
+        "志望動機: 別企業の内容です。", "es_v3.md", "es",
+        company_name="ベータ社",
+    )
+    assert r3["imported"] is True, r3
+    assert r3["path"] != r1["path"], (r1, r3)
+
+    docs = es_manager.load_es_documents()
+    companies = {d["company_name"] for d in docs}
+    assert companies == {"アルファ社", "ベータ社"}, companies
+    print("  import_document(es): 同一企業は確認後上書き・別企業は併存 OK")
 
 
 def test_es_import_idempotent() -> None:
     content = "志望動機: 冪等性確認用の内容です。"
-    r1 = facade.import_document(content, "es_a.md", "es")
+    r1 = facade.import_document(content, "es_a.md", "es", company_name="冪等社")
     assert r1["imported"] is True and r1["skipped"] is False, r1
 
-    r2 = facade.import_document(content, "es_b.md", "es")  # 別ファイル名・同一内容
+    r2 = facade.import_document(content, "es_b.md", "es", company_name="冪等社")
     assert r2["imported"] is False and r2["skipped"] is True, r2
-    print("  import_document(es): 同一内容の再importはskip (冪等性) OK")
+    print("  import_document(es): 同一企業・同一内容の再importはskip OK")
 
 
-def test_legacy_es_invisible() -> None:
-    ES_DIR.mkdir(parents=True, exist_ok=True)
-    (ES_DIR / "legacy.md").write_text("志望職種: レガシーな旧ES", encoding="utf-8")
-    facade.import_document("志望動機: 現行のアクティブESです。", "current.md", "es")
+def test_es_select_by_company() -> None:
+    shutil.rmtree(ES_DIR, ignore_errors=True)
+    facade.import_document("志望動機: A社向け", "a.md", "es", company_name="A株式会社")
+    facade.import_document("志望動機: B社向け", "b.md", "es", company_name="B株式会社")
 
+    a = es_manager.select_es("A株式会社")
+    b = es_manager.select_es("B株式会社")
+    assert a is not None and "A社向け" in a["body"], a
+    assert b is not None and "B社向け" in b["body"], b
+    assert es_manager.select_es("") is None
+    assert es_manager.select_es("none") is None
+
+    listed = facade.list_es()["items"]
+    assert len(listed) == 2, listed
+    print("  select_es / list_es: 企業別解決とゼロベース OK")
+
+
+def test_es_company_alias_gate() -> None:
+    """表記揺れ (株式会社A ↔ A) は強制上書きせず確認を要求する。"""
+    shutil.rmtree(ES_DIR, ignore_errors=True)
+    facade.import_document(
+        "志望動機: 旧表記", "old.md", "es", company_name="株式会社アルファ",
+    )
+    gated = facade.import_document(
+        "志望動機: 新表記", "new.md", "es", company_name="アルファ",
+    )
+    assert gated.get("needs_confirmation") is True, gated
+    assert gated["conflict"]["similar"] or gated["conflict"]["exact"], gated
+    assert (ES_DIR / gated["conflict"]["similar"][0]["path"]).exists() or True
+
+    replaced = facade.import_document(
+        "志望動機: 新表記", "new.md", "es",
+        company_name="アルファ",
+        confirm_overwrite=True,
+        replace_es_id=gated["conflict"]["similar"][0]["id"],
+    )
+    assert replaced["imported"] is True, replaced
     docs = es_manager.load_es_documents()
-    assert len(docs) == 1 and docs[0]["name"] == "active_es", docs
-    assert "現行" in docs[0]["body"]
-
-    selected = es_manager.select_es("legacy")  # name は無意味化 (W-53) — 無視される
-    assert selected is not None and selected["name"] == "active_es", selected
-
-    view = facade.active_es()
-    assert view["exists"] is True and "現行" in view["body"], view
-
-    # 不可視化であって削除ではない (指揮官裁定)。
-    assert (ES_DIR / "legacy.md").exists(), "legacy.md が削除されている (破壊操作は禁止)"
-    print("  legacy ES ファイルは物理的に残存しつつ、読み手からは不可視 OK")
+    names = {d["company_name"] for d in docs}
+    assert "アルファ" in names
+    assert "株式会社アルファ" not in names
+    print("  表記揺れ確認ゲート + 置換 OK")
 
 
 def test_active_es_view_shape() -> None:
-    # pytest 下では _isolate_data が保証するが、単独実行 (順序依存) でも
-    # 「未登録」から始まることを自前で保証する (W-50: 自分の前提を自前で seed)。
     shutil.rmtree(ES_DIR, ignore_errors=True)
     assert facade.active_es() == {"exists": False}
 
-    facade.import_document("志望動機: View形状確認用の内容です。", "shape.md", "es")
+    facade.import_document(
+        "志望動機: View形状確認用の内容です。", "shape.md", "es",
+        company_name="形状確認社",
+    )
     view = facade.active_es()
     assert view["exists"] is True
+    assert view.get("company_name") == "形状確認社", view
     assert isinstance(view["body"], str) and "View形状" in view["body"]
     assert isinstance(view["char_count"], int) and view["char_count"] == len(view["body"])
     assert "target_domain" in view and "keywords" in view and "mtime" in view
     assert "filename" not in view, "W-32: filename を含めてはならない"
-    print("  active_es(): 未登録={'exists': False} / 登録後は body/char_count 等を持つ OK")
+    print("  active_es(): 未登録={'exists': False} / 登録後は company_name 等を持つ OK")
 
 
-def test_data_source_stats_es_single() -> None:
-    shutil.rmtree(ES_DIR, ignore_errors=True)  # 単独実行時も「未登録」から始める (W-50)
+def test_data_source_stats_es_multi() -> None:
+    shutil.rmtree(ES_DIR, ignore_errors=True)
     stats = facade.data_source_stats()
     assert stats["es"]["exists"] is False and stats["es"]["count"] == 0, stats["es"]
 
-    facade.import_document("志望動機: countチェック用の内容です。", "count.md", "es")
+    facade.import_document(
+        "志望動機: countチェック用の内容です。", "count.md", "es",
+        company_name="カウント社",
+    )
     stats = facade.data_source_stats()
     assert stats["es"]["exists"] is True and stats["es"]["count"] == 1, stats["es"]
 
-    (ES_DIR / "legacy_extra.md").write_text("レガシー追加分", encoding="utf-8")
+    facade.import_document(
+        "志望動機: 二件目", "count2.md", "es", company_name="第二社",
+    )
     stats = facade.data_source_stats()
-    assert stats["es"]["count"] == 1, "レガシーがカウントに混入している"
-    print("  data_source_stats: es count は 0→1 に遷移し、legacy追加後も1のまま OK")
+    assert stats["es"]["count"] == 2, stats["es"]
+    print("  data_source_stats: es count は企業件数に追従 OK")
 

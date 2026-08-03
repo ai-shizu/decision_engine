@@ -4,6 +4,9 @@ use std::path::{Path, PathBuf};
 /// ユーザーデータ用ルート
 ///   Windows: %LOCALAPPDATA%\PKB
 ///   macOS:   ~/Library/Application Support/PKB
+///            (App Sandbox 時は Containers/.../Data/Library/Application Support/PKB)
+///   iOS:     $HOME/Library/Application Support/com.ai-shizu.pkb
+///            ($HOME = app container; Tauri `app_data_dir()` と同型)
 ///   Linux:   $XDG_DATA_HOME/PKB または ~/.local/share/PKB
 #[cfg(windows)]
 #[cfg_attr(debug_assertions, allow(dead_code))]
@@ -40,7 +43,26 @@ pub fn user_data_root() -> PathBuf {
     PathBuf::from(".")
 }
 
-#[cfg(all(unix, not(target_os = "macos")))]
+/// iOS App Sandbox: `HOME` is the app container root (not a Unix user home).
+/// Prefer `Library/Application Support/<bundle id>` so this matches Tauri's
+/// `PathResolver::app_data_dir()` used by Vault spawn in `lib.rs`.
+/// Do not fall through to XDG / `~/.local/share` (M19-A finding).
+#[cfg(target_os = "ios")]
+#[cfg_attr(debug_assertions, allow(dead_code))]
+pub fn user_data_root() -> PathBuf {
+    const BUNDLE_ID: &str = "com.ai-shizu.pkb";
+    if let Ok(home) = env::var("HOME") {
+        if !home.is_empty() {
+            return PathBuf::from(home)
+                .join("Library")
+                .join("Application Support")
+                .join(BUNDLE_ID);
+        }
+    }
+    PathBuf::from(".")
+}
+
+#[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios")))]
 #[cfg_attr(debug_assertions, allow(dead_code))]
 pub fn user_data_root() -> PathBuf {
     if let Ok(xdg) = env::var("XDG_DATA_HOME") {
@@ -157,7 +179,14 @@ pub fn bundled_engine_name() -> &'static str {
     "pkb-engine-x86_64-unknown-linux-gnu"
 }
 
-#[cfg(not(debug_assertions))]
+/// iOS has no desktop Python sidecar; name lookup is undefined for this OS.
+/// Keep `bundled_engine_path` compiling under Release (`not(debug_assertions)`).
+#[cfg(all(not(debug_assertions), target_os = "ios"))]
+pub fn bundled_engine_path() -> Option<PathBuf> {
+    None
+}
+
+#[cfg(all(not(debug_assertions), not(target_os = "ios")))]
 pub fn bundled_engine_path() -> Option<PathBuf> {
     let exe = env::current_exe().ok()?;
     let dir = exe.parent()?;

@@ -2,7 +2,7 @@ name: pkb-desktop
 options:
   bundleIdPrefix: com.ai-shizu.pkb
   deploymentTarget:
-    iOS: 14.0
+    iOS: 17.0
 fileGroups: [../../src]
 configs:
   debug: debug
@@ -81,6 +81,7 @@ targets:
       - sdk: Accelerate.framework
       - sdk: QuartzCore.framework
       - sdk: Security.framework
+      - sdk: LocalAuthentication.framework
       - sdk: UIKit.framework
       - sdk: WebKit.framework
     preBuildScripts:

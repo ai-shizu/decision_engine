@@ -1,0 +1,7 @@
+[
+  { "input": "株式会社テスト", "normalized": "テスト" },
+  { "input": "ACME Inc.", "normalized": "acme" },
+  { "input": "acme inc.", "normalized": "acmeinc" },
+  { "input": "ＡＣＭＥ　Ｃｏ．，Ｌｔｄ．", "normalized": "acmeco," },
+  { "input": "Foo／Bar-株式会社", "normalized": "foobar" }
+]

@@ -1,0 +1,35 @@
+# InterviewEvaluationV1 — transcript-only axes (Phase 14.3)
+# Provenance is turn_id + quote_snippet only (never vault ids).
+
+root ::= object
+
+object ::= "{" ws
+  "\"schema\"" ws ":" ws "\"interview_evaluation.v1\"" ws "," ws
+  "\"mece_structure\"" ws ":" ws axis ws "," ws
+  "\"hypothesis_thinking\"" ws ":" ws axis ws "," ws
+  "\"quantitative_validity\"" ws ":" ws axis ws "," ws
+  "\"stress_resilience\"" ws ":" ws axis ws "," ws
+  "\"overall_pass\"" ws ":" ws bool ws "," ws
+  "\"summary\"" ws ":" ws json-string
+ws "}"
+
+axis ::= "{" ws
+  "\"score\"" ws ":" ws score ws "," ws
+  "\"provenance\"" ws ":" ws prov-array
+ws "}"
+
+prov-array ::= "[" ws "]" | "[" ws prov ("," ws prov)* ws "]"
+
+prov ::= "{" ws
+  "\"turn_id\"" ws ":" ws json-string ws "," ws
+  "\"quote_snippet\"" ws ":" ws json-string
+ws "}"
+
+score ::= "0" | "1" | "1.0" | "0." digit digit | "0." digit | "1." "0"
+bool ::= "true" | "false"
+
+json-string ::= "\"" json-char* "\""
+json-char ::= [^"\\] | "\\" (["\\/bfnrt] | "u" hex hex hex hex)
+digit ::= [0-9]
+hex ::= [0-9a-fA-F]
+ws ::= [ \t\n\r]*

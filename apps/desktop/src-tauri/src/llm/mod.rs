@@ -3,18 +3,42 @@
 //! Compiled only under the `pocket-brain` feature (gated in `lib.rs`), so the
 //! default desktop build never sees it and stays byte-identical.
 //!
-//! Phase 1 status: worker + monitor logic implemented; commands defined and
-//! delegating to that logic, but NOT yet registered in the `invoke_handler` and
-//! State not managed (frontend not connected). Registration lands with the
-//! frontend-integration step.
+//! Commands (`llm_*`, `memory_monitor_*`, `llm_events`) are registered from
+//! `lib.rs` under `#[cfg(feature = "pocket-brain")]`. M7 adds the lock-free
+//! `LlmMemoryGovernor` + out-of-band `LlmLifecycleEvent::MemoryPurged` channel.
+//! M12 adds interview/ES prompt assembly (`prompt_sim`) and gated sim commands.
+//! M17 adds mentor consult context + multi-stage interview machine.
 
 pub mod commands_llm;
+pub mod commands_model_setup;
+pub mod brain;
+pub mod context_budget;
+pub mod embed;
+pub mod prompt_budget;
+pub mod hashed_embed;
 pub mod model_path;
 pub mod params;
 pub mod prompt;
+pub mod prompt_sim;
 pub mod schema;
 pub mod service;
+pub mod token_batch;
 
-// Re-exported for `lib.rs`'s `llm::LlmHandle::spawn(...)` wiring. Other types are
-// referenced through their submodules directly, so they are not re-exported here.
+#[cfg(feature = "flavor-live")]
+pub mod flavor_gen;
+
+#[cfg(all(feature = "secure-vault", target_vendor = "apple"))]
+pub mod commands_consult;
+#[cfg(all(feature = "secure-vault", target_vendor = "apple"))]
+pub mod commands_sim;
+#[cfg(all(feature = "secure-vault", target_vendor = "apple"))]
+pub mod consult_context;
+#[cfg(all(feature = "secure-vault", target_vendor = "apple"))]
+pub mod interview_machine;
+#[cfg(all(feature = "secure-vault", target_vendor = "apple"))]
+pub mod mentor_zpd;
+
+// Re-exported for `lib.rs`'s `llm::LlmHandle::spawn(...)` wiring. Other types
+// (e.g. `LlmMemoryGovernor`, `LlmLifecycleEvent`) are referenced through their
+// `service` submodule directly, so they are not re-exported here.
 pub use service::LlmHandle;

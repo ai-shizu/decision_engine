@@ -2,19 +2,23 @@
   "name": "pkb-desktop",
   "private": true,
   "version": "0.1.0",
+  "description": "Coraxis desktop (Tauri) — internal package name remains pkb-desktop",
   "type": "module",
   "scripts": {
-    "dev": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/run-dev.ps1",
-    "build": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/run-build.ps1",
+    "dev": "node scripts/run-os.mjs run-dev",
+    "build": "node scripts/run-os.mjs run-build",
     "preview": "vite preview",
     "tauri": "tauri",
-    "tauri:dev": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/run-tauri-dev.ps1",
-    "tauri:build": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/run-tauri-build.ps1",
-    "engine:build": "powershell -ExecutionPolicy Bypass -File scripts/build-engine.ps1",
-    "test:boundary": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/run-boundary-tests.ps1"
+    "tauri:dev": "node scripts/run-os.mjs run-tauri-dev",
+    "tauri:build": "node scripts/run-os.mjs run-tauri-build",
+    "tauri:ios-dev": "bash scripts/tauri-ios-dev.sh",
+    "engine:build": "node scripts/run-os.mjs build-engine",
+    "test:boundary": "node scripts/run-os.mjs run-boundary-tests"
   },
   "dependencies": {
     "@tauri-apps/api": "^2",
+    "@tauri-apps/plugin-dialog": "^2.7.2",
+    "@tauri-apps/plugin-fs": "^2.5.1",
     "react": "^19.1.0",
     "react-dom": "^19.1.0"
   },

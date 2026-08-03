@@ -9,15 +9,24 @@
 )]
 
 pub mod attestation;
+pub mod bounded_io;
 pub mod canonicalize;
+pub mod context_merger;
 pub mod dns_guard;
 pub mod dual_run;
+pub mod edinet_archive;
+pub mod edinet_client;
+pub mod edinet_csv;
+pub mod edinet_discovery;
+pub mod edinet_xbrl;
+pub mod fact_merge;
 pub mod fsm;
 pub mod net_gateway;
 pub mod orchestrator;
 pub mod pii_snapshot;
 pub mod policy_store;
 pub mod render_guard;
+pub mod wiki_extract;
 
 pub use attestation::{attestation_framing, verify_tag};
 pub use canonicalize::canonicalize_for_match;
@@ -29,8 +38,8 @@ pub use orchestrator::{
     refuse_if_egress_unavailable, refuse_if_policy_off, InjectedFetch, NetworkPolicy,
     OrchestratorError,
 };
-pub use policy_store::NetworkPolicyStore;
 pub use pii_snapshot::{snapshot_hash_hex, snapshot_preimage};
+pub use policy_store::NetworkPolicyStore;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum VerifyError {

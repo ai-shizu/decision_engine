@@ -175,8 +175,9 @@ struct InterviewConfig {
     genre: String,
     difficulty: InterviewDifficulty,
     stance: InterviewStance,
-    #[serde(rename = "customTheme", skip_serializing_if = "Option::is_none")]
-    custom_theme: Option<String>,
+    /// M20-N: 企業別 ES の id。空文字 = ゼロベース面接。
+    #[serde(rename = "esId", default, skip_serializing_if = "Option::is_none")]
+    es_id: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -217,8 +218,8 @@ impl ValidateRequest for ConsultRequest {
         if let Some(config) = &self.config {
             require_max_bytes(&config.industry, "config.industry", MAX_SHORT_TEXT_BYTES)?;
             require_max_bytes(&config.genre, "config.genre", MAX_SHORT_TEXT_BYTES)?;
-            if let Some(theme) = &config.custom_theme {
-                require_max_bytes(theme, "config.customTheme", MAX_SHORT_TEXT_BYTES)?;
+            if let Some(es_id) = &config.es_id {
+                require_max_bytes(es_id, "config.esId", MAX_SHORT_TEXT_BYTES)?;
             }
         }
         if let Some(ext_id) = &self.external_research_id {
@@ -352,13 +353,39 @@ pub struct ImportDocumentRequest {
     content: String,
     filename: String,
     dest: ImportDestination,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    company_name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    confirm_overwrite: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    replace_es_id: Option<String>,
 }
 
 impl ValidateRequest for ImportDocumentRequest {
     fn validate(&self) -> Result<(), String> {
         require_nonempty(&self.content, "content")?;
         require_max_bytes(&self.content, "content", MAX_TEXT_BYTES)?;
-        require_max_bytes(&self.filename, "filename", MAX_SHORT_TEXT_BYTES)
+        require_max_bytes(&self.filename, "filename", MAX_SHORT_TEXT_BYTES)?;
+        if let Some(company) = &self.company_name {
+            require_max_bytes(company, "company_name", MAX_SHORT_TEXT_BYTES)?;
+        }
+        if let Some(replace_id) = &self.replace_es_id {
+            require_max_bytes(replace_id, "replace_es_id", MAX_SHORT_TEXT_BYTES)?;
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct LlmWarmRequest {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    probe_llm: Option<bool>,
+}
+
+impl ValidateRequest for LlmWarmRequest {
+    fn validate(&self) -> Result<(), String> {
+        Ok(())
     }
 }
 
@@ -547,6 +574,23 @@ pub struct KnowledgePolicySetRequest {
 impl ValidateRequest for KnowledgePolicySetRequest {
     fn validate(&self) -> Result<(), String> {
         let _ = self.enabled;
+        Ok(())
+    }
+}
+
+/// Optional ES id for `es.view` (empty / absent = latest active ES).
+#[derive(Debug, Default, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct EsViewRequest {
+    #[serde(default)]
+    pub id: Option<String>,
+}
+
+impl ValidateRequest for EsViewRequest {
+    fn validate(&self) -> Result<(), String> {
+        if let Some(ref id) = self.id {
+            require_max_bytes(id, "id", 512)?;
+        }
         Ok(())
     }
 }

@@ -8,9 +8,17 @@ import sys
 NO_PROXY_ALL = "*"
 NETWORK_DENIED_MESSAGE = "PKB network capability disabled"
 
-# CPython/Windows use 23 for AF_INET6; POSIX uses 10. Keeping both makes the
-# audit hook independent of importing the socket module it is meant to guard.
-_IP_SOCKET_FAMILIES = frozenset({2, 10, 23})
+# AF numbers are platform constants. We MUST NOT `import socket` here to derive
+# them: the audit hook exists to deny socket creation, and importing socket
+# (or touching socket.AF_*) can itself trigger socket-side init / lazy C API
+# load on some builds — defeating the guard's "before any network family"
+# posture. Keep this table in sync when adding a platform.
+#
+#   AF_INET  = 2          (all common platforms)
+#   AF_INET6 = 10         (Linux)
+#   AF_INET6 = 23         (Windows / CPython-Win)
+#   AF_INET6 = 30         (Darwin / BSD — macOS developer host; was missing)
+_IP_SOCKET_FAMILIES = frozenset({2, 10, 23, 30})
 _DNS_AUDIT_EVENTS = frozenset(
     {
         "socket.getaddrinfo",

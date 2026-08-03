@@ -30,32 +30,28 @@ export interface ExtractionPanelProps {
   /** When false, extract is blocked (model not loaded). Input stays editable. */
   readonly modelReady?: boolean;
   readonly sink?: ExtractionSink;
+  /** Soften copy for messenger action sheet (desktop chrome unchanged when false). */
+  readonly friendly?: boolean;
 }
 
 function FieldRow(props: {
   label: string;
   value: string;
   unknown: boolean;
+  amount?: boolean;
 }): ReactElement {
-  const { label, value, unknown } = props;
+  const { label, value, unknown, amount } = props;
   return (
-    <div
-      style={{
-        display: "grid",
-        gridTemplateColumns: "7rem 1fr",
-        gap: 8,
-        alignItems: "baseline",
-        padding: "4px 0",
-        borderBottom: "1px solid #333",
-      }}
-    >
-      <span style={{ opacity: 0.7 }}>{label}</span>
+    <div className="ledger-extract-row">
+      <span className="ledger-extract-key">{label}</span>
       <span
-        style={{
-          fontStyle: unknown ? "italic" : "normal",
-          opacity: unknown ? 0.65 : 1,
-          textDecoration: unknown ? "underline dotted" : "none",
-        }}
+        className={
+          amount
+            ? "ledger-extract-val ledger-extract-val--amt"
+            : unknown
+              ? "ledger-extract-val ledger-extract-val--unk"
+              : "ledger-extract-val"
+        }
         data-unknown={unknown ? "true" : "false"}
       >
         {unknown ? `不明 (${value})` : value}
@@ -67,6 +63,7 @@ function FieldRow(props: {
 export function ExtractionPanel(props: ExtractionPanelProps): ReactElement {
   const modelReady = props.modelReady ?? true;
   const sink = props.sink ?? defaultSink;
+  const friendly = props.friendly ?? false;
   const [state, dispatch] = useReducer(extractionReducer, INITIAL_EXTRACTION_STATE);
   const nextRequestId = useRef(1);
   /** Guards against double completion handling for the same request. */
@@ -109,7 +106,6 @@ export function ExtractionPanel(props: ExtractionPanelProps): ReactElement {
       return;
     }
 
-    // done === true
     settledRef.current = requestId;
     if (event.validated == null) {
       dispatch({
@@ -153,8 +149,6 @@ export function ExtractionPanel(props: ExtractionPanelProps): ReactElement {
         },
         TASK_KAKEIBO_V1,
       );
-      // llm_generate is fire-and-forget: invoke resolves when queued, not when
-      // streaming finishes. Completion is solely via the Channel callback.
     } catch (e) {
       if (settledRef.current !== requestId) {
         settledRef.current = requestId;
@@ -174,11 +168,9 @@ export function ExtractionPanel(props: ExtractionPanelProps): ReactElement {
     const requestId = state.requestId;
     try {
       await cancelGeneration();
-      // Only leave extracting after the cancel IPC succeeds.
       settledRef.current = requestId;
       dispatch({ type: "extractionCancelled", requestId });
     } catch {
-      // Keep extracting + active requestId; surface IPC failure (do not force idle).
       dispatch({
         type: "cancelFailed",
         requestId,
@@ -205,43 +197,46 @@ export function ExtractionPanel(props: ExtractionPanelProps): ReactElement {
 
   return (
     <section
-      className="extraction-panel"
-      aria-label="家計簿抽出"
-      style={{
-        textAlign: "left",
-        width: "100%",
-        marginTop: 16,
-        borderTop: "1px solid #444",
-        paddingTop: 12,
-      }}
+      className={
+        friendly
+          ? "extraction-panel ledger-extract ledger-extract--friendly"
+          : "extraction-panel ledger-extract"
+      }
+      aria-label={friendly ? "支出データの抽出" : "家計簿抽出"}
     >
-      <header style={{ padding: "0 12px 8px" }}>
-        <strong>家計簿抽出</strong>
-        <span style={{ marginLeft: 8, opacity: 0.7, fontSize: "0.9em" }}>
-          task: {TASK_KAKEIBO_V1}
-        </span>
+      <header className="ledger-extract-head">
+        <strong>{friendly ? "支出データの抽出" : "KAKEIBO EXTRACT"}</strong>
+        {!friendly ? (
+          <span className="ledger-extract-meta">task: {TASK_KAKEIBO_V1}</span>
+        ) : null}
       </header>
 
-      <div style={{ padding: "0 12px", display: "flex", flexDirection: "column", gap: 8 }}>
-        <label htmlFor="extraction-input">抽出テキスト</label>
+      <div className="ledger-extract-body">
+        {friendly ? (
+          <p className="hint ledger-extract-hint">
+            買い物メモなどから日付・金額・用途を抜き出し、AI の前提知識に加えます。
+          </p>
+        ) : (
+          <label htmlFor="extraction-input">抽出テキスト</label>
+        )}
         <textarea
           id="extraction-input"
-          aria-label="家計簿抽出テキスト"
+          className="ledger-extract-input"
+          aria-label={friendly ? "支出メモ" : "家計簿抽出テキスト"}
           value={state.input}
           onChange={(e) => onInputChange(e.target.value)}
           rows={3}
           placeholder="例: 昨日スーパーで牛乳を298円で買った"
-          style={{ width: "100%", resize: "vertical" }}
         />
 
-        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+        <div className="ledger-extract-actions">
           <button
             type="button"
-            aria-label="家計簿を抽出"
+            aria-label={friendly ? "支出を抽出" : "家計簿を抽出"}
             onClick={() => void onExtract()}
             disabled={!canExtract}
           >
-            {extracting ? "抽出中…" : "抽出"}
+            {extracting ? "抽出中…" : "EXTRACT"}
           </button>
           <button
             type="button"
@@ -249,7 +244,7 @@ export function ExtractionPanel(props: ExtractionPanelProps): ReactElement {
             onClick={() => void onCancel()}
             disabled={!extracting}
           >
-            キャンセル
+            CANCEL
           </button>
           <button
             type="button"
@@ -257,66 +252,59 @@ export function ExtractionPanel(props: ExtractionPanelProps): ReactElement {
             onClick={() => void onCopy()}
             disabled={state.phase !== "success"}
           >
-            コピー
+            COPY
           </button>
         </div>
 
         {!modelReady && (
-          <p role="status" style={{ opacity: 0.7, margin: 0 }}>
-            モデルを読み込むと抽出できます
+          <p role="status" className="hint">
+            モデル準備が終わるまでお待ちください
           </p>
         )}
 
         {extracting && (
-          <p role="status" aria-live="polite" style={{ margin: 0, opacity: 0.8 }}>
+          <p role="status" aria-live="polite" className="ledger-extract-stream">
             進捗: {state.streamedText.length > 0 ? state.streamedText : "…"}
           </p>
         )}
 
         {extracting && state.cancelError != null && (
-          <p role="alert" style={{ color: "#ff5555", margin: 0 }}>
+          <p role="alert" className="error-text">
             {state.cancelError}
           </p>
         )}
 
         {state.phase === "error" && (
-          <p role="alert" style={{ color: "#ff5555", margin: 0 }}>
+          <p role="alert" className="error-text">
             {state.error}
           </p>
         )}
 
         {state.phase === "success" && state.result && (
-          <article
-            aria-label="抽出結果"
-            style={{
-              marginTop: 4,
-              padding: 8,
-              border: "1px solid #555",
-              background: "#1a1a1a",
-            }}
-          >
+          <article className="ledger-extract-result" aria-label="抽出結果">
             <FieldRow
-              label="date"
+              label={friendly ? "日付" : "date"}
               value={state.result.date}
               unknown={isUnknownField(state.result.date)}
             />
             <FieldRow
-              label="amount"
+              label={friendly ? "金額" : "amount"}
               value={formatAmountDisplay(state.result.amount)}
               unknown={state.result.amount === null}
+              amount
             />
             <FieldRow
-              label="category"
+              label={friendly ? "カテゴリ" : "category"}
               value={state.result.category}
               unknown={isUnknownField(state.result.category)}
             />
             <FieldRow
-              label="payee"
+              label={friendly ? "支払先" : "payee"}
               value={state.result.payee}
               unknown={isUnknownField(state.result.payee)}
             />
             <FieldRow
-              label="memo"
+              label={friendly ? "メモ" : "memo"}
               value={state.result.memo}
               unknown={isUnknownField(state.result.memo)}
             />
@@ -324,12 +312,12 @@ export function ExtractionPanel(props: ExtractionPanelProps): ReactElement {
         )}
 
         {state.phase === "success" && state.copyStatus === "copied" && (
-          <p role="status" style={{ margin: 0, opacity: 0.8 }}>
+          <p role="status" className="hint">
             クリップボードへコピーしました
           </p>
         )}
         {state.phase === "success" && state.copyStatus === "copy_failed" && (
-          <p role="alert" style={{ color: "#ff5555", margin: 0 }}>
+          <p role="alert" className="error-text">
             コピー失敗: {state.copyError}
           </p>
         )}

@@ -166,6 +166,234 @@ where
 /// Static GBNF grammar for [`KakeiboEntryV1`] (embedded asset).
 pub const KAKEIBO_V1_GBNF: &str = include_str!("assets/kakeibo_v1.gbnf");
 
+/// Static GBNF grammar for [`CognitiveDistortionReportV1`].
+pub const COGNITIVE_DISTORTION_V1_GBNF: &str =
+    include_str!("assets/cognitive_distortion_v1.gbnf");
+
+/// Static GBNF grammar for [`ReceiptOcrV1`].
+pub const RECEIPT_OCR_V1_GBNF: &str = include_str!("assets/receipt_ocr_v1.gbnf");
+
+
+// ─── Phase 8: Cognitive distortion extraction (Beck 1976 / Burns 1980) ───────
+
+/// Burns (1980) / Beck (1976) ten cognitive distortions.
+///
+/// CBT holds that depression and anxiety are maintained by habitual irrational
+/// thought patterns ("cognitive distortions"). These ten labels are the
+/// canonical inventory used for fingerprinting — detection is LLM-assisted
+/// under GBNF; aggregation in `bias_profile` remains deterministic.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DistortionCategory {
+    /// All-or-Nothing — 全か無か思考
+    AllOrNothing,
+    /// Overgeneralization — 過度の一般化
+    Overgeneralization,
+    /// Mental Filter — 心のフィルター
+    MentalFilter,
+    /// Disqualifying the Positive — マイナス化思考
+    DisqualifyingThePositive,
+    /// Jumping to Conclusions — 結論の飛躍（心の読みすぎ / 先読み）
+    JumpingToConclusions,
+    /// Magnification / Minimization — 拡大解釈・過小評価（破局視含む）
+    MagnificationMinimization,
+    /// Emotional Reasoning — 感情的決めつけ
+    EmotionalReasoning,
+    /// Should Statements — すべき思考
+    ShouldStatements,
+    /// Labeling — レッテル貼り
+    Labeling,
+    /// Personalization — 自己関連づけ
+    Personalization,
+}
+
+impl DistortionCategory {
+    /// Fixed Burns order (radar / table axes). Deterministic — no HashMap iteration order.
+    pub const ALL: [Self; 10] = [
+        Self::AllOrNothing,
+        Self::Overgeneralization,
+        Self::MentalFilter,
+        Self::DisqualifyingThePositive,
+        Self::JumpingToConclusions,
+        Self::MagnificationMinimization,
+        Self::EmotionalReasoning,
+        Self::ShouldStatements,
+        Self::Labeling,
+        Self::Personalization,
+    ];
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::AllOrNothing => "all_or_nothing",
+            Self::Overgeneralization => "overgeneralization",
+            Self::MentalFilter => "mental_filter",
+            Self::DisqualifyingThePositive => "disqualifying_the_positive",
+            Self::JumpingToConclusions => "jumping_to_conclusions",
+            Self::MagnificationMinimization => "magnification_minimization",
+            Self::EmotionalReasoning => "emotional_reasoning",
+            Self::ShouldStatements => "should_statements",
+            Self::Labeling => "labeling",
+            Self::Personalization => "personalization",
+        }
+    }
+
+    pub fn parse(s: &str) -> Option<Self> {
+        match s {
+            "all_or_nothing" => Some(Self::AllOrNothing),
+            "overgeneralization" => Some(Self::Overgeneralization),
+            "mental_filter" => Some(Self::MentalFilter),
+            "disqualifying_the_positive" => Some(Self::DisqualifyingThePositive),
+            "jumping_to_conclusions" => Some(Self::JumpingToConclusions),
+            "magnification_minimization" => Some(Self::MagnificationMinimization),
+            "emotional_reasoning" => Some(Self::EmotionalReasoning),
+            "should_statements" => Some(Self::ShouldStatements),
+            "labeling" => Some(Self::Labeling),
+            "personalization" => Some(Self::Personalization),
+            _ => None,
+        }
+    }
+}
+
+/// One detected distortion span from constrained extraction.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DistortionDetectionV1 {
+    pub category: DistortionCategory,
+    pub snippet: String,
+    pub confidence_score: f64,
+}
+
+/// Grammar-constrained CBT extraction report.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CognitiveDistortionReportV1 {
+    pub detected_distortions: Vec<DistortionDetectionV1>,
+}
+
+impl CognitiveDistortionReportV1 {
+    pub fn normalize(&mut self) {
+        // Keep Burns inventory live in non-test builds (Zero Warnings / no allow).
+        let _burns_n = DistortionCategory::ALL.len();
+        debug_assert_eq!(_burns_n, 10);
+        for d in &mut self.detected_distortions {
+            let label = d.category.as_str();
+            let _roundtrip = DistortionCategory::parse(label);
+            debug_assert_eq!(_roundtrip, Some(d.category));
+            d.snippet = truncate_snippet(d.snippet.trim());
+            if !d.confidence_score.is_finite() {
+                d.confidence_score = 0.0;
+            }
+            d.confidence_score = d.confidence_score.clamp(0.0, 1.0);
+        }
+        // Drop empty snippets (gap safety — do not invent quotes).
+        self.detected_distortions
+            .retain(|d| !d.snippet.is_empty() && d.snippet != UNKNOWN);
+    }
+
+    pub fn from_json_str(raw: &str) -> Result<Self, serde_json::Error> {
+        let mut report: Self = serde_json::from_str(raw)?;
+        report.normalize();
+        Ok(report)
+    }
+}
+
+fn truncate_snippet(s: &str) -> String {
+    const MAX: usize = 280;
+    if s.len() <= MAX {
+        return s.to_string();
+    }
+    let mut end = MAX;
+    while end > 0 && !s.is_char_boundary(end) {
+        end -= 1;
+    }
+    format!("{}…", &s[..end])
+}
+
+
+// ─── Phase 11: Hierarchical receipt OCR extraction ───────────────────────────
+
+/// One receipt line item — all money fields are integers (yen).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ReceiptLineV1 {
+    pub item_name: String,
+    pub unit_price: i64,
+    pub qty: i64,
+    pub amount: i64,
+}
+
+/// Grammar-constrained hierarchical receipt extract.
+///
+/// Checksum gate (deterministic, no LLM retry):
+/// `sum(line.amount) + tax == total` → verified; else fail-closed verified=0.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ReceiptOcrV1 {
+    pub merchant: String,
+    /// ISO datetime / date string, unix integer as string, or `"unknown"`.
+    pub occurred_at: String,
+    pub tax: i64,
+    pub total: i64,
+    pub lines: Vec<ReceiptLineV1>,
+}
+
+impl ReceiptOcrV1 {
+    pub fn normalize(&mut self) {
+        self.merchant = truncate_snippet(self.merchant.trim());
+        if self.merchant.is_empty() {
+            self.merchant = UNKNOWN.to_string();
+        }
+        self.occurred_at = self.occurred_at.trim().to_string();
+        if self.occurred_at.is_empty() {
+            self.occurred_at = UNKNOWN.to_string();
+        }
+        if self.tax < 0 {
+            self.tax = 0;
+        }
+        if self.total < 0 {
+            self.total = 0;
+        }
+        for line in &mut self.lines {
+            line.item_name = truncate_snippet(line.item_name.trim());
+            if line.item_name.is_empty() {
+                line.item_name = UNKNOWN.to_string();
+            }
+            if line.qty <= 0 {
+                line.qty = 1;
+            }
+            if line.unit_price < 0 {
+                line.unit_price = 0;
+            }
+            if line.amount < 0 {
+                line.amount = 0;
+            }
+        }
+        self.lines.retain(|l| l.item_name != UNKNOWN || l.amount > 0);
+    }
+
+    pub fn from_json_str(raw: &str) -> Result<Self, serde_json::Error> {
+        let mut report: Self = serde_json::from_str(raw)?;
+        report.normalize();
+        Ok(report)
+    }
+
+    /// Deterministic checksum: Σ line.amount + tax == total (integer arithmetic).
+    pub fn checksum_ok(&self) -> bool {
+        let mut sum: i64 = 0;
+        for line in &self.lines {
+            match sum.checked_add(line.amount) {
+                Some(v) => sum = v,
+                None => return false,
+            }
+        }
+        match sum.checked_add(self.tax) {
+            Some(v) => v == self.total,
+            None => false,
+        }
+    }
+}
+
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -276,4 +504,72 @@ mod tests {
         assert!(KAKEIBO_V1_GBNF.contains("unknown"));
         assert!(!KAKEIBO_V1_GBNF.trim().is_empty());
     }
+
+    #[test]
+    fn cognitive_distortion_report_parses_and_clamps() {
+        let raw = r#"{
+          "detected_distortions": [
+            {"category":"all_or_nothing","snippet":"いつも失敗する","confidence_score":1.5},
+            {"category":"should_statements","snippet":"","confidence_score":0.8}
+          ]
+        }"#;
+        let r = CognitiveDistortionReportV1::from_json_str(raw).expect("parse");
+        assert_eq!(r.detected_distortions.len(), 1);
+        assert_eq!(
+            r.detected_distortions[0].category,
+            DistortionCategory::AllOrNothing
+        );
+        assert!((r.detected_distortions[0].confidence_score - 1.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn cognitive_gbnf_lists_all_ten_categories() {
+        for cat in DistortionCategory::ALL {
+            assert!(
+                COGNITIVE_DISTORTION_V1_GBNF.contains(cat.as_str()),
+                "missing {}",
+                cat.as_str()
+            );
+        }
+        assert!(COGNITIVE_DISTORTION_V1_GBNF.contains("detected_distortions"));
+    }
+
+    #[test]
+    fn distortion_category_round_trip() {
+        for cat in DistortionCategory::ALL {
+            assert_eq!(DistortionCategory::parse(cat.as_str()), Some(cat));
+        }
+    }
+
+    #[test]
+    fn receipt_checksum_gate() {
+        let ok = ReceiptOcrV1 {
+            merchant: "店".into(),
+            occurred_at: "unknown".into(),
+            tax: 100,
+            total: 1100,
+            lines: vec![ReceiptLineV1 {
+                item_name: "牛乳".into(),
+                unit_price: 500,
+                qty: 2,
+                amount: 1000,
+            }],
+        };
+        assert!(ok.checksum_ok());
+        let bad = ReceiptOcrV1 {
+            total: 999,
+            ..ok.clone()
+        };
+        assert!(!bad.checksum_ok());
+    }
+
+    #[test]
+    fn receipt_gbnf_mentions_hierarchy() {
+        assert!(RECEIPT_OCR_V1_GBNF.contains("merchant"));
+        assert!(RECEIPT_OCR_V1_GBNF.contains("lines"));
+        assert!(RECEIPT_OCR_V1_GBNF.contains("unit_price"));
+        assert!(RECEIPT_OCR_V1_GBNF.contains("tax"));
+        assert!(RECEIPT_OCR_V1_GBNF.contains("total"));
+    }
+
 }

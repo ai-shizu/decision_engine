@@ -1,0 +1,36 @@
+# ReceiptOcrV1 — hierarchical receipt JSON (Phase 11)
+#
+# Fixed key order matching ReceiptOcrV1:
+#   merchant, occurred_at, tax, total, lines[{item_name,unit_price,qty,amount}]
+# All money fields are integers (yen). Comments use `#`.
+
+root ::= object
+
+object ::= "{" ws merchant-kv "," ws occurred-kv "," ws tax-kv "," ws total-kv "," ws lines-kv ws "}"
+
+merchant-kv  ::= "\"merchant\"" ws ":" ws string-val
+occurred-kv  ::= "\"occurred_at\"" ws ":" ws occurred-val
+tax-kv       ::= "\"tax\"" ws ":" ws integer
+total-kv     ::= "\"total\"" ws ":" ws integer
+lines-kv     ::= "\"lines\"" ws ":" ws lines-array
+
+occurred-val ::= "\"unknown\"" | iso-or-unix
+iso-or-unix ::= json-string | integer
+
+lines-array ::= "[" ws "]" | "[" ws line-object ("," ws line-object)* ws "]"
+
+line-object ::= "{" ws item-kv "," ws unit-kv "," ws qty-kv "," ws amount-kv ws "}"
+item-kv   ::= "\"item_name\"" ws ":" ws string-val
+unit-kv   ::= "\"unit_price\"" ws ":" ws integer
+qty-kv    ::= "\"qty\"" ws ":" ws integer
+amount-kv ::= "\"amount\"" ws ":" ws integer
+
+integer ::= "-"? digit+
+
+string-val ::= "\"unknown\"" | json-string
+json-string ::= "\"" json-char* "\""
+json-char ::= [^"\\] | "\\" (["\\/bfnrt] | "u" hex hex hex hex)
+
+digit ::= [0-9]
+hex ::= [0-9a-fA-F]
+ws ::= [ \t\n\r]*

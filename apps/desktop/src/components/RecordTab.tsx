@@ -6,6 +6,13 @@ import {
 } from "../lib/engine";
 import { formatDateLabel, parseAmount, summarizeDay, todayIso } from "../lib/dateUtils";
 import { isCommitEnter } from "../lib/keyUtils";
+import {
+  formatLedgerYen,
+  ledgerRiskLabel,
+  ledgerRiskLevel,
+  ledgerRowClassName,
+  ledgerTypeCode,
+} from "../lib/ledgerRowView";
 import { defaultTime } from "../lib/timeUtils";
 import { uiErrorMessage } from "../lib/uiErrorMessages";
 import type { RecordEvent, RecordSubTab, Transaction } from "../lib/types";
@@ -45,6 +52,7 @@ export function RecordTab() {
   const [incCat, setIncCat] = useState("");
   const [incAmt, setIncAmt] = useState("");
   const [noticeVisible, setNoticeVisible] = useState(false);
+  const [diaryRevealed, setDiaryRevealed] = useState(false);
 
   const diaryRef = useRef<HTMLTextAreaElement>(null);
   const noticeTimerRef = useRef<number | null>(null);
@@ -57,6 +65,10 @@ export function RecordTab() {
   useEffect(() => {
     liveRef.current = { date, subTab, events, transactions, diary };
   });
+
+  useEffect(() => {
+    setDiaryRevealed(false);
+  }, [date]);
 
   const refreshMarks = useCallback(async () => {
     try {
@@ -228,12 +240,16 @@ export function RecordTab() {
     }
   }, [date, diary, events, refreshMarks, transactions]);
 
+  const handleSaveRef = useRef(handleSave);
+  handleSaveRef.current = handleSave;
+
+  // N3: register once — diary/events churn must not rebind the global listener.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.ctrlKey && !e.altKey && e.key === "s") {
         e.preventDefault();
         e.stopPropagation();
-        void handleSave();
+        void handleSaveRef.current();
         return;
       }
       if (e.ctrlKey && !e.altKey && (e.key === "1" || e.key === "2" || e.key === "3")) {
@@ -244,7 +260,7 @@ export function RecordTab() {
     };
     window.addEventListener("keydown", onKey, { capture: true });
     return () => window.removeEventListener("keydown", onKey, { capture: true });
-  }, [handleSave]);
+  }, []);
 
   const summary = summarizeDay(transactions);
 
@@ -255,7 +271,14 @@ export function RecordTab() {
         eventDates={eventDates}
         onSelect={(d) => void handleDateSelect(d)}
       />
-      <p className="date-banner">編集中: {formatDateLabel(date)}</p>
+      <p className="date-banner">
+        <span className="term-tag term-tag--info">[ RECORD ]</span>{" "}
+        編集中: {formatDateLabel(date)}
+      </p>
+
+      <div className="ascii-sep ascii-sep--info" role="separator">
+        --- SURFACE ---
+      </div>
 
       <div className="sub-tabs">
         {(
@@ -278,6 +301,9 @@ export function RecordTab() {
 
       {subTab === "events" && (
         <div className="sub-panel">
+          <div className="ascii-sep" role="separator">
+            --- EVENTS ---
+          </div>
           <ul className="item-list">
             {events.length === 0 ? (
               <li className="hint">(この日の予定はまだありません)</li>
@@ -313,28 +339,108 @@ export function RecordTab() {
       )}
 
       {subTab === "finance" && (
-        <div className="sub-panel">
-          <p className="finance-summary">
-            収入: {summary.income.toLocaleString()}円 | 支出:{" "}
-            {summary.expense.toLocaleString()}円 | 差引: {summary.net.toLocaleString()}円
-          </p>
-          <ul className="item-list">
+        <div className="sub-panel ledger">
+          <div className="ascii-sep ascii-sep--danger" role="separator">
+            --- LEDGER / RISK ---
+          </div>
+          <div className="ledger-summary" role="group" aria-label="日次集計">
+            <div className="ledger-summary-cell">
+              <span className="ledger-summary-key">INC</span>
+              <span className="ledger-summary-val">
+                {formatLedgerYen(summary.income)}
+                <span className="ledger-yen">円</span>
+              </span>
+            </div>
+            <div className="ledger-summary-cell">
+              <span className="ledger-summary-key">EXP</span>
+              <span className="ledger-summary-val">
+                {formatLedgerYen(summary.expense)}
+                <span className="ledger-yen">円</span>
+              </span>
+            </div>
+            <div className="ledger-summary-cell">
+              <span className="ledger-summary-key">NET</span>
+              <span
+                className={
+                  summary.net < 0
+                    ? "ledger-summary-val ledger-summary-val--neg"
+                    : "ledger-summary-val"
+                }
+              >
+                {formatLedgerYen(summary.net)}
+                <span className="ledger-yen">円</span>
+              </span>
+            </div>
+          </div>
+
+          <div className="ledger-grid" role="table" aria-label="購買台帳">
+            <div className="ledger-row ledger-row--head" role="row">
+              <span className="ledger-col ledger-col-type" role="columnheader">
+                TYPE
+              </span>
+              <span className="ledger-col ledger-col-cat" role="columnheader">
+                CATEGORY
+              </span>
+              <span className="ledger-col ledger-col-flag" role="columnheader">
+                FLAG
+              </span>
+              <span className="ledger-col ledger-col-amt" role="columnheader">
+                AMOUNT
+              </span>
+            </div>
             {transactions.length === 0 ? (
-              <li className="hint">(この日の取引はまだありません)</li>
+              <div className="ledger-empty hint" role="row">
+                (この日の取引はまだありません)
+              </div>
             ) : (
-              transactions.map((tx, i) => (
-                <li key={i} className="record-item">
-                  <span className="record-item-label">
-                    [{tx.type === "expense" ? "支出" : "収入"}] {tx.category}
-                  </span>
-                  <span className="record-item-amount">{tx.amount.toLocaleString()}円</span>
-                </li>
-              ))
+              transactions.map((tx, i) => {
+                const risk = ledgerRiskLevel(tx.category);
+                const flag = ledgerRiskLabel(risk);
+                return (
+                  <div key={i} className={ledgerRowClassName(risk)} role="row">
+                    <span className="ledger-col ledger-col-type" role="cell">
+                      {ledgerTypeCode(tx.type)}
+                    </span>
+                    <span className="ledger-col ledger-col-cat" role="cell">
+                      {tx.category}
+                    </span>
+                    <span
+                      className={
+                        risk === "danger"
+                          ? "ledger-col ledger-col-flag ledger-flag--danger"
+                          : risk === "warn"
+                            ? "ledger-col ledger-col-flag ledger-flag--warn"
+                            : "ledger-col ledger-col-flag"
+                      }
+                      role="cell"
+                    >
+                      {flag ? (
+                        <span
+                          className={
+                            risk === "danger"
+                              ? "term-tag term-tag--danger"
+                              : "term-tag term-tag--warn"
+                          }
+                        >
+                          {flag}
+                        </span>
+                      ) : (
+                        <span className="term-tag term-tag--muted">[ — ]</span>
+                      )}
+                    </span>
+                    <span className="ledger-col ledger-col-amt" role="cell">
+                      {formatLedgerYen(tx.amount)}
+                      <span className="ledger-yen">円</span>
+                    </span>
+                  </div>
+                );
+              })
             )}
-          </ul>
-          <div className="finance-forms">
-            <div className="form-row">
-              <span className="field-label">支出</span>
+          </div>
+
+          <div className="ledger-forms finance-forms">
+            <div className="form-row ledger-form-row">
+              <span className="field-label">EXP</span>
               <input
                 value={expCat}
                 onChange={(e) => setExpCat(e.target.value)}
@@ -344,9 +450,11 @@ export function RecordTab() {
                     addTx("expense", expCat, expAmt);
                   }
                 }}
-                placeholder="食費・交通費など"
+                placeholder="食費・交通費 / 非計画・破局…"
+                aria-label="支出カテゴリ"
               />
               <input
+                className="ledger-amt-input"
                 value={expAmt}
                 onChange={(e) => setExpAmt(e.target.value)}
                 onKeyDown={(e) => {
@@ -356,13 +464,15 @@ export function RecordTab() {
                   }
                 }}
                 placeholder="5000"
+                inputMode="numeric"
+                aria-label="支出金額"
               />
               <button type="button" onClick={() => addTx("expense", expCat, expAmt)}>
-                追加
+                ADD
               </button>
             </div>
-            <div className="form-row">
-              <span className="field-label">収入</span>
+            <div className="form-row ledger-form-row">
+              <span className="field-label">INC</span>
               <input
                 value={incCat}
                 onChange={(e) => setIncCat(e.target.value)}
@@ -373,8 +483,10 @@ export function RecordTab() {
                   }
                 }}
                 placeholder="給与・副業など"
+                aria-label="収入カテゴリ"
               />
               <input
+                className="ledger-amt-input"
                 value={incAmt}
                 onChange={(e) => setIncAmt(e.target.value)}
                 onKeyDown={(e) => {
@@ -384,9 +496,11 @@ export function RecordTab() {
                   }
                 }}
                 placeholder="300000"
+                inputMode="numeric"
+                aria-label="収入金額"
               />
               <button type="button" onClick={() => addTx("income", incCat, incAmt)}>
-                追加
+                ADD
               </button>
             </div>
           </div>
@@ -394,38 +508,61 @@ export function RecordTab() {
       )}
 
       {subTab === "diary" && (
-        <div className="sub-panel">
-          <textarea
-            ref={diaryRef}
-            className="diary-editor"
-            value={diary}
-            onChange={(e) => setDiary(e.target.value)}
-            rows={12}
-            placeholder="今日の日記…"
-          />
+        <div className="sub-panel magi-rack diary-vault">
+          <div className="magi-mod hatch-danger">
+            <div className="magi-mod-head">
+              <span className="term-tag term-tag--danger">[ 機密メモ ]</span>
+              <button
+                type="button"
+                className="ghost"
+                onClick={() => setDiaryRevealed((v) => !v)}
+              >
+                {diaryRevealed ? "再封印" : "復号して編集"}
+              </button>
+            </div>
+            <div
+              className={`magi-mod-body data-sealed-host${diaryRevealed ? " is-revealed" : ""}`}
+            >
+              <textarea
+                ref={diaryRef}
+                className={`diary-editor${diaryRevealed ? "" : " text-redacted data-sealed"}`}
+                value={diary}
+                onChange={(e) => setDiary(e.target.value)}
+                rows={12}
+                readOnly={!diaryRevealed}
+                placeholder={
+                  diaryRevealed ? "今日の日記…" : "復号するまで内容は表示されません"
+                }
+                aria-label="日記"
+              />
+            </div>
+          </div>
         </div>
       )}
 
-      <div className="save-block">
-        <button type="button" className="primary" onClick={() => void handleSave()} disabled={busy}>
-          {busy ? "保存中…" : "保存 (Ctrl+S)"}
-        </button>
-        <p
-          className={`save-notice ${saveNotice?.kind ?? ""} ${noticeVisible ? "visible" : ""}${
-            saveNotice?.kind === "error" ? " error-text" : ""
-          }`}
-          role={saveNotice?.kind === "error" ? "alert" : undefined}
-        >
-          {saveNotice?.text ?? ""}
-        </p>
-        <span className="hint">選択中の日付を一括保存</span>
+      <div className="save-block magi-mod" style={{ marginTop: "-1px" }}>
+        <div className="magi-mod-body">
+          <button type="button" className="primary" onClick={() => void handleSave()} disabled={busy}>
+            {busy ? "保存中…" : "保存 (Ctrl+S)"}
+          </button>
+          {saveNotice?.text && noticeVisible ? (
+            <p
+              className={`sys-log${saveNotice.kind === "error" ? " sys-log--err" : " sys-log--ok"}`}
+              role={saveNotice.kind === "error" ? "alert" : undefined}
+            >
+              {`> ${saveNotice.text}`}
+            </p>
+          ) : (
+            <span className="hint guide">選択中の日付を一括保存</span>
+          )}
+        </div>
       </div>
       {status && (
         <p
-          className={`status-line${statusKind === "error" ? " error-text" : ""}`}
+          className={`sys-log${statusKind === "error" ? " sys-log--err" : ""}`}
           role={statusKind === "error" ? "alert" : undefined}
         >
-          {status}
+          {`> ${status}`}
         </p>
       )}
     </section>

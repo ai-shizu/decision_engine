@@ -109,6 +109,11 @@ def consult(
         external_research_id=external_research_id)
 
 
+def warm_consult_runtime(*, probe_llm: bool = True) -> dict:
+    """CONSULT 用 LLM/埋め込みを事前ウォーム (タブ再入場のコールドスタート対策)。"""
+    return get_engine().ensure_runtime_warm(probe_llm=probe_llm)
+
+
 def last_interview_report() -> dict | None:
     """F4b: 直前の consult() 呼び出しが面接講評 (interview_report.v1) を
     生成していればそれを返す (それ以外は None)。stdio 層が応答へ検証済み
@@ -433,14 +438,19 @@ def data_source_stats() -> dict:
             "count": count,
             "mtime": _mtime_iso(path),
         }
-    # F-16 (SPEC_FOXTROT_UI.md §10.2改定): 保持ESは active_es.md ただ1件。
-    # レガシーが ES_DIR に物理的に残っていてもカウントには数えない
-    # (読み手側整合 — es_manager と同じ「真実の源は ACTIVE_ES のみ」)。
-    es_exists = ACTIVE_ES.exists()
+    # M20-N: ES は企業別ファイル群。count = ライブラリ件数。
+    from . import es_manager as _es_mgr
+    es_docs = _es_mgr.load_es_documents()
+    es_exists = len(es_docs) > 0
+    es_mtime = None
+    if ACTIVE_ES.exists():
+        es_mtime = _mtime_iso(ACTIVE_ES)
+    elif es_docs:
+        es_mtime = _mtime_iso(Path(es_docs[0]["path"]))
     result["es"] = {
         "exists": es_exists,
-        "count": 1 if es_exists else 0,
-        "mtime": _mtime_iso(ACTIVE_ES),
+        "count": len(es_docs),
+        "mtime": es_mtime,
     }
     knowledge_exists = DATA_KNOWLEDGE.is_dir()
     result["knowledge"] = {
@@ -592,52 +602,129 @@ def _sanitize_document_filename(filename: str) -> str:
     return name or "untitled.txt"
 
 
-def _import_es_document(content: str, *, status: StatusCallback | None = None) -> dict:
-    """F-16 (SPEC_FOXTROT_UI.md §10.2改定・指揮官裁定): 保持ESは
-    active_es.md ただ1件に収束させる。ES_DIR 内の他ファイル (レガシー) は
-    削除しない (破壊操作は禁止 — 読み手側の不可視化 (es_manager) のみで
-    単一性を保証する)。
-    """
+def _import_es_document(
+    content: str,
+    *,
+    company_name: str | None = None,
+    confirm_overwrite: bool = False,
+    replace_es_id: str | None = None,
+    status: StatusCallback | None = None,
+) -> dict:
+    """企業名付き ES 保存。表記揺れ・既存上書きは確認フラグ無しでは書かない。"""
+    from . import es_manager
+
+    company = (company_name or "").strip()
+    if not company:
+        company = es_manager.extract_company_name(content, fallback="")
+    if not company:
+        raise ValueError("ES 取込には企業名が必要です")
+
     ES_DIR.mkdir(parents=True, exist_ok=True)
-    canonical_content = canonicalize_text(content)
+    canonical_content = canonicalize_text(
+        es_manager.ensure_company_header(content, company),
+    )
+    dest_path = es_manager.es_path_for_company(company)
     digest = hashlib.blake2b(
         canonical_content.encode("utf-8"), digest_size=16).hexdigest()
-    if ACTIVE_ES.exists():
+
+    exact_existing = None
+    if dest_path.exists():
         try:
+            existing_text = dest_path.read_text(encoding="utf-8")
             existing_digest = hashlib.blake2b(
-                canonicalize_text(ACTIVE_ES.read_text(encoding="utf-8")).encode("utf-8"),
-                digest_size=16,
+                canonicalize_text(existing_text).encode("utf-8"), digest_size=16,
             ).hexdigest()
         except (OSError, UnicodeDecodeError):
+            existing_text = ""
             existing_digest = None
+        parsed = None
+        try:
+            parsed = es_manager._parse_es(dest_path)
+        except (OSError, UnicodeDecodeError, AttributeError):
+            parsed = None
+        exact_existing = {
+            "id": dest_path.stem,
+            "company_name": (parsed or {}).get("company_name") or company,
+            "path": dest_path.name,
+        }
         if existing_digest == digest:
             if status:
                 status("完了 (同一内容が既に存在するためスキップ)")
             return {
                 "imported": False, "skipped": True, "dest": "es",
-                "message": "同一内容が既に存在するためスキップしました",
+                "path": dest_path.name,
+                "company_name": company,
+                "message": f"「{company}」の同一 ES が既にあるためスキップしました",
             }
 
-    # write_bytes (write_text ではない): Windows の text モードは "\n"→"\r\n"
-    # 変換を行い、read_bytes() ベースの上記ハッシュ比較と食い違って冪等性
-    # 判定が壊れる (既知の罠 — import_document 本流と同じ理由)。
+    similar = es_manager.find_similar_companies(company)
+    # replace_es_id 指定時はその ID を置換対象として優先
+    replace_id = (replace_es_id or "").strip() or None
+    needs_gate = False
+    conflict_exact = exact_existing if exact_existing is not None else None
+    conflict_similar = similar
+
+    if not confirm_overwrite:
+        if conflict_exact is not None or conflict_similar:
+            needs_gate = True
+        if replace_id:
+            # 未確認のまま replace 指定は拒否相当 — 確認を要求
+            needs_gate = True
+
+    if needs_gate and not confirm_overwrite:
+        primary = conflict_exact or (conflict_similar[0] if conflict_similar else None)
+        old_label = (primary or {}).get("company_name") or "(既存)"
+        return {
+            "imported": False,
+            "skipped": False,
+            "dest": "es",
+            "needs_confirmation": True,
+            "company_name": company,
+            "path": dest_path.name,
+            "conflict": {
+                "exact": conflict_exact,
+                "similar": conflict_similar,
+            },
+            "message": (
+                f"既存の「{old_label}」のESを新しいファイルに置き換えますか？"
+                if primary else
+                f"「{company}」のES取込には確認が必要です"
+            ),
+        }
+
+    # 確認済み: 別名エントリを置換する場合は旧ファイルを削除
+    if confirm_overwrite and replace_id:
+        old_path = ES_DIR / f"{replace_id}.md"
+        if not old_path.exists():
+            # stem のみ渡された場合
+            old_path = ES_DIR / replace_id
+        if old_path.exists() and old_path.resolve() != dest_path.resolve():
+            try:
+                old_path.unlink()
+            except OSError:
+                pass
+
+    durable_atomic_write_text(dest_path, canonical_content)
     durable_atomic_write_text(ACTIVE_ES, canonical_content)
 
     if status:
         status("追記完了")
         status("完了")
 
+    msg = f"「{company}」の ES を取り込みました ({dest_path.name})"
+    if confirm_overwrite and (conflict_exact or replace_id):
+        msg = f"「{company}」の ES を置き換えました ({dest_path.name})"
+
     return {
-        "imported": True, "skipped": False, "dest": "es", "path": ACTIVE_ES.name,
-        "message": f"active_es.md へ取り込みました ({ACTIVE_ES.name})",
+        "imported": True, "skipped": False, "dest": "es",
+        "path": dest_path.name,
+        "company_name": company,
+        "message": msg,
     }
 
 
 def active_es() -> dict:
-    """F-16 (SPEC_FOXTROT_UI.md §10.2): ImportTab の ES_ACTIVE パネル用View。
-    未登録なら {"exists": False}。W-32: filename はログ/永続化に書かない
-    (本文は本人の書類なので本人UIへの一時表示は可)。
-    """
+    """最新 ES 1件の View (後方互換)。未登録なら {"exists": False}。"""
     from . import es_manager
 
     doc = es_manager.get_active_es()
@@ -645,17 +732,60 @@ def active_es() -> dict:
         return {"exists": False}
     return {
         "exists": True,
+        "id": doc["id"],
         "title": doc["title"],
+        "company_name": doc["company_name"],
         "target_domain": doc["target_domain"],
         "keywords": doc["keywords"],
         "body": doc["body"],
         "char_count": doc["char_count"],
-        "mtime": _mtime_iso(ACTIVE_ES),
+        "mtime": _mtime_iso(Path(doc["path"])),
     }
 
 
+def get_es(es_id: str) -> dict:
+    """企業別 ES を id / 企業名で解決。未ヒットは {"exists": False}。"""
+    from . import es_manager
+
+    doc = es_manager.select_es(es_id)
+    if doc is None:
+        return {"exists": False}
+    return {
+        "exists": True,
+        "id": doc["id"],
+        "title": doc["title"],
+        "company_name": doc["company_name"],
+        "target_domain": doc["target_domain"],
+        "keywords": doc["keywords"],
+        "body": doc["body"],
+        "char_count": doc["char_count"],
+        "mtime": _mtime_iso(Path(doc["path"])),
+    }
+
+
+def list_es() -> dict:
+    """企業別 ES 一覧 (本文なし)。"""
+    from . import es_manager
+
+    items = []
+    for doc in es_manager.load_es_documents():
+        items.append({
+            "id": doc["id"],
+            "company_name": doc["company_name"],
+            "title": doc["title"],
+            "target_domain": doc["target_domain"],
+            "char_count": doc["char_count"],
+            "mtime": _mtime_iso(Path(doc["path"])),
+        })
+    return {"items": items}
+
+
 def import_document(
-    content: str, filename: str, dest: str, *, status: StatusCallback | None = None,
+    content: str, filename: str, dest: str, *,
+    company_name: str | None = None,
+    confirm_overwrite: bool = False,
+    replace_es_id: str | None = None,
+    status: StatusCallback | None = None,
 ) -> dict:
     """dest は "es"/"knowledge" の2値ホワイトリストのみ (§2.2.2 裁定1)。
     UI の分類結果を信用せず拒絶ゲートをここで再検証する — バックエンドは
@@ -677,7 +807,13 @@ def import_document(
         status(f"{filename} を検証中")
 
     if dest == "es":
-        return _import_es_document(content, status=status)
+        return _import_es_document(
+            content,
+            company_name=company_name,
+            confirm_overwrite=bool(confirm_overwrite),
+            replace_es_id=replace_es_id,
+            status=status,
+        )
 
     target_dir = _DOCUMENT_DEST_DIRS[dest]
     target_dir.mkdir(parents=True, exist_ok=True)
@@ -986,6 +1122,7 @@ __all__ = [
     "import_line_batch",
     "import_line_text",
     "latest_context_manifest",
+    "list_es",
     "oracle_payload",
     "oracle_report",
     "probe_answer",
@@ -995,6 +1132,7 @@ __all__ = [
     "run_profiler",
     "tensor_rebuild",
     "twin_forecast",
+    "warm_consult_runtime",
     "sync_calendar_ics_batch",
     "sync_calendar_ics_content",
     "load_record",

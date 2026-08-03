@@ -443,7 +443,7 @@ macOS＋full Xcode＋CocoaPods＋Rust iOS targetsを固定したrelease環境で
 開発・archive経路もM1で固定する。
 
 - initialize: <code>npm run tauri ios init</code>
-- simulator/device development: <code>npm run tauri ios dev</code>
+- simulator/device development: <code>npm run tauri:ios-dev -- --features pocket-brain,secure-vault</code>（T4-B-2: <code>tauri.ios.dev.conf.json</code> overlay 必須。素の <code>tauri ios dev</code> では HMR 用 ATS/CSP が載らない。default feature 無し — features 省略は不完全構成）
 - Xcode archive inspection: <code>npm run tauri ios build -- --open</code>
 - release export: <code>npm run tauri ios build -- --export-method app-store-connect</code>
 

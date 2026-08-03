@@ -41,13 +41,8 @@ import numpy as np
 from .canonicalization import canonicalize_text
 from .offline_runtime import enforce_offline_environment
 from .paths import (
-    DIARY_BIN,
-    DIARY_META,
-    DIARY_MD,
     METADATA_JSON,
-    OUT_DIR,
     QUERY_BIN,
-    RAW_DIARY,
     VECTORS_BIN,
 )
 

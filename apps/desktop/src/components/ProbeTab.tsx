@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { probeAnswer, probeNext, probeStatus } from "../lib/engine";
 import { todayIso } from "../lib/dateUtils";
+import { useIsNarrowViewport } from "../lib/useIsNarrowViewport";
 import { uiErrorMessage } from "../lib/uiErrorMessages";
 import type {
   ProbeAxis,
@@ -8,6 +9,8 @@ import type {
   ProbeStage,
   ProbeStatus,
 } from "../lib/types";
+import { PocketProbePanel } from "./PocketProbePanel";
+import { PulseRaschDashboard } from "./PulseRaschDashboard";
 
 const AXIS_LABELS: Record<ProbeAxis, string> = {
   decision_threshold: "意思決定閾値",
@@ -24,15 +27,89 @@ const STAGE_LABELS: Record<ProbeStage, string> = {
   MEANING: "MEANING",
 };
 
-const STAGE_ORDER: ProbeStage[] = ["FACT", "CONTEXT", "EMOTION", "MEANING"];
-
 const INSIGHT_LABELS: Record<string, string> = {
   "probe.low_confidence": "観測不足",
   "probe.under_probed": "未探索",
   "probe.stage_complete": "完了",
 };
 
+type ProbeSurface = "pb_probe" | "pulse_rasch" | "legacy";
+
+/**
+ * PROBE tab — stoic instrument rack (Japanese-first, no flavor noise).
+ */
 export function ProbeTab() {
+  const isNarrow = useIsNarrowViewport();
+  const [surface, setSurface] = useState<ProbeSurface>("pb_probe");
+
+  if (isNarrow) {
+    return (
+      <section className="panel probe-panel probe-panel-mobile magi-rack">
+        <div className="magi-mod-head" style={{ borderBottom: "1px solid var(--border)" }}>
+          <span>自己探索</span>
+        </div>
+        <PocketProbePanel />
+      </section>
+    );
+  }
+
+  return (
+    <section className="panel probe-panel magi-rack">
+      <div className="probe-topline">
+        <h2>自己探索</h2>
+      </div>
+
+      <div className="tactical-array" role="tablist" aria-label="PROBE面">
+        <button
+          type="button"
+          role="tab"
+          aria-selected={surface === "pb_probe"}
+          className={surface === "pb_probe" ? "active" : ""}
+          onClick={() => setSurface("pb_probe")}
+        >
+          [ 探索 ]
+        </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={surface === "pulse_rasch"}
+          className={surface === "pulse_rasch" ? "active" : ""}
+          onClick={() => setSurface("pulse_rasch")}
+        >
+          [ パルス ]
+        </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={surface === "legacy"}
+          className={surface === "legacy" ? "active" : ""}
+          onClick={() => setSurface("legacy")}
+        >
+          [ 旧 ]
+        </button>
+      </div>
+
+      {surface === "pb_probe" && <PocketProbePanel />}
+      {surface === "pulse_rasch" && (
+        <div className="magi-mod">
+          <div className="magi-mod-head">
+            <span>パルス / Rasch</span>
+          </div>
+          <div className="magi-mod-body">
+            <PulseRaschDashboard />
+          </div>
+        </div>
+      )}
+      {surface === "legacy" && <LegacyProbePanel />}
+    </section>
+  );
+}
+
+/**
+ * M18-D 由来の Python sidecar (Coraxis PROBE ファネル) 経路。非破壊で残置。
+ * PocketProbePanel (オンデバイス) と並存する後方互換サーフェス。
+ */
+function LegacyProbePanel() {
   const [status, setStatus] = useState<ProbeStatus | null>(null);
   const [question, setQuestion] = useState<ProbeQuestionView | null>(null);
   const [answer, setAnswer] = useState("");
@@ -133,71 +210,48 @@ export function ProbeTab() {
   const charCount = answer.length;
 
   return (
-    <section className="panel probe-panel">
-      <div className="probe-topline">
-        <div>
-          <h2>PROBE (自己探索)</h2>
-          <p className="hint">
-            進捗{" "}
-            <span className="term-metric">
-              {progress ? `${progress.percent}%` : "—"}
-            </span>
-            {activeAxis && activeStage && (
-              <>
-                {" "}
-                / 現在{" "}
-                <span className="term-metric">
-                  {AXIS_LABELS[activeAxis]} · {STAGE_LABELS[activeStage]}
-                </span>
-              </>
-            )}
-          </p>
-        </div>
-        <button type="button" className="secondary" disabled={busy} onClick={() => void handleRefresh()}>
+    <div className="magi-mod">
+      <div className="magi-mod-head">
+        <span>PROBE (legacy)</span>
+        <button
+          type="button"
+          className="ghost"
+          disabled={busy}
+          onClick={() => void handleRefresh()}
+        >
           更新
         </button>
       </div>
-
-      {error && (
-        <p className="error-text probe-error" role="alert">
-          {error}
-        </p>
-      )}
-
-      <div className="probe-grid">
-        <div className="probe-main">
-          <div className="probe-stepper" aria-label="ファネル段階">
-            {STAGE_ORDER.map((stage) => {
-              const done =
-                activeStage !== null &&
-                STAGE_ORDER.indexOf(stage) < STAGE_ORDER.indexOf(activeStage);
-              const active = stage === activeStage;
-              return (
-                <span
-                  key={stage}
-                  className={`probe-step${active ? " active" : ""}${done ? " done" : ""}`}
-                >
-                  {STAGE_LABELS[stage]}
-                </span>
-              );
-            })}
-          </div>
-
-          <div className="term-panel probe-question" aria-live="polite">
-            {question ? (
-              <>
-                <p className="term-label">
-                  {AXIS_LABELS[question.axis]} / {STAGE_LABELS[question.stage]}
-                </p>
-                <p>{question.question}</p>
-              </>
-            ) : (
-              <p className="hint">「次の質問」でバックエンドが選んだ静的質問を表示します。</p>
-            )}
-          </div>
-
-          {question && (
+      <div className="magi-mod-body">
+        {error && (
+          <p className="error-text probe-error" role="alert">
+            {error}
+          </p>
+        )}
+        <p className="hint">
+          進捗{" "}
+          <span className="term-value">
+            {progress ? `${progress.percent}%` : "—"}
+          </span>
+          {activeAxis && activeStage && (
             <>
+              {" "}
+              / 現在{" "}
+              <span className="term-value">
+                {AXIS_LABELS[activeAxis]} ・ {STAGE_LABELS[activeStage]}
+              </span>
+            </>
+          )}
+        </p>
+
+        <div className="term-panel">
+          <p className="term-header">質問</p>
+          {question ? (
+            <>
+              <p className="hint">
+                {AXIS_LABELS[question.axis]} / {STAGE_LABELS[question.stage]}
+              </p>
+              <p>{question.question}</p>
               <textarea
                 ref={answerRef}
                 className="probe-answer"
@@ -212,7 +266,9 @@ export function ProbeTab() {
                 }}
                 onKeyDown={onAnswerKeyDown}
               />
-              <div className={`probe-char-counter${charCount >= 120 ? " error-text" : ""}`}>
+              <div
+                className={`probe-char-counter${charCount >= 120 ? " error-text" : ""}`}
+              >
                 {charCount}/120
               </div>
               <div className="action-row">
@@ -226,9 +282,7 @@ export function ProbeTab() {
                 </button>
               </div>
             </>
-          )}
-
-          {!question && (
+          ) : (
             <div className="action-row">
               <button
                 ref={nextBtnRef}
@@ -240,39 +294,41 @@ export function ProbeTab() {
                 {busy ? "保存中…" : "次の質問"}
               </button>
               {status?.active_session?.status === "closed" && (
-                <p className="hint">直近セッションは完了しました。新しい質問を開始できます。</p>
+                <p className="hint">
+                  直近セッションは完了しました。新しい質問を開始できます。
+                </p>
               )}
             </div>
           )}
         </div>
 
-        <div className="probe-side">
-          <div className="probe-axis-list">
-            {(status?.axes ?? []).map((row) => (
-              <div
-                key={row.axis}
-                className={`probe-axis-row${row.axis === activeAxis ? " active" : ""}`}
-              >
-                <span className="probe-axis-label">{AXIS_LABELS[row.axis]}</span>
-                <span className="probe-axis-metric">
-                  conf {row.confidence.toFixed(2)} / pri {row.priority.toFixed(2)}
-                </span>
-                <span className="probe-axis-metric">
-                  {STAGE_LABELS[row.stage]} · nodes {row.node_count}
-                </span>
-              </div>
-            ))}
-            {!status && <p className="hint">軸状態を読み込み中…</p>}
-          </div>
+        <div className="term-panel">
+          <p className="term-header">軸の状態</p>
+          {(status?.axes ?? []).map((row) => (
+            <div key={row.axis} className="term-row">
+              <span className="term-source-name">{AXIS_LABELS[row.axis]}</span>
+              <span className="term-value">
+                conf {row.confidence.toFixed(2)} / pri {row.priority.toFixed(2)}
+              </span>
+              <span className="term-value">
+                {STAGE_LABELS[row.stage]} ・ nodes {row.node_count}
+              </span>
+            </div>
+          ))}
+          {!status && <p className="hint">軸状態を読み込み中…</p>}
+        </div>
 
+        <div className="term-panel">
+          <p className="term-header">インサイト</p>
           <ul className="probe-insight-list">
             {(status?.insights ?? []).map((ins) => (
               <li key={`${ins.kind}-${ins.axis}-${ins.stage}`}>
-                <span className="term-metric">{INSIGHT_LABELS[ins.message_code] ?? ins.message_code}</span>
+                <span className="term-value">
+                  {INSIGHT_LABELS[ins.message_code] ?? ins.message_code}
+                </span>
                 {" — "}
-                {AXIS_LABELS[ins.axis]} / {STAGE_LABELS[ins.stage]}
-                {" "}
-                <span className="probe-axis-metric">({ins.priority.toFixed(2)})</span>
+                {AXIS_LABELS[ins.axis]} / {STAGE_LABELS[ins.stage]}{" "}
+                <span className="term-value">({ins.priority.toFixed(2)})</span>
               </li>
             ))}
             {status && status.insights.length === 0 && (
@@ -281,6 +337,6 @@ export function ProbeTab() {
           </ul>
         </div>
       </div>
-    </section>
+    </div>
   );
 }

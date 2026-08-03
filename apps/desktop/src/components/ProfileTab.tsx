@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import {
   oraclePayload,
   oracleReport,
+  runProfiler,
   sourceCode,
   tensorRebuild,
   twinForecast,
@@ -9,9 +10,21 @@ import {
   type TwinForecast,
   type TwinScenario,
 } from "../lib/engine";
+import { hapticTwinWarning } from "../lib/haptics";
+import {
+  maxPLapseFromArray,
+  twinNeedsWarning,
+} from "../lib/foregroundRestore";
 import type { SourceCodeView } from "../lib/types";
 import { uiErrorMessage } from "../lib/uiErrorMessages";
 import { ContextObservatoryContainer } from "./ContextObservatoryContainer";
+import { CognitiveCalendar } from "./calendar/CognitiveCalendar";
+import { GapTensorDashboard } from "./GapTensorDashboard";
+import {
+  BlackboxProfilePanel,
+  fetchLatestBlackboxProfile,
+} from "./consult/BlackboxProfilePanel";
+import type { BlackboxProfileView } from "../lib/blackboxProfileView";
 
 function evidenceCount(evidence: unknown): number {
   return Array.isArray(evidence) ? evidence.length : 0;
@@ -30,10 +43,27 @@ export function ProfileTab() {
   const [tensorResult, setTensorResult] = useState<{ rebuilt: boolean; rows: number } | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState("");
+  const [blackboxProfile, setBlackboxProfile] = useState<BlackboxProfileView | null>(null);
+  const [blackboxError, setBlackboxError] = useState<string | null>(null);
 
   const [horizonDays, setHorizonDays] = useState(14);
-  const [twinMode, setTwinMode] = useState<"daily" | "interview">("daily");
-  const [interviewTurns, setInterviewTurns] = useState(0);
+  const [profilerMsg, setProfilerMsg] = useState("");
+
+  const reloadBlackbox = useCallback(async () => {
+    setBlackboxError(null);
+    try {
+      const view = await fetchLatestBlackboxProfile();
+      setBlackboxProfile(view);
+    } catch (e) {
+      console.error("blackbox profile load failed", e);
+      setBlackboxError("BLACKBOX プロファイルを読めませんでした（未測定として表示）");
+      setBlackboxProfile(null);
+    }
+  }, []);
+
+  useEffect(() => {
+    void reloadBlackbox();
+  }, [reloadBlackbox]);
 
   const loadSterile = useCallback(async () => {
     setBusy("refresh");
@@ -71,14 +101,17 @@ export function ProfileTab() {
     const scenario: TwinScenario = {
       horizon_days: Math.max(1, Math.min(60, Math.round(horizonDays))),
       calendar: [],
-      mode: twinMode,
-      interview_turns: twinMode === "interview" ? Math.max(0, Math.min(20, Math.round(interviewTurns))) : null,
+      mode: "daily",
     };
     setBusy("twin");
     setError("");
     try {
       const res = await twinForecast(scenario, "global");
       setForecast(res);
+      const maxPLapse = maxPLapseFromArray(res.p_lapse);
+      if (twinNeedsWarning(maxPLapse, res.critical_days?.length ?? 0)) {
+        hapticTwinWarning();
+      }
     } catch {
       setError(uiErrorMessage("TWIN_FORECAST"));
     } finally {
@@ -99,24 +132,68 @@ export function ProfileTab() {
     }
   }
 
+  async function handleProfilerRebuild() {
+    setBusy("profiler");
+    setError("");
+    setProfilerMsg("");
+    try {
+      const res = await runProfiler();
+      setProfilerMsg(res.message);
+      await loadSterile();
+    } catch {
+      setError(uiErrorMessage("PROFILER_RUN"));
+    } finally {
+      setBusy(null);
+    }
+  }
+
   return (
     <section className="panel profile-panel">
+      <CognitiveCalendar />
+
+      <GapTensorDashboard />
+
+      <BlackboxProfilePanel
+        profile={blackboxProfile}
+        loadError={blackboxError}
+        onReload={() => {
+          void reloadBlackbox();
+        }}
+      />
+
       <div className="profile-topline">
         <div>
-          <h2>プロファイル分析 (PROFILE)</h2>
-          <p className="hint">
+          <h2>
+            <span className="desktop-only">
+              PROFILE <span className="term-tag term-tag--info">[ ANALYSIS ]</span>
+            </span>
+            <span className="mobile-only">
+              <span className="term-tag term-tag--info">[ プロフィール ]</span>
+            </span>
+          </h2>
+          <div className="ascii-sep ascii-sep--info" role="separator">
+            --- TELEMETRY ---
+          </div>
+          <p className="hint guide">
             Source Code / Echo メトリクスはマウント時に無菌データのみ読み込みます。
-            言語化レポート・Twin・Tensor は明示ボタンのみ。
           </p>
         </div>
         <button type="button" className="ghost" disabled={busy !== null} onClick={() => void loadSterile()}>
-          {busy === "refresh" ? "更新中…" : "無菌データを再読込"}
+          {busy === "refresh" ? "更新中…" : (
+            <>
+              <span className="desktop-only">無菌データを再読込</span>
+              <span className="mobile-only">データを再読込</span>
+            </>
+          )}
         </button>
       </div>
 
       <div className="profile-grid">
         <div className="profile-section">
-          <p className="term-header">SOURCE_CODE</p>
+          <p className="term-header">
+            <span className="desktop-only">SOURCE_CODE</span>
+            <span className="mobile-only">思考のソース（生ログ）</span>
+          </p>
           {source ? (
             <div className="profile-axis-list">
               {Object.entries(source.axes).map(([axisId, axis]) => (
@@ -138,7 +215,10 @@ export function ProfileTab() {
         </div>
 
         <div className="profile-section">
-          <p className="term-header">ECHO_METRICS</p>
+          <p className="term-header">
+            <span className="desktop-only">ECHO_METRICS</span>
+            <span className="mobile-only">対話・行動指標</span>
+          </p>
           {oracle ? (
             <>
               <div className="profile-metric-row">
@@ -150,12 +230,16 @@ export function ProfileTab() {
                 <span className="term-value">{fmtNum(oracle.sufficiency.coverage)}</span>
               </div>
               <div className="profile-metric-row">
-                <span className="term-source-name">sufficiency.twin_bss</span>
+                <span className="term-source-name">
+                  sufficiency.twin_bss
+                </span>
                 <span className="term-value">{fmtNum(oracle.sufficiency.twin_bss)}</span>
               </div>
               <div className="profile-metric-row">
                 <span className="term-source-name">sufficiency.gate_passed</span>
-                <span className="term-value">{oracle.sufficiency.gate_passed ? "true" : "false"}</span>
+                <span className="term-value">
+                  {oracle.sufficiency.gate_passed ? "true" : "false"}
+                </span>
               </div>
               <div className="profile-metric-row">
                 <span className="term-source-name">state.r_now</span>
@@ -173,14 +257,18 @@ export function ProfileTab() {
                 <span className="term-source-name">state.oii_streak_days</span>
                 <span className="term-value">{oracle.state.oii_streak_days}</span>
               </div>
-              {oracle.couplings.filter((c) => c.sig).map((c, i) => (
-                <div key={`${c.src}-${c.dst}-${i}`} className="profile-metric-row">
-                  <span className="term-source-name">coupling {c.src}→{c.dst}</span>
-                  <span className="term-value">
-                    lag {c.lag_days}d ρ {fmtNum(c.rho)} n {c.n_eff}
-                  </span>
-                </div>
-              ))}
+              {oracle.couplings
+                .filter((c) => c.sig)
+                .map((c, i) => (
+                  <div key={`${c.src}-${c.dst}-${i}`} className="profile-metric-row">
+                    <span className="term-source-name">
+                      coupling {c.src}→{c.dst}
+                    </span>
+                    <span className="term-value">
+                      lag {c.lag_days}d ρ {fmtNum(c.rho)} n {c.n_eff}
+                    </span>
+                  </div>
+                ))}
               {oracle.forecast.critical_days.length > 0 && (
                 <div className="profile-metric-row">
                   <span className="term-source-name">forecast.critical_days</span>
@@ -209,15 +297,28 @@ export function ProfileTab() {
       </div>
 
       <div className="profile-section">
-        <p className="term-header">ORACLE_REPORT</p>
-        <p className="hint">7B 言語化レポート。数値表示には使わない。明示クリックでのみ生成。</p>
+        <p className="term-header">
+          <span className="desktop-only">ORACLE_REPORT</span>
+          <span className="mobile-only">予測の解説レポート</span>
+        </p>
+        <p className="hint mobile-only">
+          数値の代わりに、いまの傾向を文章で説明します。ボタンを押したときだけ生成します。
+        </p>
+        <p className="hint dev-noise desktop-only">
+          7B 言語化レポート。数値表示には使わない。明示クリックでのみ生成。
+        </p>
         <button
           type="button"
           className="primary"
           disabled={busy !== null}
           onClick={() => void handleOracleReport()}
         >
-          {busy === "oracle" ? "生成中…" : "Oracle 言語化レポートを生成"}
+          {busy === "oracle" ? "生成中…" : (
+            <>
+              <span className="desktop-only">Oracle 言語化レポートを生成</span>
+              <span className="mobile-only">解説レポートを生成</span>
+            </>
+          )}
         </button>
         {oracleAnalysis && (
           <pre className="profile-report">{oracleAnalysis}</pre>
@@ -225,10 +326,14 @@ export function ProfileTab() {
       </div>
 
       <div className="profile-section">
-        <p className="term-header">TWIN_FORECAST</p>
+        <p className="term-header">
+          <span className="desktop-only">TWIN_FORECAST</span>
+          <span className="mobile-only">将来予測シミュレーション</span>
+        </p>
         <div className="profile-form-row">
           <label>
-            horizon_days
+            <span className="desktop-only">horizon_days</span>
+            <span className="mobile-only">予測日数</span>
             <input
               type="number"
               min={1}
@@ -237,31 +342,20 @@ export function ProfileTab() {
               onChange={(e) => setHorizonDays(Number(e.target.value))}
             />
           </label>
-          <label>
-            mode
-            <select value={twinMode} onChange={(e) => setTwinMode(e.target.value as "daily" | "interview")}>
-              <option value="daily">daily</option>
-              <option value="interview">interview</option>
-            </select>
-          </label>
-          <label>
-            interview_turns
-            <input
-              type="number"
-              min={0}
-              max={20}
-              value={interviewTurns}
-              disabled={twinMode !== "interview"}
-              onChange={(e) => setInterviewTurns(Number(e.target.value))}
-            />
-          </label>
         </div>
         <button
           type="button"
           disabled={busy !== null}
           onClick={() => void handleTwinForecast()}
         >
-          {busy === "twin" ? "計算中…" : "Twin 予測を実行"}
+          {busy === "twin" ? (
+            "計算中…"
+          ) : (
+            <>
+              <span className="desktop-only">Twin 予測を実行</span>
+              <span className="mobile-only">将来予測を実行</span>
+            </>
+          )}
         </button>
         {forecast && (
           <>
@@ -281,11 +375,14 @@ export function ProfileTab() {
                 <span className="term-value">{forecast.critical_days.join(", ")}</span>
               </div>
             )}
-            {forecast.r_q50 && (
+            {forecast.r_q50 && forecast.r_q50.length > 0 && (
               <div className="profile-metric-row">
                 <span className="term-source-name">r_q50 (head)</span>
                 <span className="term-value">
-                  {forecast.r_q50.slice(0, 5).map((v) => fmtNum(v)).join(", ")}
+                  {forecast.r_q50
+                    .slice(0, 5)
+                    .map((v) => fmtNum(v))
+                    .join(", ")}
                 </span>
               </div>
             )}
@@ -294,14 +391,25 @@ export function ProfileTab() {
       </div>
 
       <div className="profile-section">
-        <p className="term-header">TENSOR_DIAGNOSTICS</p>
-        <p className="hint">結合テンソルの再構築。明示ボタンのみ。</p>
+        <p className="term-header">
+          <span className="desktop-only">TENSOR_DIAGNOSTICS</span>
+          <span className="mobile-only">バランス分析の再構築</span>
+        </p>
+        <p className="hint desktop-only">結合テンソルの再構築。明示ボタンのみ。</p>
+        <p className="hint mobile-only">バランス分析データを明示的に再構築します。</p>
         <button
           type="button"
           disabled={busy !== null}
           onClick={() => void handleTensorRebuild()}
         >
-          {busy === "tensor" ? "再構築中…" : "Tensor を再構築"}
+          {busy === "tensor" ? (
+            "再構築中…"
+          ) : (
+            <>
+              <span className="desktop-only">Tensor を再構築</span>
+              <span className="mobile-only">分析データを再構築</span>
+            </>
+          )}
         </button>
         {tensorResult && (
           <div className="profile-metric-row">
@@ -314,12 +422,38 @@ export function ProfileTab() {
       </div>
 
       <div className="profile-section">
-        <p className="term-header">CONTEXT_OBSERVATORY</p>
-        <p className="hint">
+        <p className="term-header">
+          <span className="desktop-only">CONTEXT_OBSERVATORY</span>
+          <span className="mobile-only">相談コンテキストの内訳</span>
+        </p>
+        <p className="hint desktop-only">
           直近の相談で 12,000 字コンテキストが何を採用・棄却したかの決定論的マニフェスト。
           明示ボタンでのみ取得し、生本文・実名・quote は表示しません。
         </p>
+        <p className="hint mobile-only">
+          直近の相談でどの情報を採用・見送ったかの内訳です。ボタンを押したときだけ取得します。
+        </p>
         <ContextObservatoryContainer />
+      </div>
+
+      <div className="profile-section">
+        <p className="term-header">AIによる自己プロフィールの再構築</p>
+        <p className="hint">
+          日記・予定・家計など取り込み済みのデータから、自己理解プロフィールを再計算します。
+        </p>
+        <button
+          type="button"
+          className="secondary"
+          disabled={busy !== null}
+          onClick={() => void handleProfilerRebuild()}
+        >
+          {busy === "profiler" ? "再構築中…" : "プロフィールを再構築"}
+        </button>
+        {profilerMsg && (
+          <p className="status-line" role="status">
+            {profilerMsg}
+          </p>
+        )}
       </div>
 
       {error && (

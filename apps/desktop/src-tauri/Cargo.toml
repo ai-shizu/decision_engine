@@ -1,7 +1,7 @@
 [package]
 name = "pkb-desktop"
 version = "0.1.0"
-description = "PKB — Personal Knowledge Base desktop app"
+description = "Coraxis — offline decision support desktop app"
 authors = ["ai-shizu"]
 edition = "2021"
 default-run = "pkb-desktop"
@@ -12,12 +12,14 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
+cc = "1"
 
 [dependencies]
 tauri = { version = "2", features = [] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-tokio = { version = "1", features = ["time", "macros", "rt", "sync"] }
+tokio = { version = "1", features = ["time", "macros", "rt", "sync", "fs", "io-util"] }
+tokio-util = { version = "=0.7.18", default-features = false, features = ["rt"] }
 base64 = "=0.22.1"
 ed25519-dalek = "=3.0.0"
 sha2 = "=0.11.0"
@@ -47,6 +49,31 @@ tokio-rustls = { version = "=0.26.4", default-features = false, features = ["rin
 # LlamaSampler::grammar/grammar_lazy are #[cfg(feature = "common")] in 0.1.151.
 llama-cpp-2 = { version = "=0.1.151", default-features = false, features = ["metal", "common"], optional = true }
 
+# M3 SQLCipher vault (docs/m3_action_plan.md §2.1). Opt-in only — default desktop
+# builds must not pull SQLCipher. `bundled-sqlcipher` uses Apple CommonCrypto on
+# iOS/macOS; NEVER enable `bundled-sqlcipher-vendored-openssl` (OpenSSL link ban).
+# `auto_extension` is available without `load_extension` (dylib); M9 registers
+# sqlite-vec via static `sqlite3_auto_extension` so iOS never needs a .dylib.
+rusqlite = { version = "=0.40.1", default-features = false, features = ["bundled-sqlcipher"], optional = true }
+# M9 local RAG: sqlite-vec C sources compiled + statically linked at build time
+# (`SQLITE_CORE`). Never `load_extension` / never ship a separate vec dylib.
+sqlite-vec = { version = "=0.1.9", optional = true }
+tauri-plugin-fs = "2"
+tauri-plugin-dialog = "2"
+log = "0.4"
+# LINE export decode fallback (BOM-aware UTF-8/UTF-16/Shift-JIS). Pure Rust,
+# no C toolchain — safe on the default build and on iOS cross-compiles.
+encoding_rs = "=0.8.35"
+encoding_rs_io = "=0.1.7"
+# EDINET lane (DESIGN_V3 Phase 0): stream ZIP/XML/CSV. zip must NOT enable
+# default features (AES/bzip2/lzma/xz/zstd). flate2 is pinned to the existing
+# rust_backend/miniz_oxide path so zlib-rs is never introduced alongside it.
+quick-xml = { version = "=0.41.0", default-features = false, features = ["encoding"] }
+zip = { version = "=8.6.0", default-features = false, features = ["deflate-flate2"] }
+flate2 = { version = "=1.1.9", default-features = false, features = ["rust_backend"] }
+csv-core = "=0.1.13"
+tempfile = "=3.27.0"
+
 [features]
 # NOTE: the blueprint prose says "reqwest/rustls-tls"; reqwest 0.13.4's actual
 # feature name is "rustls" (verified via `cargo add --dry-run` feature listing
@@ -56,6 +83,45 @@ egress-live = ["dep:hickory-resolver", "dep:rustls", "dep:hyper-rustls", "dep:to
 # M4 on-device LLM scaffold. Enables the optional llama-cpp-2 dep (requires cmake
 # + C++ toolchain). Never enable on default/release desktop builds.
 pocket-brain = ["llama-cpp-2", "libc"]
+# BLACKBOX SIMULATOR core (docs/SPEC_BLACKBOX_SIMULATOR.md). Pure-std module,
+# zero new dependencies. Keep off default builds until the arena ships. Enabling
+# it alongside secure-vault additionally compiles the vault v12 record lane
+# (db/blackbox_repo.rs); the simulator itself never depends on secure-vault.
+blackbox-sim = []
+# Phase 6-A / R-8: second factor of the profile-write AND gate (build flag).
+# Depends on blackbox-sim so the feature is meaningless alone. NEVER add to
+# default — mirrors egress-live. CI runs the PHANTOM-BOT calibration suite as
+# a required predecessor job before any job that enables this flag.
+blackbox-profile-write = ["blackbox-sim"]
+# LLM Flavor Layer (docs/SPEC_FLAVOR_LAYER.md v2). Type skeleton + witness seal
+# only in F-1 — no llama-cpp-2 / no pocket-brain dependency (FLV-I-08 /
+# placement correction: top-level flavor/, not llm/flavor/). NEVER add to
+# default (FLV-R-4). Generation path bridges under a separate cfg in F-3.
+flavor-layer = []
+# F-3 LLM flavor live path (docs/SPEC_FLAVOR_LAYER.md v3 §11 / FLV-I-12).
+# Pulls flavor-layer + pocket-brain + blackbox-sim so arena wiring under
+# blackbox_arena/ is meaningful (same shape as blackbox-profile-write =
+# ["blackbox-sim"]). NEVER add to default (FLV-R-4 / egress-live pattern).
+# Direction is one-way only: this feature may depend on blackbox-sim;
+# blackbox-sim must NEVER gain flavor-live / pocket-brain / flavor-layer
+# (FLV-I-08 / commander absolute condition 2026-07-29).
+flavor-live = ["flavor-layer", "pocket-brain", "blackbox-sim"]
+# M3 Phase 0+: SQLCipher + typed objc2 Keychain link gate. Keep off default
+# builds. All Apple bindings live in one objc2 type system; do not reintroduce
+# security-framework alongside them (docs/m3_action_plan.md §4.2.1).
+secure-vault = [
+    "dep:rusqlite",
+    "dep:sqlite-vec",
+    "dep:objc2",
+    "dep:objc2-security",
+    "dep:objc2-local-authentication",
+    "dep:objc2-foundation",
+    "dep:objc2-core-foundation",
+    "dep:objc2-ui-kit",
+    "dep:objc2-vision",
+    "dep:block2",
+    "dep:objc2-event-kit",
+]
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61.2", features = [
@@ -75,8 +141,67 @@ libc = "0.2"
 
 # M4 pocket-brain jetsam probe (proc_pid_rusage). Optional; only pulled by the
 # `pocket-brain` feature so the default desktop build is unaffected.
+# M3 Keychain: exact-pin typed objc2 stack, Apple-only and secure-vault-only
+# (docs/m3_action_plan.md §4.2.1).
 [target.'cfg(target_vendor = "apple")'.dependencies]
 libc = { version = "0.2", optional = true }
+objc2 = { version = "=0.6.4", default-features = false, features = ["std"], optional = true }
+objc2-security = { version = "=0.3.2", default-features = false, features = ["std", "objc2", "SecAccessControl", "SecBase", "SecItem", "SecRandom"], optional = true }
+objc2-local-authentication = { version = "=0.3.2", default-features = false, features = ["std", "LAContext"], optional = true }
+objc2-foundation = { version = "=0.3.2", default-features = false, features = ["std", "NSString", "NSDictionary", "NSObject", "NSValue", "NSNotification", "NSData", "NSArray", "NSURL", "objc2-core-foundation"], optional = true }
+objc2-core-foundation = { version = "=0.3.2", default-features = false, features = ["alloc", "CFData", "CFDictionary", "CFError", "objc2"], optional = true }
+objc2-vision = { version = "=0.3.2", default-features = false, features = [
+    "std",
+    "VNRecognizeTextRequest",
+    "VNRequest",
+    "VNObservation",
+    "VNRequestHandler",
+    "block2",
+    "objc2-core-foundation",
+], optional = true }
+# M20 データ連携 Part 2: EventKit calendar read bridge (docs blueprint §3.x).
+# Permission request (`requestFullAccessToEventsWithCompletion:`) is
+# completion-block based — `block2` bridges it to a blocking Rust call
+# (mirrors the objc2-vision `block2` feature already enabled above).
+block2 = { version = "=0.6.2", optional = true }
+objc2-event-kit = { version = "=0.3.2", default-features = false, features = [
+    "std",
+    "EKTypes",
+    "EKObject",
+    "EKCalendarItem",
+    "EKCalendar",
+    "EKEvent",
+    "EKEventStore",
+    "block2",
+], optional = true }
+
+# M3 Phase 4-A background auto-lock: UIKit lifecycle notification constants.
+# iOS-only because UIKit does not exist on macOS; already compiled in the graph
+# via tao/tauri, so this exact pin adds no new build (docs/m3_action_plan.md §0).
+[target.'cfg(target_os = "ios")'.dependencies]
+# Phase 10: UIFeedbackGenerator* for Taptic Engine (haptics.rs).
+objc2-ui-kit = { version = "=0.3.2", default-features = false, features = [
+    "std",
+    "UIApplication",
+    "UIFeedbackGenerator",
+    "UIImpactFeedbackGenerator",
+    "UISelectionFeedbackGenerator",
+    "UINotificationFeedbackGenerator",
+    "block2",
+], optional = true }
 
 [dev-dependencies]
 tokio = { version = "1", features = ["test-util", "macros", "rt", "time"] }
+
+[[bin]]
+name = "flavor-a1-digest"
+path = "src/bin/flavor_a1_digest.rs"
+required-features = ["blackbox-sim"]
+
+# Flavor-layer seal probes use custom --cfg flags (SPEC §9.1-3). Declare them
+# so `unexpected_cfgs` does not warn when the probes are inactive.
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = [
+    'cfg(flavor_seal_probe_verified)',
+    'cfg(flavor_seal_probe_checked)',
+] }

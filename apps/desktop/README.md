@@ -1,4 +1,4 @@
-# PKB Desktop (Tauri v2)
+# Coraxis Desktop (Tauri v2)
 
 Chrome と同様、**インストーラーをダウンロードして PC にインストールする**デスクトップアプリです。  
 外部ネットワークは使用せず、Rust ↔ Python を **stdio JSON** で直接通信します（HTTP サーバーなし）。

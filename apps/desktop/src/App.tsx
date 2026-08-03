@@ -6,32 +6,21 @@ import {
 import { ConsultTab } from "./components/ConsultTab";
 import { ImportTab } from "./components/ImportTab";
 import { InterviewTab } from "./components/InterviewTab";
+import { MobileChrome } from "./components/MobileChrome";
+import { ModelSetupGate } from "./components/ModelSetupGate";
+import { PocketBrainPanel } from "./components/PocketBrainPanel";
 import { ProbeTab } from "./components/ProbeTab";
 import { ProfileTab } from "./components/ProfileTab";
 import { RecordTab } from "./components/RecordTab";
 import { SettingsTab } from "./components/SettingsTab";
 import { TitleBar } from "./components/TitleBar";
-import { engineHealth, engineReady } from "./lib/engine";
+import { VaultPanel } from "./components/VaultPanel";
+import { engineHealth, engineReady, warmConsultRuntime } from "./lib/engine";
 import type { MainTab } from "./lib/types";
+import { useForegroundRestore } from "./lib/useForegroundRestore";
+import { useVaultAutoUnlock } from "./lib/useVaultAutoUnlock";
+import { useIsNarrowViewport } from "./lib/useIsNarrowViewport";
 import "./App.css";
-// M4 pocket-brain (docs/architecture_blueprint.md §3.9). Mounted on the loading
-// screen because that is where the iOS shell sits (engine never becomes ready on
-// device). On desktop it shows briefly before the 7-tab UI takes over.
-import { PocketBrainPanel } from "./components/PocketBrainPanel";
-
-function LoadingScreen({ message }: { message: string }) {
-  return (
-    <div className="shell">
-      <TitleBar />
-      <main className="app loading">
-        <h1>PKB</h1>
-        <p className="status-line">{message}</p>
-        <p className="hint">初回起動はエンジン展開に 30 秒ほどかかることがあります。</p>
-        <PocketBrainPanel />
-      </main>
-    </div>
-  );
-}
 
 const TABS: { id: MainTab; label: string }[] = [
   { id: "record", label: "RECORD" },
@@ -108,42 +97,98 @@ function handleTabKeyDown(
 }
 
 export default function App() {
+  const [modelGateDone, setModelGateDone] = useState(false);
   const [ready, setReady] = useState(false);
-  const [status, setStatus] = useState("PKB を起動しています…");
+  const [status, setStatus] = useState("Coraxis を起動しています…");
   const [tab, setTab] = useState<MainTab>("record");
+  const isNarrow = useIsNarrowViewport();
+
+  // Phase 10: Jetsam / vault-lock → ordered vault→LLM→analytics resync.
+  useForegroundRestore(modelGateDone);
+  // Friction removal: auto-invoke OS biometric on launch / foreground so the
+  // vault unlocks seamlessly without a manual button press (mobile-safe: runs
+  // here at App level, not in the Settings-only VaultPanel).
+  useVaultAutoUnlock(modelGateDone);
 
   useEffect(() => {
+    if (!modelGateDone) return;
     let cancelled = false;
 
+    function sleep(ms: number): Promise<void> {
+      return new Promise((r) => setTimeout(r, ms));
+    }
+
+    /** Desktop: fail-open after budget. Mobile: unlock immediately (no sidecar scare). */
+    const ENGINE_READY_BUDGET_MS = 3000;
+
     async function waitForEngine() {
-      for (let i = 0; i < 120 && !cancelled; i++) {
+      // M20-M: iOS/mobile never depends on Python sidecar for shell unlock.
+      if (isNarrow) {
+        if (!cancelled) {
+          setReady(true);
+          setStatus("");
+        }
+        // Soft background upgrade when sidecar eventually answers.
+        for (let i = 0; i < 40 && !cancelled; i += 1) {
+          try {
+            if (await engineReady()) {
+              try {
+                await engineHealth();
+              } catch {
+                /* best-effort */
+              }
+              if (!cancelled) setStatus("準備完了");
+              return;
+            }
+          } catch {
+            /* keep soft */
+          }
+          await sleep(500);
+        }
+        return;
+      }
+
+      const deadline = Date.now() + ENGINE_READY_BUDGET_MS;
+      while (!cancelled && Date.now() < deadline) {
         try {
           if (await engineReady()) {
-            await engineHealth();
+            try {
+              await engineHealth();
+            } catch {
+              /* health is best-effort once ready flips */
+            }
             if (!cancelled) {
               setReady(true);
               setStatus("準備完了（完全オフライン）");
             }
+            // CONSULT 用 LLM/埋め込みをバックグラウンドでウォーム (入力阻害なし)
+            void warmConsultRuntime(true).catch(() => {
+              /* best-effort */
+            });
             return;
           }
         } catch {
-          /* retry */
+          /* retry until budget */
         }
         if (!cancelled) setStatus("エンジン起動中…");
-        await new Promise((r) => setTimeout(r, 1000));
+        await sleep(250);
       }
-      if (!cancelled) setStatus("エンジンの起動に失敗しました。アプリを再起動してください。");
+      if (!cancelled) {
+        setReady(true);
+        setStatus("準備完了");
+      }
     }
 
     void waitForEngine();
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [isNarrow, modelGateDone]);
 
-  // SPEC_FOXTROT_UI.md §3.6 / SPEC_UI_ORPHAN: Alt+[1-6] (PROBE まで) + [1-7] (PROFILE 追加)。
+  // SPEC_FOXTROT_UI.md §3.6 — desktop Alt+[1-7] only. (PROBE shipped when
+  // tabs still spanned Alt+[1-6]; SETTINGS/PROFILE later extended the range.)
   useEffect(() => {
-    if (!ready) return;
+    if (!ready || isNarrow) return;
     const onKey = (e: KeyboardEvent) => {
       if (e.altKey && !e.ctrlKey && /^[1-7]$/.test(e.key)) {
         const idx = Number(e.key) - 1;
@@ -156,59 +201,103 @@ export default function App() {
     };
     window.addEventListener("keydown", onKey, { capture: true });
     return () => window.removeEventListener("keydown", onKey, { capture: true });
-  }, [ready]);
+  }, [ready, isNarrow]);
 
-  if (!ready) {
-    return <LoadingScreen message={status} />;
+  // Offline setup gate: block main UI until pocket-brain.gguf exists
+  // (or pocket-brain feature absent → soft skip inside the gate).
+  if (!modelGateDone) {
+    return <ModelSetupGate onReady={() => setModelGateDone(true)} />;
   }
 
+  // M20-E: mobile shell is primary — never trap under LoadingScreen.
+  // N4: propagate live `ready` (do not hardcode true).
+  if (isNarrow) {
+    return (
+      <div className="shell">
+        <TitleBar />
+        <MobileChrome statusLine={status} engineReady={ready} />
+      </div>
+    );
+  }
+
+  // N1: PocketBrain + Vault stay mounted for the desktop app lifetime.
+  // Loading copy is gated by `ready`; panels are only visually hidden after unlock
+  // so GGUF warm / vault watchers are not torn down by the 3s fail-open.
   return (
     <div className="shell">
       <TitleBar />
-      <header className="topbar">
-        <div>
-          <h1>PKB</h1>
-          <p className="subtitle">{status}</p>
-        </div>
-        <nav
-          className="tabs"
-          role="tablist"
-          aria-label="メインタブ"
-          aria-orientation="horizontal"
-        >
-          {TABS.map(({ id, label }, index) => (
-            <button
-              key={id}
-              id={tabButtonId(id)}
-              type="button"
-              role="tab"
-              aria-selected={tab === id}
-              aria-controls={tabPanelId(id)}
-              tabIndex={tab === id ? 0 : -1}
-              className={tab === id ? "active" : ""}
-              onClick={() => setTab(id)}
-              onKeyDown={(event) => handleTabKeyDown(event, index)}
+      <div
+        className={
+          ready
+            ? "desktop-pb-keepalive"
+            : "app loading desktop-chrome desktop-pb-keepalive"
+        }
+        hidden={ready}
+        aria-hidden={ready}
+      >
+        {!ready ? (
+          <>
+            <h1>CORAXIS</h1>
+            <p className="status-line">{status}</p>
+            <p className="hint">
+              初回起動はエンジン展開に 30 秒ほどかかることがあります。
+            </p>
+          </>
+        ) : null}
+        <PocketBrainPanel />
+        <VaultPanel />
+      </div>
+      {ready ? (
+        <div className="desktop-chrome">
+          <header className="topbar">
+            <div className="topbar-brand">
+              <div className="topbar-brand-row">
+                <h1>CORAXIS</h1>
+                <p className="topbar-meta">LOCAL · OFFLINE</p>
+              </div>
+              <p className="subtitle">{status || "READY"}</p>
+            </div>
+            <nav
+              className="tabs"
+              role="tablist"
+              aria-label="メインタブ"
+              aria-orientation="horizontal"
             >
-              {label}
-            </button>
-          ))}
-        </nav>
-      </header>
-      <main className="content">
-        {TABS.map(({ id }) => (
-          <div
-            key={id}
-            id={tabPanelId(id)}
-            className="main-tab-panel"
-            role="tabpanel"
-            aria-labelledby={tabButtonId(id)}
-            hidden={tab !== id}
-            tabIndex={tab === id ? 0 : -1}
-          >
-            {tab === id && renderMainTab(id)}
-          </div>
-        ))}
-      </main>
+              {TABS.map(({ id, label }, index) => (
+                <button
+                  key={id}
+                  id={tabButtonId(id)}
+                  type="button"
+                  role="tab"
+                  aria-selected={tab === id}
+                  aria-controls={tabPanelId(id)}
+                  tabIndex={tab === id ? 0 : -1}
+                  className={tab === id ? "active" : ""}
+                  onClick={() => setTab(id)}
+                  onKeyDown={(event) => handleTabKeyDown(event, index)}
+                >
+                  {label}
+                </button>
+              ))}
+            </nav>
+          </header>
+          <main className="content">
+            {TABS.map(({ id }) => (
+              <div
+                key={id}
+                id={tabPanelId(id)}
+                className="main-tab-panel"
+                role="tabpanel"
+                aria-labelledby={tabButtonId(id)}
+                hidden={tab !== id}
+                tabIndex={tab === id ? 0 : -1}
+              >
+                {tab === id && renderMainTab(id)}
+              </div>
+            ))}
+          </main>
+        </div>
+      ) : null}
     </div>
   );
 }

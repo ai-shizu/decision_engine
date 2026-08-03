@@ -182,7 +182,12 @@ npm run tauri ios init
 3. **シミュレータ起動:**
    ```bash
    cd apps/desktop
-   npm run tauri ios dev
+   npm run tauri:ios-dev
+   ```
+   （**M0 限定の履歴手順** — 当時は featureless UI シェル到達が DoD。`pocket-brain` / `secure-vault` は未導入。）
+   **現在の標準形（T4-B-2 以降）:**
+   ```bash
+   npm run tauri:ios-dev -- --features pocket-brain,secure-vault
    ```
    iPhoneシミュレータが起動し、**既存の7タブUIシェルが描画され、タブ切替（Alt/タップ）が動作し、クラッシュしない**こと。
 4. **エンジン挙動の許容範囲:** 本タスクに embedded Python は無いため、engine 依存操作（consult・record 等の実データ処理）は **"not ready" / 未接続の既存挙動**で構わない。**engine を動かそうとするな**（それはM2）。DoDは「UIシェルが正常に立ち上がること」であって「エンジンが応答すること」ではない。

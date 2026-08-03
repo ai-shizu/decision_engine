@@ -136,8 +136,25 @@ def test_03_deterministic_id_cross_link() -> None:
     assert re.search(rf"function\s+{re.escape(TAB_PANEL_ID)}\s*\(\s*id\s*:\s*MainTab", src)
     assert "main-tab-${id}" in src or 'main-tab-" + id' in src or "main-tab-" in src
     assert "main-tabpanel-${id}" in src or "main-tabpanel-" in src
+    # ID generators must stay deterministic. Date.now elsewhere in App.tsx is
+    # the ENGINE_READY_BUDGET wall-clock deadline (not an ID source) — ban it
+    # only inside the ID helper functions.
+    btn_fn = re.search(
+        rf"function\s+{re.escape(TAB_BUTTON_ID)}\b[\s\S]*?^\}}",
+        src,
+        flags=re.M,
+    )
+    panel_fn = re.search(
+        rf"function\s+{re.escape(TAB_PANEL_ID)}\b[\s\S]*?^\}}",
+        src,
+        flags=re.M,
+    )
+    assert btn_fn and panel_fn, "tab id helper functions missing"
+    for block in (btn_fn.group(0), panel_fn.group(0)):
+        assert "Math.random" not in block
+        assert "Date.now" not in block
+        assert "useId" not in block
     assert "Math.random" not in src
-    assert "Date.now" not in src
     assert "useId" not in src
     nav = _tabs_nav_block(src)
     assert re.search(rf"id=\{{{re.escape(TAB_BUTTON_ID)}\(id\)\}}", nav)

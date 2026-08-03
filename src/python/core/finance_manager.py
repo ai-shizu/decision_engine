@@ -17,7 +17,7 @@ from .durable_persistence import (
     durable_atomic_write_text,
     read_json_file,
 )
-from .paths import FINANCE_JSON, PROJECT_ROOT as ROOT
+from .paths import FINANCE_JSON
 
 _VALID_TYPES = frozenset({"expense", "income"})
 _TYPE_ALIASES = {

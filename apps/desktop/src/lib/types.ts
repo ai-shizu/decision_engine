@@ -61,6 +61,9 @@ export type MainTab =
   | "profile"
   | "settings";
 
+/** @deprecated M20-D: use MainTab. Kept as alias so call sites stay readable. */
+export type MobileSurface = MainTab;
+
 export type ProbeAxis =
   | "decision_threshold"
   | "reward_bias"
@@ -154,18 +157,18 @@ export interface GdPersona {
 }
 
 /**
- * F4a (SPEC_FOXTROT_UI.md §7 裁定2): interview_sim コンフィギュレータ。
+ * M20-N: interview_sim コンフィギュレータ。
  * F-13: スプレッド禁止、明示列挙フィールドのみバックエンドへ送る。
  * F-18: stance は面接スタンス (既定 adversarial)。
- * industry/genre はプリセットID (バックエンドの静的バンクで解決) または
- * 自由記述文字列。ES が存在する場合はバックエンド側で ES 駆動が優先される。
+ * esId: 企業別 ES の id。空文字 = ゼロベース（ESなし）。
  */
 export interface InterviewConfig {
   industry: string;
   genre: string;
   difficulty: "standard" | "hard" | "extreme";
   stance: "adversarial" | "standard";
-  customTheme?: string;
+  /** 企業別 ES id。"" = ゼロベース面接。 */
+  esId?: string;
 }
 
 /** F4b: 成績表の1軸分の評価 (バックエンドで軸ホワイトリスト・evidence必須を検証済み) */
@@ -237,24 +240,16 @@ export interface InterviewReport {
   tensor_profile: TensorProfileReportV1;
 }
 
-/** INTERVIEW タブのチャットメッセージ */
+/** INTERVIEW タブのチャットメッセージ (legacy interview_sim/es_review/gd_sim) */
 export interface InterviewMessage {
   role: "user" | "ai" | "feedback";
-  /** GD で AI 発言を話者別に分割した時の話者名 (面接では "面接官") */
   speaker?: string;
   text: string;
   streaming?: boolean;
   /** ユーザー発言に付随する応答時間 (秒) */
   responseTimeSec?: number;
-  /** gd_sim 議論フェーズのみ: 生テキストをスレッド renderer へ渡す */
-  renderAs?: "plain" | "gd_thread";
 }
 
-/** GD_FORMAT_V1 の1発言分 (parseGdSpeakerTurns の戻り値) */
-export interface GdSpeakerTurn {
-  speaker: string;
-  text: string;
-}
 
 export type RecordSubTab = "events" | "finance" | "diary";
 
@@ -265,10 +260,21 @@ export interface SourceStat {
   mtime: string | null;
 }
 
-/** F-16 (SPEC_FOXTROT_UI.md §10.2): es.view の戻り値。保持ESは
- * active_es.md ただ1件 (単一化)。未登録なら exists=false のみで他は省略。 */
+/** M20-N: 企業別 ES 一覧の1件 (本文なし)。 */
+export interface EsListItem {
+  id: string;
+  company_name: string;
+  title: string;
+  target_domain: string;
+  char_count: number;
+  mtime: string | null;
+}
+
+/** es.view: 最新 ES 1件の View (後方互換)。未登録なら exists=false。 */
 export interface EsView {
   exists: boolean;
+  id?: string;
+  company_name?: string;
   title?: string;
   target_domain?: string;
   keywords?: string[];

@@ -5,6 +5,7 @@ from __future__ import annotations
 import base64
 import json
 import math
+import os
 import struct
 import sys
 import zlib
@@ -26,7 +27,31 @@ from core.score_ranking import rank_hits  # noqa: E402
 DIM = 384
 LANES = 4
 BLOCK_BYTES = DIM * LANES * 4 + LANES * 4
-NATIVE_SEARCH_EXE = ROOT / "build" / "search_engine.exe"
+# Resolve the native binary from the real checkout root — NOT core.paths.SEARCH_EXE.
+# conftest.py rebinds PKB_PROJECT_ROOT to a disposable sandbox before collection, so
+# SEARCH_EXE always points at the empty sandbox build/ and would permanently skip.
+# Platform suffix matches core.paths._EXE_SUFFIX (Windows .exe, else none).
+# Mirror core.paths._EXE_SUFFIX (os.name) — do not hardcode ".exe".
+_EXE_SUFFIX = ".exe" if os.name == "nt" else ""
+NATIVE_SEARCH_EXE = ROOT / "build" / f"search_engine{_EXE_SUFFIX}"
+
+
+def _require_native_search_engine() -> Path:
+    """Skip with an explicit reason when the C++ engine was not built locally.
+
+    Intent of this module is cross-runtime ranking determinism. That intent is
+    valid only when the native artifact exists; absence must not fail the suite
+    on developer machines that have not run the C++ build. When the artifact
+    IS present, every test below must run (never unconditional skip).
+    """
+    if not NATIVE_SEARCH_EXE.is_file():
+        pytest.skip(
+            f"native search engine not built at {NATIVE_SEARCH_EXE} "
+            f"(build src/cpp → build/search_engine{{.exe}}); "
+            "determinism contracts require the artifact when present"
+        )
+    return NATIVE_SEARCH_EXE
+
 
 # Two float32 vectors measured to rank oppositely under the current ARM NEON
 # four-accumulator reduction and NumPy matmul. The NumPy score gap is one ULP,
@@ -115,11 +140,9 @@ def _write_index(path: Path, vectors: np.ndarray) -> None:
 
 
 def _native_search(index: Path, query: np.ndarray, top_k: int) -> list[tuple[int, float]]:
-    assert NATIVE_SEARCH_EXE.is_file(), (
-        f"native search engine is missing: {NATIVE_SEARCH_EXE}"
-    )
+    exe = _require_native_search_engine()
     client = SearchDaemonClient(
-        exe=NATIVE_SEARCH_EXE,
+        exe=exe,
         scratch_path=index.with_name("scratch.bin"),
     )
     try:

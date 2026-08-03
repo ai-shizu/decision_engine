@@ -9,32 +9,297 @@
 //! `GenerationParams`). Chat keeps the prior sampler chain; `kakeibo_v1` uses
 //! grammar + greedy and validates the full buffer before emitting `validated`.
 
-// `token_to_str` + `Special` are deprecated upstream in favour of `token_to_piece`,
-// but that replacement requires an `encoding_rs::Decoder` (a new dependency not in
-// the blueprint). The current path is functional; migrating it is deferred to a
-// later phase, so we explicitly allow the deprecation here rather than pull the dep.
-#![allow(deprecated)]
-
 use std::num::NonZeroU32;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{mpsc, Arc, Mutex};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicU8, Ordering};
+use std::sync::{mpsc, Arc, Mutex, Weak};
 use std::thread;
+use std::time::Duration;
 
 use serde::Serialize;
 use tauri::ipc::Channel;
+use tokio::sync::oneshot;
+use tokio_util::sync::CancellationToken;
 
 use llama_cpp_2::context::params::LlamaContextParams;
 use llama_cpp_2::llama_backend::LlamaBackend;
 use llama_cpp_2::llama_batch::LlamaBatch;
 use llama_cpp_2::model::params::LlamaModelParams;
-use llama_cpp_2::model::{AddBos, LlamaChatMessage, LlamaModel, Special};
+use llama_cpp_2::model::{AddBos, LlamaChatMessage, LlamaModel};
 use llama_cpp_2::sampling::LlamaSampler;
+use llama_cpp_2::token::LlamaToken;
+use llama_cpp_2::TokenToStringError;
 
-use super::params::{GenerationParams, LoadParams};
-use super::prompt::{build_prompt, TASK_KAKEIBO_V1};
-use super::schema::{KakeiboEntryV1, KAKEIBO_V1_GBNF};
-use crate::monitor::{MemPhase, MemoryMonitor};
+use super::params::{
+    force_cpu_oracle_enabled, GenerationParams, LoadParams, MAX_N_CTX, MIN_N_CTX,
+};
+use super::prompt::{
+    build_prompt, LlmTaskId, TASK_COGNITIVE_DISTORTION_V1, TASK_INTERVIEW_EVALUATION_V1,
+    TASK_KAKEIBO_V1, TASK_METACOGNITIVE_DEBRIEF_V1, TASK_RECEIPT_OCR_V1,
+};
+use super::schema::{
+    CognitiveDistortionReportV1, KakeiboEntryV1, ReceiptOcrV1, COGNITIVE_DISTORTION_V1_GBNF,
+    KAKEIBO_V1_GBNF, RECEIPT_OCR_V1_GBNF,
+};
+use super::token_batch::TokenStreamBatcher;
+use crate::coliseum::{
+    InterviewEvaluationV1, MetacognitiveDebriefV1, INTERVIEW_EVALUATION_V1_GBNF,
+    METACOGNITIVE_DEBRIEF_V1_GBNF,
+};
+use crate::monitor::{DegradationLevel, MemPhase, MemoryMonitor};
+
+/// Idle wake cadence for the worker's command loop. Bounds how long the worker
+/// may sit blocked before it observes a purge request and frees the model when
+/// no command arrives to wake it. Short enough to be prompt, long enough to be
+/// a negligible idle cost.
+const PURGE_POLL_INTERVAL: Duration = Duration::from_millis(250);
+/// Bounded ingress prevents a renderer or buggy caller from queueing an
+/// unbounded number of multi-GB model operations. Cancellation bypasses this
+/// queue through the lock-free governor.
+const LLM_COMMAND_QUEUE_CAPACITY: usize = 8;
+
+/// `LlmHandle::load/is_loaded/generate` bounds (2026-07-24 iOS-device
+/// investigation: `send_rag_chat`'s Vault calls already bound on a 5s
+/// `recv_timeout` — worker.rs — but these three used unbounded `recv()`/
+/// `.await`. A wedged worker thread (single dedicated thread; all
+/// `LlmCommand`s serialize through one queue) left every caller pending
+/// forever with no error, matching the observed CONSULT/interview freeze:
+/// device logs showed a clean embed-context construct+destroy, then total
+/// silence with no further llama.cpp output. These do not fix why the worker
+/// might wedge — they turn a silent hang into a surfaced, retryable error.
+///
+/// The worker keeps running past a caller's timeout (it only learns the
+/// receiver was dropped when it tries to reply); once whatever blocked it
+/// clears, the queue drains and the next call succeeds normally.
+const LLM_READY_PROBE_TIMEOUT: Duration = Duration::from_secs(15);
+/// mmap-load of a >1GB GGUF + Metal context construction. Observed well under
+/// 1s warm on this hardware; generous for a cold/thermally-throttled load.
+const LLM_LOAD_TIMEOUT: Duration = Duration::from_secs(60);
+/// Generous per user instruction ("モバイル推論時間を考慮して長めに"): covers
+/// a full ~384-900 token response even under poor (throttled/contended)
+/// mobile throughput. Flat wall-clock bound on the whole call, not an
+/// idle/per-token timeout — token progress still streams over the `tokens`
+/// Channel throughout; this only bounds the terminal completion signal.
+const LLM_GENERATE_TIMEOUT: Duration = Duration::from_secs(180);
+const EDINET_COORDINATOR_TIMEOUT: Duration = Duration::from_secs(30);
+pub const EDINET_MIN_START_HEADROOM_BYTES: u64 = 256 * 1024 * 1024;
+pub const EDINET_CANCEL_HEADROOM_BYTES: u64 = 128 * 1024 * 1024;
+#[cfg_attr(not(target_os = "ios"), allow(dead_code))]
+pub const ADMISSION_BACKGROUND: u32 = 1 << 0;
+pub const ADMISSION_MEMORY_PRESSURE: u32 = 1 << 1;
+pub const ADMISSION_THERMAL_PRESSURE: u32 = 1 << 2;
+
+/// Stable role boundary for free-form generation. Callers assemble rich RAG /
+/// interview context inside the user message; this system message supplies the
+/// model-level role that an instruction-tuned GGUF expects.
+const CHAT_SYSTEM_PROMPT: &str = "あなたはCoraxisのオンデバイス推論エンジンです。ユーザーの指示に正確かつ簡潔に、日本語で回答してください。";
+
+/// Incrementally reconstruct UTF-8 from llama token-piece bytes.
+///
+/// Qwen's byte-level BPE may split one Japanese scalar across multiple tokens.
+/// `llama-cpp-2` 0.1.151's convenience `token_to_piece` can return an empty
+/// string when its fixed output buffer is too small (`OutputFull`, zero input
+/// consumed), so generation uses `token_to_piece_bytes` and owns the boundary
+/// buffer explicitly.
+#[derive(Default)]
+struct Utf8TokenDecoder {
+    pending: Vec<u8>,
+}
+
+impl Utf8TokenDecoder {
+    fn push(&mut self, bytes: &[u8]) -> String {
+        self.pending.extend_from_slice(bytes);
+        let mut output = String::new();
+
+        loop {
+            let (valid_up_to, error_len) = match std::str::from_utf8(&self.pending) {
+                Ok(valid) => {
+                    output.push_str(valid);
+                    self.pending.clear();
+                    break;
+                }
+                Err(error) => (error.valid_up_to(), error.error_len()),
+            };
+
+            if valid_up_to > 0 {
+                // `valid_up_to` is supplied by `from_utf8` for this exact slice.
+                let valid = std::str::from_utf8(&self.pending[..valid_up_to])
+                    .expect("validated UTF-8 prefix");
+                output.push_str(valid);
+                self.pending.drain(..valid_up_to);
+            }
+
+            match error_len {
+                Some(invalid_len) => {
+                    output.push('\u{FFFD}');
+                    self.pending.drain(..invalid_len);
+                }
+                // A valid scalar is split at the current token boundary. Keep
+                // the suffix until the next piece arrives.
+                None => break,
+            }
+        }
+
+        output
+    }
+
+    fn finish(&mut self) -> String {
+        String::from_utf8_lossy(&std::mem::take(&mut self.pending)).into_owned()
+    }
+}
+
+fn required_piece_capacity(reported: i32) -> Option<usize> {
+    reported
+        .checked_neg()
+        .and_then(|size| usize::try_from(size).ok())
+        .filter(|size| *size > 0)
+}
+
+/// Decode the raw vocabulary bytes, retrying with llama.cpp's reported exact
+/// size when the common eight-byte fast-path is insufficient.
+fn token_piece_bytes(model: &LlamaModel, token: LlamaToken) -> Result<Vec<u8>, TokenToStringError> {
+    match model.token_to_piece_bytes(token, 8, false, None) {
+        Err(TokenToStringError::InsufficientBufferSpace(reported)) => {
+            let Some(required) = required_piece_capacity(reported) else {
+                return Err(TokenToStringError::InsufficientBufferSpace(reported));
+            };
+            model.token_to_piece_bytes(token, required, false, None)
+        }
+        result => result,
+    }
+}
+
+/// Lock-free memory governor shared between the Tauri `State` handle, the LLM
+/// worker thread, and the iOS lifecycle observer.
+///
+/// The iOS memory-warning / background callback runs on the main thread and may
+/// ONLY touch this via [`request_purge`](Self::request_purge): three atomic
+/// stores, no lock, no blocking. The heavy work — dropping the multi-GB model —
+/// happens later on the worker thread, never in the callback.
+pub struct LlmMemoryGovernor {
+    /// Monotonic generation boundary. A cancellation advances the epoch so the
+    /// currently running job stops without poisoning a later queued job.
+    cancel_epoch: AtomicU64,
+    /// Advances only for a purge. Load commands capture this value so work
+    /// queued before a Jetsam/background transition cannot rehydrate the model
+    /// after the purge has been consumed.
+    purge_epoch: AtomicU64,
+    /// Instructs the worker to drop the model/context and return memory to iOS.
+    purge_requested: AtomicBool,
+    /// Progressive degradation ladder (Nominal→Critical). Updated lock-free.
+    degradation: AtomicU8,
+    admission_bits: AtomicU32,
+    edinet_gate_closed: AtomicBool,
+    edinet_acquire_epoch: AtomicU64,
+    edinet_parked_epoch: AtomicU64,
+}
+
+impl LlmMemoryGovernor {
+    fn new() -> Self {
+        Self {
+            cancel_epoch: AtomicU64::new(0),
+            purge_epoch: AtomicU64::new(0),
+            purge_requested: AtomicBool::new(false),
+            degradation: AtomicU8::new(DegradationLevel::Nominal.as_u8()),
+            admission_bits: AtomicU32::new(0),
+            edinet_gate_closed: AtomicBool::new(false),
+            edinet_acquire_epoch: AtomicU64::new(0),
+            edinet_parked_epoch: AtomicU64::new(0),
+        }
+    }
+
+    /// Cancel the in-flight generation only (user "stop"). Lock-free.
+    pub fn request_cancel(&self) {
+        self.cancel_epoch.fetch_add(1, Ordering::SeqCst);
+    }
+
+    /// Request a full memory purge: cancel the in-flight generation AND drop the
+    /// model. Safe to call from the iOS main-thread callback or the Jetsam
+    /// sampler's `over_threshold` rising edge — three atomic updates, no lock, no
+    /// blocking (satisfies the no-heavy-work-in-callback rule). The heavy model
+    /// `Drop` happens later on the worker via [`take_purge`](Self::take_purge).
+    pub fn request_purge(&self) {
+        self.cancel_epoch.fetch_add(1, Ordering::SeqCst);
+        self.purge_epoch.fetch_add(1, Ordering::SeqCst);
+        self.purge_requested.store(true, Ordering::SeqCst);
+    }
+
+    /// Sync ladder rung from the thermal / pressure monitor (lock-free).
+    pub fn set_degradation(&self, level: DegradationLevel) {
+        self.degradation.store(level.as_u8(), Ordering::SeqCst);
+        self.set_admission_bit(
+            ADMISSION_THERMAL_PRESSURE,
+            level >= DegradationLevel::Serious,
+        );
+        self.set_admission_bit(
+            ADMISSION_MEMORY_PRESSURE,
+            level >= DegradationLevel::Critical,
+        );
+    }
+
+    pub fn degradation(&self) -> DegradationLevel {
+        DegradationLevel::from_u8(self.degradation.load(Ordering::SeqCst))
+    }
+
+    pub fn set_admission_bit(&self, bit: u32, restricted: bool) {
+        if restricted {
+            self.admission_bits.fetch_or(bit, Ordering::SeqCst);
+        } else {
+            self.admission_bits.fetch_and(!bit, Ordering::SeqCst);
+        }
+        if restricted {
+            self.request_cancel();
+        }
+    }
+
+    pub fn admission_bits(&self) -> u32 {
+        self.admission_bits.load(Ordering::SeqCst)
+    }
+
+    #[cfg_attr(not(target_os = "ios"), allow(dead_code))]
+    pub fn set_background_restricted(&self, restricted: bool) {
+        self.set_admission_bit(ADMISSION_BACKGROUND, restricted);
+    }
+
+    fn cancel_epoch(&self) -> u64 {
+        self.cancel_epoch.load(Ordering::SeqCst)
+    }
+
+    fn purge_epoch(&self) -> u64 {
+        self.purge_epoch.load(Ordering::SeqCst)
+    }
+
+    fn purge_pending(&self) -> bool {
+        self.purge_requested.load(Ordering::SeqCst)
+    }
+
+    fn load_is_stale(&self, submitted_purge_epoch: u64) -> bool {
+        self.purge_pending() || self.purge_epoch() != submitted_purge_epoch
+    }
+
+    fn is_cancelled_since(&self, start_epoch: u64) -> bool {
+        self.purge_requested.load(Ordering::SeqCst)
+            || self.cancel_epoch.load(Ordering::SeqCst) != start_epoch
+    }
+
+    /// Consume a pending purge request (true at most once per request).
+    fn take_purge(&self) -> bool {
+        self.purge_requested.swap(false, Ordering::SeqCst)
+    }
+}
+
+/// Persistent lifecycle event pushed to the frontend over a registered
+/// `tauri::ipc::Channel` (mirrors M6's `VaultLifecycleEvent`). Out-of-band from
+/// any single generation, so it uses its own sink rather than the token channel.
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "snake_case", tag = "kind")]
+pub enum LlmLifecycleEvent {
+    /// The model was dropped to survive memory pressure; the UI must suspend and
+    /// await an explicit reload.
+    MemoryPurged,
+    /// Thermal / memory ladder entered Serious or Critical — UI shows ambient warn.
+    Degradation { level: DegradationLevel },
+}
 
 /// One streamed token pushed to the frontend over `tauri::ipc::Channel`.
 #[derive(Clone, Serialize)]
@@ -45,6 +310,16 @@ pub struct TokenEvent {
     pub error: Option<String>,
     /// Set only on the final success event of a kakeibo extraction.
     pub validated: Option<KakeiboEntryV1>,
+    /// Set only on the final success event of CBT distortion extraction.
+    pub validated_distortions: Option<CognitiveDistortionReportV1>,
+    /// Set only on the final success event of receipt OCR extraction.
+    pub validated_receipt: Option<ReceiptOcrV1>,
+    /// Checksum gate result for receipt extract (`Σ amount + tax == total`).
+    pub receipt_verified: Option<bool>,
+    /// Layer-1 interview scorecard (transcript-only; Phase 14.3).
+    pub validated_interview_evaluation: Option<InterviewEvaluationV1>,
+    /// Layer-2 opt-in metacognitive debrief (Phase 14.3; never feeds pass/fail).
+    pub validated_metacognitive_debrief: Option<MetacognitiveDebriefV1>,
 }
 
 /// Resolved generation branch. Pure helper — unit-tested without a model.
@@ -52,14 +327,29 @@ pub struct TokenEvent {
 pub enum GenerationMode {
     Chat,
     KakeiboV1,
+    CognitiveDistortionV1,
+    ReceiptOcrV1,
+    InterviewEvaluationV1,
+    MetacognitiveDebriefV1,
 }
 
 /// Map `task_id` to a generation mode. Unknown ids fail closed (no chat fallback).
 pub fn resolve_generation_mode(task_id: Option<&str>) -> Result<GenerationMode, String> {
     match task_id {
         None => Ok(GenerationMode::Chat),
-        Some(TASK_KAKEIBO_V1) => Ok(GenerationMode::KakeiboV1),
-        Some(other) => Err(format!("unknown extraction task_id: {other}")),
+        Some(s) => {
+            let id = LlmTaskId::parse(s)?;
+            if id.as_str() != s {
+                return Err(format!("unknown extraction task_id: {s}"));
+            }
+            Ok(match id {
+                LlmTaskId::KakeiboV1 => GenerationMode::KakeiboV1,
+                LlmTaskId::CognitiveDistortionV1 => GenerationMode::CognitiveDistortionV1,
+                LlmTaskId::ReceiptOcrV1 => GenerationMode::ReceiptOcrV1,
+                LlmTaskId::InterviewEvaluationV1 => GenerationMode::InterviewEvaluationV1,
+                LlmTaskId::MetacognitiveDebriefV1 => GenerationMode::MetacognitiveDebriefV1,
+            })
+        }
     }
 }
 
@@ -72,6 +362,49 @@ pub fn finalize_extraction(buf: &str, cancelled: bool) -> Result<KakeiboEntryV1,
     KakeiboEntryV1::from_json_str(buf).map_err(|e| format!("extraction parse: {e}"))
 }
 
+pub fn finalize_distortion_extraction(
+    buf: &str,
+    cancelled: bool,
+) -> Result<CognitiveDistortionReportV1, String> {
+    if cancelled {
+        return Err("extraction cancelled".to_string());
+    }
+    CognitiveDistortionReportV1::from_json_str(buf)
+        .map_err(|e| format!("distortion extraction parse: {e}"))
+}
+
+pub fn finalize_receipt_extraction(buf: &str, cancelled: bool) -> Result<ReceiptOcrV1, String> {
+    if cancelled {
+        return Err("extraction cancelled".to_string());
+    }
+    ReceiptOcrV1::from_json_str(buf).map_err(|e| format!("receipt extraction parse: {e}"))
+}
+
+/// Parse Layer-1 scorecard JSON. Transcript provenance checks happen outside
+/// the worker (callers pass `[TranscriptTurnRef]` into `validate_interview_evaluation`).
+pub fn finalize_interview_evaluation(
+    buf: &str,
+    cancelled: bool,
+) -> Result<InterviewEvaluationV1, String> {
+    if cancelled {
+        return Err("extraction cancelled".to_string());
+    }
+    InterviewEvaluationV1::from_json_str(buf)
+        .map_err(|e| format!("interview evaluation parse: {e}"))
+}
+
+/// Parse Layer-2 debrief JSON. Mirror / turn validation is caller-side.
+pub fn finalize_metacognitive_debrief(
+    buf: &str,
+    cancelled: bool,
+) -> Result<MetacognitiveDebriefV1, String> {
+    if cancelled {
+        return Err("extraction cancelled".to_string());
+    }
+    MetacognitiveDebriefV1::from_json_str(buf)
+        .map_err(|e| format!("metacognitive debrief parse: {e}"))
+}
+
 fn streaming_token(seq: u32, text: String) -> TokenEvent {
     TokenEvent {
         seq,
@@ -79,6 +412,11 @@ fn streaming_token(seq: u32, text: String) -> TokenEvent {
         done: false,
         error: None,
         validated: None,
+        validated_distortions: None,
+        validated_receipt: None,
+        receipt_verified: None,
+        validated_interview_evaluation: None,
+        validated_metacognitive_debrief: None,
     }
 }
 
@@ -89,6 +427,11 @@ fn chat_done_event(seq: u32) -> TokenEvent {
         done: true,
         error: None,
         validated: None,
+        validated_distortions: None,
+        validated_receipt: None,
+        receipt_verified: None,
+        validated_interview_evaluation: None,
+        validated_metacognitive_debrief: None,
     }
 }
 
@@ -99,164 +442,896 @@ fn extract_done_event(seq: u32, entry: KakeiboEntryV1) -> TokenEvent {
         done: true,
         error: None,
         validated: Some(entry),
+        validated_distortions: None,
+        validated_receipt: None,
+        receipt_verified: None,
+        validated_interview_evaluation: None,
+        validated_metacognitive_debrief: None,
     }
 }
 
-fn error_done_event(seq: u32, error: String) -> TokenEvent {
+fn distortion_done_event(seq: u32, report: CognitiveDistortionReportV1) -> TokenEvent {
+    TokenEvent {
+        seq,
+        text: String::new(),
+        done: true,
+        error: None,
+        validated: None,
+        validated_distortions: Some(report),
+        validated_receipt: None,
+        receipt_verified: None,
+        validated_interview_evaluation: None,
+        validated_metacognitive_debrief: None,
+    }
+}
+
+fn receipt_done_event(seq: u32, report: ReceiptOcrV1) -> TokenEvent {
+    let verified = report.checksum_ok();
+    TokenEvent {
+        seq,
+        text: String::new(),
+        done: true,
+        error: None,
+        validated: None,
+        validated_distortions: None,
+        validated_receipt: Some(report),
+        receipt_verified: Some(verified),
+        validated_interview_evaluation: None,
+        validated_metacognitive_debrief: None,
+    }
+}
+
+fn interview_eval_done_event(seq: u32, report: InterviewEvaluationV1) -> TokenEvent {
+    TokenEvent {
+        seq,
+        text: String::new(),
+        done: true,
+        error: None,
+        validated: None,
+        validated_distortions: None,
+        validated_receipt: None,
+        receipt_verified: None,
+        validated_interview_evaluation: Some(report),
+        validated_metacognitive_debrief: None,
+    }
+}
+
+fn metacognitive_debrief_done_event(seq: u32, report: MetacognitiveDebriefV1) -> TokenEvent {
+    TokenEvent {
+        seq,
+        text: String::new(),
+        done: true,
+        error: None,
+        validated: None,
+        validated_distortions: None,
+        validated_receipt: None,
+        receipt_verified: None,
+        validated_interview_evaluation: None,
+        validated_metacognitive_debrief: Some(report),
+    }
+}
+
+pub(crate) fn error_done_event(seq: u32, error: String) -> TokenEvent {
     TokenEvent {
         seq,
         text: String::new(),
         done: true,
         error: Some(error),
         validated: None,
+        validated_distortions: None,
+        validated_receipt: None,
+        receipt_verified: None,
+        validated_interview_evaluation: None,
+        validated_metacognitive_debrief: None,
     }
 }
 
-/// Command sent to the worker thread. `mpsc::Sender` is `!Sync`, so `LlmHandle`
-/// wraps it in a `Mutex` to satisfy Tauri `State: Send + Sync`.
+/// Report a failed generation over the authoritative token channel, then
+/// release the async caller. The completion stays `Ok` whenever a terminal
+/// event reached the channel; only a broken terminal channel rejects invoke.
+/// Successful generation already emitted its terminal event inside [`generate`].
+fn complete_generation(
+    result: Result<(), String>,
+    tokens: &Channel<TokenEvent>,
+    completion: oneshot::Sender<Result<(), String>>,
+) {
+    let result = match result {
+        Ok(()) => Ok(()),
+        Err(error) => tokens
+            .send(error_done_event(0, error))
+            .map_err(|send_error| format!("token channel send: {send_error}")),
+    };
+    let _ = completion.send(result);
+}
+
+/// Command sent to the worker thread. Every reply lane is also bounded to one
+/// value, so a vanished caller cannot accumulate unbounded acknowledgements.
 enum LlmCommand {
     Load {
         model_path: PathBuf,
         params: LoadParams,
-        reply: mpsc::Sender<Result<(), String>>,
+        purge_epoch: u64,
+        reply: mpsc::SyncSender<Result<(), String>>,
     },
     Generate {
         params: GenerationParams,
         task_id: Option<String>,
         tokens: Channel<TokenEvent>,
+        completion: oneshot::Sender<Result<(), String>>,
     },
-    Shutdown,
+    /// Arena ambient flavor (関所 H / F-3 T-8): collect chat text on this
+    /// worker, then invoke `complete` here so the sim worker is never blocked
+    /// on decode. `complete` is an owned-clone relay (typically `send`s back
+    /// onto the sim queue).
+    #[cfg(feature = "flavor-live")]
+    FlavorGenerate {
+        params: GenerationParams,
+        complete: Box<dyn FnOnce(Result<String, String>) + Send>,
+    },
+    /// One-shot embedding on the worker (separate short-lived context).
+    Embed {
+        text: String,
+        n_ctx: u32,
+        reply: mpsc::SyncSender<Result<Vec<f32>, String>>,
+    },
+    /// Phase 10: Jetsam / foreground restore — is the GGUF still resident?
+    IsLoaded {
+        reply: mpsc::SyncSender<bool>,
+    },
+    /// 2026-07-24: exact token count via the resident model's real tokenizer.
+    /// `context_budget::estimate_tokens`'s char-based heuristic can diverge
+    /// sharply from real BPE tokenization for CJK content with rare
+    /// characters/names (observed: heuristic said "fits", `generate()`'s own
+    /// `model.str_to_token` counted 2394 against a 1792 budget) — callers
+    /// needing a budget decision that must actually hold should measure with
+    /// this, not the heuristic, before calling `generate`.
+    CountTokens {
+        text: String,
+        reply: mpsc::SyncSender<Result<usize, String>>,
+    },
+    RegisterEvents {
+        channel: Channel<LlmLifecycleEvent>,
+    },
+    Barrier {
+        reply: mpsc::SyncSender<()>,
+    },
+    Park {
+        epoch: u64,
+        reply: mpsc::SyncSender<Result<(), String>>,
+    },
+    Unpark {
+        epoch: u64,
+    },
+}
+
+/// EDINET job が cancel された理由。watcher / drop / 直接 cancel が
+/// 最初の1回だけ書き込む（AtomicU8, compare_exchange で first-writer-wins）。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(not(feature = "egress-live"), allow(dead_code))]
+pub enum EdinetCancelCause {
+    None,
+    Background,
+    MemoryPressure,
+    ThermalPressure,
+    Dropped,
+}
+
+impl EdinetCancelCause {
+    fn as_u8(self) -> u8 {
+        match self {
+            Self::None => 0,
+            Self::Background => 1,
+            Self::MemoryPressure => 2,
+            Self::ThermalPressure => 3,
+            Self::Dropped => 4,
+        }
+    }
+
+    #[cfg_attr(not(feature = "egress-live"), allow(dead_code))]
+    fn from_u8(v: u8) -> Self {
+        match v {
+            1 => Self::Background,
+            2 => Self::MemoryPressure,
+            3 => Self::ThermalPressure,
+            4 => Self::Dropped,
+            _ => Self::None,
+        }
+    }
+}
+
+struct EdinetJobGuardInner {
+    tx: Arc<Mutex<mpsc::SyncSender<LlmCommand>>>,
+    governor: Arc<LlmMemoryGovernor>,
+    epoch: u64,
+    monitor: Arc<MemoryMonitor>,
+    cancel: CancellationToken,
+    cancel_cause: AtomicU8,
+}
+
+impl Drop for EdinetJobGuardInner {
+    fn drop(&mut self) {
+        self.cancel.cancel();
+        if let Ok(tx) = self.tx.lock() {
+            let _ = tx.try_send(LlmCommand::Unpark { epoch: self.epoch });
+        }
+        self.governor
+            .edinet_gate_closed
+            .store(false, Ordering::SeqCst);
+        self.monitor.set_phase(MemPhase::Idle);
+    }
+}
+
+#[derive(Clone)]
+#[cfg_attr(not(feature = "egress-live"), allow(dead_code))]
+pub struct EdinetJobGuard(Arc<EdinetJobGuardInner>);
+
+impl EdinetJobGuard {
+    /// download / spawn_blocking へ渡す協調 cancel token（clone）。
+    #[cfg_attr(not(feature = "egress-live"), allow(dead_code))]
+    pub fn cancel_token(&self) -> CancellationToken {
+        self.0.cancel.clone()
+    }
+
+    /// 理由を記録して cancel。既に cancel 済みなら理由は上書きしない。
+    pub fn cancel_with_cause(&self, cause: EdinetCancelCause) {
+        if matches!(cause, EdinetCancelCause::None) {
+            return;
+        }
+        let _ = self.0.cancel_cause.compare_exchange(
+            EdinetCancelCause::None.as_u8(),
+            cause.as_u8(),
+            Ordering::SeqCst,
+            Ordering::SeqCst,
+        );
+        self.0.cancel.cancel();
+    }
+
+    /// 最初に記録された理由（未 cancel なら None）。
+    #[cfg_attr(not(feature = "egress-live"), allow(dead_code))]
+    pub fn cancellation_cause(&self) -> EdinetCancelCause {
+        EdinetCancelCause::from_u8(self.0.cancel_cause.load(Ordering::SeqCst))
+    }
+
+    #[cfg_attr(not(feature = "egress-live"), allow(dead_code))]
+    pub fn is_cancelled(&self) -> bool {
+        self.0.governor.admission_bits() != 0 || self.0.cancel.is_cancelled()
+    }
+
+    #[cfg_attr(not(feature = "egress-live"), allow(dead_code))]
+    pub fn set_phase(&self, phase: MemPhase) {
+        self.0.monitor.set_phase(phase);
+    }
+}
+
+/// admission bits / headroom floor を低頻度ポーリングし、成立時に
+/// cancel token を立てる監視 task。**`Weak<EdinetJobGuardInner>` を保持**
+/// し、job の最終 guard drop と同時に自然終了する。
+#[cfg_attr(not(feature = "egress-live"), allow(dead_code))]
+pub fn spawn_edinet_cancel_watch(
+    guard: &EdinetJobGuard,
+) -> tauri::async_runtime::JoinHandle<()> {
+    spawn_edinet_cancel_watch_with_headroom(
+        guard,
+        crate::monitor::os_proc_available_memory_bytes,
+    )
+}
+
+fn spawn_edinet_cancel_watch_with_headroom<F>(
+    guard: &EdinetJobGuard,
+    headroom: F,
+) -> tauri::async_runtime::JoinHandle<()>
+where
+    F: Fn() -> Option<u64> + Send + 'static,
+{
+    let weak: Weak<EdinetJobGuardInner> = Arc::downgrade(&guard.0);
+    tauri::async_runtime::spawn(async move {
+        loop {
+            tokio::time::sleep(Duration::from_millis(250)).await;
+            let Some(inner) = weak.upgrade() else {
+                return;
+            };
+            if inner.cancel.is_cancelled() {
+                return;
+            }
+            let bits = inner.governor.admission_bits();
+            if bits != 0 {
+                let cause = if bits & ADMISSION_MEMORY_PRESSURE != 0 {
+                    EdinetCancelCause::MemoryPressure
+                } else if bits & ADMISSION_THERMAL_PRESSURE != 0 {
+                    EdinetCancelCause::ThermalPressure
+                } else if bits & ADMISSION_BACKGROUND != 0 {
+                    EdinetCancelCause::Background
+                } else {
+                    EdinetCancelCause::MemoryPressure
+                };
+                let guard = EdinetJobGuard(inner);
+                guard.cancel_with_cause(cause);
+                return;
+            }
+            if headroom().is_some_and(|v| v < EDINET_CANCEL_HEADROOM_BYTES) {
+                let guard = EdinetJobGuard(inner);
+                guard.cancel_with_cause(EdinetCancelCause::MemoryPressure);
+                return;
+            }
+        }
+    })
 }
 
 /// Send + Sync handle placed in Tauri `State`.
+#[derive(Clone)]
 pub struct LlmHandle {
-    tx: Mutex<mpsc::Sender<LlmCommand>>,
-    cancel: Arc<AtomicBool>,
+    tx: Arc<Mutex<mpsc::SyncSender<LlmCommand>>>,
+    governor: Arc<LlmMemoryGovernor>,
+    startup_error: Option<Arc<str>>,
+    monitor: Arc<MemoryMonitor>,
 }
 
 impl LlmHandle {
     /// Spawn the worker thread (initializes `LlamaBackend`, enters command loop).
     /// `monitor` is shared so the worker can mark memory phases (ModelLoaded /
     /// CtxCreated / Inference / Idle) as it progresses.
-    pub fn spawn(monitor: Arc<MemoryMonitor>) -> Self {
-        let (tx, rx) = mpsc::channel::<LlmCommand>();
-        let cancel = Arc::new(AtomicBool::new(false));
-        let cancel_worker = Arc::clone(&cancel);
+    pub fn spawn(monitor: Arc<MemoryMonitor>) -> Result<Self, String> {
+        let (tx, rx) = mpsc::sync_channel::<LlmCommand>(LLM_COMMAND_QUEUE_CAPACITY);
+        let (startup_tx, startup_rx) = mpsc::sync_channel(1);
+        let governor = Arc::new(LlmMemoryGovernor::new());
+        let governor_worker = Arc::clone(&governor);
         thread::Builder::new()
             .name("pocket-brain-llm".into())
-            .spawn(move || worker_loop(rx, cancel_worker, monitor))
-            .expect("spawn pocket-brain llm worker");
+            .spawn({
+                let worker_monitor = Arc::clone(&monitor);
+                move || worker_loop(rx, governor_worker, worker_monitor, startup_tx)
+            })
+            .map_err(|error| format!("llm worker spawn failed: {error}"))?;
+        startup_rx
+            .recv()
+            .map_err(|_| "llm worker gone during startup".to_string())??;
+        Ok(Self {
+            tx: Arc::new(Mutex::new(tx)),
+            governor,
+            startup_error: None,
+            monitor,
+        })
+    }
+
+    /// Preserve a managed Tauri state even when startup failed, so every IPC
+    /// command receives a deterministic Worker Gone error instead of a missing
+    /// state/panic. Used only by application bootstrap after `spawn` returned Err.
+    pub fn unavailable(error: String) -> Self {
+        let (tx, rx) = mpsc::sync_channel(1);
+        drop(rx);
         Self {
-            tx: Mutex::new(tx),
-            cancel,
+            tx: Arc::new(Mutex::new(tx)),
+            governor: Arc::new(LlmMemoryGovernor::new()),
+            startup_error: Some(Arc::<str>::from(error)),
+            monitor: Arc::new(MemoryMonitor::new()),
         }
     }
 
-    /// Blocking: mmap-load the GGUF on the worker thread and await the result.
-    pub fn load(&self, model_path: PathBuf, params: LoadParams) -> Result<(), String> {
-        let (reply, ack) = mpsc::channel();
-        self.tx
-            .lock()
-            .map_err(|_| "llm tx poisoned".to_string())?
-            .send(LlmCommand::Load {
-                model_path,
-                params,
-                reply,
-            })
-            .map_err(|_| "llm worker gone".to_string())?;
-        ack.recv()
-            .map_err(|_| "llm worker dropped reply".to_string())?
+    fn enqueue(&self, command: LlmCommand) -> Result<(), String> {
+        if let Some(error) = self.startup_error.as_deref() {
+            return Err(format!("llm worker unavailable: {error}"));
+        }
+        let tx = self.tx.lock().map_err(|_| "llm tx poisoned".to_string())?;
+        match tx.try_send(command) {
+            Ok(()) => Ok(()),
+            Err(mpsc::TrySendError::Full(_)) => Err("llm worker queue full".into()),
+            Err(mpsc::TrySendError::Disconnected(_)) => Err("llm worker gone".into()),
+        }
     }
 
-    /// Fire-and-forget: start a generation, streaming tokens over `tokens`.
+    fn ensure_llm_heavy_admitted(&self) -> Result<(), String> {
+        if self.governor.edinet_gate_closed.load(Ordering::SeqCst) {
+            return Err("llm heavy job deferred while EDINET is active".into());
+        }
+        Ok(())
+    }
+
+    fn enqueue_heavy(&self, command: LlmCommand) -> Result<(), String> {
+        if let Some(error) = self.startup_error.as_deref() {
+            return Err(format!("llm worker unavailable: {error}"));
+        }
+        let tx = self
+            .tx
+            .lock()
+            .map_err(|_| "llm tx poisoned".to_string())?;
+        self.ensure_llm_heavy_admitted()?;
+        match tx.try_send(command) {
+            Ok(()) => Ok(()),
+            Err(mpsc::TrySendError::Full(_)) => Err("llm worker queue full".into()),
+            Err(mpsc::TrySendError::Disconnected(_)) => Err("llm worker gone".into()),
+        }
+    }
+
+    #[cfg_attr(not(feature = "egress-live"), allow(dead_code))]
+    pub fn acquire_edinet_job(&self) -> Result<EdinetJobGuard, String> {
+        self.acquire_edinet_job_with_headroom(crate::monitor::os_proc_available_memory_bytes)
+    }
+
+    pub(crate) fn acquire_edinet_job_with_headroom<F>(
+        &self,
+        headroom: F,
+    ) -> Result<EdinetJobGuard, String>
+    where
+        F: Fn() -> Option<u64>,
+    {
+        if self.governor.admission_bits() != 0 {
+            return Err("edinet admission restricted".into());
+        }
+        let available = headroom().ok_or_else(|| "edinet headroom unavailable".to_string())?;
+        if available < EDINET_MIN_START_HEADROOM_BYTES {
+            return Err("edinet insufficient headroom".into());
+        }
+        if self
+            .governor
+            .edinet_gate_closed
+            .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+            .is_err()
+        {
+            return Err("edinet job already active".into());
+        }
+        let epoch = self
+            .governor
+            .edinet_acquire_epoch
+            .fetch_add(1, Ordering::SeqCst)
+            .saturating_add(1);
+        let fail = |message: String| {
+            if let Ok(tx) = self.tx.lock() {
+                let _ = tx.try_send(LlmCommand::Unpark { epoch });
+            }
+            self.governor
+                .edinet_gate_closed
+                .store(false, Ordering::SeqCst);
+            Err(message)
+        };
+
+        self.governor.request_cancel();
+        let (barrier_reply, barrier_ack) = mpsc::sync_channel(1);
+        if let Err(error) = self.enqueue(LlmCommand::Barrier {
+            reply: barrier_reply,
+        }) {
+            return fail(error);
+        }
+        if barrier_ack
+            .recv_timeout(EDINET_COORDINATOR_TIMEOUT)
+            .is_err()
+        {
+            return fail("edinet barrier timed out".into());
+        }
+
+        self.governor.request_purge();
+        let (park_reply, park_ack) = mpsc::sync_channel(1);
+        if let Err(error) = self.enqueue(LlmCommand::Park {
+            epoch,
+            reply: park_reply,
+        }) {
+            return fail(error);
+        }
+        match park_ack.recv_timeout(EDINET_COORDINATOR_TIMEOUT) {
+            Ok(Ok(())) => {}
+            Ok(Err(error)) => return fail(error),
+            Err(_) => return fail("edinet park timed out".into()),
+        }
+        if self.governor.admission_bits() != 0 {
+            return fail("edinet admission changed while acquiring".into());
+        }
+        if headroom().unwrap_or(0) < EDINET_CANCEL_HEADROOM_BYTES {
+            return fail("edinet headroom collapsed while acquiring".into());
+        }
+        Ok(EdinetJobGuard(Arc::new(EdinetJobGuardInner {
+            tx: Arc::clone(&self.tx),
+            governor: Arc::clone(&self.governor),
+            epoch,
+            monitor: Arc::clone(&self.monitor),
+            cancel: CancellationToken::new(),
+            cancel_cause: AtomicU8::new(0),
+        })))
+    }
+
+    /// Clone of the lock-free governor, to hand to the iOS lifecycle observer.
+    pub fn governor(&self) -> Arc<LlmMemoryGovernor> {
+        Arc::clone(&self.governor)
+    }
+
+    /// Register the frontend lifecycle event sink (single sink; a later call
+    /// replaces the earlier one). Mirrors M6's `vault_events`.
+    pub fn register_events(&self, channel: Channel<LlmLifecycleEvent>) -> Result<(), String> {
+        self.enqueue(LlmCommand::RegisterEvents { channel })
+    }
+
+    /// Blocking: mmap-load the GGUF on the worker thread and await the result.
+    /// Bounded by [`LLM_LOAD_TIMEOUT`] — see its doc comment.
+    pub fn load(&self, model_path: PathBuf, params: LoadParams) -> Result<(), String> {
+        let model_path_display = model_path.display().to_string();
+        let (reply, ack) = mpsc::sync_channel(1);
+        let purge_epoch = self.governor.purge_epoch();
+        self.enqueue_heavy(LlmCommand::Load {
+            model_path,
+            params,
+            purge_epoch,
+            reply,
+        })?;
+        match ack.recv_timeout(LLM_LOAD_TIMEOUT) {
+            Ok(Ok(())) => Ok(()),
+            Ok(Err(e)) => {
+                log::error!("llm load failed at {model_path_display}: {e}");
+                Err(e)
+            }
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                log::error!(
+                    "llm load timed out after {LLM_LOAD_TIMEOUT:?} at {model_path_display} (worker unresponsive)"
+                );
+                Err("llm load timed out (worker unresponsive)".to_string())
+            }
+            Err(mpsc::RecvTimeoutError::Disconnected) => {
+                log::error!("llm worker dropped reply during load");
+                Err("llm worker dropped reply".to_string())
+            }
+        }
+    }
+
+    /// Fire-and-forget chat generation for BLACKBOX ambient flavor (関所 H).
+    ///
+    /// Runs on the LLM worker thread. `complete` is invoked there with the
+    /// owned completion text (or `Err`) — callers must relay into the sim
+    /// queue from that closure; do **not** wait on the sim worker.
+    #[cfg(feature = "flavor-live")]
+    pub fn enqueue_flavor_generate(
+        &self,
+        prompt: String,
+        max_tokens: u32,
+        complete: Box<dyn FnOnce(Result<String, String>) + Send>,
+    ) -> Result<(), String> {
+        self.enqueue_flavor_generate_seeded(prompt, max_tokens, 0, complete)
+    }
+
+    /// Same as [`Self::enqueue_flavor_generate`] with an explicit sampler seed
+    /// (T-8 discard-rate arms need independent draws).
+    #[cfg(feature = "flavor-live")]
+    pub fn enqueue_flavor_generate_seeded(
+        &self,
+        prompt: String,
+        max_tokens: u32,
+        seed: u32,
+        complete: Box<dyn FnOnce(Result<String, String>) + Send>,
+    ) -> Result<(), String> {
+        let params = GenerationParams {
+            prompt,
+            n_ctx: 0,
+            max_tokens,
+            temp: 0.7,
+            top_k: 40,
+            top_p: 0.95,
+            seed,
+        };
+        params.validate()?;
+        self.enqueue_heavy(LlmCommand::FlavorGenerate { params, complete })
+    }
+
+    /// Start a generation, streaming tokens over `tokens`, and asynchronously
+    /// wait until the worker has sent its terminal event.
     /// `task_id` is the sole authority for extraction routing (not copied into params).
-    pub fn generate(
+    /// Bounded by [`LLM_GENERATE_TIMEOUT`] — see its doc comment.
+    pub async fn generate(
         &self,
         params: GenerationParams,
         task_id: Option<String>,
         tokens: Channel<TokenEvent>,
     ) -> Result<(), String> {
-        self.cancel.store(false, Ordering::SeqCst);
-        self.tx
-            .lock()
-            .map_err(|_| "llm tx poisoned".to_string())?
-            .send(LlmCommand::Generate {
-                params,
-                task_id,
-                tokens,
-            })
-            .map_err(|_| "llm worker gone".to_string())
+        params.validate()?;
+        let task_id_for_log = task_id.clone();
+        let max_tokens_for_log = params.max_tokens;
+        let (completion, ack) = oneshot::channel();
+        self.enqueue_heavy(LlmCommand::Generate {
+            params,
+            task_id,
+            tokens,
+            completion,
+        })?;
+        match tokio::time::timeout(LLM_GENERATE_TIMEOUT, ack).await {
+            Ok(Ok(Ok(()))) => Ok(()),
+            Ok(Ok(Err(e))) => {
+                log::error!(
+                    "llm generate failed (task_id={task_id_for_log:?}, max_tokens={max_tokens_for_log}): {e}"
+                );
+                Err(e)
+            }
+            Ok(Err(_)) => {
+                log::error!(
+                    "llm worker dropped generation completion (task_id={task_id_for_log:?})"
+                );
+                Err("llm worker dropped generation completion".to_string())
+            }
+            Err(_) => {
+                log::error!(
+                    "llm generation timed out after {LLM_GENERATE_TIMEOUT:?} (task_id={task_id_for_log:?}, max_tokens={max_tokens_for_log}, worker unresponsive)"
+                );
+                Err("llm generation timed out (worker unresponsive)".to_string())
+            }
+        }
+    }
+
+    /// Phase 10: whether the worker still holds a loaded GGUF (Jetsam may have purged).
+    /// Bounded by [`LLM_READY_PROBE_TIMEOUT`] — see its doc comment.
+    pub fn is_loaded(&self) -> Result<bool, String> {
+        let (reply, ack) = mpsc::sync_channel(1);
+        self.enqueue(LlmCommand::IsLoaded { reply })?;
+        match ack.recv_timeout(LLM_READY_PROBE_TIMEOUT) {
+            Ok(result) => Ok(result),
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                log::error!(
+                    "llm ready probe timed out after {LLM_READY_PROBE_TIMEOUT:?} (worker unresponsive)"
+                );
+                Err("llm ready probe timed out (worker unresponsive)".to_string())
+            }
+            Err(mpsc::RecvTimeoutError::Disconnected) => {
+                log::error!("llm worker dropped reply during ready probe");
+                Err("llm worker dropped reply".to_string())
+            }
+        }
+    }
+
+    /// Exact token count via the resident model's real tokenizer (not the
+    /// `context_budget::estimate_tokens` char-based heuristic). See
+    /// [`LlmCommand::CountTokens`] for why this exists. `Err("MODEL_NOT_LOADED")`
+    /// if no model is resident. Bounded by [`LLM_READY_PROBE_TIMEOUT`] — a
+    /// tokenizer-only call, no generation, so it is cheap like `is_loaded`.
+    pub fn count_tokens(&self, text: String) -> Result<usize, String> {
+        let (reply, ack) = mpsc::sync_channel(1);
+        self.enqueue(LlmCommand::CountTokens { text, reply })?;
+        match ack.recv_timeout(LLM_READY_PROBE_TIMEOUT) {
+            Ok(result) => result,
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                log::error!(
+                    "llm count_tokens timed out after {LLM_READY_PROBE_TIMEOUT:?} (worker unresponsive)"
+                );
+                Err("llm count_tokens timed out (worker unresponsive)".to_string())
+            }
+            Err(mpsc::RecvTimeoutError::Disconnected) => {
+                log::error!("llm worker dropped reply during count_tokens");
+                Err("llm worker dropped reply".to_string())
+            }
+        }
+    }
+
+    /// Blocking: embed `text` and return little-endian f32 bytes (Phase 9 binary IPC).
+    pub fn embed_binary(&self, text: String, n_ctx: u32) -> Result<Vec<u8>, String> {
+        let v = self.embed(text, n_ctx)?;
+        let bytes = super::embed::f32_slice_to_le_bytes(&v);
+        // Round-trip guard keeps decode helper live (Zero Warnings) and catches packing bugs.
+        let back = super::embed::le_bytes_to_f32_vec(&bytes)?;
+        if back.len() != v.len() {
+            return Err("embed binary round-trip length mismatch".into());
+        }
+        Ok(bytes)
     }
 
     /// Request cancellation of the in-flight generation (checked each token).
     pub fn cancel(&self) {
-        self.cancel.store(true, Ordering::SeqCst);
+        self.governor.request_cancel();
     }
-}
 
-impl Drop for LlmHandle {
-    fn drop(&mut self) {
-        if let Ok(tx) = self.tx.lock() {
-            let _ = tx.send(LlmCommand::Shutdown);
+    /// Blocking: embed `text` on the worker with a short-lived embeddings context.
+    /// Does not share the generation context; respects cancel/purge via governor.
+    pub fn embed(&self, text: String, n_ctx: u32) -> Result<Vec<f32>, String> {
+        if !(MIN_N_CTX..=MAX_N_CTX).contains(&n_ctx) {
+            return Err(format!(
+                "embedding n_ctx must be in {MIN_N_CTX}..={MAX_N_CTX}"
+            ));
         }
+        let (reply, ack) = mpsc::sync_channel(1);
+        self.enqueue_heavy(LlmCommand::Embed { text, n_ctx, reply })?;
+        ack.recv()
+            .map_err(|_| "llm worker dropped reply".to_string())?
     }
 }
 
 fn worker_loop(
     rx: mpsc::Receiver<LlmCommand>,
-    cancel: Arc<AtomicBool>,
+    governor: Arc<LlmMemoryGovernor>,
     monitor: Arc<MemoryMonitor>,
+    startup: mpsc::SyncSender<Result<(), String>>,
 ) {
     let backend = match LlamaBackend::init() {
-        Ok(b) => b,
+        Ok(backend) => {
+            let _ = startup.send(Ok(()));
+            backend
+        }
         Err(e) => {
-            eprintln!("[pocket-brain] backend init failed: {e}");
+            let error = format!("llm backend init failed: {e}");
+            let _ = startup.send(Err(error));
             return;
         }
     };
     let mut model: Option<Arc<LlamaModel>> = None;
+    let mut events: Option<Channel<LlmLifecycleEvent>> = None;
+    let mut last_degradation_emit = DegradationLevel::Nominal;
+    let mut parked_epoch = 0_u64;
 
-    while let Ok(cmd) = rx.recv() {
+    loop {
+        // Commit any pending purge FIRST — including after a generation the
+        // memory warning cancel-broke, and on the timeout wake when idle. The
+        // heavy `Drop` of the multi-GB model happens here, on the worker thread,
+        // never in the OS callback. Any in-flight `ctx`/`Arc` clone was already
+        // dropped when `generate` returned, so `take()` releases the last ref.
+        commit_pending_purge(&governor, &mut model, &monitor, events.as_ref());
+
+        let cmd = match rx.recv_timeout(PURGE_POLL_INTERVAL) {
+            Ok(cmd) => cmd,
+            // Idle wake: re-check purge + emit Serious+ degradation once.
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                let level = governor.degradation();
+                if level.throttle_generation() && last_degradation_emit < DegradationLevel::Serious
+                {
+                    if let Some(sink) = events.as_ref() {
+                        let _ = sink.send(LlmLifecycleEvent::Degradation { level });
+                    }
+                }
+                last_degradation_emit = if level.throttle_generation() {
+                    level
+                } else {
+                    DegradationLevel::Nominal
+                };
+                continue;
+            }
+            Err(mpsc::RecvTimeoutError::Disconnected) => break,
+        };
+
+        // A purge can race between the loop-head check and a command waking
+        // `recv_timeout`. Commit it before dispatch so a queued generation
+        // cannot observe a model that the OS already ordered us to release.
+        commit_pending_purge(&governor, &mut model, &monitor, events.as_ref());
+
         match cmd {
             LlmCommand::Load {
                 model_path,
                 params,
+                purge_epoch,
                 reply,
             } => {
-                let result = load_model(&backend, &model_path, &params).map(|m| {
-                    model = Some(Arc::new(m));
-                    monitor.set_phase(MemPhase::ModelLoaded);
-                });
+                let result = if governor.load_is_stale(purge_epoch) {
+                    Err("model load cancelled by memory purge".into())
+                } else {
+                    load_model(&backend, &model_path, &params).and_then(|loaded| {
+                        if governor.load_is_stale(purge_epoch) {
+                            // A purge arrived during the blocking mmap/load.
+                            // Drop the temporary model instead of publishing it.
+                            Err("model load cancelled by memory purge".into())
+                        } else {
+                            model = Some(Arc::new(loaded));
+                            monitor.set_phase(MemPhase::ModelLoaded);
+                            Ok(())
+                        }
+                    })
+                };
                 let _ = reply.send(result);
             }
             LlmCommand::Generate {
                 params,
                 task_id,
                 tokens,
+                completion,
             } => {
-                let model = match model.as_ref() {
-                    Some(m) => Arc::clone(m),
-                    None => {
-                        let _ = tokens.send(error_done_event(0, "model not loaded".into()));
-                        continue;
+                let cancel_epoch = governor.cancel_epoch();
+                let result = match model.as_ref() {
+                    Some(model) => generate(
+                        &backend,
+                        model,
+                        &params,
+                        task_id.as_deref(),
+                        &tokens,
+                        &governor,
+                        cancel_epoch,
+                        &monitor,
+                    ),
+                    None => Err("MODEL_NOT_LOADED".into()),
+                };
+                monitor.set_phase(MemPhase::Idle);
+                complete_generation(result, &tokens, completion);
+            }
+            #[cfg(feature = "flavor-live")]
+            LlmCommand::FlavorGenerate { params, complete } => {
+                let cancel_epoch = governor.cancel_epoch();
+                let result = match model.as_ref() {
+                    Some(model) => generate_chat_text(
+                        &backend,
+                        model,
+                        &params,
+                        &governor,
+                        cancel_epoch,
+                        &monitor,
+                    ),
+                    None => Err("MODEL_NOT_LOADED".into()),
+                };
+                monitor.set_phase(MemPhase::Idle);
+                complete(result);
+            }
+            LlmCommand::IsLoaded { reply } => {
+                let _ = reply.send(model.is_some());
+            }
+            LlmCommand::CountTokens { text, reply } => {
+                let result = match model.as_ref() {
+                    Some(model) => model
+                        .str_to_token(&text, model_add_bos(model))
+                        .map(|tokens| tokens.len())
+                        .map_err(|e| format!("tokenize: {e}")),
+                    None => Err("MODEL_NOT_LOADED".into()),
+                };
+                let _ = reply.send(result);
+            }
+            LlmCommand::Embed { text, n_ctx, reply } => {
+                // Fair+: suppress expensive LLM embed re-warm; callers fall back
+                // to hashed-ngram (embed_knowledge).
+                if governor.degradation().suppress_background() {
+                    let _ = reply.send(Err("degraded: background embed suppressed".into()));
+                    continue;
+                }
+                let result = match model.as_ref() {
+                    None => Err("MODEL_NOT_LOADED".into()),
+                    Some(model) => {
+                        let cancel_epoch = governor.cancel_epoch();
+                        monitor.set_phase(MemPhase::CtxCreated);
+                        let out = super::embed::embed_text(
+                            &backend,
+                            model.as_ref(),
+                            &text,
+                            n_ctx,
+                            || governor.is_cancelled_since(cancel_epoch),
+                        );
+                        monitor.set_phase(MemPhase::Idle);
+                        out
                     }
                 };
-                if let Err(e) = generate(
-                    &backend,
-                    &model,
-                    &params,
-                    task_id.as_deref(),
-                    &tokens,
-                    &cancel,
-                    &monitor,
-                ) {
-                    let _ = tokens.send(error_done_event(0, e));
-                }
-                monitor.set_phase(MemPhase::Idle);
+                let _ = reply.send(result);
             }
-            LlmCommand::Shutdown => break,
+            LlmCommand::RegisterEvents { channel } => {
+                events = Some(channel);
+            }
+            LlmCommand::Barrier { reply } => {
+                let _ = reply.send(());
+            }
+            LlmCommand::Park { epoch, reply } => {
+                commit_pending_purge(&governor, &mut model, &monitor, events.as_ref());
+                let result = if model.is_some() {
+                    Err("llm purge was not committed".into())
+                } else if epoch <= parked_epoch {
+                    Err("stale edinet park epoch".into())
+                } else {
+                    parked_epoch = epoch;
+                    governor.edinet_parked_epoch.store(epoch, Ordering::SeqCst);
+                    Ok(())
+                };
+                let _ = reply.send(result);
+            }
+            LlmCommand::Unpark { epoch } => {
+                if epoch == parked_epoch {
+                    parked_epoch = 0;
+                    governor.edinet_parked_epoch.store(0, Ordering::SeqCst);
+                }
+            }
         }
     }
+}
+
+/// Consume an OS/Jetsam purge request on the worker thread. Returns whether a
+/// request was consumed, independently of whether a model happened to be
+/// resident.
+fn commit_pending_purge(
+    governor: &LlmMemoryGovernor,
+    model: &mut Option<Arc<LlamaModel>>,
+    monitor: &MemoryMonitor,
+    events: Option<&Channel<LlmLifecycleEvent>>,
+) -> bool {
+    if !governor.take_purge() {
+        return false;
+    }
+    let _ = model.take();
+    monitor.set_phase(MemPhase::Baseline);
+    // Emit even when no model is currently resident: a queued/in-flight load
+    // may still need its frontend retry state invalidated by this boundary.
+    if let Some(sink) = events {
+        let _ = sink.send(LlmLifecycleEvent::MemoryPurged);
+    }
+    true
 }
 
 /// Apply the model's baked-in chat template to a `(system, user)` pair.
@@ -279,14 +1354,117 @@ pub fn render_chat_prompt(model: &LlamaModel, system: &str, user: &str) -> Resul
         .map_err(|e| format!("apply_chat_template: {e}"))
 }
 
-fn load_model(backend: &LlamaBackend, path: &Path, p: &LoadParams) -> Result<LlamaModel, String> {
-    if !path.exists() {
-        return Err(format!("GGUF not found at {}", path.display()));
+/// Resolve the tokenizer's baked-in BOS policy. `llama-cpp-2` exposes BOS as
+/// an explicit enum rather than a model-default option, so mirror the GGUF
+/// metadata and retain the historical `Always` fallback for legacy files.
+fn add_bos_from_metadata(raw: Option<&str>) -> AddBos {
+    match raw.map(str::trim).map(str::to_ascii_lowercase).as_deref() {
+        Some("false" | "0") => AddBos::Never,
+        _ => AddBos::Always,
     }
-    let params = LlamaModelParams::default()
-        .with_n_gpu_layers(p.n_gpu_layers)
+}
+
+fn model_add_bos(model: &LlamaModel) -> AddBos {
+    let raw = model.meta_val_str("tokenizer.ggml.add_bos_token").ok();
+    add_bos_from_metadata(raw.as_deref())
+}
+
+/// The Simulator exposes a synthetic Metal device without the unified/shared
+/// memory capabilities llama.cpp expects for reliable quantized inference.
+/// Keep full Metal offload on physical iOS devices, but force Simulator builds
+/// onto the host CPU so corrupted logits cannot reach the stream.
+///
+/// Never permanently zeros the on-device path — use `CORAXIS_FORCE_CPU=1` for
+/// the G-2 CPU oracle (see [`apply_force_cpu_model_params`]).
+fn effective_n_gpu_layers(requested: u32, ios_simulator: bool) -> u32 {
+    if ios_simulator {
+        0
+    } else {
+        requested
+    }
+}
+
+/// Tier 3 P0-6-2 CPU oracle — model-params half of the 4-point set.
+///
+/// `n_gpu_layers=0` alone still lets llama.cpp init every entry in
+/// `model.devices` (Metal). Empty `with_devices(&[])` is required to suppress
+/// that. Failure must not fall back to Metal.
+fn apply_force_cpu_model_params(params: LlamaModelParams) -> Result<LlamaModelParams, String> {
+    params
+        .with_devices(&[])
+        .map_err(|e| {
+            format!("CORAXIS_FORCE_CPU: with_devices failed (refusing Metal fallback): {e}")
+        })
+        .map(|p| p.with_n_gpu_layers(0))
+}
+
+fn apply_context_device_policy(
+    params: LlamaContextParams,
+    ios_simulator: bool,
+) -> LlamaContextParams {
+    // Context half of the 4-point CPU oracle: KQV + op offload off.
+    if force_cpu_oracle_enabled() || ios_simulator {
+        params.with_offload_kqv(false).with_op_offload(false)
+    } else {
+        params
+    }
+}
+
+fn load_model(backend: &LlamaBackend, path: &Path, p: &LoadParams) -> Result<LlamaModel, String> {
+    super::model_path::validate_gguf_file(path)?;
+    let force_cpu = force_cpu_oracle_enabled();
+    let n_gpu_layers = if force_cpu {
+        0
+    } else {
+        effective_n_gpu_layers(
+            p.n_gpu_layers,
+            cfg!(all(target_os = "ios", target_abi = "sim")),
+        )
+    };
+    if !force_cpu && n_gpu_layers != p.n_gpu_layers {
+        eprintln!(
+            "Coraxis LLM: iOS Simulator detected; forcing CPU inference (requested Metal layers: {})",
+            p.n_gpu_layers
+        );
+    }
+    let mut params = LlamaModelParams::default()
+        .with_n_gpu_layers(n_gpu_layers)
         .with_use_mmap(p.use_mmap);
-    LlamaModel::load_from_file(backend, path, &params).map_err(|e| format!("model load: {e}"))
+    if force_cpu {
+        params = apply_force_cpu_model_params(params)?;
+    }
+    #[cfg(target_os = "ios")]
+    {
+        crate::ios_oslog::log_model_u64(
+            crate::ios_oslog::MODEL_FORCE_CPU,
+            if force_cpu { 1 } else { 0 },
+        );
+    }
+    let model =
+        LlamaModel::load_from_file(backend, path, &params).map_err(|e| format!("model load: {e}"))?;
+    #[cfg(target_os = "ios")]
+    {
+        log_model_identity_ios(&model, path);
+    }
+    Ok(model)
+}
+
+/// G-1: Release-visible model identity via numeric OSLog (P0-6-1).
+#[cfg(target_os = "ios")]
+fn log_model_identity_ios(model: &LlamaModel, path: &Path) {
+    use crate::ios_oslog::{
+        log_model_u64, MODEL_META_COUNT, MODEL_N_LAYER, MODEL_N_PARAMS, MODEL_N_VOCAB, MODEL_ORIGIN,
+        MODEL_SIZE,
+    };
+    log_model_u64(MODEL_N_LAYER, u64::from(model.n_layer()));
+    log_model_u64(MODEL_N_PARAMS, model.n_params());
+    log_model_u64(MODEL_SIZE, model.size());
+    log_model_u64(MODEL_META_COUNT, model.meta_count().max(0) as u64);
+    log_model_u64(MODEL_N_VOCAB, model.n_vocab().max(0) as u64);
+    log_model_u64(
+        MODEL_ORIGIN,
+        super::model_path::model_origin_code(path),
+    );
 }
 
 fn generate(
@@ -295,35 +1473,95 @@ fn generate(
     g: &GenerationParams,
     task_id: Option<&str>,
     tokens: &Channel<TokenEvent>,
-    cancel: &AtomicBool,
+    governor: &LlmMemoryGovernor,
+    cancel_epoch: u64,
     monitor: &MemoryMonitor,
 ) -> Result<(), String> {
+    g.validate()?;
+    if governor.is_cancelled_since(cancel_epoch) {
+        return Err("generation cancelled".into());
+    }
+
     // Fail closed before allocating context / sampling for unknown tasks.
     let mode = resolve_generation_mode(task_id)?;
 
     let prompt = match mode {
-        GenerationMode::Chat => g.prompt.clone(),
+        // Free-form RAG / consult / interview prompts are message content, not
+        // pre-rendered model input. Always cross the model's baked-in role
+        // boundary before tokenization (Qwen2.5-Instruct uses ChatML).
+        GenerationMode::Chat => render_chat_prompt(model, CHAT_SYSTEM_PROMPT, &g.prompt)?,
         GenerationMode::KakeiboV1 => {
             let (system, user) = build_prompt(TASK_KAKEIBO_V1, &g.prompt)?;
             render_chat_prompt(model, &system, &user)?
         }
+        GenerationMode::CognitiveDistortionV1 => {
+            let (system, user) = build_prompt(TASK_COGNITIVE_DISTORTION_V1, &g.prompt)?;
+            render_chat_prompt(model, &system, &user)?
+        }
+        GenerationMode::ReceiptOcrV1 => {
+            let (system, user) = build_prompt(TASK_RECEIPT_OCR_V1, &g.prompt)?;
+            render_chat_prompt(model, &system, &user)?
+        }
+        GenerationMode::InterviewEvaluationV1 => {
+            let (system, user) = build_prompt(TASK_INTERVIEW_EVALUATION_V1, &g.prompt)?;
+            render_chat_prompt(model, &system, &user)?
+        }
+        GenerationMode::MetacognitiveDebriefV1 => {
+            let (system, user) = build_prompt(TASK_METACOGNITIVE_DEBRIEF_V1, &g.prompt)?;
+            render_chat_prompt(model, &system, &user)?
+        }
     };
 
-    let ctx_params = LlamaContextParams::default().with_n_ctx(NonZeroU32::new(g.n_ctx));
+    if governor.is_cancelled_since(cancel_epoch) {
+        return Err("generation cancelled".into());
+    }
+
+    let requested_ctx = g.resolved_n_ctx();
+    let trained_ctx = model.n_ctx_train();
+    if trained_ctx > 0 && requested_ctx > trained_ctx {
+        return Err(format!(
+            "requested context {requested_ctx} exceeds model context {trained_ctx}"
+        ));
+    }
+    let level = governor.degradation();
+    let scaled_ctx = (((requested_ctx as f64) * f64::from(level.context_factor())).round() as u32)
+        .clamp(MIN_N_CTX, requested_ctx);
+    let input_token_budget = scaled_ctx
+        .checked_sub(g.max_tokens)
+        .ok_or_else(|| "output token budget exceeds degraded context".to_string())?
+        as usize;
+
+    let prompt_tokens = model
+        .str_to_token(&prompt, model_add_bos(model))
+        .map_err(|e| format!("tokenize: {e}"))?;
+    if prompt_tokens.len() > input_token_budget {
+        return Err(format!(
+            "prompt exceeds context budget: {} > {input_token_budget}",
+            prompt_tokens.len()
+        ));
+    }
+    if governor.is_cancelled_since(cancel_epoch) {
+        return Err("generation cancelled".into());
+    }
+
+    let ctx_params = apply_context_device_policy(
+        LlamaContextParams::default().with_n_ctx(NonZeroU32::new(scaled_ctx)),
+        cfg!(all(target_os = "ios", target_abi = "sim")),
+    );
     let mut ctx = model
         .new_context(backend, ctx_params)
         .map_err(|e| format!("context create: {e}"))?;
     monitor.set_phase(MemPhase::CtxCreated);
 
-    let prompt_tokens = model
-        .str_to_token(&prompt, AddBos::Always)
-        .map_err(|e| format!("tokenize: {e}"))?;
     let mut batch = LlamaBatch::new(prompt_tokens.len().max(1), 1);
     let last = prompt_tokens.len().saturating_sub(1);
     for (i, token) in prompt_tokens.iter().enumerate() {
         batch
             .add(*token, i as i32, &[0], i == last)
             .map_err(|e| format!("batch add: {e}"))?;
+    }
+    if governor.is_cancelled_since(cancel_epoch) {
+        return Err("generation cancelled".into());
     }
     ctx.decode(&mut batch).map_err(|e| format!("decode: {e}"))?;
     monitor.set_phase(MemPhase::Inference);
@@ -346,30 +1584,71 @@ fn generate(
                 .map_err(|e| format!("grammar init: {e}"))?;
             LlamaSampler::chain_simple([grammar, LlamaSampler::greedy()])
         }
+        GenerationMode::CognitiveDistortionV1 => {
+            let grammar = LlamaSampler::grammar(model, COGNITIVE_DISTORTION_V1_GBNF, "root")
+                .map_err(|e| format!("grammar init: {e}"))?;
+            LlamaSampler::chain_simple([grammar, LlamaSampler::greedy()])
+        }
+        GenerationMode::ReceiptOcrV1 => {
+            let grammar = LlamaSampler::grammar(model, RECEIPT_OCR_V1_GBNF, "root")
+                .map_err(|e| format!("grammar init: {e}"))?;
+            LlamaSampler::chain_simple([grammar, LlamaSampler::greedy()])
+        }
+        GenerationMode::InterviewEvaluationV1 => {
+            let grammar = LlamaSampler::grammar(model, INTERVIEW_EVALUATION_V1_GBNF, "root")
+                .map_err(|e| format!("grammar init: {e}"))?;
+            LlamaSampler::chain_simple([grammar, LlamaSampler::greedy()])
+        }
+        GenerationMode::MetacognitiveDebriefV1 => {
+            let grammar = LlamaSampler::grammar(model, METACOGNITIVE_DEBRIEF_V1_GBNF, "root")
+                .map_err(|e| format!("grammar init: {e}"))?;
+            LlamaSampler::chain_simple([grammar, LlamaSampler::greedy()])
+        }
     };
 
     let mut extract_buf = String::new();
     let mut cancelled = false;
     let mut n_cur = batch.n_tokens();
+    // A token piece can end halfway through a UTF-8 scalar. The decoder must
+    // survive across the entire generation; decoding each token independently
+    // discards Japanese byte fragments and corrupts streamed text.
+    let mut text_decoder = Utf8TokenDecoder::default();
+    let mut batcher = TokenStreamBatcher::new(|seq, text| {
+        tokens
+            .send(streaming_token(seq, text))
+            .map_err(|e| format!("channel send: {e}"))
+    });
     for seq in 0..g.max_tokens {
-        if cancel.load(Ordering::SeqCst) {
+        if governor.is_cancelled_since(cancel_epoch) {
             cancelled = true;
             break;
+        }
+        if governor.degradation().throttle_generation() {
+            // Serious+: soft rate-limit decode to shed thermal load.
+            std::thread::sleep(std::time::Duration::from_millis(10));
         }
         let token = sampler.sample(&ctx, batch.n_tokens() - 1);
         if model.is_eog_token(token) {
             break;
         }
-        let piece = model
-            .token_to_str(token, Special::Plaintext)
-            .map_err(|e| format!("token decode: {e}"))?;
-        tokens
-            .send(streaming_token(seq, piece.clone()))
+        let piece_bytes =
+            token_piece_bytes(model, token).map_err(|e| format!("token decode: {e}"))?;
+        let piece = text_decoder.push(&piece_bytes);
+        batcher
+            .push(seq, &piece)
             .map_err(|e| format!("channel send: {e}"))?;
-        if matches!(mode, GenerationMode::KakeiboV1) {
+        if matches!(
+            mode,
+            GenerationMode::KakeiboV1
+                | GenerationMode::CognitiveDistortionV1
+                | GenerationMode::ReceiptOcrV1
+                | GenerationMode::InterviewEvaluationV1
+                | GenerationMode::MetacognitiveDebriefV1
+        ) {
             extract_buf.push_str(&piece);
         }
-        sampler.accept(token);
+        // `LlamaSampler::sample` is sample-and-accept. Calling `accept` again
+        // double-advances stateful grammar / repetition samplers.
 
         batch.clear();
         batch
@@ -378,6 +1657,18 @@ fn generate(
         n_cur += 1;
         ctx.decode(&mut batch).map_err(|e| format!("decode: {e}"))?;
     }
+
+    // Finalize a possible trailing partial scalar (for example when max_tokens
+    // cuts between byte-fallback tokens) before the terminal event.
+    let trailing = text_decoder.finish();
+    if !trailing.is_empty() {
+        batcher.push(g.max_tokens, &trailing)?;
+        if !matches!(mode, GenerationMode::Chat) {
+            extract_buf.push_str(&trailing);
+        }
+    }
+
+    batcher.flush()?;
 
     match mode {
         GenerationMode::Chat => {
@@ -394,12 +1685,537 @@ fn generate(
                 .map_err(|e| format!("channel send: {e}"))?;
             Ok(())
         }
+        GenerationMode::CognitiveDistortionV1 => {
+            let report = finalize_distortion_extraction(&extract_buf, cancelled)?;
+            tokens
+                .send(distortion_done_event(g.max_tokens, report))
+                .map_err(|e| format!("channel send: {e}"))?;
+            Ok(())
+        }
+        GenerationMode::ReceiptOcrV1 => {
+            let report = finalize_receipt_extraction(&extract_buf, cancelled)?;
+            tokens
+                .send(receipt_done_event(g.max_tokens, report))
+                .map_err(|e| format!("channel send: {e}"))?;
+            Ok(())
+        }
+        GenerationMode::InterviewEvaluationV1 => {
+            let report = finalize_interview_evaluation(&extract_buf, cancelled)?;
+            tokens
+                .send(interview_eval_done_event(g.max_tokens, report))
+                .map_err(|e| format!("channel send: {e}"))?;
+            Ok(())
+        }
+        GenerationMode::MetacognitiveDebriefV1 => {
+            let report = finalize_metacognitive_debrief(&extract_buf, cancelled)?;
+            tokens
+                .send(metacognitive_debrief_done_event(g.max_tokens, report))
+                .map_err(|e| format!("channel send: {e}"))?;
+            Ok(())
+        }
     }
+}
+
+/// Chat-only generation that returns owned text (関所 H ambient path).
+/// No `Channel` — the arena relays the string onto the sim queue via callback.
+#[cfg(feature = "flavor-live")]
+fn generate_chat_text(
+    backend: &LlamaBackend,
+    model: &LlamaModel,
+    g: &GenerationParams,
+    governor: &LlmMemoryGovernor,
+    cancel_epoch: u64,
+    monitor: &MemoryMonitor,
+) -> Result<String, String> {
+    g.validate()?;
+    if governor.is_cancelled_since(cancel_epoch) {
+        return Err("generation cancelled".into());
+    }
+    let prompt = render_chat_prompt(model, CHAT_SYSTEM_PROMPT, &g.prompt)?;
+    if governor.is_cancelled_since(cancel_epoch) {
+        return Err("generation cancelled".into());
+    }
+
+    let requested_ctx = g.resolved_n_ctx();
+    let trained_ctx = model.n_ctx_train();
+    if trained_ctx > 0 && requested_ctx > trained_ctx {
+        return Err(format!(
+            "requested context {requested_ctx} exceeds model context {trained_ctx}"
+        ));
+    }
+    let level = governor.degradation();
+    let scaled_ctx = (((requested_ctx as f64) * f64::from(level.context_factor())).round() as u32)
+        .clamp(MIN_N_CTX, requested_ctx);
+    let input_token_budget = scaled_ctx
+        .checked_sub(g.max_tokens)
+        .ok_or_else(|| "output token budget exceeds degraded context".to_string())?
+        as usize;
+
+    let prompt_tokens = model
+        .str_to_token(&prompt, model_add_bos(model))
+        .map_err(|e| format!("tokenize: {e}"))?;
+    if prompt_tokens.len() > input_token_budget {
+        return Err(format!(
+            "prompt exceeds context budget: {} > {input_token_budget}",
+            prompt_tokens.len()
+        ));
+    }
+    if governor.is_cancelled_since(cancel_epoch) {
+        return Err("generation cancelled".into());
+    }
+
+    let ctx_params = apply_context_device_policy(
+        LlamaContextParams::default().with_n_ctx(NonZeroU32::new(scaled_ctx)),
+        cfg!(all(target_os = "ios", target_abi = "sim")),
+    );
+    let mut ctx = model
+        .new_context(backend, ctx_params)
+        .map_err(|e| format!("context create: {e}"))?;
+    monitor.set_phase(MemPhase::CtxCreated);
+
+    let mut batch = LlamaBatch::new(prompt_tokens.len().max(1), 1);
+    let last = prompt_tokens.len().saturating_sub(1);
+    for (i, token) in prompt_tokens.iter().enumerate() {
+        batch
+            .add(*token, i as i32, &[0], i == last)
+            .map_err(|e| format!("batch add: {e}"))?;
+    }
+    if governor.is_cancelled_since(cancel_epoch) {
+        return Err("generation cancelled".into());
+    }
+    ctx.decode(&mut batch).map_err(|e| format!("decode: {e}"))?;
+    monitor.set_phase(MemPhase::Inference);
+
+    let mut sampler = if g.temp <= 0.0 {
+        LlamaSampler::greedy()
+    } else {
+        LlamaSampler::chain_simple([
+            LlamaSampler::top_k(g.top_k),
+            LlamaSampler::top_p(g.top_p, 1),
+            LlamaSampler::temp(g.temp),
+            LlamaSampler::dist(g.seed),
+        ])
+    };
+
+    let mut out = String::new();
+    let mut n_cur = batch.n_tokens();
+    let mut text_decoder = Utf8TokenDecoder::default();
+    for _seq in 0..g.max_tokens {
+        if governor.is_cancelled_since(cancel_epoch) {
+            return Err("generation cancelled".into());
+        }
+        if governor.degradation().throttle_generation() {
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        let token = sampler.sample(&ctx, batch.n_tokens() - 1);
+        if model.is_eog_token(token) {
+            break;
+        }
+        let piece_bytes =
+            token_piece_bytes(model, token).map_err(|e| format!("token decode: {e}"))?;
+        out.push_str(&text_decoder.push(&piece_bytes));
+
+        batch.clear();
+        batch
+            .add(token, n_cur, &[0], true)
+            .map_err(|e| format!("batch add: {e}"))?;
+        n_cur += 1;
+        ctx.decode(&mut batch).map_err(|e| format!("decode: {e}"))?;
+    }
+    out.push_str(&text_decoder.finish());
+    Ok(out)
+}
+
+/// Test-only EDINET coordinator harness (fake Barrier/Park worker). Shared with
+/// `commands_sim` Step 11 pipeline tests so they do not re-implement acquire.
+#[cfg(test)]
+fn edinet_disconnected_test_handle() -> (LlmHandle, mpsc::Receiver<LlmCommand>) {
+    let (tx, rx) = mpsc::sync_channel(LLM_COMMAND_QUEUE_CAPACITY);
+    (
+        LlmHandle {
+            tx: Arc::new(Mutex::new(tx)),
+            governor: Arc::new(LlmMemoryGovernor::new()),
+            startup_error: None,
+            monitor: Arc::new(MemoryMonitor::new()),
+        },
+        rx,
+    )
+}
+
+#[cfg(test)]
+pub(crate) fn edinet_coordinator_test_handle() -> (LlmHandle, thread::JoinHandle<()>) {
+    let (handle, rx) = edinet_disconnected_test_handle();
+    let governor = handle.governor();
+    let worker = thread::spawn(move || {
+        while let Ok(command) = rx.recv() {
+            match command {
+                LlmCommand::Barrier { reply } => {
+                    let _ = reply.send(());
+                }
+                LlmCommand::Park { epoch, reply } => {
+                    let _ = governor.take_purge();
+                    governor.edinet_parked_epoch.store(epoch, Ordering::SeqCst);
+                    let _ = reply.send(Ok(()));
+                }
+                LlmCommand::Unpark { epoch } => {
+                    if governor.edinet_parked_epoch.load(Ordering::SeqCst) == epoch {
+                        governor.edinet_parked_epoch.store(0, Ordering::SeqCst);
+                    }
+                }
+                _ => {}
+            }
+        }
+    });
+    (handle, worker)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn coordinator_test_handle() -> (LlmHandle, thread::JoinHandle<()>) {
+        edinet_coordinator_test_handle()
+    }
+
+    fn disconnected_test_handle() -> (LlmHandle, mpsc::Receiver<LlmCommand>) {
+        edinet_disconnected_test_handle()
+    }
+
+    fn test_generation_params() -> GenerationParams {
+        GenerationParams {
+            prompt: "test".into(),
+            n_ctx: 512,
+            max_tokens: 1,
+            temp: 0.0,
+            top_k: 1,
+            top_p: 1.0,
+            seed: 0,
+        }
+    }
+
+    #[test]
+    fn dropping_clone_does_not_stop_shared_worker_channel() {
+        let (handle, rx) = disconnected_test_handle();
+        drop(handle.clone());
+
+        assert!(matches!(rx.try_recv(), Err(mpsc::TryRecvError::Empty)));
+
+        drop(handle);
+        assert!(matches!(
+            rx.try_recv(),
+            Err(mpsc::TryRecvError::Disconnected)
+        ));
+    }
+
+    #[test]
+    fn bounded_queue_rejects_excess_work_without_blocking() {
+        let (tx, _rx) = mpsc::sync_channel(1);
+        let handle = LlmHandle {
+            tx: Arc::new(Mutex::new(tx)),
+            governor: Arc::new(LlmMemoryGovernor::new()),
+            startup_error: None,
+            monitor: Arc::new(MemoryMonitor::new()),
+        };
+        let first = Channel::new(|_| Ok(()));
+        assert!(handle.register_events(first).is_ok());
+        let second = Channel::new(|_| Ok(()));
+        assert_eq!(
+            handle.register_events(second),
+            Err("llm worker queue full".into())
+        );
+    }
+
+    #[test]
+    fn unavailable_worker_propagates_startup_error() {
+        let handle = LlmHandle::unavailable("backend unavailable".into());
+        let channel = Channel::new(|_| Ok(()));
+        assert_eq!(
+            handle.register_events(channel),
+            Err("llm worker unavailable: backend unavailable".into())
+        );
+    }
+
+    #[cfg(feature = "flavor-live")]
+    #[test]
+    fn enqueue_flavor_generate_rejects_unavailable_worker() {
+        let handle = LlmHandle::unavailable("backend unavailable".into());
+        let err = handle.enqueue_flavor_generate(
+            "雰囲気だけを書け。".into(),
+            16,
+            Box::new(|_| panic!("complete must not run when enqueue fails")),
+        );
+        assert!(err.is_err(), "unavailable worker must reject flavor enqueue");
+    }
+
+    #[test]
+    fn edinet_guard_closes_heavy_gate_and_unparks_on_last_drop() {
+        let (handle, worker) = coordinator_test_handle();
+        let guard = handle
+            .acquire_edinet_job_with_headroom(|| Some(EDINET_MIN_START_HEADROOM_BYTES))
+            .expect("acquire");
+        let clone = guard.clone();
+        assert!(handle.ensure_llm_heavy_admitted().is_err());
+        assert_ne!(
+            handle.governor.edinet_parked_epoch.load(Ordering::SeqCst),
+            0
+        );
+        drop(guard);
+        assert!(handle.ensure_llm_heavy_admitted().is_err());
+        drop(clone);
+        for _ in 0..100 {
+            if handle.governor.edinet_parked_epoch.load(Ordering::SeqCst) == 0 {
+                break;
+            }
+            thread::yield_now();
+        }
+        assert!(handle.ensure_llm_heavy_admitted().is_ok());
+        drop(handle);
+        worker.join().expect("worker");
+    }
+
+    #[test]
+    fn edinet_admission_and_headroom_fail_closed() {
+        let (handle, worker) = coordinator_test_handle();
+        handle.governor.set_background_restricted(true);
+        assert!(handle
+            .acquire_edinet_job_with_headroom(|| Some(EDINET_MIN_START_HEADROOM_BYTES))
+            .is_err());
+        handle.governor.set_background_restricted(false);
+        assert!(handle
+            .acquire_edinet_job_with_headroom(|| Some(EDINET_MIN_START_HEADROOM_BYTES - 1))
+            .is_err());
+        assert!(handle.acquire_edinet_job_with_headroom(|| None).is_err());
+        drop(handle);
+        worker.join().expect("worker");
+    }
+
+    #[test]
+    fn edinet_cancel_token_live_until_last_guard_drop() {
+        let (handle, worker) = coordinator_test_handle();
+        let guard = handle
+            .acquire_edinet_job_with_headroom(|| Some(EDINET_MIN_START_HEADROOM_BYTES))
+            .expect("acquire");
+        let token = guard.cancel_token();
+        assert!(!token.is_cancelled());
+        let clone = guard.clone();
+        drop(guard);
+        assert!(!token.is_cancelled());
+        drop(clone);
+        assert!(token.is_cancelled());
+        drop(handle);
+        worker.join().expect("worker");
+    }
+
+    #[test]
+    fn edinet_cancel_with_cause_is_first_writer_wins() {
+        let (handle, worker) = coordinator_test_handle();
+        let guard = handle
+            .acquire_edinet_job_with_headroom(|| Some(EDINET_MIN_START_HEADROOM_BYTES))
+            .expect("acquire");
+        guard.cancel_with_cause(EdinetCancelCause::Background);
+        guard.cancel_with_cause(EdinetCancelCause::MemoryPressure);
+        assert_eq!(
+            guard.cancellation_cause(),
+            EdinetCancelCause::Background
+        );
+        assert!(guard.cancel_token().is_cancelled());
+        drop(guard);
+        drop(handle);
+        worker.join().expect("worker");
+    }
+
+    #[test]
+    fn edinet_is_cancelled_true_for_token_alone() {
+        let (handle, worker) = coordinator_test_handle();
+        let guard = handle
+            .acquire_edinet_job_with_headroom(|| Some(EDINET_MIN_START_HEADROOM_BYTES))
+            .expect("acquire");
+        assert!(!guard.is_cancelled());
+        guard.cancel_token().cancel();
+        assert!(guard.is_cancelled());
+        drop(guard);
+        drop(handle);
+        worker.join().expect("worker");
+    }
+
+    #[tokio::test]
+    async fn edinet_watcher_cancels_on_admission_bits() {
+        async fn case(bit: u32, expected: EdinetCancelCause) {
+            let (handle, worker) = coordinator_test_handle();
+            let guard = handle
+                .acquire_edinet_job_with_headroom(|| Some(EDINET_MIN_START_HEADROOM_BYTES))
+                .expect("acquire");
+            let token = guard.cancel_token();
+            let _watch = spawn_edinet_cancel_watch_with_headroom(&guard, || {
+                Some(EDINET_MIN_START_HEADROOM_BYTES)
+            });
+            handle.governor.set_admission_bit(bit, true);
+            let deadline = tokio::time::Instant::now() + Duration::from_secs(1);
+            while !token.is_cancelled() && tokio::time::Instant::now() < deadline {
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+            assert!(token.is_cancelled());
+            assert_eq!(guard.cancellation_cause(), expected);
+            drop(guard);
+            drop(handle);
+            worker.join().expect("worker");
+        }
+        case(ADMISSION_BACKGROUND, EdinetCancelCause::Background).await;
+        case(ADMISSION_MEMORY_PRESSURE, EdinetCancelCause::MemoryPressure).await;
+        case(ADMISSION_THERMAL_PRESSURE, EdinetCancelCause::ThermalPressure).await;
+    }
+
+    #[tokio::test]
+    async fn edinet_watcher_exits_when_guard_drops_and_gate_opens() {
+        let (handle, worker) = coordinator_test_handle();
+        let guard = handle
+            .acquire_edinet_job_with_headroom(|| Some(EDINET_MIN_START_HEADROOM_BYTES))
+            .expect("acquire");
+        let watch = spawn_edinet_cancel_watch_with_headroom(&guard, || {
+            Some(EDINET_MIN_START_HEADROOM_BYTES)
+        });
+        drop(guard);
+        let joined = tokio::time::timeout(Duration::from_secs(2), watch).await;
+        assert!(joined.is_ok(), "watcher must finish after Weak upgrade fails");
+        assert!(handle.ensure_llm_heavy_admitted().is_ok());
+        drop(handle);
+        worker.join().expect("worker");
+    }
+
+    #[tokio::test]
+    async fn edinet_watcher_cancels_on_headroom_floor() {
+        let (handle, worker) = coordinator_test_handle();
+        let guard = handle
+            .acquire_edinet_job_with_headroom(|| Some(EDINET_MIN_START_HEADROOM_BYTES))
+            .expect("acquire");
+        let token = guard.cancel_token();
+        let _watch = spawn_edinet_cancel_watch_with_headroom(&guard, || {
+            Some(EDINET_CANCEL_HEADROOM_BYTES - 1)
+        });
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(1);
+        while !token.is_cancelled() && tokio::time::Instant::now() < deadline {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        assert!(token.is_cancelled());
+        assert_eq!(
+            guard.cancellation_cause(),
+            EdinetCancelCause::MemoryPressure
+        );
+        drop(guard);
+        drop(handle);
+        worker.join().expect("worker");
+    }
+
+    #[tokio::test]
+    async fn generate_waits_for_worker_completion_ack() {
+        let (handle, rx) = disconnected_test_handle();
+        let tokens = Channel::new(|_| Ok(()));
+        let generation = handle.generate(test_generation_params(), None, tokens);
+        tokio::pin!(generation);
+
+        tokio::select! {
+            result = &mut generation => panic!("generation resolved before worker ack: {result:?}"),
+            _ = tokio::task::yield_now() => {}
+        }
+
+        let completion = match rx.try_recv() {
+            Ok(LlmCommand::Generate { completion, .. }) => completion,
+            Ok(_) => panic!("unexpected worker command"),
+            Err(error) => panic!("generation command not queued: {error}"),
+        };
+
+        assert!(completion.send(Ok(())).is_ok());
+        assert_eq!(generation.await, Ok(()));
+    }
+
+    #[test]
+    fn error_terminal_is_sent_before_completion_ack() {
+        let (completion, ack) = oneshot::channel();
+        let ack = Arc::new(Mutex::new(ack));
+        let ack_during_terminal = Arc::clone(&ack);
+        let terminal_seen = Arc::new(AtomicBool::new(false));
+        let terminal_seen_by_channel = Arc::clone(&terminal_seen);
+        let tokens = Channel::new(move |body| {
+            assert!(matches!(
+                ack_during_terminal.lock().expect("ack lock").try_recv(),
+                Err(oneshot::error::TryRecvError::Empty)
+            ));
+            match body {
+                tauri::ipc::InvokeResponseBody::Json(json) => {
+                    assert!(json.contains("\"done\":true"));
+                    assert!(json.contains("\"error\":\"boom\""));
+                }
+                tauri::ipc::InvokeResponseBody::Raw(_) => panic!("unexpected raw token event"),
+            }
+            terminal_seen_by_channel.store(true, Ordering::SeqCst);
+            Ok(())
+        });
+
+        complete_generation(Err("boom".into()), &tokens, completion);
+
+        assert!(terminal_seen.load(Ordering::SeqCst));
+        assert_eq!(ack.lock().expect("ack lock").try_recv(), Ok(Ok(())));
+    }
+
+    #[test]
+    fn failed_terminal_delivery_rejects_completion_ack() {
+        let (completion, mut ack) = oneshot::channel();
+        let tokens = Channel::new(|_| Err(tauri::Error::FailedToReceiveMessage));
+
+        complete_generation(Err("boom".into()), &tokens, completion);
+
+        let error = ack
+            .try_recv()
+            .expect("completion ack")
+            .expect_err("broken terminal channel must reject invoke");
+        assert!(error.starts_with("token channel send:"));
+    }
+
+    #[test]
+    fn governor_request_purge_advances_epoch_and_stays_sticky_until_consumed() {
+        let g = LlmMemoryGovernor::new();
+        let before = g.cancel_epoch();
+        let purge_before = g.purge_epoch();
+        assert!(!g.is_cancelled_since(before));
+        assert!(!g.take_purge());
+
+        g.request_purge();
+        assert!(g.is_cancelled_since(before));
+        assert_ne!(g.purge_epoch(), purge_before);
+        let after = g.cancel_epoch();
+        // Even a snapshot taken after the epoch advance must observe the
+        // unconsumed purge request.
+        assert!(g.is_cancelled_since(after));
+        assert!(g.take_purge());
+        assert!(!g.is_cancelled_since(after));
+        assert!(!g.take_purge());
+    }
+
+    #[test]
+    fn governor_cancel_only_invalidates_the_running_epoch() {
+        let g = LlmMemoryGovernor::new();
+        let running = g.cancel_epoch();
+        let submitted_load = g.purge_epoch();
+        g.request_cancel();
+        assert!(g.is_cancelled_since(running));
+        assert!(!g.take_purge());
+        assert!(!g.load_is_stale(submitted_load));
+        let next_job = g.cancel_epoch();
+        assert!(!g.is_cancelled_since(next_job));
+    }
+
+    #[test]
+    fn queued_load_from_before_purge_stays_stale_after_purge_is_consumed() {
+        let g = LlmMemoryGovernor::new();
+        let stale_load = g.purge_epoch();
+        g.request_purge();
+        assert!(g.load_is_stale(stale_load));
+        assert!(g.take_purge());
+        assert!(g.load_is_stale(stale_load));
+
+        let foreground_load = g.purge_epoch();
+        assert!(!g.load_is_stale(foreground_load));
+    }
 
     #[test]
     fn mode_none_is_chat() {
@@ -418,8 +2234,100 @@ mod tests {
     }
 
     #[test]
+    fn mode_cognitive_distortion_v1_is_extract() {
+        assert!(matches!(
+            resolve_generation_mode(Some(TASK_COGNITIVE_DISTORTION_V1)),
+            Ok(GenerationMode::CognitiveDistortionV1)
+        ));
+    }
+
+    #[test]
+    fn mode_receipt_ocr_v1_is_extract() {
+        assert_eq!(
+            resolve_generation_mode(Some(TASK_RECEIPT_OCR_V1)),
+            Ok(GenerationMode::ReceiptOcrV1)
+        );
+    }
+
+    #[test]
+    fn mode_interview_evaluation_v1_is_extract() {
+        assert_eq!(
+            resolve_generation_mode(Some(TASK_INTERVIEW_EVALUATION_V1)),
+            Ok(GenerationMode::InterviewEvaluationV1)
+        );
+    }
+
+    #[test]
+    fn mode_metacognitive_debrief_v1_is_extract() {
+        assert_eq!(
+            resolve_generation_mode(Some(TASK_METACOGNITIVE_DEBRIEF_V1)),
+            Ok(GenerationMode::MetacognitiveDebriefV1)
+        );
+    }
+
+    #[test]
     fn mode_unknown_is_err() {
         assert!(resolve_generation_mode(Some("nope")).is_err());
+    }
+
+    #[test]
+    fn bos_policy_tracks_gguf_metadata() {
+        assert_eq!(add_bos_from_metadata(Some("false")), AddBos::Never);
+        assert_eq!(add_bos_from_metadata(Some(" 0 ")), AddBos::Never);
+        assert_eq!(add_bos_from_metadata(Some("true")), AddBos::Always);
+        assert_eq!(add_bos_from_metadata(None), AddBos::Always);
+    }
+
+    #[test]
+    fn simulator_forces_cpu_without_changing_device_offload() {
+        assert_eq!(effective_n_gpu_layers(999, true), 0);
+        assert_eq!(effective_n_gpu_layers(999, false), 999);
+        assert_eq!(effective_n_gpu_layers(0, false), 0);
+
+        let simulator = apply_context_device_policy(LlamaContextParams::default(), true);
+        assert!(!simulator.offload_kqv());
+        assert!(!simulator.op_offload());
+
+        // On-device default (no CORAXIS_FORCE_CPU): Metal KQV/op stay on.
+        // Desktop builds never enable the oracle, so this asserts the Metal arm.
+        assert!(
+            !force_cpu_oracle_enabled(),
+            "CPU oracle must stay off unless CORAXIS_FORCE_CPU=1 on iOS"
+        );
+        let device = apply_context_device_policy(LlamaContextParams::default(), false);
+        assert!(device.offload_kqv());
+        assert!(device.op_offload());
+    }
+
+    #[test]
+    fn on_device_effective_layers_preserve_metal_999_default() {
+        // D-40 target: permanently zeroing on-device layers must fail this.
+        assert_eq!(effective_n_gpu_layers(999, false), 999);
+    }
+
+    #[test]
+    fn utf8_decoder_preserves_scalar_split_across_token_pieces() {
+        let mut decoder = Utf8TokenDecoder::default();
+        let bytes = "思".as_bytes();
+
+        assert!(decoder.push(&bytes[..1]).is_empty());
+        assert_eq!(decoder.push(&bytes[1..]), "思");
+        assert!(decoder.finish().is_empty());
+    }
+
+    #[test]
+    fn utf8_decoder_replaces_only_irrecoverably_invalid_bytes() {
+        let mut decoder = Utf8TokenDecoder::default();
+        assert_eq!(decoder.push(b"A\xFFB"), "A\u{FFFD}B");
+        assert!(decoder.finish().is_empty());
+    }
+
+    #[test]
+    fn token_piece_retry_uses_llama_reported_capacity() {
+        assert_eq!(required_piece_capacity(-9), Some(9));
+        assert_eq!(required_piece_capacity(0), None);
+        assert_eq!(required_piece_capacity(9), None);
+        assert_eq!(required_piece_capacity(i32::MIN), None);
     }
 
     #[test]

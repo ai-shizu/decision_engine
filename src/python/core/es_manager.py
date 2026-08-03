@@ -3,8 +3,7 @@
 """
 動的 ES (エントリーシート / 企画書) 管理
 ==========================================
-data/es/ 配下の Markdown / テキストを読み込み、本文から
-「ターゲットドメイン (志望業界・職種)」を動的に抽出する。
+data/es/ 配下の Markdown を企業名付きで複数保持する (M20-N)。
 
 【ドメイン非依存の原則 — 変更禁止】
 テック・金融・クリエイティブ等、特定業界の if-elif をここに書いてはならない。
@@ -13,6 +12,10 @@ data/es/ 配下の Markdown / テキストを読み込み、本文から
   2. なければ頻度ベースのキーワード抽出 (英数トークン・カタカナ語・漢字連続)
 抽出結果はシミュレーター (interview_sim / gd_sim / es_review) のペルソナ生成に
 使われ、面接官・添削者の専門性は ES が語る領域に自動追従する。
+
+【企業別保持 (M20-N)】
+各ファイル先頭の「企業名: …」が会社キー。draft_*.md は一覧から除外。
+select_es(id) は stem / 企業名で解決。id が空/none なら None (ゼロベース面接)。
 """
 
 from __future__ import annotations
@@ -20,12 +23,13 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-from .paths import ACTIVE_ES
+from .paths import ACTIVE_ES, ES_DIR
 
 _EXPLICIT_DOMAIN_RE = re.compile(
     r"^(?:志望業界|志望職種|応募職種|応募先|ターゲット(?:ドメイン)?)\s*[:：]\s*(.+)$",
     re.MULTILINE,
 )
+_COMPANY_RE = re.compile(r"^企業名\s*[:：]\s*(.+)$", re.MULTILINE)
 # 英数トークン (C++/OpenGL/HFT 等) / カタカナ語 / 漢字連続 を語彙として拾う
 _TOKEN_RE = re.compile(r"[A-Za-z][A-Za-z0-9+#.]+|[ァ-ヶー]{3,}|[一-鿿]{2,6}")
 
@@ -39,6 +43,7 @@ _STOPWORDS = {
 
 MAX_KEYWORDS = 8
 MAX_BODY_CHARS = 2500  # プロンプト注入時の本文上限
+_NONE_IDS = frozenset({"", "none", "__none__", "null", "zero", "ゼロベース"})
 
 
 def _read_text_lenient(path: Path) -> str:
@@ -78,6 +83,117 @@ def extract_target_domain(text: str) -> dict:
     return {"domain": domain, "explicit": False, "keywords": keywords}
 
 
+def extract_company_name(text: str, fallback: str = "") -> str:
+    m = _COMPANY_RE.search(text)
+    if m:
+        return m.group(1).strip()
+    return (fallback or "").strip()
+
+
+def company_slug(company: str) -> str:
+    raw = (company or "").strip() or "company"
+    slug = re.sub(r"[^\w\-ぁ-んァ-ヶ一-鿿]+", "_", raw).strip("_")[:48]
+    return slug or "company"
+
+
+# 法人格・括弧表記の揺れを落とす (業界依存の if-elif は禁止 — 形式だけ)
+_CORP_SUFFIX_RE = re.compile(
+    r"(株式会社|有限会社|合同会社|合名会社|合資会社|"
+    r"\(株\)|（株）|\(有\)|（有）|㈱|㈲|"
+    r"Inc\.?|Corp\.?|Ltd\.?|LLC|Co\.,?\s*Ltd\.?)",
+    re.IGNORECASE,
+)
+_SIMILARITY_THRESHOLD = 0.82
+
+
+def normalize_company_key(name: str) -> str:
+    """表記揺れ比較用の正規化キー (保存名そのものは変えない)。"""
+    import unicodedata
+
+    text = unicodedata.normalize("NFKC", (name or "").strip())
+    text = _CORP_SUFFIX_RE.sub("", text)
+    text = re.sub(r"[\s　・･./／\-ー—_]+", "", text)
+    return text.casefold()
+
+
+def company_name_similarity(a: str, b: str) -> float:
+    """0..1。正規化キーの一致 / 包含 / SequenceMatcher。"""
+    from difflib import SequenceMatcher
+
+    ka, kb = normalize_company_key(a), normalize_company_key(b)
+    if not ka or not kb:
+        return 0.0
+    if ka == kb:
+        return 1.0
+    if ka in kb or kb in ka:
+        shorter, longer = (ka, kb) if len(ka) <= len(kb) else (kb, ka)
+        if len(shorter) >= 2:
+            return max(0.88, len(shorter) / max(len(longer), 1))
+    return SequenceMatcher(None, ka, kb).ratio()
+
+
+def find_similar_companies(
+    company: str,
+    *,
+    threshold: float = _SIMILARITY_THRESHOLD,
+    exclude_exact_slug: bool = False,
+) -> list[dict]:
+    """既存 ES から表記揺れ候補を返す (スコア降順)。"""
+    target_slug = company_slug(company)
+    hits: list[dict] = []
+    for doc in load_es_documents():
+        if exclude_exact_slug and doc["id"] == f"es_{target_slug}":
+            continue
+        if doc["id"] == f"es_{target_slug}" or doc.get("company_name") == company:
+            # 完全一致は別経路 (exact) で扱う
+            continue
+        score = company_name_similarity(company, doc.get("company_name") or doc.get("title") or "")
+        if score < threshold:
+            # slug 同士の近さも見る
+            score = max(
+                score,
+                company_name_similarity(company, doc["id"].removeprefix("es_").replace("_", "")),
+            )
+        if score >= threshold:
+            hits.append({
+                "id": doc["id"],
+                "company_name": doc["company_name"],
+                "title": doc["title"],
+                "score": round(float(score), 3),
+                "path": Path(doc["path"]).name,
+            })
+    hits.sort(key=lambda h: (-float(h["score"]), h["company_name"]))
+    return hits
+
+
+def ensure_company_header(content: str, company: str) -> str:
+    """本文先頭に企業名フィールドを付与 / 置換する。"""
+    company = company.strip()
+    if not company:
+        return content
+    if _COMPANY_RE.search(content):
+        return _COMPANY_RE.sub(f"企業名: {company}", content, count=1)
+    return f"企業名: {company}\n\n{content.lstrip()}"
+
+
+def es_path_for_company(company: str) -> Path:
+    return ES_DIR / f"es_{company_slug(company)}.md"
+
+
+def _is_es_library_file(path: Path) -> bool:
+    if not path.is_file() or path.suffix.lower() not in {".md", ".txt"}:
+        return False
+    name = path.name
+    if name.startswith("draft_"):
+        return False
+    if name.startswith("."):
+        return False
+    # active_es.md は企業別ファイルへのミラー (一覧に二重計上しない)
+    if name == ACTIVE_ES.name:
+        return False
+    return True
+
+
 def _parse_es(path: Path) -> dict:
     text = _read_text_lenient(path).strip()
     title = path.stem
@@ -85,51 +201,91 @@ def _parse_es(path: Path) -> dict:
     if hm:
         title = hm.group(1).strip()
     domain = extract_target_domain(text)
+    company = extract_company_name(text, fallback=title)
     return {
+        "id": path.stem,
         "name": path.stem,
         "path": str(path),
         "title": title,
+        "company_name": company or title,
         "body": text,
         "target_domain": domain["domain"],
         "explicit_domain": domain["explicit"],
         "keywords": domain["keywords"],
         "mtime": path.stat().st_mtime,
+        "char_count": len(text),
     }
 
 
 def load_es_documents() -> list[dict]:
-    """保持する ES は常に active_es.md ただ1件 (F-16)。
-
-    W-53: 真実の源は ACTIVE_ES ただ一つ。ES_DIR 内の他ファイル (レガシー) は
-    削除されず物理的に残りうるが、この読み手からは構造的に不可視 —
-    active_es.md 以外を読む経路をここに新設しないこと。
-    """
-    if not ACTIVE_ES.exists():
+    """企業別 ES ライブラリ (draft_* / active_es.md ミラー除外)。mtime 降順。"""
+    if not ES_DIR.is_dir():
+        if ACTIVE_ES.exists():
+            return [_parse_es(ACTIVE_ES)]
         return []
-    return [_parse_es(ACTIVE_ES)]
+    docs: list[dict] = []
+    for path in ES_DIR.iterdir():
+        if _is_es_library_file(path):
+            try:
+                docs.append(_parse_es(path))
+            except (OSError, UnicodeDecodeError):
+                continue
+    # 企業別ファイルが無い旧環境: active_es.md のみをライブラリとして扱う
+    if not docs and ACTIVE_ES.exists():
+        try:
+            docs.append(_parse_es(ACTIVE_ES))
+        except (OSError, UnicodeDecodeError):
+            pass
+    docs.sort(key=lambda d: (-float(d["mtime"]), d["id"]))
+    return docs
 
 
 def select_es(name: str | None = None) -> dict | None:
-    """常に active_es.md を返す (無ければ None)。
+    """id / stem / 企業名で ES を解決。空・none 系はゼロベース (None)。
 
-    F-16 による単一化で `name` は意味を失った。呼び出し側の互換のため
-    引数は残すが、無視する (W-53)。
+    name 省略時は最新1件 (es_review 等の後方互換)。明示ゼロベースは
+    Interview 側が esId="" を渡す。
     """
+    docs = load_es_documents()
+    if not docs:
+        return None
+    if name is None:
+        return docs[0]
+    key = str(name).strip()
+    if key.lower() in _NONE_IDS or key == "ゼロベース（ESなし）":
+        return None
+    for doc in docs:
+        if doc["id"] == key or doc["name"] == key:
+            return doc
+        if doc["company_name"] == key:
+            return doc
+    # スラッグ一致
+    slug = company_slug(key)
+    for doc in docs:
+        if doc["id"] == f"es_{slug}" or doc["id"] == slug:
+            return doc
+    return None
+
+
+def get_active_es() -> dict | None:
+    """最新 ES 1件 (Import 要約・後方互換)。"""
     docs = load_es_documents()
     return docs[0] if docs else None
 
 
-def get_active_es() -> dict | None:
-    """ImportTab の ES_ACTIVE パネル (View 専用) 向け。
-
-    ACTIVE_ES が無ければ None。在れば `_parse_es` の全フィールドに加え
-    `char_count` (本文の View 表示用) を持つ dict を返す。
-    """
-    if not ACTIVE_ES.exists():
-        return None
-    doc = _parse_es(ACTIVE_ES)
-    doc["char_count"] = len(doc["body"])
-    return doc
+def list_es_summaries() -> list[dict]:
+    """UI 向け軽量一覧 (本文なし)。"""
+    out = []
+    for doc in load_es_documents():
+        out.append({
+            "id": doc["id"],
+            "company_name": doc["company_name"],
+            "title": doc["title"],
+            "target_domain": doc["target_domain"],
+            "char_count": doc["char_count"],
+            "mtime": doc["mtime"],
+        })
+    return out
 
 
 def es_body_for_prompt(es: dict) -> str:
@@ -147,9 +303,10 @@ def build_interviewer_persona(es: dict, stance: str = "adversarial") -> str:
     契約を無断で弱めない)。
     """
     kw = "、".join(es["keywords"][:6]) or "(語彙抽出なし)"
+    company = es.get("company_name") or es.get("target_domain") or "志望先"
     header = (
-        f"あなたは「{es['target_domain']}」領域のトップ組織で採用と専門評価を"
-        "長年担当してきた面接官である。この領域の専門語彙"
+        f"あなたは「{company}」向け選考で「{es['target_domain']}」領域の"
+        "トップ組織で採用と専門評価を長年担当してきた面接官である。この領域の専門語彙"
         f" ({kw}) を正確に扱い、候補者の主張の裏を取る。\n"
     )
     if stance == "standard":

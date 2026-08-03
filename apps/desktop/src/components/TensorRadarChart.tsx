@@ -72,6 +72,7 @@ export function TensorRadarChart({ data, title }: TensorRadarChartProps) {
 
   const titleId = "tensor-radar-title";
   const descId = "tensor-radar-desc";
+  const liveId = "tensor-radar-live";
   const normalized = data.map((d) => ({ ...d, plot: clampValue(d.value) }));
   const dataPoints = normalized
     .map((d, i) => {
@@ -85,7 +86,9 @@ export function TensorRadarChart({ data, title }: TensorRadarChartProps) {
     const name = d.axisName ? `${d.label} (${d.axisName})` : d.label;
     return `${name}: ${formatDisplayValue(d.plot)}`;
   });
-  const accessibleDesc = [title ?? "Six-dimensional tensor profile", ...descLines].join("; ");
+  const chartTitle = title ?? "Six-dimensional tensor profile";
+  const accessibleDesc = [chartTitle, ...descLines].join("; ");
+  const ariaLabel = `${chartTitle}. ${descLines.join(". ")}`;
 
   return (
     <div className="tensor-radar-panel">
@@ -93,9 +96,10 @@ export function TensorRadarChart({ data, title }: TensorRadarChartProps) {
         className="tensor-radar-svg"
         viewBox="0 0 320 320"
         role="img"
+        aria-label={ariaLabel}
         aria-labelledby={`${titleId} ${descId}`}
       >
-        <title id={titleId}>{title ?? "Six-dimensional tensor profile"}</title>
+        <title id={titleId}>{chartTitle}</title>
         <desc id={descId}>{accessibleDesc}</desc>
         {GRID_SCALES.map((scale) => {
           const ring = Array.from({ length: N }, (_, i) => {
@@ -135,13 +139,18 @@ export function TensorRadarChart({ data, title }: TensorRadarChartProps) {
               y={fmtCoord(lp.y)}
               textAnchor={labelAnchor(i)}
               dominantBaseline="middle"
+              aria-hidden="true"
             >
               {d.label}
             </text>
           );
         })}
       </svg>
-      <ul className="tensor-radar-legend" aria-hidden="false">
+      {/* VoiceOver: vision-independent summary; polite live region on data refresh. */}
+      <p id={liveId} className="sr-only" aria-live="polite" aria-atomic="true">
+        {accessibleDesc}
+      </p>
+      <ul className="tensor-radar-legend" aria-label="テンソル各軸の数値">
         {normalized.map((d) => (
           <li key={d.id} className="tensor-radar-legend-row">
             <span className="tensor-radar-legend-label">
@@ -153,7 +162,12 @@ export function TensorRadarChart({ data, title }: TensorRadarChartProps) {
                 <AxisHelp id={d.id} description={d.description} />
               ) : null}
             </span>
-            <span className="tensor-radar-legend-value">{formatDisplayValue(d.plot)}</span>
+            <span
+              className="tensor-radar-legend-value"
+              aria-label={`${d.label} ${formatDisplayValue(d.plot)}`}
+            >
+              {formatDisplayValue(d.plot)}
+            </span>
           </li>
         ))}
       </ul>

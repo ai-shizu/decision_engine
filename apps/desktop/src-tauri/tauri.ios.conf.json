@@ -2,28 +2,36 @@
   "$schema": "https://schema.tauri.app/config/2",
   "build": {
     "beforeDevCommand": "bash scripts/run-dev.sh",
-    "beforeBuildCommand": "bash scripts/run-build.sh"
+    "beforeBuildCommand": "bash scripts/run-build.sh",
+    "devUrl": null
   },
   "app": {
     "windows": [
       {
         "label": "main",
-        "title": "PKB",
+        "title": "Coraxis",
         "width": 1200,
         "height": 800,
         "create": true,
         "visible": true,
         "center": true,
-        "backgroundColor": "#0f1419",
+        "backgroundColor": "#0a0a0a",
         "decorations": false
       }
-    ]
+    ],
+    "security": {
+      "devCsp": null
+    }
   },
   "bundle": {
     "externalBin": [],
+    "resources": {
+      "../models/pocket-brain.gguf": "models/pocket-brain.gguf"
+    },
     "iOS": {
       "minimumSystemVersion": "17.0",
-      "frameworks": ["Accelerate"]
+      "frameworks": ["Accelerate", "LocalAuthentication"],
+      "infoPlist": "Info.ios.plist"
     }
   }
 }

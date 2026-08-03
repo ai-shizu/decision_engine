@@ -64,14 +64,24 @@ def _redact_hidden_reasoning(raw: str, streaming: bool = False) -> str:
 
 
 def test_redactor_exported_and_used_before_render() -> None:
+    # NOTE: the legacy per-speaker `GdThreadMessage` component (and its GD-only
+    # render branch) was deleted wholesale in fcf7fed (dead-code cleanup); the
+    # legacy consult()-backed gd_sim mode now renders through the *same* generic
+    # ai-message branch as every other mode, keyed off `m.speaker` (set to "GD"
+    # at send() time). See docs/AI_SKILLS.md for the Inner Coliseum GD Arena,
+    # which owns per-speaker parsing today (lib/gdStreamParser.ts).
     tab = _read("components/InterviewTab.tsx")
-    assert "export function redactHiddenReasoning" in tab
+    lib = _read("lib/redactHiddenReasoning.ts")
+    assert "export function redactHiddenReasoning" in lib
     assert "redactHiddenReasoning(" in tab
     render_block = tab.split("messages.map", 1)[1].split("MISSION_RESULT", 1)[0]
     assert "redactHiddenReasoning" in render_block
     assert 'm.role === "user"' in render_block
-    assert "GdThreadMessage" in render_block
+    assert "m.speaker" in render_block
     assert "visibleText" in render_block or "redactHiddenReasoning(m.text" in render_block
+    # Redaction must still gate speaker-name resolution/display (no path from
+    # raw m.text to the DOM that skips redactHiddenReasoning first).
+    assert render_block.index("redactHiddenReasoning(m.text") < render_block.index("m.speaker")
 
 
 def test_redactor_behavior_table() -> None:
@@ -109,12 +119,18 @@ def test_redactor_behavior_table() -> None:
 
 
 def test_gd_redaction_before_parser() -> None:
+    # Per-speaker GD parsing (formerly `parseGdSpeakerTurns` inside the deleted
+    # `GdThreadMessage` component) now lives in the Inner Coliseum's dedicated
+    # stream parser (lib/gdStreamParser.ts), decoupled from the legacy
+    # consult()-backed panel in InterviewTab.tsx. Each surface is checked on
+    # its own terms: the legacy panel must still redact before any render, and
+    # the current speaker-turn parser must still exist with its real exports.
     tab = _read("components/InterviewTab.tsx")
-    assert "GdThreadMessage" in tab
-    gd_block = tab.split("function GdThreadMessage", 1)[1].split("type SessionPhase", 1)[0]
     render_loop = tab.split("messages.map", 1)[1].split("MISSION_RESULT", 1)[0]
     assert "redactHiddenReasoning" in render_loop
-    assert "parseGdSpeakerTurns" in gd_block
+    parser = _read("lib/gdStreamParser.ts")
+    assert "export function parseGdStream" in parser
+    assert "export class GdIncrementalStreamParser" in parser
 
 
 def test_tensor_radar_chart_contract() -> None:
@@ -150,9 +166,8 @@ def test_profile_tab_has_no_tensor_preview() -> None:
 
 def test_forbidden_tokens_on_changed_surface() -> None:
     tab = _read("components/InterviewTab.tsx")
-    redactor_slice = tab.split("export function redactHiddenReasoning", 1)[1].split(
-        "export function parseGdSpeakerTurns", 1
-    )[0]
+    lib = _read("lib/redactHiddenReasoning.ts")
+    redactor_slice = lib.split("export function redactHiddenReasoning", 1)[1]
     render_slice = tab.split("const visibleText = redactHiddenReasoning", 1)[1].split(
         "MISSION_RESULT", 1
     )[0]
@@ -185,12 +200,16 @@ def test_package_manifests_unchanged() -> None:
 
 
 def test_tensor_radar_css_classes() -> None:
+    # NOTE: `.gd-thread-row` (the old GD thread bubble class) was deleted along
+    # with GdThreadMessage in fcf7fed; `.vault-panel` is the block that now
+    # immediately follows the tensor-radar rules and is the correct boundary.
     css = _read("App.css")
     assert ".tensor-radar-panel" in css
     assert ".tensor-radar-svg" in css
     start = css.index(".tensor-radar-panel")
-    end = css.find(".gd-thread-row", start)
-    tensor_css = css[start:end] if end != -1 else css[start:]
+    end = css.find(".vault-panel", start)
+    assert end != -1, "tensor-radar CSS boundary marker (.vault-panel) not found"
+    tensor_css = css[start:end]
     assert re.search(r"#[0-9a-fA-F]{3,8}", tensor_css) is None
 
 

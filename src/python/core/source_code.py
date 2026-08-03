@@ -9,12 +9,10 @@ import statistics
 from typing import Any
 
 from .gap_analysis import (
-    DONE_MARKERS,
     GENUINE_DOC_MIN_WEIGHT,
     PRODUCTIVITY_MARKERS,
     analyze_procrastination,
     build_subjective_corpus,
-    hyperbolic_discount,
 )
 from .line_telemetry import compute_interpersonal_axes
 

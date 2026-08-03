@@ -9,6 +9,7 @@ import {
   parseClassifyResult,
   parseDocumentImportResult,
   parseEngineHealth,
+  parseEsList,
   parseEsView,
   parseImportStats,
   parseKnowledgeFetchSummary,
@@ -43,6 +44,7 @@ import { parseContextManifestResponseV1 } from "./parseManifest";
 import { readTextLenient } from "./textDecode";
 import type {
   ClassifyResult,
+  EsListItem,
   EsView,
   InterviewConfig,
   ProbeAnswerResult,
@@ -55,6 +57,7 @@ import type {
 } from "./types";
 
 
+/** FE-invoked Python sidecar commands only (Coraxis dual-stack wrappers removed). */
 type EngineIpcCommand =
   | "engine_ready"
   | "engine_health"
@@ -62,6 +65,7 @@ type EngineIpcCommand =
   | "record_save"
   | "calendar_event_dates"
   | "import_stats"
+  | "es_list"
   | "es_view"
   | "consult"
   | "calendar_sync_ics"
@@ -70,14 +74,15 @@ type EngineIpcCommand =
   | "import_line_batch"
   | "import_classify"
   | "import_document"
+  | "llm_warm"
   | "settings_get"
   | "settings_save_fixed"
   | "settings_run_profiler"
+  | "tensor_rebuild"
+  | "profile_source_code"
   | "oracle_payload"
   | "oracle_report"
   | "twin_forecast"
-  | "tensor_rebuild"
-  | "profile_source_code"
   | "narrative_compile"
   | "knowledge_fetch_pending"
   | "knowledge_research"
@@ -98,10 +103,29 @@ async function invokeEngine<T>(
   request?: Record<string, unknown>,
   cid?: number,
 ): Promise<T> {
-  const raw = request === undefined
-    ? await invoke<unknown>(command)
-    : await invoke<unknown>(command, { request, cid: cid ?? null });
-  return parser(raw);
+  let raw: unknown;
+  try {
+    raw = request === undefined
+      ? await invoke<unknown>(command)
+      : await invoke<unknown>(command, { request, cid: cid ?? null });
+  } catch (cause) {
+    // Lessons-learned rule (2026-07-24 context-budget hunt, re-confirmed by the
+    // 2026-07-25 device E2E where the NetworkPolicy toggle failed in total
+    // silence): surface the RAW IPC error before any caller can swallow it.
+    // `pocketInvoke` has had this since Phase 1; this engine lane did not, so
+    // every failure on it was invisible.
+    // eslint-disable-next-line no-console -- intentional diagnostic (see above)
+    console.error(`[invokeEngine] invoke("${command}") failed:`, cause);
+    throw cause;
+  }
+  try {
+    return parser(raw);
+  } catch (cause) {
+    // A parser rejection is just as invisible as a transport failure.
+    // eslint-disable-next-line no-console -- intentional diagnostic (see above)
+    console.error(`[invokeEngine] parse of "${command}" response failed:`, cause, raw);
+    throw cause;
+  }
 }
 
 
@@ -148,8 +172,17 @@ export async function importStats(): Promise<Record<string, SourceStat>> {
 }
 
 
-export async function esView(): Promise<EsView> {
-  return invokeEngine("es_view", parseEsView);
+export async function esList(): Promise<EsListItem[]> {
+  return invokeEngine("es_list", parseEsList);
+}
+
+
+export async function esView(id?: string): Promise<EsView> {
+  return invokeEngine(
+    "es_view",
+    parseEsView,
+    id && id.trim() ? { id: id.trim() } : {},
+  );
 }
 
 
@@ -271,13 +304,51 @@ export async function importDocument(
   filename: string,
   dest: "es" | "knowledge",
   cid?: number,
+  companyName?: string,
+  opts?: { confirmOverwrite?: boolean; replaceEsId?: string },
 ): Promise<DocumentImportResult> {
   return invokeEngine(
     "import_document",
     parseDocumentImportResult,
-    { content, filename, dest },
+    {
+      content,
+      filename,
+      dest,
+      ...(companyName !== undefined && companyName !== ""
+        ? { company_name: companyName }
+        : {}),
+      ...(opts?.confirmOverwrite ? { confirm_overwrite: true } : {}),
+      ...(opts?.replaceEsId ? { replace_es_id: opts.replaceEsId } : {}),
+    },
     cid,
   );
+}
+
+
+export interface LlmWarmResult {
+  embedder_ready: boolean;
+  backend_ready: boolean;
+  llm_probed: boolean;
+  message: string;
+}
+
+
+function parseLlmWarmResult(value: unknown): LlmWarmResult {
+  if (typeof value !== "object" || value === null) {
+    throw new Error("llm.warm: expected object");
+  }
+  const o = value as Record<string, unknown>;
+  return {
+    embedder_ready: Boolean(o.embedder_ready),
+    backend_ready: Boolean(o.backend_ready),
+    llm_probed: Boolean(o.llm_probed),
+    message: typeof o.message === "string" ? o.message : "",
+  };
+}
+
+
+export async function warmConsultRuntime(probeLlm = true): Promise<LlmWarmResult> {
+  return invokeEngine("llm_warm", parseLlmWarmResult, { probe_llm: probeLlm });
 }
 
 
@@ -293,6 +364,16 @@ export async function saveFixedAttributes(attributes: Record<string, string>): P
 
 export async function runProfiler(): Promise<ProfilerResult> {
   return invokeEngine("settings_run_profiler", parseProfilerResult);
+}
+
+
+export async function tensorRebuild(): Promise<{ rebuilt: boolean; rows: number }> {
+  return invokeEngine("tensor_rebuild", parseTensorRebuildResult);
+}
+
+
+export async function sourceCode(): Promise<SourceCodeView> {
+  return invokeEngine("profile_source_code", parseSourceCodeView);
 }
 
 
@@ -341,16 +422,6 @@ export async function twinForecast(
 }
 
 
-export async function tensorRebuild(): Promise<{ rebuilt: boolean; rows: number }> {
-  return invokeEngine("tensor_rebuild", parseTensorRebuildResult);
-}
-
-
-export async function sourceCode(): Promise<SourceCodeView> {
-  return invokeEngine("profile_source_code", parseSourceCodeView);
-}
-
-
 export async function narrativeCompile(targetDomain?: string): Promise<NarrativeCompileResult> {
   return invokeEngine(
     "narrative_compile",
@@ -362,21 +433,6 @@ export async function narrativeCompile(targetDomain?: string): Promise<Narrative
 
 export async function knowledgeFetchPending(): Promise<KnowledgeFetchSummary> {
   return invokeEngine("knowledge_fetch_pending", parseKnowledgeFetchSummary);
-}
-
-
-export async function knowledgeResearch(query: string): Promise<KnowledgeResearchReceipt> {
-  return invokeEngine("knowledge_research", parseKnowledgeResearchReceipt, { query });
-}
-
-
-export async function getKnowledgeResearchPolicy() {
-  return invokeEngine("knowledge_policy_get", parseKnowledgePolicy);
-}
-
-
-export async function setKnowledgeResearchPolicy(enabled: boolean) {
-  return invokeEngine("knowledge_policy_set", parseKnowledgePolicy, { enabled });
 }
 
 
@@ -406,6 +462,21 @@ export async function probeAnswer(
       today,
     },
   );
+}
+
+
+export async function knowledgeResearch(query: string): Promise<KnowledgeResearchReceipt> {
+  return invokeEngine("knowledge_research", parseKnowledgeResearchReceipt, { query });
+}
+
+
+export async function getKnowledgeResearchPolicy() {
+  return invokeEngine("knowledge_policy_get", parseKnowledgePolicy);
+}
+
+
+export async function setKnowledgeResearchPolicy(enabled: boolean) {
+  return invokeEngine("knowledge_policy_set", parseKnowledgePolicy, { enabled });
 }
 
 

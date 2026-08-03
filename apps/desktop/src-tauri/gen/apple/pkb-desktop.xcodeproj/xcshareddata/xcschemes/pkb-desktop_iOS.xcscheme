@@ -15,7 +15,7 @@
             <BuildableReference
                BuildableIdentifier = "primary"
                BlueprintIdentifier = "F1D830E748DEBE6DDC962EF1"
-               BuildableName = "PKB.app"
+               BuildableName = "Coraxis.app"
                BlueprintName = "pkb-desktop_iOS"
                ReferencedContainer = "container:pkb-desktop.xcodeproj">
             </BuildableReference>
@@ -31,7 +31,7 @@
          <BuildableReference
             BuildableIdentifier = "primary"
             BlueprintIdentifier = "F1D830E748DEBE6DDC962EF1"
-            BuildableName = "PKB.app"
+            BuildableName = "Coraxis.app"
             BlueprintName = "pkb-desktop_iOS"
             ReferencedContainer = "container:pkb-desktop.xcodeproj">
          </BuildableReference>
@@ -66,7 +66,7 @@
          <BuildableReference
             BuildableIdentifier = "primary"
             BlueprintIdentifier = "F1D830E748DEBE6DDC962EF1"
-            BuildableName = "PKB.app"
+            BuildableName = "Coraxis.app"
             BlueprintName = "pkb-desktop_iOS"
             ReferencedContainer = "container:pkb-desktop.xcodeproj">
          </BuildableReference>
@@ -95,7 +95,7 @@
          <BuildableReference
             BuildableIdentifier = "primary"
             BlueprintIdentifier = "F1D830E748DEBE6DDC962EF1"
-            BuildableName = "PKB.app"
+            BuildableName = "Coraxis.app"
             BlueprintName = "pkb-desktop_iOS"
             ReferencedContainer = "container:pkb-desktop.xcodeproj">
          </BuildableReference>

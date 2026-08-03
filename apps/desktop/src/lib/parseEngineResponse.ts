@@ -1,6 +1,7 @@
 import type {
   ClassifyResult,
   EngineEvent,
+  EsListItem,
   EsView,
   ProbeAnswerResult,
   ProbeAxis,
@@ -287,11 +288,11 @@ export function parseEsView(value: unknown): EsView {
   const object = exactObject(
     root,
     ["exists", "title", "target_domain", "keywords", "body", "char_count", "mtime"],
-    [],
+    ["id", "company_name"],
     "es.view",
   );
   if (object.exists !== true) fail("es.view.exists", "expected boolean state");
-  return {
+  const result: EsView = {
     exists: true,
     title: asString(object.title, "es.view.title"),
     target_domain: asString(object.target_domain, "es.view.target_domain"),
@@ -300,6 +301,35 @@ export function parseEsView(value: unknown): EsView {
     char_count: asNonNegativeInteger(object.char_count, "es.view.char_count"),
     mtime: asNullableString(object.mtime, "es.view.mtime"),
   };
+  const id = optionalString(object, "id", "es.view");
+  if (id !== undefined) result.id = id;
+  const company = optionalString(object, "company_name", "es.view");
+  if (company !== undefined) result.company_name = company;
+  return result;
+}
+
+
+export function parseEsList(value: unknown): EsListItem[] {
+  const root = exactObject(value, ["items"], [], "es.list");
+  return asArray(root.items, "es.list.items").map((item, index) => {
+    const object = exactObject(
+      item,
+      ["id", "company_name", "title", "target_domain", "char_count", "mtime"],
+      [],
+      `es.list.items[${index}]`,
+    );
+    return {
+      id: asString(object.id, `es.list.items[${index}].id`),
+      company_name: asString(object.company_name, `es.list.items[${index}].company_name`),
+      title: asString(object.title, `es.list.items[${index}].title`),
+      target_domain: asString(object.target_domain, `es.list.items[${index}].target_domain`),
+      char_count: asNonNegativeInteger(
+        object.char_count,
+        `es.list.items[${index}].char_count`,
+      ),
+      mtime: asNullableString(object.mtime, `es.list.items[${index}].mtime`),
+    };
+  });
 }
 
 
@@ -403,6 +433,11 @@ export function parseClassifyResult(value: unknown): ClassifyResult {
 }
 
 
+export interface DocumentImportConflict {
+  exact: { id: string; company_name: string; path: string } | null;
+  similar: { id: string; company_name: string; title: string; score: number; path: string }[];
+}
+
 export interface DocumentImportResult {
   imported: boolean;
   skipped: boolean;
@@ -410,6 +445,9 @@ export interface DocumentImportResult {
   path?: string;
   message?: string;
   index_rebuilt?: boolean;
+  company_name?: string;
+  needs_confirmation?: boolean;
+  conflict?: DocumentImportConflict;
 }
 
 
@@ -417,7 +455,7 @@ export function parseDocumentImportResult(value: unknown): DocumentImportResult 
   const object = exactObject(
     value,
     ["imported", "skipped", "dest"],
-    ["path", "message", "index_rebuilt"],
+    ["path", "message", "index_rebuilt", "company_name", "needs_confirmation", "conflict"],
     "import.document",
   );
   const result: DocumentImportResult = {
@@ -425,14 +463,66 @@ export function parseDocumentImportResult(value: unknown): DocumentImportResult 
     skipped: asBoolean(object.skipped, "import.document.skipped"),
     dest: asLiteral(object.dest, ["es", "knowledge"] as const, "import.document.dest"),
   };
-  if (result.imported === result.skipped) fail("import.document", "invalid import state");
+  const needsConfirmation = optionalBoolean(object, "needs_confirmation", "import.document");
+  if (needsConfirmation !== undefined) result.needs_confirmation = needsConfirmation;
+  if (result.needs_confirmation) {
+    if (result.imported || result.skipped) {
+      fail("import.document", "confirmation state cannot be imported/skipped");
+    }
+  } else if (result.imported === result.skipped) {
+    fail("import.document", "invalid import state");
+  }
   const path = optionalString(object, "path", "import.document");
   if (path !== undefined) result.path = path;
   const message = optionalString(object, "message", "import.document");
   if (message !== undefined) result.message = message;
   const rebuilt = optionalBoolean(object, "index_rebuilt", "import.document");
   if (rebuilt !== undefined) result.index_rebuilt = rebuilt;
+  const company = optionalString(object, "company_name", "import.document");
+  if (company !== undefined) result.company_name = company;
+  if (Object.prototype.hasOwnProperty.call(object, "conflict")) {
+    result.conflict = parseImportConflict(object.conflict);
+  }
   return result;
+}
+
+function parseImportConflict(value: unknown): DocumentImportConflict {
+  const object = exactObject(
+    value,
+    ["exact", "similar"],
+    [],
+    "import.document.conflict",
+  );
+  let exact: DocumentImportConflict["exact"] = null;
+  if (object.exact !== null) {
+    const ex = exactObject(
+      object.exact,
+      ["id", "company_name", "path"],
+      [],
+      "import.document.conflict.exact",
+    );
+    exact = {
+      id: asString(ex.id, "import.document.conflict.exact.id"),
+      company_name: asString(ex.company_name, "import.document.conflict.exact.company_name"),
+      path: asString(ex.path, "import.document.conflict.exact.path"),
+    };
+  }
+  const similar = asArray(object.similar, "import.document.conflict.similar").map((item, i) => {
+    const row = exactObject(
+      item,
+      ["id", "company_name", "title", "score", "path"],
+      [],
+      `import.document.conflict.similar[${i}]`,
+    );
+    return {
+      id: asString(row.id, `import.document.conflict.similar[${i}].id`),
+      company_name: asString(row.company_name, `import.document.conflict.similar[${i}].company_name`),
+      title: asString(row.title, `import.document.conflict.similar[${i}].title`),
+      score: asFiniteNumber(row.score, `import.document.conflict.similar[${i}].score`),
+      path: asString(row.path, `import.document.conflict.similar[${i}].path`),
+    };
+  });
+  return { exact, similar };
 }
 
 

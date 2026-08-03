@@ -9,7 +9,10 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 DESKTOP = ROOT / "apps" / "desktop"
 PACKAGE_JSON = DESKTOP / "package.json"
+# Legacy Windows runner still checked for path hygiene; npm entrypoint is
+# platform-agnostic via run-os.mjs (win → .ps1, else → .sh).
 RUNNER = DESKTOP / "scripts" / "run-boundary-tests.ps1"
+RUNNER_SH = DESKTOP / "scripts" / "run-boundary-tests.sh"
 TSCONFIG_BOUNDARY = DESKTOP / "tsconfig.boundary.json"
 AI_SKILLS = ROOT / "docs" / "AI_SKILLS.md"
 HANDOFF = ROOT / "docs" / "HANDOFF.md"
@@ -43,8 +46,12 @@ def test_package_json_has_test_boundary_script() -> None:
     scripts = pkg.get("scripts") or {}
     assert "test:boundary" in scripts
     cmd = scripts["test:boundary"]
-    assert "run-boundary-tests.ps1" in cmd
-    assert "powershell" in cmd.lower()
+    # Current entrypoint: node scripts/run-os.mjs run-boundary-tests
+    # (dispatches to .ps1 on win32 / .sh elsewhere). Do not pin powershell.
+    assert "run-os.mjs" in cmd
+    assert "run-boundary-tests" in cmd
+    assert RUNNER.is_file(), "Windows runner script missing"
+    assert RUNNER_SH.is_file(), "Unix runner script missing"
     # Must invoke the runner only (no inline tsc/node suite names).
     assert "manifest_boundary" not in cmd
     assert "consult_tensor" not in cmd

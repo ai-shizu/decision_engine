@@ -1,12 +1,14 @@
-import { useEffect, useReducer, useRef, useState } from "react";
-import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import { memo, useEffect, useReducer, useRef, useState } from "react";
 import {
-  consult,
   getKnowledgeResearchPolicy,
   knowledgeResearch,
-  type RomanceAnalysisResult,
 } from "../lib/engine";
-import { parseEngineEvent } from "../lib/parseEngineResponse";
+import { cancelGeneration } from "../lib/llm";
+import {
+  calculateInteractionPulse,
+  consultWithOracleContext,
+} from "../lib/pocketBrain";
+import type { RomanceAnalysisV1 } from "../lib/pocketBrain/types";
 import {
   deriveProvenance,
   INITIAL_RESEARCH_UI_STATE,
@@ -14,16 +16,27 @@ import {
   provenanceChipText,
   reduceResearchUi,
 } from "../lib/researchUiReducer";
-import type { ChatMessage, EngineEvent } from "../lib/types";
+import { readLocalFixedAttributes } from "../lib/settingsLocalCache";
+import type { ChatMessage } from "../lib/types";
 import { uiErrorMessage } from "../lib/uiErrorMessages";
-import { useCorrelationId } from "../lib/useCorrelationId";
 import { useThrottledStream } from "../lib/useThrottledStream";
 import { RomanceAnalysisPanel } from "./RomanceAnalysisPanel";
 
 type ConsultMode = "consult" | "romance_analysis";
 
+const CONSULT_MODES = ["consult", "romance_analysis"] as const;
+
+function isConsultMode(value: string): value is ConsultMode {
+  return (CONSULT_MODES as readonly string[]).includes(value);
+}
+
 const ROMANCE_SUCCESS_MESSAGE = "会話履歴を解析しました";
 const ROMANCE_PARSING_STATUS = "交流パルスを解析中…";
+
+// F-11: タブはアンマウントされるが、会話セッションはモジュールに残し
+// 再入場時の「白紙＋再ロード感」を消す (ImportTab の importLog と同型)。
+let consultSessionMessages: ChatMessage[] = [];
+let consultSessionMode: ConsultMode = "consult";
 
 function stripRomanceSuccessMessages(messages: ChatMessage[]): ChatMessage[] {
   return messages.filter(
@@ -31,27 +44,73 @@ function stripRomanceSuccessMessages(messages: ChatMessage[]): ChatMessage[] {
   );
 }
 
+/** W6: never persist a forever-streaming ghost in the module singleton. */
+function freezeStreamingMessages(messages: ChatMessage[]): ChatMessage[] {
+  const out: ChatMessage[] = [];
+  for (const m of messages) {
+    if (!m.streaming) {
+      out.push(m);
+      continue;
+    }
+    if (m.role === "assistant" && !m.text.trim()) {
+      continue;
+    }
+    out.push({ ...m, streaming: false });
+  }
+  return out;
+}
+
+function persistConsultSession(messages: ChatMessage[]): void {
+  consultSessionMessages = freezeStreamingMessages(messages);
+}
+
+const ConsultMessageBubble = memo(function ConsultMessageBubble({
+  message,
+}: {
+  message: ChatMessage;
+}) {
+  return (
+    <div className={`chat-bubble ${message.role}`}>
+      <span className="chat-role">
+        {message.role === "user" ? "あなた" : "Coraxis"}
+      </span>
+      <pre className={`chat-text${message.streaming ? " streaming" : ""}`}>
+        {message.text}
+        {message.streaming && <span className="chat-cursor">▌</span>}
+      </pre>
+      {message.provenanceLabel && (
+        <span className="provenance-chip">{message.provenanceLabel}</span>
+      )}
+    </div>
+  );
+});
+
 export function ConsultTab() {
-  const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [messages, setMessages] = useState<ChatMessage[]>(consultSessionMessages);
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
   const [status, setStatus] = useState("");
   const [statusKind, setStatusKind] = useState<"info" | "error">("info");
   const [confirmingClear, setConfirmingClear] = useState(false);
-  const [mode, setMode] = useState<ConsultMode>("consult");
-  const [romanceResult, setRomanceResult] = useState<RomanceAnalysisResult | null>(null);
+  const [mode, setMode] = useState<ConsultMode>(consultSessionMode);
+  const [romanceResult, setRomanceResult] = useState<RomanceAnalysisV1 | null>(null);
   const [researchUi, dispatchResearchUi] = useReducer(
     reduceResearchUi,
     INITIAL_RESEARCH_UI_STATE,
   );
   const researchSeqRef = useRef(0);
   const logRef = useRef<HTMLDivElement>(null);
-  // SPEC_FOXTROT_UI.md §9 (Rev.10): 旧来の真偽値フラグ (F3 裁定1) を撤廃し、
-  // 相関ID (cid) 照合へ移行した。自分の consult が in-flight の間だけ
-  // status/chunk を反映する (W-34 の是正) のは cid.accepts() が構造的に保証する。
-  const cid = useCorrelationId();
-  // 裁定2: 最下端追従の可否は ref で持つ (state にすると再レンダリングの嵐)。
   const stickRef = useRef(true);
+  const streamingRef = useRef(false);
+
+  useEffect(() => {
+    // Live UI may show streaming; singleton must never keep streaming:true across remount.
+    persistConsultSession(messages);
+  }, [messages]);
+
+  useEffect(() => {
+    consultSessionMode = mode;
+  }, [mode]);
 
   function scrollToBottom(smooth = false) {
     requestAnimationFrame(() => {
@@ -68,59 +127,32 @@ export function ConsultTab() {
     stickRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 24;
   }
 
-  // F3.5 (SPEC_FOXTROT_UI.md §7 裁定1): chunk は一定速でキューから放出する。
-  // 確定置換 (handleSubmit 側) は必ず flushAndStop() でキューを破棄してから
-  // 行う (W-35)。放出コールバック自体は既存の stickRef 追従規律をそのまま踏襲。
-  const { push: pushChunk, flushAndStop: flushChunkQueue } = useThrottledStream(
-    (piece) => {
-      setMessages((prev) => {
-        const last = prev[prev.length - 1];
-        if (!last || last.role !== "assistant" || !last.streaming) return prev;
-        return [...prev.slice(0, -1), { ...last, text: last.text + piece }];
-      });
-      if (stickRef.current) scrollToBottom(false);
-    },
-  );
-
-  // Python エンジンの中間イベント (進捗 status / 生成トークン chunk) を受信する。
-  // W-22/W-23 の disposed フラグ標準形: cleanup が listen() の resolve より
-  // 先に走っても (StrictMode の二重実行等)、購読は確実に解除される。
-  useEffect(() => {
-    let disposed = false;
-    let unlistenFn: UnlistenFn | null = null;
-
-    const handler = ({ payload: raw }: { payload: unknown }) => {
-      let payload: EngineEvent;
-      try {
-        payload = parseEngineEvent(raw);
-      } catch {
-        return;
-      }
-      // W-34/W-45〜W-49: 自分の in-flight cid のイベントだけを処理する。
-      if (!cid.accepts(payload)) return;
-      if (payload.event === "status" && payload.message) {
-        setStatusKind("info");
-        setStatus(payload.message);
-        return;
-      }
-      if (payload.event === "chunk" && payload.text) {
-        pushChunk(payload.text); // スロットルキューへ積むだけ (放出はタイマー駆動)
-      }
-    };
-
-    void listen<unknown>("pkb-engine-event", handler).then((fn) => {
-      if (disposed) {
-        fn();
-        return;
-      }
-      unlistenFn = fn;
+  const {
+    push: pushChunk,
+    drainAndStop: drainChunkQueue,
+    flushAndStop: flushChunkQueue,
+  } = useThrottledStream((piece) => {
+    setMessages((prev) => {
+      const last = prev[prev.length - 1];
+      if (!last || last.role !== "assistant" || !last.streaming) return prev;
+      return [...prev.slice(0, -1), { ...last, text: last.text + piece }];
     });
+    if (stickRef.current) scrollToBottom(false);
+  });
 
+  // W4/W6: cancel in-flight LLM on unmount; freeze singleton streaming ghosts.
+  useEffect(() => {
     return () => {
-      disposed = true;
-      unlistenFn?.();
+      flushChunkQueue();
+      if (streamingRef.current) {
+        void cancelGeneration().catch(() => {
+          /* best-effort */
+        });
+      }
+      persistConsultSession(consultSessionMessages);
+      streamingRef.current = false;
     };
-  }, []);
+  }, [flushChunkQueue]);
 
   function handleModeChange(next: ConsultMode) {
     setMode(next);
@@ -133,7 +165,6 @@ export function ConsultTab() {
     if (!q || busy) return;
     setInput("");
     flushChunkQueue();
-    const myCid = cid.begin();
     stickRef.current = true;
 
     if (mode === "romance_analysis") {
@@ -143,11 +174,8 @@ export function ConsultTab() {
       setStatusKind("info");
       setStatus(ROMANCE_PARSING_STATUS);
       try {
-        const res = await consult(q, { mode: "romance_analysis" }, myCid);
-        if (!res.romance_analysis) {
-          throw new Error("解析結果を取得できませんでした");
-        }
-        setRomanceResult(res.romance_analysis);
+        const res = await calculateInteractionPulse(q);
+        setRomanceResult(res.analysis);
         setMessages((prev) => [
           ...prev,
           { role: "assistant", text: ROMANCE_SUCCESS_MESSAGE },
@@ -161,7 +189,6 @@ export function ConsultTab() {
         setStatus(uiErrorMessage("ROMANCE_ANALYSIS"));
       } finally {
         setBusy(false);
-        cid.end(myCid);
         if (stickRef.current) scrollToBottom(true);
       }
       return;
@@ -174,7 +201,6 @@ export function ConsultTab() {
     ]);
     scrollToBottom(true);
 
-    let externalResearchId: string | undefined;
     let provenanceLabel: string | undefined;
     try {
       const policy = await getKnowledgeResearchPolicy();
@@ -188,7 +214,6 @@ export function ConsultTab() {
           const provenance = deriveProvenance(receipt);
           if (provenance) {
             provenanceLabel = provenanceChipText(provenance);
-            externalResearchId = receipt.research_id;
           }
         } catch {
           dispatchResearchUi({ kind: "FAIL", seq });
@@ -199,18 +224,30 @@ export function ConsultTab() {
     }
 
     setBusy(true);
+    streamingRef.current = true;
     setStatusKind("info");
     setStatus("考え中…");
     try {
-      const res = await consult(
-        q,
-        externalResearchId ? { external_research_id: externalResearchId } : {},
-        myCid,
+      const profile = readLocalFixedAttributes() ?? undefined;
+      await consultWithOracleContext(
+        { message: q, includeRag: true, profile },
+        (event) => {
+          if (event.error) {
+            flushChunkQueue();
+            setStatusKind("error");
+            setStatus(uiErrorMessage("CONSULT_RESPONSE"));
+            return;
+          }
+          if (event.done) {
+            drainChunkQueue();
+            return;
+          }
+          if (event.text) {
+            pushChunk(event.text);
+          }
+        },
       );
-      // W-35: 確定置換は必ず「キュー破棄 → 置換」の順で原子的に行う。
-      // 順序が逆だと、破棄前に残っていたキューが置換後のメッセージへ
-      // 追記され続けてしまう。
-      flushChunkQueue();
+      drainChunkQueue();
       setMessages((prev) => {
         const last = prev[prev.length - 1];
         if (last?.role === "assistant" && last.streaming) {
@@ -218,21 +255,18 @@ export function ConsultTab() {
             ...prev.slice(0, -1),
             {
               role: "assistant",
-              text: res.answer,
+              text: last.text,
+              streaming: false,
               provenanceLabel,
             },
           ];
         }
-        return [
-          ...prev,
-          { role: "assistant", text: res.answer, provenanceLabel },
-        ];
+        return prev;
       });
       setStatusKind("info");
       setStatus("");
     } catch {
-      flushChunkQueue(); // W-35: エラー経路でも確定 (削除/凍結) 前にキューを破棄する
-      // 空のプレースホルダーは取り除き、エラーは status 行に出す
+      flushChunkQueue();
       setMessages((prev) => {
         const last = prev[prev.length - 1];
         if (last?.role === "assistant" && last.streaming && !last.text) {
@@ -246,19 +280,21 @@ export function ConsultTab() {
       setStatusKind("error");
       setStatus(uiErrorMessage("CONSULT_RESPONSE"));
     } finally {
+      streamingRef.current = false;
       setBusy(false);
-      cid.end(myCid);
+      // W6: belt-and-suspenders — freeze singleton even if setState is dropped on unmount.
+      persistConsultSession(consultSessionMessages);
       if (stickRef.current) scrollToBottom(true);
     }
   }
 
-  // F-7: セッション内会話は復元不能な破壊対象 — インライン2段クリックで確定する。
   function handleClearClick() {
     if (!confirmingClear) {
       setConfirmingClear(true);
       return;
     }
     setMessages([]);
+    consultSessionMessages = [];
     setStatus("");
     setRomanceResult(null);
     setConfirmingClear(false);
@@ -269,7 +305,9 @@ export function ConsultTab() {
   return (
     <section className="panel consult-panel">
       <div className="consult-header">
-        <h2>AI 相談 (CONSULT)</h2>
+        <h2>
+          CONSULT <span className="term-tag term-tag--info">[ OFFLINE ]</span>
+        </h2>
         <button
           type="button"
           className="ghost"
@@ -280,14 +318,20 @@ export function ConsultTab() {
           {confirmingClear ? "本当にクリア" : "履歴クリア"}
         </button>
       </div>
-      <p className="hint">記録・プロファイルに基づくオフライン相談。会話はこのセッション内のみ保持されます。</p>
+      <div className="ascii-sep ascii-sep--info" role="separator">
+        --- SESSION ---
+      </div>
+      <p className="hint guide">記録・プロファイルに基づくオフライン相談。会話はこのセッション内のみ保持されます。</p>
 
       <div className="consult-mode-row">
         <label htmlFor="consult-mode-select">モード</label>
         <select
           id="consult-mode-select"
           value={mode}
-          onChange={(e) => handleModeChange(e.target.value as ConsultMode)}
+          onChange={(e) => {
+            const next = e.target.value;
+            if (isConsultMode(next)) handleModeChange(next);
+          }}
           disabled={busy}
         >
           <option value="consult">通常相談</option>
@@ -300,16 +344,7 @@ export function ConsultTab() {
           <p className="hint chat-empty">質問を入力して送信してください。</p>
         ) : (
           messages.map((m, i) => (
-            <div key={i} className={`chat-bubble ${m.role}`}>
-              <span className="chat-role">{m.role === "user" ? "あなた" : "PKB"}</span>
-              <pre className={`chat-text${m.streaming ? " streaming" : ""}`}>
-                {m.text}
-                {m.streaming && <span className="chat-cursor">▌</span>}
-              </pre>
-              {m.provenanceLabel && (
-                <span className="provenance-chip">{m.provenanceLabel}</span>
-              )}
-            </div>
+            <ConsultMessageBubble key={i} message={m} />
           ))
         )}
       </div>

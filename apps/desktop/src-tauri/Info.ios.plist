@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>NSFaceIDUsageDescription</key>
+	<string>Vaultの自動解錠および、機密性の高いプロンプトデータの保護にFace IDを使用します。</string>
+	<!-- M20 データ連携 Part 2: EventKit 予定読み取り (read-only)。 -->
+	<key>NSCalendarsFullAccessUsageDescription</key>
+	<string>Coraxisのコンテキストに予定を取り込むため、カレンダーへのフルアクセスを使用します。</string>
+	<!-- Release: no NSAppTransportSecurity / NSLocalNetworkUsageDescription.
+	     Physical-device HMR keys live only in Info.ios.dev.plist, loaded via
+	     tauri.ios.dev.conf.json on `tauri ios dev` (see T4-B-2). -->
+	<key>ITSAppUsesNonExemptEncryption</key>
+	<false/>
+</dict>
+</plist>

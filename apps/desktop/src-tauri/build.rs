@@ -33,6 +33,15 @@ fn main() {
     let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap());
     let target = env::var("TARGET").unwrap_or_else(|_| "aarch64-pc-windows-msvc".to_string());
 
+    // Tier 3 P0-1: compile OSLog C shim for device + simulator only.
+    // Desktop keeps the stderr logger; do not link this on macOS host builds.
+    if target.contains("ios") {
+        println!("cargo:rerun-if-changed=native/ios_oslog.c");
+        cc::Build::new()
+            .file(manifest_dir.join("native/ios_oslog.c"))
+            .compile("pkb_ios_oslog");
+    }
+
     // iOS has no Python sidecar; skip placeholder binaries for apple-ios targets.
     if !target.contains("ios") {
         ensure_engine_placeholder(&manifest_dir, &target);

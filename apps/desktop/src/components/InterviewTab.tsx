@@ -1,42 +1,259 @@
 import { useEffect, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
-import { consult, narrativeCompile, type NarrativeCompileResult } from "../lib/engine";
+import { consult, esList, narrativeCompile, type NarrativeCompileResult } from "../lib/engine";
+import { emptyCompanyFacts } from "../lib/interviewStage";
 import { parseEngineEvent } from "../lib/parseEngineResponse";
+import type { CompanyFacts } from "../lib/pocketBrain/types";
 import type {
   EngineEvent,
+  EsListItem,
   GdPersona,
-  GdSpeakerTurn,
   InterviewConfig,
   InterviewMessage,
   InterviewMode,
   InterviewReport,
 } from "../lib/types";
+import { redactHiddenReasoning } from "../lib/redactHiddenReasoning";
 import { uiErrorMessage } from "../lib/uiErrorMessages";
 import { useCorrelationId } from "../lib/useCorrelationId";
+import { useCompanyFactsEnrichment } from "../lib/useCompanyFactsEnrichment";
+import { useInterviewEsBase } from "../lib/useInterviewEsBase";
+import { useIsNarrowViewport } from "../lib/useIsNarrowViewport";
+import { ColiseumRoot } from "./consult/coliseum";
+import { CompanyDashboardPanel } from "./interview/CompanyDashboardPanel";
+import { CompanyFactsForm } from "./interview/CompanyFactsForm";
+import { EsReviewPanel } from "./interview/EsReviewPanel";
+import { InterviewEsBaseForm } from "./interview/InterviewEsBaseForm";
+import { InterviewPocketPanel } from "./interview/InterviewPocketPanel";
+import { MultistageInterviewPanel } from "./interview/MultistageInterviewPanel";
 import { TensorProfilePanel } from "./TensorProfilePanel";
 
-// F-17 (SPEC_FOXTROT_UI.md §10.3): es_review は思考速度を計測も評価もしない
-// (latency 構造的皆無)。hint はモード別に単一定義し、二重定義を作らない
-// (line ~319 は currentMode.hint をそのまま描画するのみ)。
-const MODES: { id: InterviewMode; label: string; hint: string }[] = [
+// M18-E: Interview tab is Coraxis-only for daily use; "legacy" restores the
+// pre-M18 Python consult-backed interview_sim/es_review/gd_sim + Narrative
+// Draft flow (T-2 debt repayment) without displacing Coliseum as default.
+type InterviewSurface =
+  | "interview_pocket"
+  | "multistage"
+  | "es_pocket"
+  | "coliseum"
+  | "company"
+  | "legacy";
+
+const MODES: { id: InterviewSurface; label: string; shortLabel: string; hint: string }[] = [
   {
-    id: "interview_sim", label: "ケース/ES面接",
+    id: "interview_pocket",
+    label: "[ 1on1面接 ]",
+    shortLabel: "[ 1on1 ]",
+    hint: "技術・人物の1対1面接。企業コンテキストと任意のESを前提に進めます。",
+  },
+  {
+    id: "multistage",
+    label: "[ 多段設計 ]",
+    shortLabel: "[ 多段 ]",
+    hint: "Foundation → Pressure → Debrief → Closed の多段面接。",
+  },
+  {
+    id: "es_pocket",
+    label: "[ ES解析 ]",
+    shortLabel: "[ ES ]",
+    hint: "提出ESを採用責任者視点で添削します。",
+  },
+  {
+    id: "coliseum",
+    label: "[ GD闘技 ]",
+    shortLabel: "[ GD ]",
+    hint: "グループディスカッションの闘技シミュレーション。",
+  },
+  {
+    id: "company",
+    label: "[ 企業DB ]",
+    shortLabel: "[ 企業 ]",
+    hint: "取得済み企業データを面接対策ダッシュボードに構造化します。",
+  },
+  {
+    id: "legacy",
+    label: "[ 旧面接/GD ]",
+    shortLabel: "[ 旧 ]",
+    hint: "Python consult 経由の旧ケース/ES面接・GD・Narrative Draft。",
+  },
+];
+
+export function InterviewTab() {
+  const isNarrow = useIsNarrowViewport();
+  const [surface, setSurface] = useState<InterviewSurface>("interview_pocket");
+  const [sharedFacts, setSharedFacts] = useState<CompanyFacts>(() => emptyCompanyFacts());
+  const esBase = useInterviewEsBase();
+
+  const patchSharedFacts = (patch: Partial<CompanyFacts>) => {
+    setSharedFacts((prev) => ({ ...prev, ...patch }));
+  };
+  const {
+    researching: sharedResearching,
+    preparing: sharedPreparing,
+    provenanceLabel: sharedProvenance,
+  } = useCompanyFactsEnrichment(sharedFacts, patchSharedFacts, isNarrow);
+
+  const currentMode = MODES.find((m) => m.id === surface)!;
+
+  function switchSurface(next: InterviewSurface) {
+    if (next === surface) return;
+    setSurface(next);
+  }
+
+  return (
+    <section className="panel interview-panel magi-rack">
+      <div className="magi-mod-head consult-header">
+        <h2>
+          <span className="desktop-only">面接シミュレーター</span>
+          <span className="mobile-only">面接</span>
+        </h2>
+      </div>
+
+      <div
+        className="tactical-array interview-mode-array"
+        role="tablist"
+        aria-label="面接モード"
+      >
+        {MODES.map((m) => (
+          <button
+            key={m.id}
+            type="button"
+            role="tab"
+            aria-selected={surface === m.id}
+            className={surface === m.id ? "active" : ""}
+            onClick={() => switchSurface(m.id)}
+            title={m.hint}
+          >
+            <span className="desktop-only">{m.label}</span>
+            <span className="mobile-only">{m.shortLabel}</span>
+          </button>
+        ))}
+      </div>
+
+      <p className="hint guide" style={{ margin: "6px 8px" }}>
+        {currentMode.hint}
+      </p>
+
+      {isNarrow && surface === "interview_pocket" && (
+        <div className="interview-shared-context">
+          <InterviewEsBaseForm
+            esId={esBase.esId}
+            esText={esBase.esText}
+            items={esBase.items}
+            onEsIdChange={(id) => {
+              void esBase.onEsIdChange(id);
+            }}
+            onEsTextChange={esBase.onEsTextChange}
+          />
+          <CompanyFactsForm
+            facts={sharedFacts}
+            onPatch={patchSharedFacts}
+            researching={sharedResearching}
+            provenanceLabel={sharedProvenance}
+          />
+        </div>
+      )}
+
+      {isNarrow && surface !== "interview_pocket" && surface !== "coliseum" && (
+        <div className="interview-shared-context">
+          <CompanyFactsForm
+            facts={sharedFacts}
+            onPatch={patchSharedFacts}
+            researching={sharedResearching}
+            provenanceLabel={sharedProvenance}
+          />
+        </div>
+      )}
+
+      {surface === "company" && !isNarrow && (
+        <div className="interview-shared-context">
+          <CompanyFactsForm
+            facts={sharedFacts}
+            onPatch={patchSharedFacts}
+            researching={sharedResearching}
+            provenanceLabel={sharedProvenance}
+          />
+        </div>
+      )}
+
+      {surface === "company" && (
+        <CompanyDashboardPanel facts={sharedFacts} />
+      )}
+
+      {surface === "interview_pocket" && (
+        <InterviewPocketPanel
+          sharedFacts={isNarrow ? sharedFacts : undefined}
+          onSharedFactsPatch={isNarrow ? patchSharedFacts : undefined}
+          hideEmbeddedFactsForm={isNarrow}
+          preparingOverride={isNarrow ? sharedPreparing : undefined}
+          esText={esBase.esText}
+          esBaseSlot={
+            isNarrow ? null : (
+              <InterviewEsBaseForm
+                esId={esBase.esId}
+                esText={esBase.esText}
+                items={esBase.items}
+                onEsIdChange={(id) => {
+                  void esBase.onEsIdChange(id);
+                }}
+                onEsTextChange={esBase.onEsTextChange}
+              />
+            )
+          }
+        />
+      )}
+      {surface === "multistage" && (
+        <MultistageInterviewPanel
+          sharedFacts={isNarrow ? sharedFacts : undefined}
+          onSharedFactsPatch={isNarrow ? patchSharedFacts : undefined}
+          hideEmbeddedFactsForm={isNarrow}
+          preparingOverride={isNarrow ? sharedPreparing : undefined}
+        />
+      )}
+      {surface === "es_pocket" && (
+        <EsReviewPanel
+          sharedFacts={isNarrow ? sharedFacts : undefined}
+          onSharedFactsPatch={isNarrow ? patchSharedFacts : undefined}
+          hideEmbeddedFactsForm={isNarrow}
+          preparingOverride={isNarrow ? sharedPreparing : undefined}
+        />
+      )}
+      {surface === "coliseum" && <ColiseumRoot />}
+      {surface === "legacy" && <LegacyInterviewPanel />}
+    </section>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// LegacyInterviewPanel — pre-M18 Python consult()-backed interview_sim /
+// es_review / gd_sim + Narrative Draft (T-2 debt repayment). Self-contained:
+// does not read/write the Coliseum surfaces' state above. multistage/es_pocket
+// are intentionally NOT duplicated here (Coraxis on-device panels above cover
+// them); this panel restores only what those panels don't: consult()-based
+// report/MISSION_RESULT scoring and the Narrative Draft (ES草案) compiler.
+// ---------------------------------------------------------------------------
+
+type LegacyMode = InterviewMode;
+
+const LEGACY_MODES: { id: LegacyMode; label: string; shortLabel: string; hint: string }[] = [
+  {
+    id: "interview_sim", label: "ケース/ES面接", shortLabel: "ケース",
     hint: "ES があれば敵対的 ES 面接、無ければケース面接。"
       + "回答時間を計測し、思考速度も講評対象になります。",
   },
   {
-    id: "es_review", label: "ES添削",
-    hint: "data/es/ の ES を採用責任者ペルソナで容赦なく添削。"
+    id: "es_review", label: "ES添削 (legacy)", shortLabel: "ES旧",
+    hint: "登録済みの ES を採用責任者ペルソナで容赦なく添削。"
       + "書類単体の論理的強度のみを評価します (思考速度は評価しません)。",
   },
   {
-    id: "gd_sim", label: "グループディスカッション",
+    id: "gd_sim", label: "グループディスカッション", shortLabel: "GD",
     hint: "厄介な参加者たちとのカオス GD。"
       + "回答時間を計測し、思考速度も講評対象になります。",
   },
 ];
 
-const TRAIT_PRESETS = [
+const LEGACY_TRAIT_PRESETS = [
   "クラッシャー",
   "フリーライダー",
   "クラウザー",
@@ -44,60 +261,56 @@ const TRAIT_PRESETS = [
   "論理的",
   "アイデア型",
 ];
-const CUSTOM_TRAIT = "__custom__";
-const MAX_PERSONAS = 9;
+const LEGACY_CUSTOM_TRAIT = "__custom__";
+const LEGACY_MAX_PERSONAS = 9;
 
-const DEFAULT_PERSONAS: GdPersona[] = [
+const LEGACY_DEFAULT_PERSONAS: GdPersona[] = [
   { name: "学生A", trait: "クラッシャー" },
   { name: "学生B", trait: "フリーライダー" },
   { name: "学生C", trait: "クラウザー" },
 ];
 
-// F4a (SPEC_FOXTROT_UI.md §7 裁定2): プリセットIDはバックエンドの静的バンク
-// (INTERVIEW_INDUSTRY_BANK 等) の ID と一致させる。ラベルの表示のみここで持ち、
-// 意味解決 (ES優先・difficulty反映) はすべてバックエンド側の責務。
-const INDUSTRY_PRESETS: { id: string; label: string }[] = [
+const LEGACY_INDUSTRY_PRESETS: { id: string; label: string }[] = [
   { id: "foreign_it", label: "外資系IT企業" },
   { id: "foreign_finance", label: "外資系金融 (HFT/クオンツ)" },
   { id: "consulting", label: "戦略コンサルティングファーム" },
   { id: "startup", label: "急成長スタートアップ" },
 ];
-const GENRE_PRESETS: { id: string; label: string }[] = [
+const LEGACY_GENRE_PRESETS: { id: string; label: string }[] = [
   { id: "algorithm", label: "アルゴリズム・データ構造" },
   { id: "system_design", label: "システムデザイン" },
   { id: "fermi", label: "フェルミ推定・ケース" },
   { id: "behavioral", label: "行動面接" },
 ];
-const DIFFICULTY_OPTIONS: { id: InterviewConfig["difficulty"]; label: string }[] = [
+const LEGACY_DIFFICULTY_OPTIONS: { id: InterviewConfig["difficulty"]; label: string }[] = [
   { id: "standard", label: "標準" },
   { id: "hard", label: "高難度" },
   { id: "extreme", label: "最難関" },
 ];
-const STANCE_OPTIONS: { id: InterviewConfig["stance"]; label: string }[] = [
+const LEGACY_STANCE_OPTIONS: { id: InterviewConfig["stance"]; label: string }[] = [
   { id: "adversarial", label: "敵対的・圧迫" },
   { id: "standard", label: "標準・穏和" },
 ];
-const CUSTOM_CONFIG = "__custom__";
-const CUSTOM_THEME_MAX_CHARS = 240;
-const DEFAULT_CONFIG: InterviewConfig = {
+const LEGACY_CUSTOM_CONFIG = "__custom__";
+const LEGACY_DEFAULT_CONFIG: InterviewConfig = {
   industry: "foreign_it",
   genre: "fermi",
   difficulty: "standard",
   stance: "adversarial",
-  customTheme: "",
+  esId: "",
 };
 
 // F4b (SPEC_FOXTROT_UI.md §7 裁定3): スコア 0-100 を TensionMeter と同型の
 // <rect>×10 計器で表示する。アニメーションなし (計器は跳ねない)。
-function scoreColor(score: number): string {
+function legacyScoreColor(score: number): string {
   if (score >= 70) return "var(--ok)";
   if (score >= 40) return "var(--accent)";
   return "var(--err)";
 }
 
-function ScoreBar({ score }: { score: number }) {
+function LegacyScoreBar({ score }: { score: number }) {
   const lit = Math.max(0, Math.min(10, Math.round(score / 10)));
-  const color = scoreColor(score);
+  const color = legacyScoreColor(score);
   return (
     <svg className="score-bar" viewBox="0 0 100 10" preserveAspectRatio="none">
       {Array.from({ length: 10 }, (_, i) => (
@@ -107,132 +320,28 @@ function ScoreBar({ score }: { score: number }) {
   );
 }
 
-// 話者名 → アバター色 (決定論的ハッシュ)
-const AVATAR_COLORS = [
+const LEGACY_AVATAR_COLORS = [
   "#e57373", "#64b5f6", "#ffb74d", "#9575cd", "#4db6ac",
   "#f06292", "#a1887f", "#90a4ae", "#aed581",
 ];
-function avatarColor(name: string): string {
+function legacyAvatarColor(name: string): string {
   let h = 0;
   for (let i = 0; i < name.length; i++) h = (h * 31 + name.charCodeAt(i)) | 0;
-  return AVATAR_COLORS[Math.abs(h) % AVATAR_COLORS.length];
-}
-
-const GD_SPEAKER_HEADER_RE = /^\[([^\][:\n]{1,24})\]:\s*(.*)$/;
-
-const REDACT_OPEN_TAG = "<think>";
-const REDACT_CLOSE_TAG = "</think>";
-
-function matchRedactTag(raw: string, pos: number, tag: string): number {
-  const remain = raw.length - pos;
-  if (remain <= 0) return -1;
-  const n = Math.min(tag.length, remain);
-  for (let i = 0; i < n; i++) {
-    if (raw[pos + i].toLowerCase() !== tag[i].toLowerCase()) return -1;
-  }
-  if (n < tag.length) return 0;
-  return tag.length;
-}
-
-function isPartialOpenPrefix(raw: string, pos: number): boolean {
-  const fragment = raw.slice(pos);
-  if (!fragment || fragment.length >= REDACT_OPEN_TAG.length) return false;
-  return fragment.toLowerCase() === REDACT_OPEN_TAG.slice(0, fragment.length).toLowerCase();
-}
-
-/** Hidden-reasoning blocks are removed before any AI/feedback text reaches the DOM. */
-export function redactHiddenReasoning(raw: string, streaming = false): string {
-  const out: string[] = [];
-  let depth = 0;
-  let i = 0;
-  while (i < raw.length) {
-    const openFull = matchRedactTag(raw, i, REDACT_OPEN_TAG);
-    if (openFull === REDACT_OPEN_TAG.length) {
-      depth += 1;
-      i += REDACT_OPEN_TAG.length;
-      continue;
-    }
-    const closeFull = matchRedactTag(raw, i, REDACT_CLOSE_TAG);
-    if (closeFull === REDACT_CLOSE_TAG.length) {
-      if (depth > 0) depth -= 1;
-      i += REDACT_CLOSE_TAG.length;
-      continue;
-    }
-    if (depth === 0) {
-      if (streaming && isPartialOpenPrefix(raw, i)) break;
-      out.push(raw[i]);
-    }
-    i += 1;
-  }
-  return out.join("");
-}
-
-/** GD_FORMAT_V1: 行頭 [話者名]: のみを認識し、文中の [学生A] は分割しない */
-export function parseGdSpeakerTurns(raw: string): GdSpeakerTurn[] {
-  const normalized = raw.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
-  const lines = normalized.split("\n");
-  const turns: GdSpeakerTurn[] = [];
-  let current: GdSpeakerTurn | null = null;
-
-  for (const line of lines) {
-    const m = GD_SPEAKER_HEADER_RE.exec(line);
-    if (m) {
-      const speaker = m[1].trim();
-      if (!speaker) continue;
-      if (current) turns.push(current);
-      current = { speaker, text: m[2].trim() };
-      continue;
-    }
-    if (current) {
-      if (line.trim() || current.text) {
-        current.text = current.text ? `${current.text}\n${line}` : line;
-      }
-    }
-  }
-  if (current) turns.push(current);
-
-  const trimmed = raw.trim();
-  if (turns.length === 0 && trimmed) {
-    return [{ speaker: "GD", text: trimmed }];
-  }
-  return turns;
-}
-
-function GdThreadMessage({ text, streaming }: { text: string; streaming?: boolean }) {
-  const turns = parseGdSpeakerTurns(text);
-  return (
-    <div className="gd-thread">
-      {turns.map((t, i) => (
-        <div key={i} className="gd-turn">
-          <span
-            className="gd-turn-avatar persona-avatar"
-            style={{ background: avatarColor(t.speaker) }}
-          >
-            {t.speaker.slice(0, 1) || "?"}
-          </span>
-          <div className="gd-turn-body">
-            <span className="gd-turn-speaker">{t.speaker}</span>
-            <pre className="gd-turn-text chat-text">
-              {t.text}
-              {streaming && i === turns.length - 1 && <span className="chat-cursor">▌</span>}
-            </pre>
-          </div>
-        </div>
-      ))}
-    </div>
-  );
+  return LEGACY_AVATAR_COLORS[Math.abs(h) % LEGACY_AVATAR_COLORS.length];
 }
 
 // F-20 (SPEC_FOXTROT_UI.md §10.6): セッションの三状態。"debrief" は講評後の
 // 対話継続フェーズ (感想戦) — バックエンドの state["phase"]=="debrief" と対応。
 type SessionPhase = "idle" | "active" | "debrief";
 
-export function InterviewTab() {
-  const [mode, setMode] = useState<InterviewMode>("interview_sim");
+function LegacyInterviewPanel() {
+  const isNarrow = useIsNarrowViewport();
+  const [mode, setMode] = useState<LegacyMode>("interview_sim");
   const [phase, setPhase] = useState<SessionPhase>("idle");
   const [messages, setMessages] = useState<InterviewMessage[]>([]);
-  const [personas, setPersonas] = useState<GdPersona[]>(DEFAULT_PERSONAS);
-  const [config, setConfig] = useState<InterviewConfig>(DEFAULT_CONFIG);
+  const [personas, setPersonas] = useState<GdPersona[]>(LEGACY_DEFAULT_PERSONAS);
+  const [config, setConfig] = useState<InterviewConfig>(LEGACY_DEFAULT_CONFIG);
+  const [esLibrary, setEsLibrary] = useState<EsListItem[]>([]);
   const [report, setReport] = useState<InterviewReport | null>(null);
   const [narrativeTarget, setNarrativeTarget] = useState("");
   const [narrativeResult, setNarrativeResult] = useState<NarrativeCompileResult | null>(null);
@@ -241,14 +350,25 @@ export function InterviewTab() {
   const [busy, setBusy] = useState(false);
   const [status, setStatus] = useState("");
   const [statusKind, setStatusKind] = useState<"info" | "error">("info");
+  const [sharedFacts, setSharedFacts] = useState<CompanyFacts>(() => emptyCompanyFacts());
   const logRef = useRef<HTMLDivElement>(null);
   // AI メッセージ表示完了時刻 — 次のユーザー送信までの経過が response_time_sec
   const aiShownAtRef = useRef<number | null>(null);
-  // SPEC_FOXTROT_UI.md §9 (Rev.10): pkb-engine-event はコマンド非依存の
-  // グローバルバス (W-28)。以前は busy 系ガードが無く、他タブの status/
-  // chunk が混線し得た。相関ID (cid) 照合で自分の in-flight リクエストの
-  // イベントのみ処理する (F4a/F4b の config/report ロジックには無変更)。
   const cid = useCorrelationId();
+
+  const patchSharedFacts = (patch: Partial<CompanyFacts>) => {
+    setSharedFacts((prev) => ({ ...prev, ...patch }));
+  };
+  const {
+    researching: sharedResearching,
+    provenanceLabel: sharedProvenance,
+  } = useCompanyFactsEnrichment(sharedFacts, patchSharedFacts, isNarrow);
+
+  useEffect(() => {
+    void esList()
+      .then((items) => setEsLibrary(items))
+      .catch(() => setEsLibrary([]));
+  }, []);
 
   function scrollToBottom() {
     requestAnimationFrame(() => {
@@ -284,7 +404,7 @@ export function InterviewTab() {
     };
   }, []);
 
-  function switchMode(next: InterviewMode) {
+  function switchMode(next: LegacyMode) {
     if (busy || next === mode) return;
     // モード切替 = 新しいセッション。バックエンドの状態は「開始」で上書きされる
     setMode(next);
@@ -304,13 +424,9 @@ export function InterviewTab() {
       responseTime?: number;
       placeholderRole?: "ai" | "feedback";
       userEcho?: boolean;
-      /** gd_sim 議論フェーズ (START 直後など phase 未反映時) */
-      gdThread?: boolean;
     } = {},
   ) {
     const role = opts.placeholderRole ?? "ai";
-    const shouldRenderGdThread =
-      role === "ai" && mode === "gd_sim" && (opts.gdThread ?? phase === "active");
     setBusy(true);
     setStatusKind("info");
     setStatus("");
@@ -324,7 +440,6 @@ export function InterviewTab() {
         speaker: role === "feedback" ? "講評" : undefined,
         text: "",
         streaming: true,
-        ...(shouldRenderGdThread ? { renderAs: "gd_thread" as const } : {}),
       },
     ]);
     scrollToBottom();
@@ -351,17 +466,11 @@ export function InterviewTab() {
           return [...withoutPlaceholder, { role: "feedback", speaker: "講評", text: res.answer }];
         }
         // F-20: 感想戦フェーズの AI 返信は mode に依らず「メンター」。
-        // gd_thread renderer は適用しない — メンターは単一の統合された声で応答する。
         if (phase === "debrief") {
           return [...withoutPlaceholder, { role: "ai", speaker: "メンター", text: res.answer }];
         }
-        if (shouldRenderGdThread) {
-          return [
-            ...withoutPlaceholder,
-            { role: "ai", text: res.answer, renderAs: "gd_thread" },
-          ];
-        }
-        const speaker = mode === "es_review" ? "採用責任者" : "面接官";
+        const speaker =
+          mode === "es_review" ? "採用責任者" : mode === "gd_sim" ? "GD" : "面接官";
         return [...withoutPlaceholder, { role: "ai", speaker, text: res.answer }];
       });
       aiShownAtRef.current = Date.now();
@@ -386,7 +495,6 @@ export function InterviewTab() {
     const ok = await send("開始", {
       withPersonas: mode === "gd_sim",
       withConfig: mode === "interview_sim" || mode === "gd_sim",
-      gdThread: mode === "gd_sim",
     });
     if (!ok) setPhase("idle");
   }
@@ -462,14 +570,16 @@ export function InterviewTab() {
   const showLobby = mode === "gd_sim" && phase === "idle";
   // F4a: 開始前のみ表示。セッション中は条件レンダリングで unmount する
   // (F-11 — display:none 等の keep-alive 化はしない)。
-  const showSessionConfig =
-    phase === "idle" && (mode === "interview_sim" || mode === "gd_sim");
-  const currentMode = MODES.find((m) => m.id === mode)!;
+  const showSessionConfig = phase === "idle" && (mode === "interview_sim" || mode === "gd_sim");
+  const currentLegacyMode = LEGACY_MODES.find((m) => m.id === mode)!;
 
   return (
-    <section className="panel interview-panel">
+    <section className="interview-legacy-panel">
       <div className="consult-header">
-        <h2>面接・GD シミュレーター (INTERVIEW)</h2>
+        <h2>
+          <span className="desktop-only">面接・GD シミュレーター (INTERVIEW / legacy)</span>
+          <span className="mobile-only">面接 (旧)</span>
+        </h2>
         {phase === "active" && (
           <button
             type="button"
@@ -492,45 +602,62 @@ export function InterviewTab() {
         )}
       </div>
 
-      <div className="sub-tabs">
-        {MODES.map((m) => (
+      <div className="sub-tabs sub-tabs-pills" role="tablist" aria-label="旧面接モード">
+        {LEGACY_MODES.map((m) => (
           <button
             key={m.id}
             type="button"
+            role="tab"
+            aria-selected={mode === m.id}
             className={mode === m.id ? "active" : ""}
             onClick={() => switchMode(m.id)}
             disabled={busy}
           >
-            {m.label}
+            <span className="desktop-only">{m.label}</span>
+            <span className="mobile-only">{m.shortLabel}</span>
           </button>
         ))}
       </div>
-      <p className="hint">{currentMode.hint}</p>
+      <p className="hint dev-noise">{currentLegacyMode.hint}</p>
+
+      {isNarrow && (
+        <div className="interview-shared-context">
+          <CompanyFactsForm
+            facts={sharedFacts}
+            onPatch={patchSharedFacts}
+            researching={sharedResearching}
+            provenanceLabel={sharedProvenance}
+          />
+        </div>
+      )}
 
       {showSessionConfig && (
         <div className="term-panel">
-          <p className="term-header">SESSION_CONFIG</p>
+          <p className="term-header">
+            <span className="desktop-only">SESSION_CONFIG</span>
+            <span className="mobile-only">設定</span>
+          </p>
           {mode === "interview_sim" && (
           <>
           <div className="term-row config-row">
             <span className="term-source-name">業界</span>
             <select
-              value={INDUSTRY_PRESETS.some((p) => p.id === config.industry) ? config.industry : CUSTOM_CONFIG}
+              value={LEGACY_INDUSTRY_PRESETS.some((p) => p.id === config.industry) ? config.industry : LEGACY_CUSTOM_CONFIG}
               onChange={(e) =>
                 setConfig((c) => ({
                   ...c,
-                  industry: e.target.value === CUSTOM_CONFIG ? "" : e.target.value,
+                  industry: e.target.value === LEGACY_CUSTOM_CONFIG ? "" : e.target.value,
                 }))
               }
             >
-              {INDUSTRY_PRESETS.map((p) => (
+              {LEGACY_INDUSTRY_PRESETS.map((p) => (
                 <option key={p.id} value={p.id}>
                   {p.label}
                 </option>
               ))}
-              <option value={CUSTOM_CONFIG}>自由記述…</option>
+              <option value={LEGACY_CUSTOM_CONFIG}>自由記述…</option>
             </select>
-            {!INDUSTRY_PRESETS.some((p) => p.id === config.industry) && (
+            {!LEGACY_INDUSTRY_PRESETS.some((p) => p.id === config.industry) && (
               <input
                 value={config.industry}
                 onChange={(e) => setConfig((c) => ({ ...c, industry: e.target.value }))}
@@ -541,22 +668,22 @@ export function InterviewTab() {
           <div className="term-row config-row">
             <span className="term-source-name">出題ジャンル</span>
             <select
-              value={GENRE_PRESETS.some((p) => p.id === config.genre) ? config.genre : CUSTOM_CONFIG}
+              value={LEGACY_GENRE_PRESETS.some((p) => p.id === config.genre) ? config.genre : LEGACY_CUSTOM_CONFIG}
               onChange={(e) =>
                 setConfig((c) => ({
                   ...c,
-                  genre: e.target.value === CUSTOM_CONFIG ? "" : e.target.value,
+                  genre: e.target.value === LEGACY_CUSTOM_CONFIG ? "" : e.target.value,
                 }))
               }
             >
-              {GENRE_PRESETS.map((p) => (
+              {LEGACY_GENRE_PRESETS.map((p) => (
                 <option key={p.id} value={p.id}>
                   {p.label}
                 </option>
               ))}
-              <option value={CUSTOM_CONFIG}>自由記述…</option>
+              <option value={LEGACY_CUSTOM_CONFIG}>自由記述…</option>
             </select>
-            {!GENRE_PRESETS.some((p) => p.id === config.genre) && (
+            {!LEGACY_GENRE_PRESETS.some((p) => p.id === config.genre) && (
               <input
                 value={config.genre}
                 onChange={(e) => setConfig((c) => ({ ...c, genre: e.target.value }))}
@@ -572,7 +699,7 @@ export function InterviewTab() {
                 setConfig((c) => ({ ...c, difficulty: e.target.value as InterviewConfig["difficulty"] }))
               }
             >
-              {DIFFICULTY_OPTIONS.map((d) => (
+              {LEGACY_DIFFICULTY_OPTIONS.map((d) => (
                 <option key={d.id} value={d.id}>
                   {d.label}
                 </option>
@@ -587,7 +714,7 @@ export function InterviewTab() {
                 setConfig((c) => ({ ...c, stance: e.target.value as InterviewConfig["stance"] }))
               }
             >
-              {STANCE_OPTIONS.map((s) => (
+              {LEGACY_STANCE_OPTIONS.map((s) => (
                 <option key={s.id} value={s.id}>
                   {s.label}
                 </option>
@@ -596,25 +723,30 @@ export function InterviewTab() {
           </div>
           </>
           )}
-          <div className="term-row config-row">
-            <span className="term-source-name">持ち込みお題 / ケース課題 (任意)</span>
-            <textarea
-              value={config.customTheme ?? ""}
-              onChange={(e) => setConfig((c) => ({ ...c, customTheme: e.target.value }))}
-              placeholder="例: 自動運転車の障害物検知システムの設計 / 東京都内の信号機の数をフェルミ推定... (空欄の場合は通常進行)"
-              rows={6}
-              className="custom-theme-textarea"
-              maxLength={CUSTOM_THEME_MAX_CHARS}
-            />
-            <span className="hint">
-              {(config.customTheme ?? "").length}/{CUSTOM_THEME_MAX_CHARS}
-            </span>
-          </div>
           {mode === "interview_sim" && (
           <>
-          <p className="hint">ES (data/es/) があれば ES 駆動の面接が優先され、この設定は記録用に保持されます。</p>
+          <div className="term-row config-row">
+            <span className="term-source-name">対象企業のES</span>
+            <select
+              value={config.esId ?? ""}
+              disabled={busy}
+              onChange={(e) => setConfig((c) => ({ ...c, esId: e.target.value }))}
+            >
+              <option value="">ゼロベース（ESなし）</option>
+              {esLibrary.map((item) => (
+                <option key={item.id} value={item.id}>
+                  {item.company_name}のES
+                </option>
+              ))}
+            </select>
+          </div>
+          <p className="hint">
+            {config.esId
+              ? "選択した企業のESのみを面接官AIの前提として使います。"
+              : "ESを使わず、下の業界・ジャンル設定でゼロベースの面接にします。"}
+          </p>
           <div className="action-row">
-            <button type="button" className="ghost" onClick={() => setConfig(DEFAULT_CONFIG)}>
+            <button type="button" className="ghost" onClick={() => setConfig(LEGACY_DEFAULT_CONFIG)}>
               既定値に戻す
             </button>
           </div>
@@ -625,12 +757,12 @@ export function InterviewTab() {
 
       {showLobby && (
         <div className="gd-lobby">
-          <h3>GD ロビー — 参加者の設定 ({personas.length}/{MAX_PERSONAS})</h3>
+          <h3>GD ロビー — 参加者の設定 ({personas.length}/{LEGACY_MAX_PERSONAS})</h3>
           {personas.map((p, i) => {
-            const isPreset = TRAIT_PRESETS.includes(p.trait);
+            const isPreset = LEGACY_TRAIT_PRESETS.includes(p.trait);
             return (
               <div key={i} className="persona-row">
-                <span className="persona-avatar" style={{ background: avatarColor(p.name) }}>
+                <span className="persona-avatar" style={{ background: legacyAvatarColor(p.name) }}>
                   {p.name.slice(0, 1) || "?"}
                 </span>
                 <input
@@ -639,19 +771,19 @@ export function InterviewTab() {
                   placeholder={`学生${String.fromCharCode(65 + i)}`}
                 />
                 <select
-                  value={isPreset ? p.trait : CUSTOM_TRAIT}
+                  value={isPreset ? p.trait : LEGACY_CUSTOM_TRAIT}
                   onChange={(e) =>
                     updatePersona(i, {
-                      trait: e.target.value === CUSTOM_TRAIT ? "" : e.target.value,
+                      trait: e.target.value === LEGACY_CUSTOM_TRAIT ? "" : e.target.value,
                     })
                   }
                 >
-                  {TRAIT_PRESETS.map((t) => (
+                  {LEGACY_TRAIT_PRESETS.map((t) => (
                     <option key={t} value={t}>
                       {t}
                     </option>
                   ))}
-                  <option value={CUSTOM_TRAIT}>自由記述…</option>
+                  <option value={LEGACY_CUSTOM_TRAIT}>自由記述…</option>
                 </select>
                 {!isPreset && (
                   <input
@@ -681,7 +813,7 @@ export function InterviewTab() {
                   { name: `学生${String.fromCharCode(65 + prev.length)}`, trait: "協調型" },
                 ])
               }
-              disabled={personas.length >= MAX_PERSONAS}
+              disabled={personas.length >= LEGACY_MAX_PERSONAS}
             >
               参加者を追加
             </button>
@@ -689,9 +821,13 @@ export function InterviewTab() {
         </div>
       )}
 
-      {phase === "idle" && (
+      {/* ES草案生成は ES 添削 (legacy) モード専用 — ケース/GD への侵食禁止 */}
+      {phase === "idle" && mode === "es_review" && (
         <div className="term-panel narrative-panel">
-          <p className="term-header">NARRATIVE_DRAFT</p>
+          <p className="term-header">
+            <span className="desktop-only">NARRATIVE_DRAFT</span>
+            <span className="mobile-only">ES草案生成</span>
+          </p>
           <p className="hint">
             現在のスキルと目指す姿のギャップを分析し、自己PR・ESの草案を自動生成します（※模擬面接マウント中は実行不可）
           </p>
@@ -700,7 +836,7 @@ export function InterviewTab() {
             <input
               value={narrativeTarget}
               onChange={(e) => setNarrativeTarget(e.target.value)}
-              placeholder="空欄なら active ES / 既定ドメイン"
+              placeholder="空欄なら登録済み ES / 既定ドメイン"
             />
           </div>
           <button
@@ -792,17 +928,10 @@ export function InterviewTab() {
                 </div>
               );
             }
-            if (m.renderAs === "gd_thread") {
-              return (
-                <div key={i} className="line-row ai gd-thread-row">
-                  <GdThreadMessage text={visibleText} streaming={m.streaming} />
-                </div>
-              );
-            }
             const name = m.speaker || "AI";
             return (
               <div key={i} className="line-row ai">
-                <span className="persona-avatar" style={{ background: avatarColor(name) }}>
+                <span className="persona-avatar" style={{ background: legacyAvatarColor(name) }}>
                   {name.slice(0, 1)}
                 </span>
                 <div className="line-bubble ai">
@@ -828,7 +957,7 @@ export function InterviewTab() {
             report.metrics.map((m) => (
               <div key={m.axis} className="term-row mission-result-row">
                 <span className="term-source-name">{m.axis}</span>
-                <ScoreBar score={m.score} />
+                <LegacyScoreBar score={m.score} />
                 <span className="term-value">{m.score}</span>
               </div>
             ))

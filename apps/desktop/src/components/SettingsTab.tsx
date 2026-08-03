@@ -1,20 +1,65 @@
 import { useEffect, useState } from "react";
 import {
+  engineReady as checkEngineReady,
   getKnowledgeResearchPolicy,
   loadSettings,
-  runProfiler,
   saveFixedAttributes,
   setKnowledgeResearchPolicy,
 } from "../lib/engine";
 import { defaultBirthday } from "../lib/birthdayUtils";
+import {
+  localSettingsShell,
+  readLocalFixedAttributes,
+  writeLocalFixedAttributes,
+} from "../lib/settingsLocalCache";
 import type { FixedField, SettingsData } from "../lib/types";
 import { uiErrorMessage } from "../lib/uiErrorMessages";
+import { useIsNarrowViewport } from "../lib/useIsNarrowViewport";
 import { BirthdayPicker } from "./BirthdayPicker";
 import { Toggle } from "./Toggle";
 
-export function SettingsTab() {
-  const [settings, setSettings] = useState<SettingsData | null>(null);
-  const [attrs, setAttrs] = useState<Record<string, string>>({});
+/** Desktop: short probe then fail-open. Mobile uses local-first (no scare). */
+const ENGINE_READY_BUDGET_MS = 3000;
+const SETTINGS_LOAD_TIMEOUT_MS = 3000;
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((r) => setTimeout(r, ms));
+}
+
+function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error("timeout")), ms);
+    promise.then(
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      (err: unknown) => {
+        clearTimeout(timer);
+        reject(err);
+      },
+    );
+  });
+}
+
+export function SettingsTab({
+  engineReady = true,
+  onOpenProfile,
+}: {
+  engineReady?: boolean;
+  /** Mobile: jump to PROFILE surface (single source of analysis). */
+  onOpenProfile?: () => void;
+}) {
+  const isNarrow = useIsNarrowViewport();
+  const [settings, setSettings] = useState<SettingsData | null>(() =>
+    isNarrow ? localSettingsShell(readLocalFixedAttributes()) : null,
+  );
+  const [attrs, setAttrs] = useState<Record<string, string>>(() => {
+    if (!isNarrow) return {};
+    const local = readLocalFixedAttributes();
+    const shell = localSettingsShell(local);
+    return { ...shell.fixed_attributes };
+  });
   const [status, setStatus] = useState("");
   const [statusKind, setStatusKind] = useState<"info" | "error">("info");
   const [saveNotice, setSaveNotice] = useState<{ text: string; kind: "success" | "error" } | null>(
@@ -24,32 +69,112 @@ export function SettingsTab() {
   const [loadError, setLoadError] = useState("");
   const [knowledgeResearchEnabled, setKnowledgeResearchEnabled] = useState(false);
   const [policyBusy, setPolicyBusy] = useState(false);
+  const [waitingEngine, setWaitingEngine] = useState(false);
 
-  async function fetchSettings() {
+  /// Read the persisted NetworkPolicy. Independent of the Python engine so it
+  /// still runs on iOS (see the call site in `fetchSettings`).
+  async function loadKnowledgePolicy(): Promise<void> {
+    try {
+      const policy = await withTimeout(getKnowledgeResearchPolicy(), 1500);
+      setKnowledgeResearchEnabled(policy.enabled);
+    } catch (err) {
+      // eslint-disable-next-line no-console -- intentional diagnostic (原則3)
+      console.error("[SettingsTab] knowledge policy load failed:", err);
+    }
+  }
+
+  async function probeReady(budgetMs: number): Promise<boolean> {
+    if (engineReady) return true;
+    const deadline = Date.now() + budgetMs;
+    while (Date.now() < deadline) {
+      try {
+        if (await withTimeout(checkEngineReady(), 500)) return true;
+      } catch {
+        /* keep probing */
+      }
+      await sleep(250);
+    }
+    try {
+      return await withTimeout(checkEngineReady(), 500);
+    } catch {
+      return false;
+    }
+  }
+
+  function applySettings(s: SettingsData) {
+    const merged = { ...s.fixed_attributes };
+    if (!merged.birthday?.trim()) {
+      merged.birthday = defaultBirthday();
+    }
+    setSettings(s);
+    setAttrs(merged);
+  }
+
+  async function fetchSettings(opts?: { skipWait?: boolean }) {
     setLoadError("");
     setStatus("");
     setStatusKind("info");
-    try {
-      const s = await loadSettings();
-      const merged = { ...s.fixed_attributes };
-      if (!merged.birthday?.trim()) {
-        merged.birthday = defaultBirthday();
+
+    if (isNarrow) {
+      // Instant local shell — never block or scare on mobile.
+      applySettings(localSettingsShell(readLocalFixedAttributes()));
+      // NetworkPolicy is a pure-Rust command (`knowledge_policy_get`) and works on
+      // iOS, where `loadSettings()` (a Python-engine proxy) can never succeed —
+      // there is no sidecar on mobile by design. Nesting the policy read inside
+      // the settings try meant it was never reached on device, so the toggle was
+      // stuck at its initial `false` no matter what was persisted (2026-07-25
+      // device E2E). Read it independently, before and regardless of the engine.
+      await loadKnowledgePolicy();
+      try {
+        const s = await withTimeout(loadSettings(), SETTINGS_LOAD_TIMEOUT_MS);
+        applySettings(s);
+        writeLocalFixedAttributes({ ...s.fixed_attributes });
+      } catch (err) {
+        // eslint-disable-next-line no-console -- intentional diagnostic (原則3)
+        console.error("[SettingsTab] settings load failed (mobile shell):", err);
+        /* stay on local shell — seamless */
       }
-      setSettings(s);
-      setAttrs(merged);
-      const policy = await getKnowledgeResearchPolicy();
-      setKnowledgeResearchEnabled(policy.enabled);
-    } catch {
-      setLoadError(uiErrorMessage("SETTINGS_LOAD"));
+      return;
+    }
+
+    setWaitingEngine(true);
+    const ready = opts?.skipWait
+      ? engineReady || (await checkEngineReady().catch(() => false))
+      : await probeReady(ENGINE_READY_BUDGET_MS);
+    setWaitingEngine(false);
+
+    try {
+      const s = await withTimeout(loadSettings(), SETTINGS_LOAD_TIMEOUT_MS);
+      applySettings(s);
+      // Keep the local cache in sync with the engine (mirrors the mobile
+      // branch above) so on-device CONSULT sees current Vault-saved basics
+      // even when the user hasn't re-hit Save this session.
+      writeLocalFixedAttributes({ ...s.fixed_attributes });
+      await loadKnowledgePolicy();
+      if (!ready) {
+        setStatusKind("info");
+        setStatus("一部の保存機能は後から有効になります。");
+      }
+    } catch (err) {
+      // eslint-disable-next-line no-console -- intentional diagnostic (原則3)
+      console.error("[SettingsTab] settings load failed:", err);
+      applySettings(localSettingsShell(readLocalFixedAttributes()));
+      setLoadError("");
+      setStatusKind("info");
+      setStatus("設定を端末に保持した状態で表示しています。「再読込」で同期できます。");
     }
   }
 
   useEffect(() => {
     void fetchSettings();
-  }, []);
+  }, [engineReady, isNarrow]);
 
   function updateAttr(key: string, value: string) {
-    setAttrs((prev) => ({ ...prev, [key]: value }));
+    setAttrs((prev) => {
+      const next = { ...prev, [key]: value };
+      if (isNarrow) writeLocalFixedAttributes(next);
+      return next;
+    });
   }
 
   async function handleSaveFixed() {
@@ -57,11 +182,18 @@ export function SettingsTab() {
     setStatus("");
     setStatusKind("info");
     setSaveNotice(null);
+    writeLocalFixedAttributes(attrs);
     try {
       await saveFixedAttributes(attrs);
       setSaveNotice({ text: "基本情報を保存しました", kind: "success" });
-    } catch {
-      setSaveNotice({ text: uiErrorMessage("SETTINGS_SAVE"), kind: "error" });
+    } catch (err) {
+      // eslint-disable-next-line no-console -- intentional diagnostic (原則3)
+      console.error("[SettingsTab] saveFixedAttributes failed:", err);
+      if (isNarrow) {
+        setSaveNotice({ text: "基本情報を端末に保存しました", kind: "success" });
+      } else {
+        setSaveNotice({ text: uiErrorMessage("SETTINGS_SAVE"), kind: "error" });
+      }
     } finally {
       setBusy(false);
     }
@@ -72,37 +204,24 @@ export function SettingsTab() {
     try {
       const policy = await setKnowledgeResearchPolicy(enabled);
       setKnowledgeResearchEnabled(policy.enabled);
-    } catch {
+    } catch (err) {
+      // eslint-disable-next-line no-console -- intentional diagnostic (原則3).
+      // This exact catch swallowed the 2026-07-25 device failure: the toggle
+      // appeared inert with nothing in the console to act on.
+      console.error("[SettingsTab] knowledge policy save failed:", err);
       setStatusKind("error");
-      setStatus("外部検索の同意設定を保存できませんでした");
+      setStatus(uiErrorMessage("SETTINGS_SAVE"));
     } finally {
       setPolicyBusy(false);
-    }
-  }
-
-  async function handleProfiler() {
-    setBusy(true);
-    setStatusKind("info");
-    setStatus("プロファイラ実行中… (数分かかる場合があります)");
-    try {
-      const res = await runProfiler();
-      setStatusKind("info");
-      setStatus(res.message);
-      const s = await loadSettings();
-      setSettings(s);
-      setAttrs({ ...s.fixed_attributes });
-    } catch {
-      setStatusKind("error");
-      setStatus(uiErrorMessage("PROFILER_RUN"));
-    } finally {
-      setBusy(false);
     }
   }
 
   if (!settings) {
     return (
       <section className="panel">
-        <p className="hint">{loadError ? "" : "設定を読み込み中…"}</p>
+        <p className="hint">
+          {waitingEngine ? "設定を読み込み中…" : loadError ? "" : "設定を読み込み中…"}
+        </p>
         {loadError && (
           <>
             <p className="status-line error-text" role="alert">
@@ -110,13 +229,10 @@ export function SettingsTab() {
             </p>
             <div className="action-row">
               <button type="button" className="primary" onClick={() => void fetchSettings()}>
-                再読み込み
+                再試行
               </button>
             </div>
           </>
-        )}
-        {!loadError && (
-          <p className="hint">初回はエンジンの準備に数十秒かかることがあります。</p>
         )}
       </section>
     );
@@ -124,11 +240,26 @@ export function SettingsTab() {
 
   return (
     <section className="panel settings-panel">
-      <h2>設定 (SETTINGS)</h2>
+      <h2>
+        <span className="desktop-only">
+          SETTINGS <span className="term-tag term-tag--info">[ CONFIG ]</span>
+        </span>
+        <span className="mobile-only">
+          <span className="term-tag term-tag--info">[ 設定 ]</span>
+        </span>
+      </h2>
+      <div className="ascii-sep" role="separator">
+        --- CONTROLS ---
+      </div>
+      <div className="action-row">
+        <button type="button" className="ghost" onClick={() => void fetchSettings({ skipWait: true })}>
+          再読込
+        </button>
+      </div>
 
       <div className="settings-block">
         <h3>基本情報</h3>
-        <p className="hint">手入力の基本情報（profiler では変更されません）</p>
+        <p className="hint">手入力の基本情報（自動分析では変更されません）</p>
         <div className="settings-list">
           {settings.fixed_fields.map((f: FixedField) => (
             <div
@@ -180,7 +311,7 @@ export function SettingsTab() {
       </div>
 
       <div className="settings-block">
-        <h3>外部知識 (E0b)</h3>
+        <h3>外部知識</h3>
         <p className="hint">
           同意後、相談送信時に Wikipedia 検索で知識を補強します（オフライン検証パイプライン経由）。
         </p>
@@ -201,18 +332,29 @@ export function SettingsTab() {
         </div>
       </div>
 
+      {/* Auto profile lives on PROFILE tab — avoid duplicate Surfaces (M20-M). */}
       <div className="settings-block">
-        <h3>自動プロフィール</h3>
-        <p className="hint">日記・LINE・相談・家計簿から profiler が抽象化して抽出します（読み取り専用）</p>
-        <pre className="profile-box">{settings.profile_summary || "(プロファイル未生成)"}</pre>
+        <h3>自己分析について</h3>
+        <p className="hint">
+          日記・行動データからの深い分析結果は、プロフィール画面にまとめています。
+        </p>
+        {onOpenProfile ? (
+          <div className="action-row">
+            <button type="button" className="secondary" onClick={onOpenProfile}>
+              プロフィールを開く
+            </button>
+          </div>
+        ) : (
+          <p className="hint desktop-only">PROFILE タブでギャップ分析・指標を確認できます。</p>
+        )}
       </div>
 
       <details className="settings-advanced">
-        <summary>Advanced</summary>
+        <summary>高度な連携・詳細設定</summary>
         <div className="settings-list">
           <div className="settings-row">
             <label htmlFor="settings-apple-calendar" className="settings-row-label">
-              Apple カレンダー連携
+              iPhoneカレンダー（予定）の読み込み連携
             </label>
             <div className="settings-row-value">
               <Toggle
@@ -222,11 +364,6 @@ export function SettingsTab() {
               />
             </div>
           </div>
-        </div>
-        <div className="settings-advanced-actions">
-          <button type="button" className="secondary" disabled={busy} onClick={() => void handleProfiler()}>
-            再分析 (profiler)
-          </button>
         </div>
       </details>
 
