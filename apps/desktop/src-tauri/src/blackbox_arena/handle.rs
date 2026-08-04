@@ -971,6 +971,37 @@ pub(crate) fn ambient_flavor_seed(genesis_digest8: [u8; 8], turns: u32) -> u32 {
 /// Kept free of `cfg(target_os)` so the mapping is asserted by host tests. The
 /// same shape as `sanitize_one_liner` had, whose iOS-only test never ran once
 /// and asserted something false for months.
+///
+/// # Which codes can actually appear (T4-E reachability sweep)
+///
+/// | code | reason | reachable in production |
+/// |---|---|---|
+/// | 0 | not `Dead` | yes |
+/// | 1 | `AccountingBreach` | **no — defence in depth** |
+/// | 2 | `SnapshotDigestMismatch` | **no — defence in depth** |
+/// | 3 | *(retired)* | — |
+/// | 4 | `InternalInvariantBroken` | **yes — the only live path** |
+///
+/// Codes 1 and 2 are unreachable *because an earlier check gets there first*,
+/// not because their guards are absent. `close_period` runs `apply_plans`
+/// before `cash_flow.verify`, so unbalanced books already surfaced as code 4
+/// in the neighbouring arm; and `section_of` is an exhaustive match with no
+/// wildcard, so balanced postings preserve the cash-flow identity by
+/// construction — a property the compiler re-checks whenever an `AccountCode`
+/// is added. `capture` derives payload and digest from the same bytes, which
+/// makes the `verify` immediately after it tautological.
+///
+/// **Both guards are deliberately kept.** They are the second layer, and the
+/// ordering that makes them redundant is pinned by
+/// `unbalanced_books_die_as_internal_invariant_not_accounting_breach` — reorder
+/// `close_period` and that test fails, which is exactly when the distinct code
+/// would start earning its keep.
+///
+/// Code 3 (`ReplayDivergence`) was retired in T4-E: it had no production
+/// `die()` site in any release. `BridgeError::ReplayDivergence` survives and is
+/// unrelated — it refuses to *write a profile* from degraded determinism, which
+/// is a write gate rather than a session death. **The number is not reused**:
+/// renumbering would silently reinterpret any code already captured in a log.
 pub(crate) const fn arena_terminal_codes(
     state: crate::blackbox_sim::fsm::SessionState,
 ) -> (u64, u64) {
@@ -983,11 +1014,28 @@ pub(crate) const fn arena_terminal_codes(
             match reason {
                 FailureReason::AccountingBreach => 1,
                 FailureReason::SnapshotDigestMismatch => 2,
-                FailureReason::ReplayDivergence => 3,
+                // 3 retired — see the table above. Do not reuse.
                 FailureReason::InternalInvariantBroken => 4,
             },
         ),
     }
+}
+
+/// Platform-free judgment behind [`log_arena_terminal_ios`]: which OSLog
+/// labels/values a terminal session would emit. Ungated so host tests can
+/// prove the instrument produces a non-zero `arena.dead_reason` without
+/// standing on an iOS runner (T4-E-2 / §4.2 — same extract pattern as moving
+/// pure logic out from under `cfg(target_os = "ios")`).
+pub(crate) const fn arena_terminal_metrics(
+    state: crate::blackbox_sim::fsm::SessionState,
+    turns: u32,
+) -> [(&'static str, u64); 3] {
+    let (sealed, reason) = arena_terminal_codes(state);
+    [
+        ("arena.sealed", sealed),
+        ("arena.dead_reason", reason),
+        ("arena.turns_completed", turns as u64),
+    ]
 }
 
 /// Release-visible terminal evidence. The arena's own diagnostics are
@@ -996,13 +1044,15 @@ pub(crate) const fn arena_terminal_codes(
 /// simply stopped advancing. This is the same hole G-5's import and G-4's
 /// flavor each fell into, closed the same way: numeric OSLog through the path
 /// P0-6 proved survives.
+///
+/// Judgment lives in [`arena_terminal_metrics`]; this gate is the FFI boundary
+/// only (`log_model_u64` → OSLog).
 #[cfg(target_os = "ios")]
 fn log_arena_terminal_ios(state: crate::blackbox_sim::fsm::SessionState, turns: u32) {
     use crate::ios_oslog::log_model_u64;
-    let (sealed, reason) = arena_terminal_codes(state);
-    log_model_u64("arena.sealed", sealed);
-    log_model_u64("arena.dead_reason", reason);
-    log_model_u64("arena.turns_completed", u64::from(turns));
+    for (label, value) in arena_terminal_metrics(state, turns) {
+        log_model_u64(label, value);
+    }
 }
 
 #[cfg(test)]
@@ -1126,10 +1176,13 @@ mod tests {
 
         // Every failure reason must be distinguishable — a single "it died"
         // bit would leave the device log unable to name which invariant broke.
+        //
+        // 3 is absent because ReplayDivergence was retired in T4-E, and the
+        // remaining codes keep their numbers: reusing 3 would silently
+        // reinterpret any value already captured in a device log.
         for (reason, code) in [
             (FailureReason::AccountingBreach, 1),
             (FailureReason::SnapshotDigestMismatch, 2),
-            (FailureReason::ReplayDivergence, 3),
             (FailureReason::InternalInvariantBroken, 4),
         ] {
             assert_eq!(
@@ -1138,6 +1191,96 @@ mod tests {
                 "{reason:?} must map to its own code"
             );
         }
+    }
+
+    /// Drive a real session into `Dead` via execute()'s InventoryDesync →
+    /// InternalInvariantBroken site (the only FailureReason whose production
+    /// `die()` arm is fireable under Session driving — see T4-E H-1), then
+    /// assert the ungated instrument emits code 4. Does not construct
+    /// `SessionState::Dead` by hand (T4-E-2 H-3).
+    #[test]
+    fn driven_session_inventory_desync_emits_dead_reason_4() {
+        use crate::blackbox_sim::director::Session;
+        use crate::blackbox_sim::fsm::FailureReason;
+        use crate::blackbox_sim::ledger::AccountCode;
+        use crate::blackbox_sim::telemetry::ActionIntent;
+
+        let mut session = ok(Session::start(request()));
+        ok(session.observe());
+        ok(session.submit(ActionIntent::Abstain, None));
+        // Plant ledger/firm inventory desync — operate_tick's boundary check.
+        session
+            .test_books_mut()
+            .balances
+            .test_add_unchecked(AccountCode::Inventory, 1);
+        assert!(
+            session.execute().is_err(),
+            "operate_tick must die on inventory desync"
+        );
+        assert!(
+            matches!(
+                session.state(),
+                SessionState::Dead {
+                    reason: FailureReason::InternalInvariantBroken
+                }
+            ),
+            "expected InternalInvariantBroken dead, got {:?}",
+            session.state()
+        );
+        let metrics = arena_terminal_metrics(session.state(), session.turns_completed());
+        assert_eq!(metrics[0], ("arena.sealed", 1));
+        assert_eq!(metrics[1], ("arena.dead_reason", 4));
+        assert_eq!(
+            metrics[2],
+            (
+                "arena.turns_completed",
+                u64::from(session.turns_completed())
+            )
+        );
+    }
+
+    /// H-1 companion: balance poison that would be needed to disagree the
+    /// cash-flow statement is intercepted by `apply_plans`' zero-sum check
+    /// and dies as InternalInvariantBroken (code 4), never AccountingBreach
+    /// (code 1). Documents why code 1 is excluded from the H-3 positive control.
+    #[test]
+    fn unbalanced_books_die_as_internal_invariant_not_accounting_breach() {
+        use crate::blackbox_sim::director::Session;
+        use crate::blackbox_sim::fsm::FailureReason;
+        use crate::blackbox_sim::ledger::AccountCode;
+        use crate::blackbox_sim::settle::TICKS_PER_QUARTER;
+        use crate::blackbox_sim::telemetry::ActionIntent;
+
+        let mut session = ok(Session::start(request()));
+        for _ in 0..(TICKS_PER_QUARTER - 1) {
+            ok(session.observe());
+            ok(session.submit(ActionIntent::Abstain, None));
+            ok(session.execute());
+            ok(session.settle());
+            ok(session.report());
+        }
+        ok(session.observe());
+        ok(session.submit(ActionIntent::Abstain, None));
+        ok(session.execute());
+        session
+            .test_books_mut()
+            .balances
+            .test_add_unchecked(AccountCode::OperatingExpense, 1);
+        assert!(session.settle().is_err());
+        assert!(
+            matches!(
+                session.state(),
+                SessionState::Dead {
+                    reason: FailureReason::InternalInvariantBroken
+                }
+            ),
+            "unbalanced books must not be reported as AccountingBreach; got {:?}",
+            session.state()
+        );
+        assert_eq!(
+            arena_terminal_metrics(session.state(), session.turns_completed())[1],
+            ("arena.dead_reason", 4)
+        );
     }
 
     fn request() -> GenesisRequest {

@@ -254,6 +254,20 @@ impl Balances {
         self.minor.get(account.index()).copied().unwrap_or(0)
     }
 
+    /// Test-only: mutate a single account outside double-entry.
+    ///
+    /// Production `apply` cannot break BXS-I-03 — balanced postings preserve the
+    /// cash-flow identity by construction. The AccountingBreach / InventoryDesync
+    /// die() sites exist to refuse *corruption*, so host positive-control tests
+    /// must be able to plant corruption without inventing a production API for it.
+    #[cfg(test)]
+    pub(crate) fn test_add_unchecked(&mut self, account: AccountCode, delta: i64) {
+        let idx = account.index();
+        if let Some(slot) = self.minor.get_mut(idx) {
+            *slot = slot.wrapping_add(delta);
+        }
+    }
+
     /// Atomic apply (BXS-I-04): stage every delta with overflow checks, then
     /// commit the whole staged array. On any error, `self` is untouched.
     pub fn apply(&mut self, tx: &Transaction) -> Result<(), LedgerError> {

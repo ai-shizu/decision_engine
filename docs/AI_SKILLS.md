@@ -633,6 +633,46 @@ Info.plist / embedded.mobileprovision / pocket-brain.gguf の**明示スコー�
 9. **対照の入力クラス ≠ 本番の入力クラス** は Vacuous Green の同型欠陥（text≠Mach-O、XML≠binary plist）。陽性対照は走査対象と同じ符号化で組め。
 10. bplist に CJK を混ぜると文字列が UTF-16 になり ASCII バイト走査が沈黙する — 植込みは ASCII。
 
+**T4-E as-built（2026-08-04）— `arena.dead_reason` 計器の到達可能性と陽性対照:**
+正本 `docs/T4E_ARENA_DEAD_REASON_PLAN.md` / 報告 `docs/T4E_ARENA_DEAD_REASON_REPORT.md`。
+- **計器はバグではない。** `FailureReason` → OSLog 数値の健全性を先に測る。
+- **発火可能な本番 `die()` は `InternalInvariantBroken` のみ**（InventoryDesync 等）。
+  `AccountingBreach` は `apply_plans` の零和検査に先を越され、
+  `SnapshotDigestMismatch` は capture⊕verify 恒真、`ReplayDivergence` は
+  `die()` サイト自体が ABSENT。
+- **`BridgeError::ReplayDivergence` は設計**（プロファイル書込拒否）。FSM の
+  同名 variant は未配線の遺物。
+- **最終クリーンアップ（指揮官裁定）:** `FailureReason::ReplayDivergence` は
+  **退役（削除）**。本番 `die()` サイトが皆無で、コード表に残せば読み手に
+  誤った推測を与えるだけだった。`BridgeError::ReplayDivergence` は**無改変**。
+  **コード 3 は再利用しない** —— 番号を詰めると、既にログへ落ちた値の意味が
+  黙って変わる。
+- **`AccountingBreach` / `SnapshotDigestMismatch` は variant もガードも維持する。**
+  不到達なのは「本体が無い」からではなく「手前の検査が先に捕らえる」から
+  であり、多層防御の二層目である。**発火実績が無い計器は調べる対象であって
+  消す対象ではない。** 順序は
+  `unbalanced_books_die_as_internal_invariant_not_accounting_breach` が pin
+  しており、`close_period` を並べ替えれば落ちる —— 専用コードが価値を持つのは
+  まさにその時である。ノイズ対策は削除ではなく**到達可能性の明記**で行う
+  （`arena_terminal_codes` の doc 表）。
+- 判断は `arena_terminal_metrics`（ungated）。`log_arena_terminal_ios` は
+  OSLog FFI のみ。陽性対照は Session 駆動 → `Dead` → 非ゼロ `dead_reason`
+  （状態の手構築禁止）。計器破壊の変異ドリルで RED を実証せよ。
+- **`cfg(target_os = "ios")` 配下の `#[test]` / `#[cfg(test)]` 禁止ゲート**
+  （`scripts/ios_cfg_test_forbid_gate.sh` + mutation）。型検査は通るが実行されない
+  テストを永久に書けなくする（`sanitize_one_liner` 同型の穴）。
+- **未修復:** `advance` 成功経路に `Dead` が乗らないため、OSLog の
+  `arena.dead_reason≠0` 配線到達は ABSENT。判断関数の陽性対照 ≠ デバイス発火証明。
+
+**T4-E ハマりどころ:**
+1. 「`die()` サイトがある」と「発火する」を混同するな。サイトを数えただけで
+   計器が赤くなれるとは言えない。
+2. 帳簿を壊して AccountingBreach を狙うと、先に零和検査が code 4 で殺す。
+3. `cfg(target_os = "ios")` 内に `#[test]` を置くな — CI の `cargo check --target
+   aarch64-apple-ios-sim` は型だけ見て、テストは走らない。
+4. アリーナ `advance` は `die()` が `Err` を返す分岐で端末ログへ到達しない。
+   成功後の terminal 分岐に Dead を期待するな。
+
 報告には「何を変えたか」「なぜか」「何で検証したか」を必ず含めろ。テストが通らないまま完了と言うことは、いかなる理由があっても禁止する。
 
 ---
