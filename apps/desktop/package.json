@@ -12,6 +12,7 @@
     "tauri:dev": "node scripts/run-os.mjs run-tauri-dev",
     "tauri:build": "node scripts/run-os.mjs run-tauri-build",
     "tauri:ios-dev": "bash scripts/tauri-ios-dev.sh",
+    "tauri:ios-release": "bash ../../scripts/ios_release_build.sh",
     "engine:build": "node scripts/run-os.mjs build-engine",
     "test:boundary": "node scripts/run-os.mjs run-boundary-tests"
   },
