@@ -130,16 +130,47 @@ mk_s4_red() {
 mk_s5_red() {
   local app
   app="$(mk_green_base "red-s5")"
-  # Plant CIDR into binary resource via overwrite of a data section companion file
-  # S-5 greps Coraxis binary and Info.plist — embed string in a tiny .c string literal
+  # Legacy path: plant via C string literal (compiler-dependent). Measured first for E-1a.
   cat >"$FIX_ROOT/_s5.c" <<'EOF'
 #include <stdio.h>
 static const char *k = "marker 10.0.0.0/8 http://192.168.1.1:1420";
 int main(void) { puts(k); return 0; }
 EOF
-  clang -o "$app/Coraxis" "$FIX_ROOT/_s5.c"
+  clang -O0 -o "$app/Coraxis" "$FIX_ROOT/_s5.c"
+  diagnose_s5_bytes "$app/Coraxis" "pre_append_clang_literal"
+  # Permanent plant: compiler-independent append (T4B_ONLY=S-5 does not require valid Mach-O).
+  # Do not remove the clang path above — diagnostics must still show whether the literal survived.
+  printf '\nmarker 10.0.0.0/8 http://192.168.1.1:1420\n' >>"$app/Coraxis"
+  diagnose_s5_bytes "$app/Coraxis" "post_append"
   write_clean_plist "$app/Info.plist"
   printf '%s\n' "$app"
+}
+
+diagnose_s5_bytes() {
+  # Args: binary_path label — prove whether marker bytes exist before blaming grep.
+  # MUST write to stderr: mk_* helpers print the app path on stdout for capture.
+  local bin="$1"
+  local label="$2"
+  {
+    echo "S5_BYTE_DIAG label=${label} path=${bin}"
+    ls -l "$bin"
+    shasum -a 256 "$bin"
+    local grep_ac py_off xxd_ascii
+    set +e
+    grep_ac="$(grep -ac '10\.0\.0\.0/8' "$bin" 2>/dev/null)"
+    set -e
+    echo "S5_BYTE_DIAG grep_ac_10.0.0.0/8=${grep_ac:-0}"
+    py_off="$(python3 -c "import pathlib; d=pathlib.Path(r'''$bin''').read_bytes(); print(d.find(b'10.0.0.0/8'))")"
+    echo "S5_BYTE_DIAG python_find_offset=${py_off}"
+    # xxd default ASCII column — string may span lines; count lines that contain the digit run
+    xxd_ascii="$(xxd "$bin" | grep -c '10\.0\.0\.0' || true)"
+    echo "S5_BYTE_DIAG xxd_ascii_lines_with_10.0.0.0=${xxd_ascii}"
+    if [[ "$py_off" -ge 0 ]]; then
+      echo "S5_BYTE_DIAG marker_bytes=PRESENT"
+    else
+      echo "S5_BYTE_DIAG marker_bytes=ABSENT"
+    fi
+  } >&2
 }
 
 mk_s7_red() {

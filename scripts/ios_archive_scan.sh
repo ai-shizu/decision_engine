@@ -258,6 +258,7 @@ EOF
 
   # S-5: CIDR without :// or :port — the hole that made the old detector blind
   # Also prove grep -a finds UTF-8 (Japanese) adjacent to LAN marker (strings would miss JP)
+  # TEXT control (kept): regex fires on a plain file.
   printf 'marker 10.0.0.0/8 開発用LAN\n' >"$WORK/control_lan.bin"
   n="$(count_lan_strings "$WORK/control_lan.bin")"
   if [[ "$n" -lt 1 ]]; then
@@ -266,7 +267,27 @@ EOF
   # Prove old regex is blind to this sample (documentation of why S-5 exists)
   local old_hits
   old_hits="$( { grep -aoE '://(10|172|192)\.[0-9]+\.[0-9]+\.[0-9]+:[0-9]+' "$WORK/control_lan.bin" 2>/dev/null || true; } | wc -l | tr -d ' ')"
-  echo "S-5 control: OK detected=${n} CIDR via grep -a; old_://:port_regex_hits=${old_hits:-0} (expect 0)"
+  echo "S-5 control: OK text detected=${n} CIDR via grep -a; old_://:port_regex_hits=${old_hits:-0} (expect 0)"
+
+  # Mach-O control (T4-D E-1): production scan_target is Coraxis (Mach-O), not a text file.
+  # Vacuous-green hole: text-only control proved the regex, not the Mach-O input class.
+  require_cmd clang file
+  cat >"$WORK/control_lan.c" <<'EOF'
+#include <stdio.h>
+/* Planted for S-5 positive control — must remain visible to grep -a on the linked Mach-O. */
+static const char planted[] = "marker 10.0.0.0/8 開発用LAN";
+int main(void) { puts(planted); return 0; }
+EOF
+  clang -O0 -o "$WORK/control_lan_macho" "$WORK/control_lan.c"
+  if ! file "$WORK/control_lan_macho" | grep -q 'Mach-O'; then
+    fail_control "S-5" "clang did not produce a Mach-O control binary"
+  fi
+  local macho_hits
+  macho_hits="$(count_lan_strings "$WORK/control_lan_macho")"
+  if [[ "$macho_hits" -lt 1 ]]; then
+    fail_control "S-5" "LAN/CIDR pattern matched 0 on clang-built Mach-O control (text control alone is vacuous)"
+  fi
+  echo "S-5 control: OK macho detected=${macho_hits} CIDR via grep -a on clang -O0 Mach-O"
 
   # S-6: planted wrong-size file must fail size/sha check logic
   printf 'not-a-gguf' >"$WORK/control_gguf.bin"
