@@ -1,16 +1,15 @@
-# T4-D — protected iOS signed Archive lane (main only).
+# T4-D D-4 — signed Archive lane DISARMED.
 #
-# PR / fork / pull_request_target forbidden. Secrets only on build/import
-# steps; always cleanup. Environment ios-release; runner
-# [self-hosted, macOS, ARM64, pkb-ios-release].
+# C-2=UNPAID_PERSONAL_TEAM (commander confirmed 2026-08-04).
+# Distribution certificate cannot be issued → secrets/vars/environment/runner
+# have nothing to hold. Do NOT speculative-wire armed steps.
 #
-# Until Environment / runner / secrets / ADRs / GGUF asset root exist:
-# BLOCKED_EXTERNAL_PREREQUISITE — never claim Archive GREEN from SKIP/queued.
+# Triggers: workflow_dispatch ONLY (push:main removed — would paint main RED forever).
+# pull_request / pull_request_target FORBIDDEN (PUBLIC × self-hosted).
+# continue-on-error / if: false / neutral greenwashing FORBIDDEN.
 name: ios-signed-archive
 
 on:
-  push:
-    branches: [main]
   workflow_dispatch:
     inputs:
       confirm_main_sha:
@@ -20,19 +19,15 @@ on:
 
 permissions:
   contents: read
-  checks: read
-  actions: read
 
 concurrency:
   group: ios-signed-archive
   cancel-in-progress: false
 
 jobs:
-  quality-predecessor:
-    name: quality predecessor (no secrets)
+  preflight-unpaid-block:
+    name: preflight (C-2 unpaid — disarmed)
     runs-on: macos-14
-    outputs:
-      target_sha: ${{ steps.pin.outputs.target_sha }}
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
         with:
@@ -42,228 +37,28 @@ jobs:
       - name: Pin target SHA (reject non-main dispatch)
         id: pin
         env:
-          DISPATCH_SHA: ${{ github.event.inputs.confirm_main_sha || '' }}
+          DISPATCH_SHA: ${{ github.event.inputs.confirm_main_sha }}
         run: |
           set -euo pipefail
           TARGET="$(git rev-parse HEAD)"
-          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
-            [[ "$DISPATCH_SHA" =~ ^[0-9a-f]{40}$ ]] || exit 1
-            MAIN_SHA="$(git rev-parse origin/main 2>/dev/null || git rev-parse main)"
-            test "$DISPATCH_SHA" = "$MAIN_SHA"
-            test "$TARGET" = "$MAIN_SHA"
-          fi
-          echo "target_sha=$TARGET" >> "$GITHUB_OUTPUT"
-
-      - name: Quality predecessor (13 unique checks, same SHA)
-        env:
-          TARGET_SHA: ${{ steps.pin.outputs.target_sha }}
-          QUALITY_PREDECESSOR_TIMEOUT_SEC: "3600"
-          QUALITY_PREDECESSOR_RECEIPT: ${{ runner.temp }}/quality_predecessor.receipt.json
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-          chmod +x scripts/ios_quality_predecessor.sh
-          bash scripts/ios_quality_predecessor.sh "$TARGET_SHA"
-
-      - name: Upload predecessor receipt
-        if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
-        with:
-          name: ios-quality-predecessor-receipt
-          path: ${{ runner.temp }}/quality_predecessor.receipt.json
-          if-no-files-found: error
-
-  signed-archive:
-    name: signed archive (ios-release)
-    needs: quality-predecessor
-    runs-on: [self-hosted, macOS, ARM64, pkb-ios-release]
-    environment: ios-release
-    env:
-      TARGET_SHA: ${{ needs.quality-predecessor.outputs.target_sha }}
-      T4D_LOG_DIR: ${{ runner.temp }}/t4d-archive-logs
-      PKB_IOS_GGUF_ASSET_ROOT: ${{ vars.PKB_IOS_GGUF_ASSET_ROOT }}
-      # Exact ExportOptions path — no find fallback
-      EXPORT_OPTIONS_PATH: apps/desktop/src-tauri/gen/apple/build/arm64/ExportOptions.plist
-    steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
-        with:
-          persist-credentials: false
-          ref: ${{ needs.quality-predecessor.outputs.target_sha }}
-
-      - name: Verify external prerequisites (no secrets yet)
-        run: |
-          set -euo pipefail
-          missing=0
-          if [[ -z "${PKB_IOS_GGUF_ASSET_ROOT:-}" ]]; then
-            echo "BLOCKED_EXTERNAL_PREREQUISITE: vars.PKB_IOS_GGUF_ASSET_ROOT unset"
-            missing=1
-          fi
-          # Secret *names* presence is checked at build step; here we only gate vars.
-          if [[ "$missing" -ne 0 ]]; then
-            echo "T4-D SIGNED ARCHIVE LANE: BLOCKED_EXTERNAL_PREREQUISITE"
+          [[ "$DISPATCH_SHA" =~ ^[0-9a-f]{40}$ ]] || {
+            echo "confirm_main_sha must be exact 40-hex"
             exit 1
-          fi
-
-      - name: npm ci BEFORE any npx --no-install tauri
-        working-directory: apps/desktop
-        run: npm ci --ignore-scripts
-
-      - name: Toolchain receipt (no secrets)
-        run: |
-          set -euo pipefail
-          mkdir -p "$T4D_LOG_DIR"
-          {
-            echo "target_sha=$TARGET_SHA"
-            echo "github_run_id=${GITHUB_RUN_ID}"
-            echo "github_run_attempt=${GITHUB_RUN_ATTEMPT}"
-            echo "runner_name=${RUNNER_NAME:-}"
-            xcodebuild -version
-            node --version
-            npm --version
-            rustc --version
-            cargo --version
-            xcodegen --version
-            (cd apps/desktop && npx --no-install tauri --version)
-          } | tee "$T4D_LOG_DIR/toolchain_receipt.txt"
-
-      - name: Erase prior stage GGUF / xcarchive / IPA / ExportOptions (exact paths)
-        run: |
-          set -euo pipefail
-          STAGE="apps/desktop/src-tauri/gen/apple/assets/models/pocket-brain.gguf"
-          XC="apps/desktop/src-tauri/gen/apple/build/pkb-desktop_iOS.xcarchive"
-          IPA="apps/desktop/src-tauri/gen/apple/build/arm64/Coraxis.ipa"
-          for p in "$STAGE" "$XC" "$IPA" "$EXPORT_OPTIONS_PATH"; do
-            if [[ -e "$p" ]]; then rm -rf "$p"; echo "ERASED: $p"; else echo "ABSENT: $p"; fi
-          done
-
-      - name: Stage real GGUF from approved read-only asset root
-        run: |
-          set -euo pipefail
-          EXPECTED_SIZE=1117320736
-          EXPECTED_SHA=6a1a2eb6d15622bf3c96857206351ba97e1af16c30d7a74ee38970e434e9407e
-          SRC="${PKB_IOS_GGUF_ASSET_ROOT}/models/pocket-brain.gguf"
-          DST="apps/desktop/models/pocket-brain.gguf"
-          test -f "$SRC"
-          SIZE="$(wc -c <"$SRC" | tr -d ' ')"
-          SHA="$(shasum -a 256 "$SRC" | awk '{print $1}')"
-          test "$SIZE" = "$EXPECTED_SIZE"
-          test "$SHA" = "$EXPECTED_SHA"
-          mkdir -p "$(dirname "$DST")"
-          cp -p "$SRC" "$DST"
-          test "$(shasum -a 256 "$DST" | awk '{print $1}')" = "$EXPECTED_SHA"
-
-      - name: Fresh signed Archive via release wrapper (secrets scoped here)
-        id: build
-        env:
-          IOS_CERTIFICATE: ${{ secrets.IOS_CERTIFICATE }}
-          IOS_CERTIFICATE_PASSWORD: ${{ secrets.IOS_CERTIFICATE_PASSWORD }}
-          IOS_MOBILE_PROVISION: ${{ secrets.IOS_MOBILE_PROVISION }}
-          APPLE_DEVELOPMENT_TEAM: ${{ secrets.APPLE_DEVELOPMENT_TEAM }}
-        run: |
-          set -euo pipefail
-          for v in IOS_CERTIFICATE IOS_CERTIFICATE_PASSWORD IOS_MOBILE_PROVISION APPLE_DEVELOPMENT_TEAM; do
-            if [[ -z "${!v:-}" ]]; then
-              echo "BLOCKED_EXTERNAL_PREREQUISITE: missing $v"
-              exit 1
-            fi
-            echo "present(name_only): $v"
-          done
-          chmod +x scripts/ios_release_build.sh
-          BUILD_START_UTC="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-          BUILD_START_EPOCH="$(date -u +%s)"
-          {
-            echo "BUILD_START_UTC=$BUILD_START_UTC"
-            echo "BUILD_START_EPOCH=$BUILD_START_EPOCH"
-            echo "TARGET_SHA=$TARGET_SHA"
-          } | tee "$T4D_LOG_DIR/build_receipt.txt"
-          set +e
-          /bin/bash -o pipefail -c 'bash scripts/ios_release_build.sh' \
-            2>&1 | tee "$T4D_LOG_DIR/build.log"
-          BUILD_EXIT=${PIPESTATUS[0]}
-          set -e
-          BUILD_END_UTC="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-          BUILD_END_EPOCH="$(date -u +%s)"
-          {
-            echo "BUILD_END_UTC=$BUILD_END_UTC"
-            echo "BUILD_END_EPOCH=$BUILD_END_EPOCH"
-            echo "BUILD_EXIT=$BUILD_EXIT"
-          } | tee -a "$T4D_LOG_DIR/build_receipt.txt"
-          test "$BUILD_EXIT" -eq 0
-          # Exact ExportOptions path only — no find fallback
-          test -f "$EXPORT_OPTIONS_PATH"
-          python3 scripts/ios/check_export_method.py "$EXPORT_OPTIONS_PATH"
-
-      - name: Always cleanup signing material from env/keychain best-effort
-        if: always()
-        env:
-          IOS_CERTIFICATE: ${{ secrets.IOS_CERTIFICATE }}
-          IOS_CERTIFICATE_PASSWORD: ${{ secrets.IOS_CERTIFICATE_PASSWORD }}
-          IOS_MOBILE_PROVISION: ${{ secrets.IOS_MOBILE_PROVISION }}
-          APPLE_DEVELOPMENT_TEAM: ${{ secrets.APPLE_DEVELOPMENT_TEAM }}
-        run: |
-          set +e
-          unset IOS_CERTIFICATE IOS_CERTIFICATE_PASSWORD IOS_MOBILE_PROVISION APPLE_DEVELOPMENT_TEAM
-          # Best-effort: remove any temporary profiles/certs the build may have imported.
-          security delete-certificate -c "iPhone Distribution" 2>/dev/null
-          security delete-certificate -c "Apple Distribution" 2>/dev/null
-          rm -f "$HOME/Library/MobileDevice/Provisioning Profiles/"*.mobileprovision 2>/dev/null
-          echo "signing cleanup attempted"
-          set -e
-
-      - name: Provenance sizes / mtimes / SHAs bound to build window + TARGET_SHA
-        run: |
-          set -euo pipefail
-          python3 - <<'PY'
-          import hashlib, json, os
-          from pathlib import Path
-          log = Path(os.environ["T4D_LOG_DIR"])
-          receipt = (log / "build_receipt.txt").read_text(encoding="utf-8")
-          def grab(k):
-              for line in receipt.splitlines():
-                  if line.startswith(k + "="):
-                      return line.split("=", 1)[1]
-              raise SystemExit(f"missing {k}")
-          start = int(grab("BUILD_START_EPOCH"))
-          end = int(grab("BUILD_END_EPOCH"))
-          target_sha = grab("TARGET_SHA")
-          assert target_sha == os.environ["TARGET_SHA"]
-          paths = {
-            "export_options": Path(os.environ["EXPORT_OPTIONS_PATH"]),
-            "archive_info": Path("apps/desktop/src-tauri/gen/apple/build/pkb-desktop_iOS.xcarchive/Info.plist"),
-            "app_info": Path("apps/desktop/src-tauri/gen/apple/build/pkb-desktop_iOS.xcarchive/Products/Applications/Coraxis.app/Info.plist"),
-            "app_bin": Path("apps/desktop/src-tauri/gen/apple/build/pkb-desktop_iOS.xcarchive/Products/Applications/Coraxis.app/Coraxis"),
-            "ipa": Path("apps/desktop/src-tauri/gen/apple/build/arm64/Coraxis.ipa"),
           }
-          out = {"target_sha": target_sha, "start_epoch": start, "end_epoch": end, "artifacts": {}}
-          for k, p in paths.items():
-              if not p.exists():
-                  raise SystemExit(f"ABSENT {k}: {p}")
-              st = p.stat()
-              mtime = int(st.st_mtime)
-              if not (start <= mtime <= end):
-                  raise SystemExit(f"mtime outside build window for {k}: {mtime} not in [{start},{end}]")
-              data = p.read_bytes() if p.is_file() else b""
-              out["artifacts"][k] = {
-                  "path": str(p),
-                  "size": st.st_size,
-                  "mtime": mtime,
-                  "sha256": hashlib.sha256(data).hexdigest() if p.is_file() else "DIR",
-              }
-          (log / "provenance.json").write_text(json.dumps(out, indent=2), encoding="utf-8")
-          print(json.dumps(out, indent=2))
-          PY
+          MAIN_SHA="$(git rev-parse origin/main 2>/dev/null || git rev-parse main)"
+          test "$DISPATCH_SHA" = "$MAIN_SHA"
+          test "$TARGET" = "$MAIN_SHA"
+          echo "target_sha=$TARGET" >> "$GITHUB_OUTPUT"
+          echo "confirm_main_sha OK: $TARGET"
 
-      - name: Archive / IPA acceptance
+      - name: Preflight — C-2 unpaid blocks arming (upstream reason)
         run: |
           set -euo pipefail
-          chmod +x scripts/ios_signed_archive_accept.sh scripts/ios_gguf_three_point_require_present.sh
-          bash scripts/ios_signed_archive_accept.sh
-
-      - name: Upload logs / receipts only (PUBLIC-safe)
-        if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
-        with:
-          name: ios-signed-archive-receipts
-          path: |
-            ${{ runner.temp }}/t4d-archive-logs/**
-          if-no-files-found: error
+          echo "C-2=UNPAID_PERSONAL_TEAM"
+          echo "BLOCKED_EXTERNAL_PREREQUISITE: no Apple Developer Program membership"
+          echo "  → distribution certificate cannot be issued"
+          echo "  → secrets/vars/environment/runner have nothing to hold"
+          echo "NOTE: this is not 'secrets unset' — issuance is impossible on unpaid Personal Team"
+          echo "NOT MEASURED: signed Archive / IPA (lane disarmed)"
+          echo "NOT MEASURED: real GGUF three-point on Archive path"
+          exit 1
