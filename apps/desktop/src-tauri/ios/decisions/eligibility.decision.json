@@ -1,0 +1,15 @@
+{
+  "decision_kind": "ios_eligibility",
+  "status": "UNAPPROVED",
+  "option": null,
+  "decision_id": null,
+  "approver": null,
+  "approved_at": null,
+  "rationale": "Commander-signed ADR for Option A or B has not been recorded. Release eligibility remains RED until an approved decision is filed. Do not invent Option A/B.",
+  "requires_iphone_performance_gaming_tier_if_option_a": true,
+  "notes": [
+    "Option A would require UIRequiredDeviceCapabilities to include iphone-performance-gaming-tier.",
+    "Option B would keep base capabilities [arm64, metal] only.",
+    "Until APPROVED, archive lane must report BLOCKED_EXTERNAL_PREREQUISITE / RED."
+  ]
+}

@@ -1,0 +1,204 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://pkb.local/ios-release.policy.schema.json",
+  "title": "PKB iOS release policy",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "policy_id",
+    "product_name",
+    "product_bundle_identifier",
+    "minimum_ios_version",
+    "targeted_device_family",
+    "required_device_capabilities_base",
+    "marketing_version",
+    "build_number",
+    "sku",
+    "external_bin",
+    "features_exact",
+    "export_method",
+    "signing_mode",
+    "signing_env_vars",
+    "tauri_cli_package",
+    "xcodegen_version",
+    "product_app_name",
+    "required_info_plist_keys",
+    "eligibility",
+    "export_compliance",
+    "privacy_manifest",
+    "gguf",
+    "paths",
+    "quality_predecessor_checks",
+    "quality_predecessor_required_app_slug"
+  ],
+  "properties": {
+    "$schema": { "type": "string" },
+    "policy_id": { "type": "string", "minLength": 1 },
+    "product_name": { "const": "Coraxis" },
+    "product_bundle_identifier": { "const": "com.ai-shizu.pkb" },
+    "minimum_ios_version": { "const": "17.0" },
+    "targeted_device_family": { "const": "1" },
+    "required_device_capabilities_base": {
+      "type": "array",
+      "minItems": 2,
+      "uniqueItems": true,
+      "items": { "type": "string", "minLength": 1 }
+    },
+    "marketing_version": { "type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$" },
+    "build_number": { "type": "integer", "minimum": 1 },
+    "sku": { "type": "string", "minLength": 1 },
+    "external_bin": {
+      "type": "array",
+      "maxItems": 0,
+      "uniqueItems": true,
+      "items": { "type": "string" }
+    },
+    "features_exact": {
+      "type": "array",
+      "minItems": 3,
+      "maxItems": 3,
+      "uniqueItems": true,
+      "items": { "type": "string", "minLength": 1 }
+    },
+    "export_method": { "const": "app-store-connect" },
+    "signing_mode": { "const": "manual" },
+    "signing_env_vars": {
+      "type": "array",
+      "minItems": 4,
+      "uniqueItems": true,
+      "items": { "type": "string", "minLength": 1 }
+    },
+    "tauri_cli_package": { "type": "string", "minLength": 1 },
+    "xcodegen_version": { "type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$" },
+    "product_app_name": { "const": "Coraxis.app" },
+    "required_info_plist_keys": {
+      "type": "array",
+      "minItems": 3,
+      "maxItems": 3,
+      "uniqueItems": true,
+      "items": { "type": "string", "minLength": 1 }
+    },
+    "eligibility": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "option", "decision_id", "approver", "approved_at", "decision_record"],
+      "properties": {
+        "status": { "enum": ["UNAPPROVED", "APPROVED"] },
+        "option": { "type": ["string", "null"], "enum": ["A", "B", null] },
+        "decision_id": { "type": ["string", "null"] },
+        "approver": { "type": ["string", "null"] },
+        "approved_at": { "type": ["string", "null"] },
+        "decision_record": { "type": "string", "minLength": 1 }
+      }
+    },
+    "export_compliance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "status",
+        "decision_id",
+        "approver",
+        "jurisdiction",
+        "crypto_inventory_digest",
+        "its_app_uses_non_exempt_encryption",
+        "decision_record"
+      ],
+      "properties": {
+        "status": { "enum": ["UNAPPROVED", "APPROVED"] },
+        "decision_id": { "type": ["string", "null"] },
+        "approver": { "type": ["string", "null"] },
+        "jurisdiction": { "type": ["string", "null"] },
+        "crypto_inventory_digest": { "type": ["string", "null"] },
+        "its_app_uses_non_exempt_encryption": { "type": ["boolean", "null"] },
+        "decision_record": { "type": "string", "minLength": 1 }
+      }
+    },
+    "privacy_manifest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["canonical_path", "bundle_resource_name", "bundle_resource_path", "accessed_api_types"],
+      "properties": {
+        "canonical_path": { "type": "string", "minLength": 1 },
+        "bundle_resource_name": { "const": "PrivacyInfo.xcprivacy" },
+        "bundle_resource_path": { "const": "PrivacyInfo.xcprivacy" },
+        "accessed_api_types": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["type", "reasons"],
+            "properties": {
+              "type": { "type": "string", "minLength": 1 },
+              "reasons": {
+                "type": "array",
+                "minItems": 1,
+                "uniqueItems": true,
+                "items": { "type": "string", "minLength": 1 }
+              }
+            }
+          }
+        }
+      }
+    },
+    "gguf": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "stage_relpath",
+        "archive_relpath",
+        "ipa_app_relpath",
+        "expected_size",
+        "expected_sha256"
+      ],
+      "properties": {
+        "stage_relpath": { "type": "string", "minLength": 1 },
+        "archive_relpath": { "type": "string", "minLength": 1 },
+        "ipa_app_relpath": { "type": "string", "minLength": 1 },
+        "expected_size": { "const": 1117320736 },
+        "expected_sha256": {
+          "const": "6a1a2eb6d15622bf3c96857206351ba97e1af16c30d7a74ee38970e434e9407e"
+        }
+      }
+    },
+    "paths": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "xcodegen_template",
+        "xcodegen_template_tauri_config_path",
+        "release_config",
+        "dev_overlay_config",
+        "info_plist_release",
+        "info_plist_dev",
+        "gen_apple",
+        "archive_app",
+        "ipa",
+        "xcarchive",
+        "export_options"
+      ],
+      "properties": {
+        "xcodegen_template": { "type": "string" },
+        "xcodegen_template_tauri_config_path": { "type": "string" },
+        "release_config": { "type": "string" },
+        "dev_overlay_config": { "type": "string" },
+        "info_plist_release": { "type": "string" },
+        "info_plist_dev": { "type": "string" },
+        "gen_apple": { "type": "string" },
+        "archive_app": { "type": "string" },
+        "ipa": { "type": "string" },
+        "xcarchive": { "type": "string" },
+        "export_options": { "type": "string" }
+      }
+    },
+    "quality_predecessor_checks": {
+      "type": "array",
+      "minItems": 13,
+      "maxItems": 13,
+      "uniqueItems": true,
+      "items": { "type": "string", "minLength": 1 }
+    },
+    "quality_predecessor_required_app_slug": { "type": "string", "minLength": 1 }
+  }
+}
