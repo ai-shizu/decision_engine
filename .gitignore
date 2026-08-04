@@ -41,3 +41,7 @@ apps/desktop/src-tauri/binaries/pkb-api*
 !apps/desktop/src-tauri/binaries/README.md
 /apps/desktop/.boundary-tests-out/
 *.gguf
+
+# T4-D D-2: local scratch / non-product artifacts (do not commit)
+/output/
+/tmp/

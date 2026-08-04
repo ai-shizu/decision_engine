@@ -1,0 +1,94 @@
+{
+  "$schema": "./ios-release.policy.schema.json",
+  "policy_id": "pkb-ios-release-v1",
+  "product_name": "Coraxis",
+  "product_bundle_identifier": "com.ai-shizu.pkb",
+  "minimum_ios_version": "17.0",
+  "targeted_device_family": "1",
+  "required_device_capabilities_base": ["arm64", "metal"],
+  "marketing_version": "0.1.0",
+  "build_number": 1,
+  "sku": "com.ai-shizu.pkb",
+  "external_bin": [],
+  "features_exact": ["pocket-brain", "secure-vault", "flavor-live"],
+  "export_method": "app-store-connect",
+  "signing_mode": "manual",
+  "signing_env_vars": [
+    "IOS_CERTIFICATE",
+    "IOS_CERTIFICATE_PASSWORD",
+    "IOS_MOBILE_PROVISION",
+    "APPLE_DEVELOPMENT_TEAM"
+  ],
+  "tauri_cli_package": "@tauri-apps/cli",
+  "xcodegen_version": "2.46.0",
+  "product_app_name": "Coraxis.app",
+  "required_info_plist_keys": [
+    "NSFaceIDUsageDescription",
+    "NSCalendarsFullAccessUsageDescription",
+    "ITSAppUsesNonExemptEncryption"
+  ],
+  "eligibility": {
+    "status": "UNAPPROVED",
+    "option": null,
+    "decision_id": null,
+    "approver": null,
+    "approved_at": null,
+    "decision_record": "apps/desktop/src-tauri/ios/decisions/eligibility.decision.json"
+  },
+  "export_compliance": {
+    "status": "UNAPPROVED",
+    "decision_id": null,
+    "approver": null,
+    "jurisdiction": null,
+    "crypto_inventory_digest": null,
+    "its_app_uses_non_exempt_encryption": null,
+    "decision_record": "apps/desktop/src-tauri/ios/decisions/export-compliance.decision.json"
+  },
+  "privacy_manifest": {
+    "canonical_path": "apps/desktop/src-tauri/ios/canonical/PrivacyInfo.xcprivacy",
+    "bundle_resource_name": "PrivacyInfo.xcprivacy",
+    "bundle_resource_path": "PrivacyInfo.xcprivacy",
+    "accessed_api_types": [
+      {
+        "type": "NSPrivacyAccessedAPICategoryFileTimestamp",
+        "reasons": ["C617.1"]
+      }
+    ]
+  },
+  "gguf": {
+    "stage_relpath": "apps/desktop/src-tauri/gen/apple/assets/models/pocket-brain.gguf",
+    "archive_relpath": "apps/desktop/src-tauri/gen/apple/build/pkb-desktop_iOS.xcarchive/Products/Applications/Coraxis.app/assets/models/pocket-brain.gguf",
+    "ipa_app_relpath": "Payload/Coraxis.app",
+    "expected_size": 1117320736,
+    "expected_sha256": "6a1a2eb6d15622bf3c96857206351ba97e1af16c30d7a74ee38970e434e9407e"
+  },
+  "paths": {
+    "xcodegen_template": "apps/desktop/src-tauri/ios/xcodegen/project.yml.template",
+    "xcodegen_template_tauri_config_path": "src-tauri/ios/xcodegen/project.yml.template",
+    "release_config": "apps/desktop/src-tauri/tauri.ios.conf.json",
+    "dev_overlay_config": "apps/desktop/src-tauri/tauri.ios.dev.conf.json",
+    "info_plist_release": "apps/desktop/src-tauri/Info.ios.plist",
+    "info_plist_dev": "apps/desktop/src-tauri/Info.ios.dev.plist",
+    "gen_apple": "apps/desktop/src-tauri/gen/apple",
+    "archive_app": "apps/desktop/src-tauri/gen/apple/build/pkb-desktop_iOS.xcarchive/Products/Applications/Coraxis.app",
+    "ipa": "apps/desktop/src-tauri/gen/apple/build/arm64/Coraxis.ipa",
+    "xcarchive": "apps/desktop/src-tauri/gen/apple/build/pkb-desktop_iOS.xcarchive",
+    "export_options": "apps/desktop/src-tauri/gen/apple/build/arm64/ExportOptions.plist"
+  },
+  "quality_predecessor_checks": [
+    "絶対孤立",
+    "desktop suite",
+    "seal-probe",
+    "doctest-fences",
+    "test-floors",
+    "feature-one-way",
+    "a1-deletability",
+    "flavor-live-absent",
+    "calibration",
+    "write-gated",
+    "write-absent",
+    "iOS config contract",
+    "iOS Rust lib check (sim)"
+  ],
+  "quality_predecessor_required_app_slug": "github-actions"
+}

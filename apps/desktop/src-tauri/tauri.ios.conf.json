@@ -30,8 +30,13 @@
     },
     "iOS": {
       "minimumSystemVersion": "17.0",
-      "frameworks": ["Accelerate", "LocalAuthentication"],
-      "infoPlist": "Info.ios.plist"
+      "frameworks": [
+        "Accelerate",
+        "LocalAuthentication"
+      ],
+      "infoPlist": "Info.ios.plist",
+      "template": "src-tauri/ios/xcodegen/project.yml.template",
+      "bundleVersion": "1"
     }
   }
 }

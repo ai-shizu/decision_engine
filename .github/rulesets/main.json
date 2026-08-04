@@ -1,0 +1,54 @@
+{
+  "name": "main",
+  "target": "branch",
+  "enforcement": "active",
+  "conditions": {
+    "ref_name": {
+      "include": ["refs/heads/main"],
+      "exclude": []
+    }
+  },
+  "rules": [
+    {
+      "type": "deletion"
+    },
+    {
+      "type": "non_fast_forward"
+    },
+    {
+      "type": "pull_request",
+      "parameters": {
+        "required_approving_review_count": 0,
+        "dismiss_stale_reviews": false,
+        "require_code_owner_review": false,
+        "require_last_push_approval": false,
+        "required_review_thread_resolution": true
+      }
+    },
+    {
+      "type": "required_status_checks",
+      "parameters": {
+        "strict_required_status_checks_policy": true,
+        "do_not_enforce_on_create": false,
+        "required_status_checks": [
+          { "context": "絶対孤立" },
+          { "context": "desktop suite" },
+          { "context": "feature-one-way" },
+          { "context": "a1-deletability" },
+          { "context": "doctest-fences" },
+          { "context": "flavor-live-absent" },
+          { "context": "test-floors" },
+          { "context": "seal-probe" },
+          { "context": "calibration" },
+          { "context": "write-absent" },
+          { "context": "write-gated" },
+          { "context": "iOS config contract" },
+          { "context": "iOS Rust lib check (sim)" },
+          { "context": "archive-scan-wiring" },
+          { "context": "s5-grep-diagnostic" }
+        ]
+      }
+    }
+  ],
+  "bypass_actors": []
+}

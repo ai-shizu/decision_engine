@@ -532,10 +532,114 @@ Info.plist / embedded.mobileprovision / pocket-brain.gguf の**明示スコー�
    gen は disposable として一度キー除去してから Release を取り直せ。
 6. XML コメントに `--` を含めるな（`--config` 等）— plist が well-formed でなくなる。
 
+**T4-D as-built（2026-08-03）— iOS Canonical Config / Signed Archive CI:**
+- 正本は `gen/apple/**` 手編集ではなく
+  `apps/desktop/src-tauri/ios/`（xcodegen template / PrivacyInfo /
+  policy / decisions）+ `scripts/ios_*.sh` + `scripts/ios/*.py`。
+- PR レーン: `.github/workflows/ios-config-gate.yml`
+  （jobs 表示名 `iOS config contract` / `iOS Rust lib check (sim)` —
+  cargo check のみ。Xcode simulator app build とは名乗らない）。
+  GitHub-hosted macOS のみ。`SIGNING` / `ARCHIVE/IPA` /
+  `REAL GGUF THREE-POINT` / `PHYSICAL-DEVICE HMR` は常に NOT MEASURED。
+- 署名レーン: `.github/workflows/ios-signed-archive.yml`
+  （`push: main` + dispatch・exact main SHA 以外拒否 /
+  Environment `ios-release` / runner
+  `[self-hosted, macOS, ARM64, pkb-ios-release]` /
+  `npm ci` を `npx --no-install tauri` より前 /
+  secrets は build/import と always cleanup のみ /
+  ExportOptions は正規 1 パスのみ・find fallback 禁止 /
+  predecessor receipt は `if: always()` + `if-no-files-found: error`）。
+  Environment・runner・Secrets・eligibility/法務 ADR・実 GGUF asset root が
+  無い限り **BLOCKED_EXTERNAL_PREREQUISITE** — SKIP/queued を GREEN と呼ぶな。
+- 生成決定性: template は `__PKB_FORCE_COLOR_ARG__` sentinel、
+  `ios_postprocess_gen_apple.py` が literal `${FORCE_COLOR}` に復元し裸 `0`/`1`
+  を拒否。FORCE_COLOR unset/0/1 matrix は byte 一致必須。XcodeGen は
+  policy `xcodegen_version`（2.46.0）厳密一致。A/B/tracked は
+  `ios_cmp_gen_apple_manifest.py` で `gen/apple` 全 init 生成ファイル
+  （`build/` のみ除外）。
+- 製品契約: scheme `BuildableName` / PBX productReference / build product は
+  `Coraxis.app`。Info.plist 3 キー
+  （FaceID / CalendarsFullAccess / ITS）は Info.ios.plist → postprocess merge。
+  ITS は APPROVED decision の boolean と source/archive/IPA 全地点一致 —
+  UNAPPROVED を推測承認するな。PrivacyInfo は root
+  `PrivacyInfo.xcprivacy` + Resources membership の構造確認のみ
+  （nested find 禁止）。
+- quality predecessor: pending/missing は poll（exit 2）、
+  failure/cancelled/skipped/duplicate/wrong SHA/wrong app は即 RED（exit 3）。
+  13 名称は exact・unique。mock: `test_quality_predecessor_mock.sh`。
+- V-3: disposable 変異 + `scripts/ios/check_*.py` / `ios_archive_scan.sh`
+  （`T4B_ONLY=S-4|S-5`）/ GGUF fixture seam（`GGUF_GATE_SCRIPT`）のみ。
+  必須 4 点 = 注入→RED→byte/SHA 復元→同本番 gate GREEN。
+  fresh signed 無しの full-gate は PASS ではなく
+  `BLOCKED_EXTERNAL_PREREQUISITE`。
+- Release 入口は `npm run tauri:ios-release` →
+  `scripts/ios_release_build.sh` のみ。任意 argv 素通し禁止。
+  許可コマンド形は
+  `env -u CARGO_TARGET_DIR npx --no-install tauri ios build --ci --target aarch64 --features pocket-brain,secure-vault,flavor-live --build-number "$VALIDATED_BUILD_NUMBER" --export-method app-store-connect`。
+- `bundle.iOS.template` は **cwd（apps/desktop）相対**
+  `src-tauri/ios/xcodegen/project.yml.template`（Tauri CLI は src-tauri 基準で
+  なく process cwd で template を開く）。`TARGETED_DEVICE_FAMILY=1` /
+  `PRODUCT_NAME=Coraxis` / `CFBundleVersion` 正整数 / PrivacyInfo リソースを
+  template で固定。
+- eligibility / export-compliance は
+  `ios/decisions/*.decision.json` が `APPROVED` になるまで Archive 禁止。
+  Option A/B と `ITSAppUsesNonExemptEncryption` を推測で埋めるな。
+  policy↔decision は status だけでなく option/decision_id/approver/
+  approved_at/jurisdiction/crypto digest/boolean 全項目一致
+  （`validate_ios_policy.py` + schema additionalProperties/uniqueItems）。
+- GGUF 三点は既存 `gguf_three_point_sha_gate.sh` 無改変のまま、
+  `ios_gguf_three_point_require_present.sh` が SOURCE/STAGE/ARCHIVE の
+  `OK` 3 行を要求して fail-closed 化。
+- 既存 5 workflow + `ios_archive_scan.sh` + `gguf_three_point_sha_gate.sh` は
+  **無改変**（blob 一致が防壁）。
+- PUBLIC repo: IPA/xcarchive/実GGUF/profile/certificate を Actions artifact に
+  載せるな。receipt / scan log / toolchain のみ。
+
+
+**T4-D D-3/D-4/D-5（2026-08-04・C-2=UNPAID 確定後）:**
+- `archive-scan-wiring` は `T4B_ONLY=S-N` + ジョブ内 fixture のみ。`gguf_three_point_sha_gate.sh` 無改変。
+- **E-1:** S-5 陽性対照がテキストのみ・走査対象が Mach-O だった Vacuous Green。P-2 特例で Mach-O 対照を追加（テキスト対照は残す）。fixture は構築直後にバイト実在を測り、マーカーはリンク後追記でコンパイラ非依存にする。
+- hosted に Apple 署名 ID が無いとき、ad-hoc (`codesign -s -`) の S-3 は **exit 28 fail-closed**（23 ではない）。全走査も 28。これは欠陥ではなく計器が生きている証拠。
+- S-6 実 GGUF / 署名 Archive / 物理 HMR は NOT MEASURED。緑の範囲を同時に述べよ。
+- C-2=UNPAID では署名レーンは **disarmed のみ**（`workflow_dispatch` のみ・`push:main` 禁止）。preflight は「secrets 未設定」ではなく **発行不能** と書け。
+- ruleset の必須チェックに `archive-scan-wiring` / `ios-signed-archive` を実測前・武装不能時に入れるな。
+- S-3 の `get-task-allow` 禁止は **RELEASE 署名にのみ**適用される。`classify_signing()` が `Apple Distribution` を RELEASE、`Apple Development` を DEV とする。**DEV 署名の `get-task-allow=true` は違反ではなく GREEN**（実測: 実アーカイブ `ALL GREEN` exit=0）。無償 Personal Team は Distribution 権限を取れないため **RELEASE 分類が出現せず、S-3 の release 方針は発動しない**。「永久 RED」ではない — 壊れていないゲートを直しにかかるな。
+- **E-2:** XcodeGen は brew ではなく release zip の SHA-256 ピンで導入。Homebrew 都合で封緘版をダウングレードするな。
+- **E-3:** iOS Rust lib check は `npm run build` で実 `dist/` を建ててから `cargo check`。空 dist で panic を回避するな。
+- **F-2（S-5 検出器）:** `count_lan_strings` は `scripts/ios/count_lan_strings.py` の mmap バイト走査。`grep` / `LC_ALL=C grep` に出荷判定を預けるな（F-1: BSD grep + UTF-8 locale が Mach-O で 0 を返す実測）。`LAN_STRING_RE` は `ios_archive_scan.sh` の単一定義のみ。
+- **F-2 陽性対照は入力クラスを揃える:** text / Mach-O / **Apple binary Info.plist** の 3 つ。XML fixture は binary plist を保証しない。bplist への植込みは **ASCII のみ**（CJK 混入は UTF-16 符号化され ASCII CIDR 正規表現が空洞化する）。
+- **F-2-e:** `s5-grep-diagnostic` は診断恒久グリーンではなく、ロケール 3 種 × 入力 3 クラスで `count_lan_strings` 一致を assert する回帰。grep 列は情報のみ。不一致は非 0。変異ドリル（grep 系 helper）で RED 能力を示せ。
+
+**T4-D ハマりどころ:**
+1. template パスを `ios/...`（src-tauri 相対）にすると
+   `No such file or directory` で静かに default template へ落ちる —
+   cwd 相対 `src-tauri/ios/...` か abs のみ実測成功。
+2. `tauri ios init` は rustup target 追加を試みる — CI/ローカル再生成は
+   `--skip-targets-install` を付けろ（sandbox では download が死ぬ）。
+3. 再生成ツリーの pbxproj は Externals 内の既存 `libapp.a` 有無で
+   Resources 行がドリフトする。比較用 disposable tree は Externals 空で揃え、
+   tracked baseline も同じ init 結果へ同期せよ。
+4. Release Info.plist の **XML コメント**に `NSAppTransportSecurity` と書いてあっても
+   キー検査は plistlib（コメント除去後）で行え。生文字列 grep は偽 RED。
+5. eligibility/export ADR 未承認のまま config contract を GREEN にしてよいのは
+   「UNAPPROVED が正直に機械表現されている」意味に限る。Archive GREEN ではない。
+6. XcodeGen は ambient `${FORCE_COLOR}` を `0`/`1` へ展開する — template に
+   裸 `${FORCE_COLOR}` を置くと pbxproj が環境依存になる。sentinel + postprocess
+   復元が必須。matrix を取らずに決定性を主張するな。
+7. V-3 で本番 gate を inline Python/grep で再実装すると監査 RED。
+   disposable copy + 共有 `check_*.py` / 本物の `ios_archive_scan.sh` を呼べ。
+8. GGUF stage 実体を直接 `mv`/破壊するな — `GGUF_GATE_SCRIPT` で
+   disposable ROOT を差し替えろ。fresh signed 無しを PASS と書くな。
+9. **対照の入力クラス ≠ 本番の入力クラス** は Vacuous Green の同型欠陥（text≠Mach-O、XML≠binary plist）。陽性対照は走査対象と同じ符号化で組め。
+10. bplist に CJK を混ぜると文字列が UTF-16 になり ASCII バイト走査が沈黙する — 植込みは ASCII。
+
 報告には「何を変えたか」「なぜか」「何で検証したか」を必ず含めろ。テストが通らないまま完了と言うことは、いかなる理由があっても禁止する。
 
 ---
 
+
+9. 報告メッセージに SHA を貼り直すな（R-8）。報告本体はディスク上のファイル、提出はパスと SHA-256 のみ。転記面をゼロにする。
+10. D-2 封緘は output/ tmp/ xcarchive/ipa/実GGUF を除外し、.gitignore で恒久化する。 gen/apple は再生成 byte 一致を示してからコミット。
 
 ## 4. macOS 配布・公証 (Code Signing & Notarization) Skills
 

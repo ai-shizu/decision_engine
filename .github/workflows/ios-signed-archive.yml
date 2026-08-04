@@ -1,0 +1,64 @@
+# T4-D D-4 — signed Archive lane DISARMED.
+#
+# C-2=UNPAID_PERSONAL_TEAM (commander confirmed 2026-08-04).
+# Distribution certificate cannot be issued → secrets/vars/environment/runner
+# have nothing to hold. Do NOT speculative-wire armed steps.
+#
+# Triggers: workflow_dispatch ONLY (push:main removed — would paint main RED forever).
+# pull_request / pull_request_target FORBIDDEN (PUBLIC × self-hosted).
+# continue-on-error / if: false / neutral greenwashing FORBIDDEN.
+name: ios-signed-archive
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirm_main_sha:
+        description: "Exact current origin/main 40-hex SHA (dispatch only)"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ios-signed-archive
+  cancel-in-progress: false
+
+jobs:
+  preflight-unpaid-block:
+    name: preflight (C-2 unpaid — disarmed)
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+
+      - name: Pin target SHA (reject non-main dispatch)
+        id: pin
+        env:
+          DISPATCH_SHA: ${{ github.event.inputs.confirm_main_sha }}
+        run: |
+          set -euo pipefail
+          TARGET="$(git rev-parse HEAD)"
+          [[ "$DISPATCH_SHA" =~ ^[0-9a-f]{40}$ ]] || {
+            echo "confirm_main_sha must be exact 40-hex"
+            exit 1
+          }
+          MAIN_SHA="$(git rev-parse origin/main 2>/dev/null || git rev-parse main)"
+          test "$DISPATCH_SHA" = "$MAIN_SHA"
+          test "$TARGET" = "$MAIN_SHA"
+          echo "target_sha=$TARGET" >> "$GITHUB_OUTPUT"
+          echo "confirm_main_sha OK: $TARGET"
+
+      - name: Preflight — C-2 unpaid blocks arming (upstream reason)
+        run: |
+          set -euo pipefail
+          echo "C-2=UNPAID_PERSONAL_TEAM"
+          echo "BLOCKED_EXTERNAL_PREREQUISITE: no Apple Developer Program membership"
+          echo "  → distribution certificate cannot be issued"
+          echo "  → secrets/vars/environment/runner have nothing to hold"
+          echo "NOTE: this is not 'secrets unset' — issuance is impossible on unpaid Personal Team"
+          echo "NOT MEASURED: signed Archive / IPA (lane disarmed)"
+          echo "NOT MEASURED: real GGUF three-point on Archive path"
+          exit 1

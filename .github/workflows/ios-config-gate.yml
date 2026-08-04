@@ -1,0 +1,156 @@
+# T4-D — iOS config / static contract gate (PR lane).
+#
+# Measures regenerable canonical iOS config + FORCE_COLOR matrix + full
+# gen/apple manifest. Does NOT measure signing / Archive/IPA / real GGUF /
+# physical-device HMR. PUBLIC repo: GitHub-hosted macOS only.
+name: ios-config-gate
+
+on:
+  pull_request:
+  push:
+    branches: [main, master]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  ios-config-contract:
+    name: iOS config contract
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          persist-credentials: false
+
+      - name: Install frontend deps (lockfile; Tauri CLI) BEFORE npx tauri
+        working-directory: apps/desktop
+        run: |
+          set -euo pipefail
+          npm ci --ignore-scripts
+          npx --no-install tauri --version
+
+      - name: Install XcodeGen policy-pinned (SHA-256 frozen; no brew)
+        run: |
+          set -euo pipefail
+          chmod +x scripts/ios_install_xcodegen_pinned.sh
+          bash scripts/ios_install_xcodegen_pinned.sh
+
+      - name: XcodeGen version gate (must match policy)
+        run: |
+          set -euo pipefail
+          EXPECTED="$(python3 -c 'import json;print(json.load(open("apps/desktop/src-tauri/ios/policy/ios-release.policy.json"))["xcodegen_version"])')"
+          GOT="$(xcodegen --version | awk '{print $2}')"
+          echo "xcodegen got=$GOT expected=$EXPECTED"
+          test "$GOT" = "$EXPECTED"
+
+      - name: XcodeGen pin mutation drill (wrong digest / version must RED)
+        run: |
+          set -euo pipefail
+          chmod +x scripts/ios_xcodegen_pin_mutation_drill.sh
+          bash scripts/ios_xcodegen_pin_mutation_drill.sh
+
+      - name: iOS config contract gate (FORCE_COLOR unset)
+        env:
+          T4D_LOG_DIR: ${{ runner.temp }}/t4d-logs
+        run: |
+          set -euo pipefail
+          mkdir -p "$T4D_LOG_DIR"
+          chmod +x scripts/ios_*.sh scripts/ios/*.py scripts/ios/*.sh 2>/dev/null || true
+          env -u FORCE_COLOR -u NO_COLOR -u CLICOLOR -u CLICOLOR_FORCE \
+            bash scripts/ios_config_contract_gate.sh
+          echo "SIGNING: NOT MEASURED"
+          echo "ARCHIVE/IPA: NOT MEASURED"
+          echo "REAL GGUF THREE-POINT: NOT MEASURED"
+          echo "PHYSICAL-DEVICE HMR: NOT MEASURED"
+
+      - name: Upload config receipts (no secrets / no IPA / no GGUF)
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: ios-config-contract-receipts
+          path: |
+            ${{ runner.temp }}/t4d-logs/**
+          if-no-files-found: error
+
+  ios-rust-lib-check-sim:
+    name: iOS Rust lib check (sim)
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          persist-credentials: false
+
+      - name: Install frontend deps + build real dist/ (tauri generate_context requires frontendDist)
+        working-directory: apps/desktop
+        run: |
+          set -euo pipefail
+          npm ci --ignore-scripts
+          npm run build
+          test -d dist
+          test -n "$(find dist -type f | head -1)"
+          echo "frontendDist: PRESENT apps/desktop/dist (real vite build — not a placeholder)"
+
+      - name: Create NOTGGUF placeholder (Rust-only check — NOT real GGUF)
+        run: |
+          set -euo pipefail
+          mkdir -p "$GITHUB_WORKSPACE/apps/desktop/models"
+          printf 'NOTGGUF\n' > "$GITHUB_WORKSPACE/apps/desktop/models/pocket-brain.gguf"
+          echo "REAL GGUF THREE-POINT: NOT MEASURED"
+          echo "NOTE: this job is Rust lib cargo check only — not an Xcode simulator app build"
+
+      - name: Install Rust iOS simulator target
+        run: |
+          set -euo pipefail
+          rustup target add aarch64-apple-ios-sim
+          rustup target list --installed | grep -qx aarch64-apple-ios-sim
+
+      - name: cargo check aarch64-apple-ios-sim (pocket-brain,secure-vault,flavor-live)
+        working-directory: apps/desktop/src-tauri
+        run: |
+          set -euo pipefail
+          test -d ../dist
+          cargo check \
+            --target aarch64-apple-ios-sim \
+            --features pocket-brain,secure-vault,flavor-live \
+            --lib
+          echo "SIGNING: NOT MEASURED"
+          echo "ARCHIVE/IPA: NOT MEASURED"
+          echo "REAL GGUF THREE-POINT: NOT MEASURED"
+          echo "PHYSICAL-DEVICE HMR: NOT MEASURED"
+
+  # D-3: prove ios_archive_scan.sh is reachable from CI without a signing identity.
+  # Fixtures only; gguf_three_point_sha_gate.sh unmodified.
+  # E-1: ios_archive_scan.sh S-5 positive control may gain Mach-O path (P-2 exception).
+  archive-scan-wiring:
+    name: archive-scan-wiring
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          persist-credentials: false
+
+      - name: Fixture RED/GREEN matrix for ios_archive_scan.sh (T4B_ONLY)
+        run: |
+          set -euo pipefail
+          chmod +x scripts/ios_archive_scan.sh scripts/ios_archive_scan_wiring.sh \
+            scripts/gguf_three_point_sha_gate.sh scripts/ios/count_lan_strings.py
+          bash scripts/ios_archive_scan_wiring.sh
+
+  # F-2-e: locale regression for count_lan_strings (byte-scan). Asserts identical
+  # occurrence counts across LC_ALL=C / en_US.UTF-8 / unset × text/macho/binary_plist.
+  # grep columns are informational only — never used for pass/fail.
+  s5-grep-diagnostic:
+    name: s5-grep-diagnostic
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          persist-credentials: false
+
+      - name: S-5 locale regression (count_lan_strings assert)
+        run: |
+          set -euo pipefail
+          chmod +x scripts/ios_s5_grep_diagnostic.sh scripts/ios_archive_scan.sh \
+            scripts/ios/count_lan_strings.py
+          bash scripts/ios_s5_grep_diagnostic.sh

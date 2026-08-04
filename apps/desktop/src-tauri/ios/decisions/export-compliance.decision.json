@@ -1,0 +1,15 @@
+{
+  "decision_kind": "ios_export_compliance",
+  "status": "UNAPPROVED",
+  "decision_id": null,
+  "approver": null,
+  "approved_at": null,
+  "jurisdiction": null,
+  "crypto_inventory_digest": null,
+  "its_app_uses_non_exempt_encryption": null,
+  "rationale": "No approved legal decision record exists for ITSAppUsesNonExemptEncryption. Do not guess or ratify the plist value. Archive is forbidden until decision_id, approver, jurisdiction, crypto_inventory_digest, and plist value all match an APPROVED record.",
+  "notes": [
+    "Info.ios.plist currently contains ITSAppUsesNonExemptEncryption; that presence is not an approval.",
+    "Changing or confirming the boolean without an ADR is prohibited."
+  ]
+}
