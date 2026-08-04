@@ -601,7 +601,7 @@ Info.plist / embedded.mobileprovision / pocket-brain.gguf の**明示スコー�
 - hosted に Apple 署名 ID が無いとき、ad-hoc (`codesign -s -`) の S-3 は **exit 28 fail-closed**（23 ではない）。全走査も 28。これは欠陥ではなく計器が生きている証拠。
 - S-6 実 GGUF / 署名 Archive / 物理 HMR は NOT MEASURED。緑の範囲を同時に述べよ。
 - C-2=UNPAID では署名レーンは **disarmed のみ**（`workflow_dispatch` のみ・`push:main` 禁止）。preflight は「secrets 未設定」ではなく **発行不能** と書け。
-- ruleset 必須 11 件に `archive-scan-wiring` / `ios-signed-archive` を実測前・武装不能時に入れるな。
+- ruleset の必須チェックに `archive-scan-wiring` / `ios-signed-archive` を実測前・武装不能時に入れるな。
 - Personal Team の S-3（get-task-allow）は永久 RED — ゲート正常。直す対象ではない。
 
 **T4-D ハマりどころ:**
