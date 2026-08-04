@@ -19,14 +19,16 @@ ExpirationDate = 2026-08-06 13:38:43 UTC
 
 ---
 
-## C-1 — 実機 dev ループの再署名
+## C-1 — 実機 dev ループの再署名（**7 日周期の恒常タスク**）
 
 | 項目 | 内容 |
 |---|---|
-| **期限** | **2026-08-06 13:38:43Z まで**（失効後は実機アプリ起動不能） |
-| **目的** | Tier3 実機・HMR・実機 CONSULT 検証を継続する |
-| **費用** | 無償 Apple ID で可 |
-| **注意** | 再署名後も **再び約 7 日で失効**する。Archive 用 Distribution にはならない |
+| **性質** | **一回限りではない。** 無償 Personal Team の Development プロファイルは **約 7 日で失効**する |
+| **次回失効（基準）** | **2026-08-06 13:38:43Z**（UUID `bc9298a3-5ad3-40ae-b225-751814cff088`） |
+| **以後の失効** | 各再署名日の **+7 日**（再署名のたびにカレンダーを更新） |
+| **目的** | Tier 3 実機・HMR・実機 CONSULT 検証を継続する。**Tier 3 は本周期に律速される** |
+| **費用** | 無償 Apple ID で可（Archive / Distribution にはならない） |
+| **注意** | 再署名しても **再び約 7 日で失効**する。このプロファイルを Archive レーンに差し込むな |
 
 ### 手順
 
@@ -34,13 +36,13 @@ ExpirationDate = 2026-08-06 13:38:43 UTC
 2. Xcode で `apps/desktop` の iOS ワークスペース／プロジェクトを開く（既存の `tauri ios dev` / Xcode Run 経路）。
 3. Signing & Capabilities で Team を選択し、**Automatically manage signing**（Development）で実機向けに再署名する。
 4. 実機へ Run / インストールし、起動できることを確認する。
-5. 再署名後、実装担当に依頼してよい検証（指揮官が実行しなくてよい）:
+5. **残余秒数を自分で測る**（実装担当不要）:
    ```bash
    bash scripts/ios_provisioning_probe.sh \
      "<再署名後の .app または embedded.mobileprovision>"
    ```
    - 期待: `profile_class=DEVELOPMENT` / `get_task_allow=true` / **exit 23**（Release 禁止の証明）
-   - `seconds_remaining` と `expiration_utc` を記録し、次の失効日をカレンダーに入れる
+   - `seconds_remaining` と `expiration_utc` を記録し、**次の失効日（再署名日 +7 日）**をカレンダーに入れる
 6. **やってはならないこと**: この Development プロファイルを `IOS_MOBILE_PROVISION` として CI 署名 Archive に登録すること。
 
 ---
@@ -142,10 +144,24 @@ ExpirationDate = 2026-08-06 13:38:43 UTC
 ## 依存関係（要約）
 
 ```
-C-1（実機 8/6 まで） ── 独立。無償でも実施可。Archive とは別物。
-C-2（有償確認） ─── 否 → Archive 武装は BLOCKED_EXTERNAL_PREREQUISITE
-                 └─ 是 → C-3 → C-4 → C-5 → はじめて Archive レーン武装可
+C-1（実機・7 日周期） ── 独立。無償でも実施必須。Archive とは別物。Tier 3 律速。
+C-2（有償確認） ─── UNPAID_PERSONAL_TEAM 確定
+                 → C-3 発行不可 / C-4・C-5 対象なし / TestFlight・App Store 不可
+                 → 署名 Archive レーン = BLOCKED_EXTERNAL_PREREQUISITE（恒久・本フェーズ）
+C-2=PAID になった場合のみ → C-3 → C-4 → C-5 → Archive レーン武装可
 ```
+
+## C-2=UNPAID 確定後の帰結（指示書 §3.4）
+
+| 項目 | 確定した状態 |
+|---|---|
+| C-3 Distribution 証明書 | **発行不可** |
+| C-4 Secrets / Variable / Environment | **登録する対象が存在しない** |
+| C-5 self-hosted runner | **同上。用意しても署名するものが無い** |
+| 署名 Archive レーン | **`BLOCKED_EXTERNAL_PREREQUISITE`（恒久・本フェーズでは武装しない）** |
+| TestFlight / App Store / Ad Hoc 配布 | **いずれも不可** |
+| C-1 実機再署名 | **7 日ごとの恒常タスク**（一回限りではない） |
+| S-3 on Personal Team archives | **永久 RED**（`get-task-allow=true` を外せない — ゲート正常） |
 
 ## 実装担当が実施しないこと（再掲）
 
@@ -155,10 +171,13 @@ C-2（有償確認） ─── 否 → Archive 武装は BLOCKED_EXTERNAL_PRERE
 
 ## C-2 実行結果（指揮官確定）
 
+**訂正（2026-08-04）:** 下記表は当初 `C-2=PAID`（有償・Distribution 発行可）と誤記録していた。指揮官がその通達を中断・撤回し、確定値は `C-2=UNPAID_PERSONAL_TEAM` である。黙った差し替えではなく、誤った主張と正しい値を残す。
+
 | 項目 | 値 |
 |---|---|
-| 結果 | `C-2=PAID` |
-| 意味 | Apple Developer Program 有償。C-3 以降の Distribution 発行が可能 |
-| 記録日 | 2026-08-04（指揮官通達） |
+| ~~誤記録（撤回）~~ | ~~`C-2=PAID` — Apple Developer Program 有償。C-3 以降の Distribution 発行が可能~~ |
+| **確定結果** | **`C-2=UNPAID_PERSONAL_TEAM`** |
+| **意味** | 無償 Personal Team。C-3 以降の Distribution は発行不能。署名 Archive は `BLOCKED_EXTERNAL_PREREQUISITE` |
+| 記録日 | 2026-08-04（指揮官確定。有償通達は中断・撤回） |
 | 実装担当 | 未実行（本記録は通達の反映のみ） |
 
