@@ -44,7 +44,9 @@ out = Path(sys.argv[2])
 
 # 64-hex first so 40-hex extraction does not slice digests
 hex64 = sorted(set(re.findall(r"\b[0-9a-f]{64}\b", text)))
-hex40 = sorted(set(re.findall(r"\b[0-9a-f]{40}\b", text)))
+hex40_all = sorted(set(re.findall(r"\b[0-9a-f]{40}\b", text)))
+# A 64-hex contains 40-hex substrings; do not treat those slices as git objects.
+hex40 = sorted(h for h in hex40_all if not any(h in g for g in hex64))
 # ISO8601 (date required; time optional; Z or offset)
 iso = sorted(set(re.findall(
     r"\b\d{4}-\d{2}-\d{2}(?:[T ]\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})?)?\b",
