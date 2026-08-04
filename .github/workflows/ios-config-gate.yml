@@ -30,16 +30,25 @@ jobs:
           npm ci --ignore-scripts
           npx --no-install tauri --version
 
-      - name: Pin XcodeGen exact version
+      - name: Install XcodeGen policy-pinned (SHA-256 frozen; no brew)
+        run: |
+          set -euo pipefail
+          chmod +x scripts/ios_install_xcodegen_pinned.sh
+          bash scripts/ios_install_xcodegen_pinned.sh
+
+      - name: XcodeGen version gate (must match policy)
         run: |
           set -euo pipefail
           EXPECTED="$(python3 -c 'import json;print(json.load(open("apps/desktop/src-tauri/ios/policy/ios-release.policy.json"))["xcodegen_version"])')"
-          if ! command -v xcodegen >/dev/null 2>&1; then
-            brew install xcodegen
-          fi
           GOT="$(xcodegen --version | awk '{print $2}')"
           echo "xcodegen got=$GOT expected=$EXPECTED"
           test "$GOT" = "$EXPECTED"
+
+      - name: XcodeGen pin mutation drill (wrong digest / version must RED)
+        run: |
+          set -euo pipefail
+          chmod +x scripts/ios_xcodegen_pin_mutation_drill.sh
+          bash scripts/ios_xcodegen_pin_mutation_drill.sh
 
       - name: iOS config contract gate (FORCE_COLOR unset)
         env:
@@ -72,6 +81,16 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Install frontend deps + build real dist/ (tauri generate_context requires frontendDist)
+        working-directory: apps/desktop
+        run: |
+          set -euo pipefail
+          npm ci --ignore-scripts
+          npm run build
+          test -d dist
+          test -n "$(find dist -type f | head -1)"
+          echo "frontendDist: PRESENT apps/desktop/dist (real vite build — not a placeholder)"
+
       - name: Create NOTGGUF placeholder (Rust-only check — NOT real GGUF)
         run: |
           set -euo pipefail
@@ -90,6 +109,7 @@ jobs:
         working-directory: apps/desktop/src-tauri
         run: |
           set -euo pipefail
+          test -d ../dist
           cargo check \
             --target aarch64-apple-ios-sim \
             --features pocket-brain,secure-vault,flavor-live \
@@ -100,7 +120,8 @@ jobs:
           echo "PHYSICAL-DEVICE HMR: NOT MEASURED"
 
   # D-3: prove ios_archive_scan.sh is reachable from CI without a signing identity.
-  # Fixtures only; ios_archive_scan.sh / gguf_three_point_sha_gate.sh unmodified.
+  # Fixtures only; gguf_three_point_sha_gate.sh unmodified.
+  # E-1: ios_archive_scan.sh S-5 positive control may gain Mach-O path (P-2 exception).
   archive-scan-wiring:
     name: archive-scan-wiring
     runs-on: macos-14
