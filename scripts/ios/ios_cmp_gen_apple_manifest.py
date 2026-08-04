@@ -28,6 +28,14 @@ def manifest(root: Path) -> dict[str, str]:
         rel = path.relative_to(root).as_posix()
         if rel == "build" or rel.startswith("build/"):
             continue
+        # Per-user Xcode UI state (window layout, navigator selection). Never
+        # emitted by ios_regenerate_tree.sh and untracked by git, so a fresh CI
+        # checkout has none while any machine that has opened Xcode does — the
+        # comparison would then pass in CI and fail locally for the same commit.
+        # That bites on a schedule: the unpaid Personal Team profile expires
+        # every 7 days and the re-sign (C-1) requires opening Xcode.
+        if "xcuserdata" in path.relative_to(root).parts:
+            continue
         out[rel] = file_digest(path)
     return out
 

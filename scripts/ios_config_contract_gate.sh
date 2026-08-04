@@ -18,9 +18,13 @@ LOG="$LOG_DIR/ios_config_contract.log"
 if [[ "${T4D_CONFIG_GATE_INNER:-}" != 1 ]]; then
   export T4D_CONFIG_GATE_INNER=1
   # Default gate run: FORCE_COLOR must be unset for the recorded GREEN path.
+  # `|| EC=$?` is load-bearing: under `set -e` a bare failing command aborts the
+  # shell here, so `cat "$LOG"` never runs and a RED gate prints NOTHING at all —
+  # the diagnosis is written to $LOG and never reaches the reader. Measured
+  # 2026-08-04: exit 1, zero bytes on stdout. Keep the failure path printing.
+  EC=0
   env -u FORCE_COLOR -u NO_COLOR -u CLICOLOR -u CLICOLOR_FORCE \
-    bash "$0" "$@" >"$LOG" 2>&1
-  EC=$?
+    bash "$0" "$@" >"$LOG" 2>&1 || EC=$?
   cat "$LOG"
   exit "$EC"
 fi
