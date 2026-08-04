@@ -261,6 +261,13 @@ impl Session {
         &self.books
     }
 
+    /// Test-only: reach the books so a positive-control test can plant the
+    /// corruption that `die()` is designed to catch. Not a production seam.
+    #[cfg(test)]
+    pub(crate) fn test_books_mut(&mut self) -> &mut SimBooks {
+        &mut self.books
+    }
+
     /// The published market view — the ONLY market information that leaves
     /// this module (wall W-a). `None` before the first observation.
     #[must_use]

@@ -990,19 +990,38 @@ pub(crate) const fn arena_terminal_codes(
     }
 }
 
+/// Platform-free judgment behind [`log_arena_terminal_ios`]: which OSLog
+/// labels/values a terminal session would emit. Ungated so host tests can
+/// prove the instrument produces a non-zero `arena.dead_reason` without
+/// standing on an iOS runner (T4-E-2 / §4.2 — same extract pattern as moving
+/// pure logic out from under `cfg(target_os = "ios")`).
+pub(crate) const fn arena_terminal_metrics(
+    state: crate::blackbox_sim::fsm::SessionState,
+    turns: u32,
+) -> [(&'static str, u64); 3] {
+    let (sealed, reason) = arena_terminal_codes(state);
+    [
+        ("arena.sealed", sealed),
+        ("arena.dead_reason", reason),
+        ("arena.turns_completed", turns as u64),
+    ]
+}
+
 /// Release-visible terminal evidence. The arena's own diagnostics are
 /// `eprintln!`, which iOS Release discards (G-0R) — so a campaign that died of
 /// an invariant breach was indistinguishable, on device, from one the operator
 /// simply stopped advancing. This is the same hole G-5's import and G-4's
 /// flavor each fell into, closed the same way: numeric OSLog through the path
 /// P0-6 proved survives.
+///
+/// Judgment lives in [`arena_terminal_metrics`]; this gate is the FFI boundary
+/// only (`log_model_u64` → OSLog).
 #[cfg(target_os = "ios")]
 fn log_arena_terminal_ios(state: crate::blackbox_sim::fsm::SessionState, turns: u32) {
     use crate::ios_oslog::log_model_u64;
-    let (sealed, reason) = arena_terminal_codes(state);
-    log_model_u64("arena.sealed", sealed);
-    log_model_u64("arena.dead_reason", reason);
-    log_model_u64("arena.turns_completed", u64::from(turns));
+    for (label, value) in arena_terminal_metrics(state, turns) {
+        log_model_u64(label, value);
+    }
 }
 
 #[cfg(test)]
@@ -1138,6 +1157,96 @@ mod tests {
                 "{reason:?} must map to its own code"
             );
         }
+    }
+
+    /// Drive a real session into `Dead` via execute()'s InventoryDesync →
+    /// InternalInvariantBroken site (the only FailureReason whose production
+    /// `die()` arm is fireable under Session driving — see T4-E H-1), then
+    /// assert the ungated instrument emits code 4. Does not construct
+    /// `SessionState::Dead` by hand (T4-E-2 H-3).
+    #[test]
+    fn driven_session_inventory_desync_emits_dead_reason_4() {
+        use crate::blackbox_sim::director::Session;
+        use crate::blackbox_sim::fsm::FailureReason;
+        use crate::blackbox_sim::ledger::AccountCode;
+        use crate::blackbox_sim::telemetry::ActionIntent;
+
+        let mut session = ok(Session::start(request()));
+        ok(session.observe());
+        ok(session.submit(ActionIntent::Abstain, None));
+        // Plant ledger/firm inventory desync — operate_tick's boundary check.
+        session
+            .test_books_mut()
+            .balances
+            .test_add_unchecked(AccountCode::Inventory, 1);
+        assert!(
+            session.execute().is_err(),
+            "operate_tick must die on inventory desync"
+        );
+        assert!(
+            matches!(
+                session.state(),
+                SessionState::Dead {
+                    reason: FailureReason::InternalInvariantBroken
+                }
+            ),
+            "expected InternalInvariantBroken dead, got {:?}",
+            session.state()
+        );
+        let metrics = arena_terminal_metrics(session.state(), session.turns_completed());
+        assert_eq!(metrics[0], ("arena.sealed", 1));
+        assert_eq!(metrics[1], ("arena.dead_reason", 4));
+        assert_eq!(
+            metrics[2],
+            (
+                "arena.turns_completed",
+                u64::from(session.turns_completed())
+            )
+        );
+    }
+
+    /// H-1 companion: balance poison that would be needed to disagree the
+    /// cash-flow statement is intercepted by `apply_plans`' zero-sum check
+    /// and dies as InternalInvariantBroken (code 4), never AccountingBreach
+    /// (code 1). Documents why code 1 is excluded from the H-3 positive control.
+    #[test]
+    fn unbalanced_books_die_as_internal_invariant_not_accounting_breach() {
+        use crate::blackbox_sim::director::Session;
+        use crate::blackbox_sim::fsm::FailureReason;
+        use crate::blackbox_sim::ledger::AccountCode;
+        use crate::blackbox_sim::settle::TICKS_PER_QUARTER;
+        use crate::blackbox_sim::telemetry::ActionIntent;
+
+        let mut session = ok(Session::start(request()));
+        for _ in 0..(TICKS_PER_QUARTER - 1) {
+            ok(session.observe());
+            ok(session.submit(ActionIntent::Abstain, None));
+            ok(session.execute());
+            ok(session.settle());
+            ok(session.report());
+        }
+        ok(session.observe());
+        ok(session.submit(ActionIntent::Abstain, None));
+        ok(session.execute());
+        session
+            .test_books_mut()
+            .balances
+            .test_add_unchecked(AccountCode::OperatingExpense, 1);
+        assert!(session.settle().is_err());
+        assert!(
+            matches!(
+                session.state(),
+                SessionState::Dead {
+                    reason: FailureReason::InternalInvariantBroken
+                }
+            ),
+            "unbalanced books must not be reported as AccountingBreach; got {:?}",
+            session.state()
+        );
+        assert_eq!(
+            arena_terminal_metrics(session.state(), session.turns_completed())[1],
+            ("arena.dead_reason", 4)
+        );
     }
 
     fn request() -> GenesisRequest {
