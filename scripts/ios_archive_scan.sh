@@ -37,7 +37,7 @@ NM_NETWORK_RE='_socket$|_connect$|getaddrinfo|CFNetwork|nw_'
 OTOOL_NETWORK_RE='Network\.framework|CFNetwork\.framework'
 ENTITLEMENT_NETWORK_RE='com\.apple\.security\.network\.(client|server)|com\.apple\.developer\.networking\.|com\.apple\.developer\.associated-domains'
 PLIST_NETWORK_KEY_RE='NSAppTransportSecurity|NSAllowsArbitraryLoads|NSAllowsArbitraryLoadsInWebContent|NSAllowsLocalNetworking|NSExceptionDomains|NSLocalNetworkUsageDescription|NSBonjourServices|UIRequiresPersistentWiFi'
-# S-5: must catch CIDR (no :// / :port required) AND classic dev URLs — grep -a, never strings(1)
+# S-5: must catch CIDR (no :// / :port required) AND classic dev URLs — byte-scan, never strings(1)/locale-grep
 LAN_STRING_RE='10\.0\.0\.0/8|172\.16\.0\.0/12|192\.168\.0\.0/16|169\.254\.0\.0/16|://(10|172|192)\.[0-9]+\.[0-9]+\.[0-9]+(:[0-9]+)?|localhost:[0-9]+|127\.0\.0\.1:[0-9]+'
 
 APP="${1:-$DEFAULT_APP}"
@@ -178,12 +178,23 @@ count_plist_network_keys() {
 }
 
 count_lan_strings() {
-  # $1 = file path (binary or text); uses grep -a (NOT strings).
-  # Prefer match-list | wc — BSD grep -c/-o pairing under-counts.
-  # grep exit 1 on zero matches must not trip pipefail.
-  local n
-  n="$( { grep -aoE "$LAN_STRING_RE" "$1" 2>/dev/null || true; } | wc -l | tr -d ' ')"
-  echo "${n:-0}"
+  # $1 = file path (binary or text). Byte scan — never grep (F-2 / F-1 locale defect).
+  # Counts non-overlapping ERE matches of LAN_STRING_RE (same as former grep -aoE | wc -l).
+  # COUNT_LAN_STRINGS_HELPER: mutation-drill override only (default = scripts/ios/count_lan_strings.py).
+  local path="$1"
+  local helper="${COUNT_LAN_STRINGS_HELPER:-$ROOT/scripts/ios/count_lan_strings.py}"
+  if [[ ! -f "$helper" ]]; then
+    echo "INTERNAL: missing $helper" >&2
+    exit 1
+  fi
+  python3 "$helper" "$path" "$LAN_STRING_RE"
+}
+
+list_lan_strings() {
+  # Best-effort match listing for RED diagnostics (byte-safe, no locale grep).
+  local path="$1"
+  local helper="${COUNT_LAN_STRINGS_HELPER:-$ROOT/scripts/ios/count_lan_strings.py}"
+  python3 "$helper" "$path" "$LAN_STRING_RE" --list 2>/dev/null | head -20 || true
 }
 
 # ---------------------------------------------------------------------------
@@ -256,25 +267,23 @@ EOF
   fi
   echo "S-4 control: OK detected=${n} (planted NSAppTransportSecurity / NSLocalNetworkUsageDescription)"
 
-  # S-5: CIDR without :// or :port — the hole that made the old detector blind
-  # Also prove grep -a finds UTF-8 (Japanese) adjacent to LAN marker (strings would miss JP)
+  # S-5: CIDR without :// or :port — the hole that made the old detector blind.
   # TEXT control (kept): regex fires on a plain file.
   printf 'marker 10.0.0.0/8 開発用LAN\n' >"$WORK/control_lan.bin"
   n="$(count_lan_strings "$WORK/control_lan.bin")"
   if [[ "$n" -lt 1 ]]; then
     fail_control "S-5" "LAN/CIDR pattern matched 0 on planted CIDR (10.0.0.0/8) — old ://:port hole unrepaired"
   fi
-  # Prove old regex is blind to this sample (documentation of why S-5 exists)
+  # Prove old ://:port-only regex is blind to this sample (documentation of why S-5 exists)
   local old_hits
   old_hits="$( { grep -aoE '://(10|172|192)\.[0-9]+\.[0-9]+\.[0-9]+:[0-9]+' "$WORK/control_lan.bin" 2>/dev/null || true; } | wc -l | tr -d ' ')"
-  echo "S-5 control: OK text detected=${n} CIDR via grep -a; old_://:port_regex_hits=${old_hits:-0} (expect 0)"
+  echo "S-5 control: OK text detected=${n} CIDR via byte-scan; old_://:port_regex_hits=${old_hits:-0} (expect 0)"
 
   # Mach-O control (T4-D E-1): production scan_target is Coraxis (Mach-O), not a text file.
-  # Vacuous-green hole: text-only control proved the regex, not the Mach-O input class.
   require_cmd clang file
   cat >"$WORK/control_lan.c" <<'EOF'
 #include <stdio.h>
-/* Planted for S-5 positive control — must remain visible to grep -a on the linked Mach-O. */
+/* Planted for S-5 positive control — must remain visible to byte-scan on the linked Mach-O. */
 static const char planted[] = "marker 10.0.0.0/8 開発用LAN";
 int main(void) { puts(planted); return 0; }
 EOF
@@ -287,7 +296,47 @@ EOF
   if [[ "$macho_hits" -lt 1 ]]; then
     fail_control "S-5" "LAN/CIDR pattern matched 0 on clang-built Mach-O control (text control alone is vacuous)"
   fi
-  echo "S-5 control: OK macho detected=${macho_hits} CIDR via grep -a on clang -O0 Mach-O"
+  echo "S-5 control: OK macho detected=${macho_hits} CIDR via byte-scan on clang -O0 Mach-O"
+
+  # Binary Info.plist control (T4-D F-2-b): production .app Info.plist is Apple binary plist.
+  # XML fixture alone does not prove the binary-plist input class.
+  # IMPORTANT: plant ASCII-only. A string containing CJK is stored as UTF-16 in bplist00,
+  # which would make an ASCII CIDR regex vacuous (same class-gap as XML-vs-binary).
+  require_cmd plutil
+  cat >"$WORK/control_lan_info.xml.plist" <<'EOF'
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleIdentifier</key>
+	<string>control.lan</string>
+	<key>PlantedLANMarker</key>
+	<string>marker 10.0.0.0/8 http://192.168.1.1:1420</string>
+</dict>
+</plist>
+EOF
+  plutil -convert binary1 -o "$WORK/control_lan_info.binary.plist" "$WORK/control_lan_info.xml.plist"
+  if ! file "$WORK/control_lan_info.binary.plist" | grep -qi 'binary property list\|data'; then
+    # file(1) may say "Apple binary property list" or "data"
+    if ! plutil -p "$WORK/control_lan_info.binary.plist" >/dev/null 2>&1; then
+      fail_control "S-5" "failed to build binary Info.plist positive control"
+    fi
+  fi
+  # Confirm it is not XML text (vacuous XML would hide the class gap)
+  if head -c 8 "$WORK/control_lan_info.binary.plist" | grep -q '<?xml'; then
+    fail_control "S-5" "binary plist control unexpectedly still XML"
+  fi
+  # Confirm ASCII CIDR bytes survived bplist encoding (UTF-16 plant would be a vacuous control)
+  if ! python3 -c "import sys; d=open(sys.argv[1],'rb').read(); sys.exit(0 if b'10.0.0.0/8' in d else 1)" \
+      "$WORK/control_lan_info.binary.plist"; then
+    fail_control "S-5" "binary plist control lacks ASCII 10.0.0.0/8 bytes (UTF-16 elision?)"
+  fi
+  local bplist_hits
+  bplist_hits="$(count_lan_strings "$WORK/control_lan_info.binary.plist")"
+  if [[ "$bplist_hits" -lt 1 ]]; then
+    fail_control "S-5" "LAN/CIDR pattern matched 0 on binary Info.plist control (XML/Mach-O alone are vacuous)"
+  fi
+  echo "S-5 control: OK binary_plist detected=${bplist_hits} CIDR via byte-scan on plutil binary1"
 
   # S-6: planted wrong-size file must fail size/sha check logic
   printf 'not-a-gguf' >"$WORK/control_gguf.bin"
@@ -463,7 +512,7 @@ check_s4() {
 check_s5() {
   local bin="$APP/Coraxis"
   local plist="$APP/Info.plist"
-  echo "--- S-5: dev URL / LAN host / CIDR strings (grep -a, not strings) ---"
+  echo "--- S-5: dev URL / LAN host / CIDR strings (byte-scan, not grep/strings) ---"
   echo "scan_target: $bin"
   echo "scan_target: $plist"
   local total=0
@@ -497,16 +546,15 @@ check_s5() {
 
   if [[ "$total" -gt 0 ]]; then
     echo "S-5: RED total_hits=${total}"
-    # Show matching lines/context where feasible (plist xml / binary strings via grep -a)
     if [[ -f "$plist" ]]; then
-      grep -aoE "$LAN_STRING_RE" "$plist" | sort -u | head -20 || true
+      list_lan_strings "$plist" | sed 's/^/S-5 plist_match: /' || true
     fi
     if [[ -f "$bin" ]]; then
-      grep -aoE "$LAN_STRING_RE" "$bin" | sort -u | head -20 || true
+      list_lan_strings "$bin" | sed 's/^/S-5 binary_match: /' || true
     fi
     record_fail 25
   else
-    echo "S-5: GREEN total_hits=0 (measured via grep -a on listed targets)"
+    echo "S-5: GREEN total_hits=0 (measured via byte-scan on listed targets)"
   fi
 }
 
@@ -602,7 +650,18 @@ if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
   die_usage
 fi
 
-require_cmd nm otool codesign plutil security grep mktemp date
+# F-2-e / external callers: invoke the S-5 counter without scanning an .app
+if [[ "${1:-}" == "--count-lan-strings" ]]; then
+  if [[ $# -ne 2 ]]; then
+    echo "usage: $0 --count-lan-strings <path>" >&2
+    exit 1
+  fi
+  require_cmd python3
+  count_lan_strings "$2"
+  exit 0
+fi
+
+require_cmd nm otool codesign plutil security grep mktemp date python3
 if ! command -v shasum >/dev/null 2>&1 && ! command -v sha256sum >/dev/null 2>&1; then
   echo "INTERNAL: need shasum or sha256sum" >&2
   exit 1

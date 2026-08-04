@@ -134,12 +134,12 @@ jobs:
         run: |
           set -euo pipefail
           chmod +x scripts/ios_archive_scan.sh scripts/ios_archive_scan_wiring.sh \
-            scripts/gguf_three_point_sha_gate.sh
+            scripts/gguf_three_point_sha_gate.sh scripts/ios/count_lan_strings.py
           bash scripts/ios_archive_scan_wiring.sh
 
-  # F-1: diagnose why grep misses in-Mach-O LAN markers. Does NOT modify count_lan_strings.
-  # Always exit 0 when the 15-cell matrix is complete — this is diagnosis, not a gate.
-  # Leave archive-scan-wiring RED until F-2 changes the detector with evidence.
+  # F-2-e: locale regression for count_lan_strings (byte-scan). Asserts identical
+  # occurrence counts across LC_ALL=C / en_US.UTF-8 / unset × text/macho/binary_plist.
+  # grep columns are informational only — never used for pass/fail.
   s5-grep-diagnostic:
     name: s5-grep-diagnostic
     runs-on: macos-14
@@ -148,8 +148,9 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: S-5 grep diagnostic matrix (3 inputs × 5 methods)
+      - name: S-5 locale regression (count_lan_strings assert)
         run: |
           set -euo pipefail
-          chmod +x scripts/ios_s5_grep_diagnostic.sh scripts/ios_archive_scan.sh
+          chmod +x scripts/ios_s5_grep_diagnostic.sh scripts/ios_archive_scan.sh \
+            scripts/ios/count_lan_strings.py
           bash scripts/ios_s5_grep_diagnostic.sh

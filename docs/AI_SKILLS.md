@@ -606,6 +606,9 @@ Info.plist / embedded.mobileprovision / pocket-brain.gguf の**明示スコー�
 - S-3 の `get-task-allow` 禁止は **RELEASE 署名にのみ**適用される。`classify_signing()` が `Apple Distribution` を RELEASE、`Apple Development` を DEV とする。**DEV 署名の `get-task-allow=true` は違反ではなく GREEN**（実測: 実アーカイブ `ALL GREEN` exit=0）。無償 Personal Team は Distribution 権限を取れないため **RELEASE 分類が出現せず、S-3 の release 方針は発動しない**。「永久 RED」ではない — 壊れていないゲートを直しにかかるな。
 - **E-2:** XcodeGen は brew ではなく release zip の SHA-256 ピンで導入。Homebrew 都合で封緘版をダウングレードするな。
 - **E-3:** iOS Rust lib check は `npm run build` で実 `dist/` を建ててから `cargo check`。空 dist で panic を回避するな。
+- **F-2（S-5 検出器）:** `count_lan_strings` は `scripts/ios/count_lan_strings.py` の mmap バイト走査。`grep` / `LC_ALL=C grep` に出荷判定を預けるな（F-1: BSD grep + UTF-8 locale が Mach-O で 0 を返す実測）。`LAN_STRING_RE` は `ios_archive_scan.sh` の単一定義のみ。
+- **F-2 陽性対照は入力クラスを揃える:** text / Mach-O / **Apple binary Info.plist** の 3 つ。XML fixture は binary plist を保証しない。bplist への植込みは **ASCII のみ**（CJK 混入は UTF-16 符号化され ASCII CIDR 正規表現が空洞化する）。
+- **F-2-e:** `s5-grep-diagnostic` は診断恒久グリーンではなく、ロケール 3 種 × 入力 3 クラスで `count_lan_strings` 一致を assert する回帰。grep 列は情報のみ。不一致は非 0。変異ドリル（grep 系 helper）で RED 能力を示せ。
 
 **T4-D ハマりどころ:**
 1. template パスを `ios/...`（src-tauri 相対）にすると
@@ -627,6 +630,8 @@ Info.plist / embedded.mobileprovision / pocket-brain.gguf の**明示スコー�
    disposable copy + 共有 `check_*.py` / 本物の `ios_archive_scan.sh` を呼べ。
 8. GGUF stage 実体を直接 `mv`/破壊するな — `GGUF_GATE_SCRIPT` で
    disposable ROOT を差し替えろ。fresh signed 無しを PASS と書くな。
+9. **対照の入力クラス ≠ 本番の入力クラス** は Vacuous Green の同型欠陥（text≠Mach-O、XML≠binary plist）。陽性対照は走査対象と同じ符号化で組め。
+10. bplist に CJK を混ぜると文字列が UTF-16 になり ASCII バイト走査が沈黙する — 植込みは ASCII。
 
 報告には「何を変えたか」「なぜか」「何で検証したか」を必ず含めろ。テストが通らないまま完了と言うことは、いかなる理由があっても禁止する。
 

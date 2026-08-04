@@ -139,10 +139,30 @@ EOF
   clang -O0 -o "$app/Coraxis" "$FIX_ROOT/_s5.c"
   diagnose_s5_bytes "$app/Coraxis" "pre_append_clang_literal"
   # Permanent plant: compiler-independent append (T4B_ONLY=S-5 does not require valid Mach-O).
-  # Do not remove the clang path above — diagnostics must still show whether the literal survived.
   printf '\nmarker 10.0.0.0/8 http://192.168.1.1:1420\n' >>"$app/Coraxis"
   diagnose_s5_bytes "$app/Coraxis" "post_append"
   write_clean_plist "$app/Info.plist"
+  printf '%s\n' "$app"
+}
+
+mk_s5_red_bplist() {
+  # F-2-c: violation lives in Apple binary Info.plist (production input class).
+  local app
+  app="$(mk_green_base "red-s5-bplist")"
+  build_clean_bin "$app/Coraxis"
+  write_clean_plist "$app/Info.plist"
+  plutil -insert PlantedLANMarker -string 'marker 10.0.0.0/8 http://192.168.1.1:1420' "$app/Info.plist"
+  plutil -convert binary1 "$app/Info.plist"
+  printf '%s\n' "$app"
+}
+
+mk_s5_green_bplist() {
+  # Clean binary Info.plist — no LAN markers.
+  local app
+  app="$(mk_green_base "green-s5-bplist")"
+  build_clean_bin "$app/Coraxis"
+  write_clean_plist "$app/Info.plist"
+  plutil -convert binary1 "$app/Info.plist"
   printf '%s\n' "$app"
 }
 
@@ -260,6 +280,8 @@ APP_S1="$(mk_s1_red)"
 APP_S2="$(mk_s2_red)"
 APP_S4="$(mk_s4_red)"
 APP_S5="$(mk_s5_red)"
+APP_S5B="$(mk_s5_red_bplist)"
+APP_S5BG="$(mk_s5_green_bplist)"
 APP_S7R="$(mk_s7_red)"
 APP_S7G="$(mk_s7_green)"
 APP_G="$(mk_green_no_prov)"
@@ -270,6 +292,7 @@ expect_exit "RED-S-1" 21 S-1 "$APP_S1"
 expect_exit "RED-S-2" 22 S-2 "$APP_S2"
 expect_exit "RED-S-4" 24 S-4 "$APP_S4"
 expect_exit "RED-S-5" 25 S-5 "$APP_S5"
+expect_exit "RED-S-5-BPLIST" 25 S-5 "$APP_S5B"
 expect_exit "RED-S-7" 27 S-7 "$APP_S7R"
 
 # GREEN positive controls per check (T4B_ONLY isolates from S-3/S-6)
@@ -277,6 +300,7 @@ expect_exit "GREEN-S-1" 0 S-1 "$APP_G"
 expect_exit "GREEN-S-2" 0 S-2 "$APP_G"
 expect_exit "GREEN-S-4" 0 S-4 "$APP_G"
 expect_exit "GREEN-S-5" 0 S-5 "$APP_G"
+expect_exit "GREEN-S-5-BPLIST" 0 S-5 "$APP_S5BG"
 expect_exit "GREEN-S-7" 0 S-7 "$APP_S7G"
 
 # S-3: measure ad-hoc — do not assume 23 vs 28
@@ -327,7 +351,7 @@ fi
 echo "FULL_SCAN: fail-closed to 28 observed (S-3 UNKNOWN without Apple signing identity)"
 
 echo ""
-echo "SCANNED: red-s1(S-1) red-s2(S-2) red-s4(S-4) red-s5(S-5) red-s7(S-7) green-clean(S-1..S-5) green-s7(S-7) adhoc-s3(S-3) green-clean(full)"
+echo "SCANNED: red-s1(S-1) red-s2(S-2) red-s4(S-4) red-s5(S-5) red-s5-bplist(S-5) red-s7(S-7) green-clean(S-1..S-5) green-s5-bplist(S-5) green-s7(S-7) adhoc-s3(S-3) green-clean(full)"
 if [[ "$S3_RC" -eq 28 ]]; then
   echo "S-3: NOT MEASURED (no signing identity — fail-closed to 28)"
 else
