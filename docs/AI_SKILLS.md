@@ -673,6 +673,35 @@ Info.plist / embedded.mobileprovision / pocket-brain.gguf の**明示スコー�
 4. アリーナ `advance` は `die()` が `Err` を返す分岐で端末ログへ到達しない。
    成功後の terminal 分岐に Dead を期待するな。
 
+**T4-F as-built（2026-08-04）— ランタイム孤立の計測装置と陽性対照（F-1/F-2）:**
+正本 `docs/T4F_ABSOLUTE_ISOLATION_RUNTIME_PLAN.md` /
+報告 `docs/T4F_ABSOLUTE_ISOLATION_RUNTIME_REPORT.md`。
+- **沈黙は証拠ではない。** 「0 バイト捕捉」と「キャプチャ未稼働」はログ上区別不能。
+  同一セッション内の陽性対照が発火するまで本計測へ進むな。
+- **試験 A（無線 ON キャプチャ）と試験 B（機内モード完走）は別試験。**
+  機内モードでパケットを捕らえて 0 とするのは空虚な緑（plan §2）。
+  `t4f_capture_session.sh` は `T4F_TEST=B` のキャプチャを exit 2 で拒否する。
+- **装置:** `scripts/t4f_capture_session.sh`（rvi は `ifconfig -l` で接地。
+  `rvictl -l` を存在証明にするな）/ `scripts/t4f_port_scan.sh`
+  （既定 scope は `--top-ports 1000`。full 65535 は `T4F_PORT_SCOPE=full` 明示時のみ）。
+- **キャプチャ陽性対照:** Coraxis 以外のブラウザで既知 URL（既定 `http://example.com/`）。
+  Mac 側 curl は rvi0 に乗らない。証跡は件数・endpoint カーディナリティのみ（payload 残すな）。
+- **port-scan 陽性対照:** 既知 open の listen（Mac `127.0.0.1` 可）を先に検出。
+  対照失敗の device 結果は報告するな。
+- **app-owned は rvi0/tcpdump だけでは NOT SEPARABLE。** プロセス帰属が無い。
+  切り分け不能を 0 と書くな。書けるのは device-wide 件数（かつ対照発火後）のみ。
+- **tcpdump は root/BPF。** 実装担当は sudo するな。装置を作り指揮官が実行する。
+- 変異ドリル:
+  `t4f_capture_positive_control_mutation_drill.sh` /
+  `t4f_port_scan_positive_control_mutation_drill.sh`。
+
+**T4-F ハマりどころ:**
+1. `rvictl -l` が空でも `rvi0` が生きていることがある — 存在は `ifconfig -l`。
+2. 機内モードの 0 バイトは「喋れなかった」ではなく「捕らえる媒体が無かった」。
+3. 陽性対照に被測定アプリを使うな。対照と本計測が同根になる。
+4. device-wide 0 を app-owned 0 へ黙って言い換えるな — NOT SEPARABLE。
+5. スキャン範囲を述べない「開いていない」は語れない緑（top1000 ≠ 全ポート）。
+
 報告には「何を変えたか」「なぜか」「何で検証したか」を必ず含めろ。テストが通らないまま完了と言うことは、いかなる理由があっても禁止する。
 
 ---
