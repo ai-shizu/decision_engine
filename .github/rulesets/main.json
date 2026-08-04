@@ -45,7 +45,8 @@
           { "context": "iOS config contract" },
           { "context": "iOS Rust lib check (sim)" },
           { "context": "archive-scan-wiring" },
-          { "context": "s5-grep-diagnostic" }
+          { "context": "s5-grep-diagnostic" },
+          { "context": "iOS cfg test forbid" }
         ]
       }
     }
