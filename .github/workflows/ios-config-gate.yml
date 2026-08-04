@@ -136,3 +136,20 @@ jobs:
           chmod +x scripts/ios_archive_scan.sh scripts/ios_archive_scan_wiring.sh \
             scripts/gguf_three_point_sha_gate.sh
           bash scripts/ios_archive_scan_wiring.sh
+
+  # F-1: diagnose why grep misses in-Mach-O LAN markers. Does NOT modify count_lan_strings.
+  # Always exit 0 when the 15-cell matrix is complete — this is diagnosis, not a gate.
+  # Leave archive-scan-wiring RED until F-2 changes the detector with evidence.
+  s5-grep-diagnostic:
+    name: s5-grep-diagnostic
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          persist-credentials: false
+
+      - name: S-5 grep diagnostic matrix (3 inputs × 5 methods)
+        run: |
+          set -euo pipefail
+          chmod +x scripts/ios_s5_grep_diagnostic.sh scripts/ios_archive_scan.sh
+          bash scripts/ios_s5_grep_diagnostic.sh
