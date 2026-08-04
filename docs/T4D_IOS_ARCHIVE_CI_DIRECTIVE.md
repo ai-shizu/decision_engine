@@ -203,11 +203,38 @@ D-1 の計器が出した `NOTE=validity_days_total=7 suggests unpaid Apple Pers
 
 **そして最も重要な帰結:**
 
-> **`ios_archive_scan.sh` の S-3 は、この機材が作れる全てのアーカイブに対して永久に RED である。**
->
-> 無償 Personal Team では `get-task-allow=true` を外せない。**出荷可能な成果物を、この環境は原理的に生成できない。**
->
-> これはゲートの欠陥ではない。**T4-B のゲートは、いま完全に目的を果たしている——「出荷してはならない」と正しく言い続けている。** 8 回の手作業が見落としたものを、ゲートは初回から一貫して指している。
+> **無償 Personal Team は `Apple Distribution` 権限を取得できないため、RELEASE 分類のアーカイブを原理的に生成できない。出荷可能な成果物が存在しない。**
+
+#### 訂正（2026-08-04）—— 起草者の誤りを実測が正した
+
+**本節は当初、次のように書かれていた。誤りである。**
+
+> ~~`ios_archive_scan.sh` の S-3 は、この機材が作れる全てのアーカイブに対して永久に RED である~~
+
+**実測（起草者が実アーカイブに対して `ios_archive_scan.sh` を実行）:**
+
+```
+signing_type: DEV
+signing_evidence: authority_match=development
+network_entitlement_hits: 0
+get-task-allow: true
+S-3: DEV signing get-task-allow=true — allowed (not a violation)
+S-3: GREEN (network entitlements=0; get-task-allow policy satisfied for DEV)
+GATE: ALL GREEN (S-1..S-7)          exit=0
+```
+
+`classify_signing()` は `Authority=Apple Distribution|iPhone Distribution|iOS Distribution` を **RELEASE**、`Apple Development|iPhone Developer` を **DEV** と分類する。**S-3 の `get-task-allow` 禁止は RELEASE にのみ適用される。** DEV 署名で `get-task-allow=true` は正常であり、違反ではない。
+
+**したがって正しい記述はこうである。**
+
+| 誤 | 正 |
+|---|---|
+| S-3 が永久に RED になる | **S-3 は DEV アーカイブに対して正しく GREEN になる** |
+| ゲートが「出荷するな」と言い続けている | **RELEASE 経路がそもそも存在しない。** S-3 の release 方針は一度も発動しない |
+
+**この違いは実務に効く。** 「永久 RED」と書けば、誰かが壊れていないゲートを直しにかかる。**実際には S-3 は健全で、無償である限り測る対象（RELEASE 署名）が現れないだけである。**
+
+**教訓としては元の主張より弱い。** ゲートは「出荷してはならない」と言っているのではなく、**出荷物が存在しないので何も言っていない。** 沈黙を主張と読み替えたのは起草者の誤りである（鉄則 2 の自己違反）。
 
 ### 3.5 本フェーズの実装方針（C-2 確定を受けて）
 

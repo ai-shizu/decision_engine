@@ -597,12 +597,15 @@ Info.plist / embedded.mobileprovision / pocket-brain.gguf の**明示スコー�
 
 
 **T4-D D-3/D-4/D-5（2026-08-04・C-2=UNPAID 確定後）:**
-- `archive-scan-wiring` は `T4B_ONLY=S-N` + ジョブ内 fixture のみ。`ios_archive_scan.sh` / `gguf_three_point_sha_gate.sh` 無改変。
+- `archive-scan-wiring` は `T4B_ONLY=S-N` + ジョブ内 fixture のみ。`gguf_three_point_sha_gate.sh` 無改変。
+- **E-1:** S-5 陽性対照がテキストのみ・走査対象が Mach-O だった Vacuous Green。P-2 特例で Mach-O 対照を追加（テキスト対照は残す）。fixture は構築直後にバイト実在を測り、マーカーはリンク後追記でコンパイラ非依存にする。
 - hosted に Apple 署名 ID が無いとき、ad-hoc (`codesign -s -`) の S-3 は **exit 28 fail-closed**（23 ではない）。全走査も 28。これは欠陥ではなく計器が生きている証拠。
 - S-6 実 GGUF / 署名 Archive / 物理 HMR は NOT MEASURED。緑の範囲を同時に述べよ。
 - C-2=UNPAID では署名レーンは **disarmed のみ**（`workflow_dispatch` のみ・`push:main` 禁止）。preflight は「secrets 未設定」ではなく **発行不能** と書け。
 - ruleset の必須チェックに `archive-scan-wiring` / `ios-signed-archive` を実測前・武装不能時に入れるな。
-- Personal Team の S-3（get-task-allow）は永久 RED — ゲート正常。直す対象ではない。
+- S-3 の `get-task-allow` 禁止は **RELEASE 署名にのみ**適用される。`classify_signing()` が `Apple Distribution` を RELEASE、`Apple Development` を DEV とする。**DEV 署名の `get-task-allow=true` は違反ではなく GREEN**（実測: 実アーカイブ `ALL GREEN` exit=0）。無償 Personal Team は Distribution 権限を取れないため **RELEASE 分類が出現せず、S-3 の release 方針は発動しない**。「永久 RED」ではない — 壊れていないゲートを直しにかかるな。
+- **E-2:** XcodeGen は brew ではなく release zip の SHA-256 ピンで導入。Homebrew 都合で封緘版をダウングレードするな。
+- **E-3:** iOS Rust lib check は `npm run build` で実 `dist/` を建ててから `cargo check`。空 dist で panic を回避するな。
 
 **T4-D ハマりどころ:**
 1. template パスを `ios/...`（src-tauri 相対）にすると
