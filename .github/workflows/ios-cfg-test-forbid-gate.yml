@@ -1,0 +1,37 @@
+# T4-E — forbid ios-cfg-gated unit tests (static scan).
+#
+# Separate workflow: does not modify sealed T4-D workflows (C-2).
+# Measures only: no #[test] / #[cfg(test)] under cfg(target_os = "ios").
+name: ios-cfg-test-forbid-gate
+
+on:
+  pull_request:
+  push:
+    branches: [main, master]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  ios-cfg-test-forbid:
+    name: iOS cfg test forbid
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          persist-credentials: false
+
+      - name: ios_cfg_test_forbid_gate (expect GREEN)
+        run: |
+          set -euo pipefail
+          chmod +x scripts/ios_cfg_test_forbid_gate.sh
+          bash scripts/ios_cfg_test_forbid_gate.sh
+
+      - name: Mutation drill (plant → RED → restore → GREEN)
+        run: |
+          set -euo pipefail
+          chmod +x scripts/ios_cfg_test_forbid_mutation_drill.sh
+          T4E_LOG_DIR="${RUNNER_TEMP}/t4e-ios-cfg-forbid"
+          mkdir -p "$T4E_LOG_DIR"
+          T4E_LOG_DIR="$T4E_LOG_DIR" bash scripts/ios_cfg_test_forbid_mutation_drill.sh
