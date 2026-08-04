@@ -98,3 +98,20 @@ jobs:
           echo "ARCHIVE/IPA: NOT MEASURED"
           echo "REAL GGUF THREE-POINT: NOT MEASURED"
           echo "PHYSICAL-DEVICE HMR: NOT MEASURED"
+
+  # D-3: prove ios_archive_scan.sh is reachable from CI without a signing identity.
+  # Fixtures only; ios_archive_scan.sh / gguf_three_point_sha_gate.sh unmodified.
+  archive-scan-wiring:
+    name: archive-scan-wiring
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          persist-credentials: false
+
+      - name: Fixture RED/GREEN matrix for ios_archive_scan.sh (T4B_ONLY)
+        run: |
+          set -euo pipefail
+          chmod +x scripts/ios_archive_scan.sh scripts/ios_archive_scan_wiring.sh \
+            scripts/gguf_three_point_sha_gate.sh
+          bash scripts/ios_archive_scan_wiring.sh
