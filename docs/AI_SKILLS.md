@@ -641,7 +641,20 @@ Info.plist / embedded.mobileprovision / pocket-brain.gguf の**明示スコー�
   `SnapshotDigestMismatch` は capture⊕verify 恒真、`ReplayDivergence` は
   `die()` サイト自体が ABSENT。
 - **`BridgeError::ReplayDivergence` は設計**（プロファイル書込拒否）。FSM の
-  同名 variant は未配線の遺物。接続実装は別裁定（本フェーズは判定のみ）。
+  同名 variant は未配線の遺物。
+- **最終クリーンアップ（指揮官裁定）:** `FailureReason::ReplayDivergence` は
+  **退役（削除）**。本番 `die()` サイトが皆無で、コード表に残せば読み手に
+  誤った推測を与えるだけだった。`BridgeError::ReplayDivergence` は**無改変**。
+  **コード 3 は再利用しない** —— 番号を詰めると、既にログへ落ちた値の意味が
+  黙って変わる。
+- **`AccountingBreach` / `SnapshotDigestMismatch` は variant もガードも維持する。**
+  不到達なのは「本体が無い」からではなく「手前の検査が先に捕らえる」から
+  であり、多層防御の二層目である。**発火実績が無い計器は調べる対象であって
+  消す対象ではない。** 順序は
+  `unbalanced_books_die_as_internal_invariant_not_accounting_breach` が pin
+  しており、`close_period` を並べ替えれば落ちる —— 専用コードが価値を持つのは
+  まさにその時である。ノイズ対策は削除ではなく**到達可能性の明記**で行う
+  （`arena_terminal_codes` の doc 表）。
 - 判断は `arena_terminal_metrics`（ungated）。`log_arena_terminal_ios` は
   OSLog FFI のみ。陽性対照は Session 駆動 → `Dead` → 非ゼロ `dead_reason`
   （状態の手構築禁止）。計器破壊の変異ドリルで RED を実証せよ。

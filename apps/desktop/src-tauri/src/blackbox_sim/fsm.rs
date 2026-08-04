@@ -19,12 +19,24 @@ pub enum TurnPhase {
     Report,
 }
 
+/// Why a session died. Every variant must have a production `die()` site —
+/// a reason nothing can raise is a code the reader will still try to explain.
+///
+/// `ReplayDivergence` was removed in T4-E for exactly that: it had no caller in
+/// any release, so `arena.dead_reason` could never report it. The similarly
+/// named `BridgeError::ReplayDivergence` is a different enum and stays — it
+/// refuses to write a profile from degraded determinism rather than killing a
+/// live session.
+///
+/// `AccountingBreach` and `SnapshotDigestMismatch` are unreachable today
+/// because earlier checks catch the same corruption first, and they are kept on
+/// purpose as the second layer; see `arena_terminal_codes` for the ordering
+/// that makes them redundant and the test that pins it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum FailureReason {
     AccountingBreach,
     SnapshotDigestMismatch,
-    ReplayDivergence,
     InternalInvariantBroken,
 }
 
@@ -124,7 +136,7 @@ mod tests {
             SessionEvent::CampaignCompleted,
             SessionEvent::AbortRequested,
             SessionEvent::CorruptionDetected {
-                reason: FailureReason::ReplayDivergence,
+                reason: FailureReason::InternalInvariantBroken,
             },
         ]
     }

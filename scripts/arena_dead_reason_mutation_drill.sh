@@ -24,37 +24,45 @@ echo "DRILL[arena_dead_reason_instrument] before_sha=$BEFORE"
 python3 - "$TARGET" <<'PY'
 from pathlib import Path
 import sys
-p = Path(sys.argv[1])
-text = p.read_text(encoding="utf-8")
-# Sabotage: force the instrument to always report "no death".
-old = """pub(crate) const fn arena_terminal_codes(
-    state: crate::blackbox_sim::fsm::SessionState,
-) -> (u64, u64) {
-    use crate::blackbox_sim::fsm::{FailureReason, SessionState};
-    match state {
-        SessionState::Genesis | SessionState::Active { .. } => (0, 0),
-        SessionState::Sealed => (1, 0),
-        SessionState::Dead { reason } => (
-            1,
-            match reason {
-                FailureReason::AccountingBreach => 1,
-                FailureReason::SnapshotDigestMismatch => 2,
-                FailureReason::ReplayDivergence => 3,
-                FailureReason::InternalInvariantBroken => 4,
-            },
-        ),
-    }
-}"""
-new = """pub(crate) const fn arena_terminal_codes(
+
+# Anchor on the signature and rewrite through the matching brace rather than
+# matching the body verbatim. The verbatim form fail-closed on the T4-E code-3
+# retirement — correct, but it makes every edit to the guarded function look
+# like a broken drill, and the tempting repair is to weaken the drill.
+SIG = "pub(crate) const fn arena_terminal_codes("
+REPLACEMENT = """pub(crate) const fn arena_terminal_codes(
     state: crate::blackbox_sim::fsm::SessionState,
 ) -> (u64, u64) {
     let _ = state;
     // T4-E mutation plant: instrument permanently reports zero.
     (0, 0)
 }"""
-if old not in text:
-    raise SystemExit("arena_terminal_codes body not found for mutation")
-p.write_text(text.replace(old, new, 1), encoding="utf-8")
+
+p = Path(sys.argv[1])
+text = p.read_text(encoding="utf-8")
+
+start = text.find(SIG)
+if start == -1:
+    raise SystemExit(f"signature not found for mutation: {SIG}")
+
+open_brace = text.find("{", text.find(")", start))
+if open_brace == -1:
+    raise SystemExit("opening brace of arena_terminal_codes not found")
+
+depth = 0
+end = None
+for i in range(open_brace, len(text)):
+    if text[i] == "{":
+        depth += 1
+    elif text[i] == "}":
+        depth -= 1
+        if depth == 0:
+            end = i + 1
+            break
+if end is None:
+    raise SystemExit("unbalanced braces in arena_terminal_codes")
+
+p.write_text(text[:start] + REPLACEMENT + text[end:], encoding="utf-8")
 print("planted always-zero arena_terminal_codes")
 PY
 
