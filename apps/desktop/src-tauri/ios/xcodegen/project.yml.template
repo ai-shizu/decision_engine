@@ -17,9 +17,28 @@ settingGroups:
       ENABLE_USER_SCRIPT_SANDBOXING: NO
       # iPhone only — never "1,2". Policy: targeted_device_family=1.
       TARGETED_DEVICE_FAMILY: "1"
-      {{#if apple.development-team}}
-      DEVELOPMENT_TEAM: {{apple.development-team}}
-      {{/if}}
+      # Signing lives here, not in the generated pbxproj (T4-D F-2).
+      #
+      # Setting the Team in Xcode writes DEVELOPMENT_TEAM / CODE_SIGN_STYLE /
+      # CODE_SIGN_IDENTITY straight into gen/apple/.../project.pbxproj, which is a
+      # GENERATED file: ios_regenerate_tree.sh overwrites it and the settings are
+      # gone. That is not hypothetical — it happened on 2026-08-04, and because the
+      # unpaid Personal Team profile expires every 7 days the re-sign (C-1) recurs,
+      # so the loss would recur with it. Committing the drift instead is equally
+      # wrong: `iOS config contract` compares the tracked tree against a fresh
+      # regen byte-for-byte, and a hand-edited pbxproj fails that comparison.
+      #
+      # Hardcoded rather than {{apple.development-team}}: that placeholder resolves
+      # from Tauri's environment, so a runner without it would regenerate a
+      # DIFFERENT tree than a developer machine and break the manifest gate. The
+      # team id is not a secret — it is the prefix of the app id in every profile.
+      #
+      # CODE_SIGN_IDENTITY is Development because C-2 is UNPAID_PERSONAL_TEAM and
+      # no Distribution identity can exist. Revisit only if the program is joined.
+      DEVELOPMENT_TEAM: 4SZG59FV5K
+      CODE_SIGN_STYLE: Automatic
+      CODE_SIGN_IDENTITY: Apple Development
+      PROVISIONING_PROFILE_SPECIFIER: ""
 targetTemplates:
   app:
     type: application
