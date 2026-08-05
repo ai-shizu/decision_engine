@@ -381,6 +381,25 @@ run_xctrace_record() {
     return 0
   fi
 
+  # Existence of the bundle is not success. Measured 2026-08-05 on the first
+  # live run: xctrace exited 13 with "Timed out waiting for device to boot",
+  # still left a control.trace behind, and the rig called that status=ok. Export
+  # then failed with "Document Missing Template Error" and the session reported
+  # NOT_PARSEABLE — blaming the xpath for something the recorder never recorded.
+  # The gate still refused, correctly, but it named the wrong component, and a
+  # wrong diagnosis sends the next reader to the wrong place.
+  if [[ "$RECORD_EC" -ne 0 ]]; then
+    RECORD_STATUS="failed"
+    {
+      echo "status=RECORD_FAILED"
+      echo "record_exit=$RECORD_EC"
+      echo "elapsed_seconds=$t"
+      echo "trace_bundle=present_but_not_a_successful_recording"
+      echo "note=do_not_attribute_this_to_parsing; see xctrace_record_${label}.log"
+    } >"$SESSION_DIR/record_${label}_status.txt"
+    return 0
+  fi
+
   RECORD_STATUS="ok"
   {
     echo "status=ok"
