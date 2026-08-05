@@ -703,7 +703,7 @@ Info.plist / embedded.mobileprovision / pocket-brain.gguf の**明示スコー�
 5. スキャン範囲を述べない「開いていない」は語れない緑（top1000 ≠ 全ポート）。
 6. PKTAP/pcapng の再読込失敗を `set -e` + `2>/dev/null` で黙殺するな — 対照成功後に
    装置全体が死ぬ（T4-F-1 実機事故）。外部コマンドは fail-soft、stderr は証跡へ。
-7. `xctrace --time-limit` を信じるな — 外側 watchdog。ハングを 0 件と書くな（HUNG）。
+7. `xctrace --time-limit` を信じるな — 外側 watchdog。ハングを件数ゼロと書くな（HUNG）。
 8. EXIT trap で `local rc; rc=$?` とするな（この bash では `local` が `$?` を潰す）。
    `trap 'handler $?' EXIT` で渡せ。
 9. 全角括弧 `（$VAR）` は `set -u` 下で `$VAR）` を別変数に誤認し得る — ASCII `()` を使え。
