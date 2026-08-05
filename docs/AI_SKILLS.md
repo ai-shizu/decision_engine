@@ -701,6 +701,25 @@ Info.plist / embedded.mobileprovision / pocket-brain.gguf の**明示スコー�
 3. 陽性対照に被測定アプリを使うな。対照と本計測が同根になる。
 4. device-wide 0 を app-owned 0 へ黙って言い換えるな — NOT SEPARABLE。
 5. スキャン範囲を述べない「開いていない」は語れない緑（top1000 ≠ 全ポート）。
+6. PKTAP/pcapng の再読込失敗を `set -e` + `2>/dev/null` で黙殺するな — 対照成功後に
+   装置全体が死ぬ（T4-F-1 実機事故）。外部コマンドは fail-soft、stderr は証跡へ。
+7. `xctrace --time-limit` を信じるな — 外側 watchdog。ハングを 0 件と書くな（HUNG）。
+8. EXIT trap で `local rc; rc=$?` とするな（この bash では `local` が `$?` を潰す）。
+   `trap 'handler $?' EXIT` で渡せ。
+9. 全角括弧 `（$VAR）` は `set -u` 下で `$VAR）` を別変数に誤認し得る — ASCII `()` を使え。
+10. `xctrace list devices` の Offline を USB 未接続と読むな（CoreDevice 可用性とは別）。
+
+**T4-F-3a as-built（2026-08-05）— xctrace プロセス帰属（接続件数）:**
+正本指示は本会話の T4-F-3a 実装指示書 /
+報告 `docs/T4F_XCTRACE_ATTRIBUTION_REPORT.md`。
+- **裁定:** app-owned **connection 0** は byte 0 より強い §15.2-2 主張（経路未成立）。
+  代用ではない。NEFilter / Network Extension 帰属は禁止（条項 1 破壊）。
+- **装置:** `scripts/t4f_xctrace_attribution.sh` — 別アプリ attach 陽性対照 → Coraxis attach
+  本計測 → 撤去。計数スキーマ正本 `network-connection-detected`（export+xpath、GUI 目視禁止）。
+  失敗は `NOT_PARSEABLE` / ハングは `HUNG`（exit 3）。rvi0 装置は併存・無改変。
+- **変異ドリル:** `scripts/t4f_xctrace_positive_control_mutation_drill.sh`
+  （ゲート破壊・watchdog・parse fail・`2>/dev/null` 不在・残骸ゼロ）。
+- ライブ record は指揮官。実装担当はハング経路を harness で実証する。
 
 報告には「何を変えたか」「なぜか」「何で検証したか」を必ず含めろ。テストが通らないまま完了と言うことは、いかなる理由があっても禁止する。
 

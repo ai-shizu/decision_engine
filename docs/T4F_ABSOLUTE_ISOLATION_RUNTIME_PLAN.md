@@ -2,7 +2,7 @@
 
 > **起草**: リードアーキテクト（Opus 5）・2026-08-04
 > **ブランチ**: `feature/t4f-absolute-isolation-runtime`（base `6cf99d9`）
-> **状態**: 設計案。T4-F-1/F-2 装置着工済（報告 `docs/T4F_ABSOLUTE_ISOLATION_RUNTIME_REPORT.md`）。T4-F-3/4/5 は未着工。
+> **状態**: 設計案。T4-F-1/F-2 装置封緘済。T4-F-3a（xctrace 帰属装置）着工済（報告 `docs/T4F_XCTRACE_ATTRIBUTION_REPORT.md`）。T4-F-3 本計測ライブ / F-4 / F-5 は未着工。
 > **前提**: `main` 16/16 GREEN・ruleset id=20378920 稼働
 
 ---
