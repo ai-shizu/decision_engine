@@ -48,6 +48,7 @@ HARNESS="${T4F_HARNESS:-0}"
 HARNESS_CONTROL="${T4F_HARNESS_CONTROL:-pass}"
 SKIP_MEASURE="${T4F_SKIP_MEASURE:-0}"
 UDID="${T4F_UDID:-}"
+RVI_BROUGHT_UP=0
 
 mkdir -p "$EVID"
 SESSION_ID="$(date -u +%Y%m%dT%H%M%SZ)-$$"
@@ -57,6 +58,48 @@ LOG="$SESSION_DIR/session.log"
 
 log() { printf '%s\n' "$*" | tee -a "$LOG"; }
 die() { log "FAIL: $*"; exit 1; }
+
+# A run that dies mid-session used to leave rvi0 up, a tcpdump running, and no
+# word about either: the operator saw the shell prompt return and had to infer
+# from an absent artifact that anything had gone wrong. Announce the abnormal
+# exit and put the machine back.
+t4f_on_exit() {
+  local rc=$?
+  trap - EXIT
+  # rc=2 is a refusal (Test B / vacuous-green guard) — deliberate, not a crash.
+  if [[ "$rc" -ne 0 && "$rc" -ne 2 && "${T4F_CLEAN_EXIT:-0}" != "1" ]]; then
+    echo "" >&2
+    echo "ABNORMAL EXIT rc=$rc — session did not complete." >&2
+    echo "  session dir : ${SESSION_DIR:-<unset>}" >&2
+    echo "  last log    : ${LOG:-<unset>}" >&2
+    echo "  pcap stderr : ${SESSION_DIR:-}/pcap_read_stderr.log (if present)" >&2
+    if [[ -n "${TCPDUMP_PID:-}" ]] && kill -0 "$TCPDUMP_PID" 2>/dev/null; then
+      kill "$TCPDUMP_PID" 2>/dev/null || true
+      echo "  stopped stray tcpdump pid=$TCPDUMP_PID" >&2
+    fi
+    # Only touch an interface THIS run created. Warning about a pre-existing
+    # rvi0 would blame this session for someone else's leftovers.
+    if [[ "${RVI_BROUGHT_UP:-0}" == "1" ]]; then
+      if declare -F teardown_rvi >/dev/null 2>&1; then
+        teardown_rvi >/dev/null 2>&1 || true
+      fi
+      local left=""
+      if declare -F list_rvi >/dev/null 2>&1; then
+        left="$(list_rvi 2>/dev/null || true)"
+      fi
+      if [[ -n "$left" ]]; then
+        echo "  WARNING: rvi interface still present: $left" >&2
+      else
+        echo "  rvi torn down" >&2
+      fi
+    else
+      echo "  rvi: not brought up by this run — left untouched" >&2
+    fi
+  fi
+  exit "$rc"
+}
+
+trap t4f_on_exit EXIT
 refuse() { log "REFUSED: $*"; exit 2; }
 
 sha_of() {
@@ -96,14 +139,48 @@ require_rvi_present() {
   return 0
 }
 
+# Count packets WITHOUT letting a partial read abort the session.
+#
+# Measured 2026-08-04 on a live rvi0 control capture: tcpdump writes PCAP-NG
+# when capturing PKTAP, and re-reading that file fails part-way —
+#   tcpdump: pcap_loop: block in pcapng dump file has a length of 262146
+#            that is not a multiple of 4
+# — after emitting the packets it did decode, then exits 1. Under
+# `set -euo pipefail` the command substitution around this pipeline inherited
+# that 1 and killed the whole run with no message: the session died right
+# after "control: waiting 20s capture window", left rvi0 up, and wrote no
+# verdict. The control had actually PASSED (25 packets); the counting of it is
+# what fell over.
+#
+# So: prefer the count tcpdump already reported while capturing, keep the
+# re-read as a cross-check, and never let either turn into a silent zero.
+# `$2` (optional) is tcpdump's own capture log.
 packet_count_pcap() {
   local pcap="$1"
-  if [[ ! -s "$pcap" ]]; then
-    echo 0
-    return 0
+  local capture_log="${2:-}"
+  local live_n="" reread_n="" rc=0
+
+  if [[ -n "$capture_log" && -f "$capture_log" ]]; then
+    live_n="$(awk '/packets captured/{print $1; exit}' "$capture_log" 2>/dev/null || true)"
   fi
-  # Count only — never dump payloads into evidence (C-7).
-  "$TCPDUMP" -nn -r "$pcap" 2>/dev/null | wc -l | tr -d ' '
+
+  if [[ -s "$pcap" ]]; then
+    # Count only — never dump payloads into evidence (C-7).
+    # `|| true` is load-bearing: a partial read must not abort the session.
+    reread_n="$( { "$TCPDUMP" -nn -r "$pcap" 2>>"$SESSION_DIR/pcap_read_stderr.log" || true; } \
+      | wc -l | tr -d ' ')"
+  fi
+
+  if [[ -n "$live_n" ]]; then
+    echo "$live_n"
+  elif [[ -n "$reread_n" ]]; then
+    echo "$reread_n"
+  else
+    # Neither path produced a number. NOT a zero — say so and fail loudly.
+    echo "NOT_COUNTABLE"
+    rc=1
+  fi
+  return "$rc"
 }
 
 summarize_pcap_endpoints() {
@@ -115,10 +192,15 @@ summarize_pcap_endpoints() {
     echo "unique_endpoints=0" >>"$out"
     return 0
   fi
+  # Same hazard as packet_count_pcap: a partial PCAP-NG read exits 1, and
+  # `grep -oE` exits 1 when it matches nothing — either one would abort the
+  # session under `set -euo pipefail`. A capture with no IPv4 in it is a real
+  # outcome (v6-only traffic), not a reason to die.
   local lines endpoints
-  lines="$("$TCPDUMP" -nn -r "$pcap" 2>/dev/null | wc -l | tr -d ' ')"
-  endpoints="$("$TCPDUMP" -nn -r "$pcap" 2>/dev/null \
-    | grep -oE '([0-9]{1,3}\.){3}[0-9]{1,3}' \
+  lines="$( { "$TCPDUMP" -nn -r "$pcap" 2>>"$SESSION_DIR/pcap_read_stderr.log" || true; } \
+    | wc -l | tr -d ' ')"
+  endpoints="$( { "$TCPDUMP" -nn -r "$pcap" 2>>"$SESSION_DIR/pcap_read_stderr.log" || true; } \
+    | { grep -oE '([0-9]{1,3}\.){3}[0-9]{1,3}' || true; } \
     | sort -u | wc -l | tr -d ' ')"
   {
     echo "packet_lines=$lines"
@@ -266,6 +348,8 @@ else
   RVI_EC=$?
   set -e
   echo "rvictl_start_exit=$RVI_EC" >>"$SESSION_DIR/rvi_bringup.txt"
+  # From here the exit handler owns teardown of what we just created.
+  RVI_BROUGHT_UP=1
   sleep 1
   RVI_LIST="$(require_rvi_present)" || die "rvictl -s reported done but ifconfig -l has no rvi* (do not trust rvictl -l)"
   RVI_IFACE="$(printf '%s\n' "$RVI_LIST" | head -n1)"
@@ -326,7 +410,11 @@ else
   wait "$TCPDUMP_PID" 2>/dev/null
   set -e
 
-  PC_COUNT="$(packet_count_pcap "$CONTROL_PCAP")"
+  PC_COUNT="$(packet_count_pcap "$CONTROL_PCAP" "$SESSION_DIR/tcpdump_control.log")" || true
+  if [[ "$PC_COUNT" == "NOT_COUNTABLE" ]]; then
+    teardown_rvi || true
+    die "control capture produced no countable packet total (see pcap_read_stderr.log) — refusing to call that zero"
+  fi
   summarize_pcap_endpoints "$CONTROL_PCAP" "$CONTROL_SUMMARY"
   echo "control_url=$CONTROL_URL" >>"$CONTROL_SUMMARY"
   echo "control_source_requirement=non_Coraxis_browser_on_device" >>"$CONTROL_SUMMARY"
