@@ -507,9 +507,16 @@ else
       echo "app_owned_note=rvi_tcpdump_has_no_process_attribution; do_not_report_app_owned_zero"
       echo "silence_claim=FORBIDDEN_without_attribution_method"
     } >"$SESSION_DIR/measurement_summary.txt"
-    # Retain measurement pcap for commander audit; payloads may include ambient
-    # system traffic — do not paste contents into reports (C-7). Counts only in report.
+    # C-7: drop the pcap once counted and hashed, exactly as the control does.
+    # This window is device-wide and minutes long, so it holds whatever the phone
+    # was doing in the background — the more sensitive of the two captures, not
+    # the less. Keeping it for "audit convenience" was the wrong trade: the count
+    # and the SHA already carry the provenance, and re-deriving 23 from a file
+    # nobody may keep is not worth retaining someone's ambient traffic.
+    rm -f "$MEASURE_PCAP"
+    echo "pcap_retained=no_deleted_after_count" >>"$SESSION_DIR/measurement_summary.txt"
     log "measurement: device_wide packet_lines=$M_COUNT app_owned=NOT_SEPARABLE"
+    log "measurement: pcap deleted after count+hash (C-7)"
   fi
 fi
 
