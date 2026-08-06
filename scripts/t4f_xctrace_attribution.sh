@@ -602,6 +602,51 @@ extract_connection_events() {
 
   # Count rows mechanically. Empty table => 0 (valid). Parse tools must not crash us.
   local count
+  # Attribution check BEFORE counting anything.
+  #
+  # The Network template declares a "Process ID" column, and on 2026-08-06 the
+  # first successful live run emitted 145 rows for Coraxis and 180 for Safari
+  # with that column empty — <sentinel/> in every single row of both traces,
+  # zero pid values anywhere. Same address prefixes in both, the same three
+  # globally-routable endpoints in both, and fd99::/8 ULA pairs that are the
+  # Mac↔device debug tunnel. --attach scopes the trace session; the connection
+  # table does not follow it. So those 145 were device-wide ambient traffic, and
+  # calling them app-owned nearly sent the team hunting a leak that the static
+  # scan says cannot exist: the binary links neither Network.framework nor
+  # CFNetwork and has no socket/connect symbols, and a process cannot call what
+  # it never linked.
+  #
+  # A count without attribution is the noisy twin of a zero without a control.
+  # Refuse it the same way.
+  attributed="$(python3 - "$table_xml" <<'PY' 2>>"$outdir/python_attr.err"
+import sys, re
+from pathlib import Path
+text = Path(sys.argv[1]).read_text(encoding="utf-8", errors="replace")
+rows = re.findall(r"<row>(.*?)</row>", text, re.S)
+# A pid is present only as a real <pid ...>N</pid> element. <sentinel/> is the
+# exporter saying "this column has no value here".
+with_pid = sum(1 for r in rows if re.search(r"<pid\b[^>]*>\s*\d+\s*</pid>", r))
+print(f"{len(rows)} {with_pid}")
+PY
+)" || attributed=""
+
+  ATTR_ROWS="${attributed%% *}"
+  ATTR_WITH_PID="${attributed##* }"
+  if [[ -n "$attributed" && "$ATTR_ROWS" =~ ^[0-9]+$ && "$ATTR_WITH_PID" =~ ^[0-9]+$ ]] \
+     && [[ "$ATTR_ROWS" -gt 0 && "$ATTR_WITH_PID" -eq 0 ]]; then
+    {
+      echo "status=NOT_SEPARABLE"
+      echo "connection_events=NOT_SEPARABLE"
+      echo "schema=$schema"
+      echo "rows_present=$ATTR_ROWS"
+      echo "rows_with_pid=0"
+      echo "reason=network_table_is_device_wide; --attach does not scope it"
+      echo "note=do_not_report_these_as_app_owned; a count without attribution proves nothing"
+    } >"$result"
+    log "parse[$label]: $ATTR_ROWS rows, none carrying a pid — NOT_SEPARABLE"
+    return 0
+  fi
+
   count="$(python3 - "$table_xml" <<'PY' 2>>"$outdir/python_count.err"
 import sys, re
 from pathlib import Path
