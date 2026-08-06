@@ -282,6 +282,38 @@ if [[ "$WATCHDOG_SECS" -le "$RECORD_SECS" ]]; then
 fi
 
 # =============================================================================
+# Device process lookup
+# =============================================================================
+# Prints the pid of the newest process whose executable basename matches $1, or
+# nothing. Never aborts the session: an unresolvable target is a reportable
+# outcome, not a crash.
+resolve_device_pid() {
+  local want="$1"
+  local out="$SESSION_DIR/device_processes_${want}.json"
+  local err="$SESSION_DIR/device_processes_${want}.err"
+
+  if ! xcrun devicectl device info processes \
+      --device "$UDID" --json-output "$out" >>"$err" 2>>"$err"; then
+    return 1
+  fi
+
+  python3 - "$out" "$want" <<'PY' || true
+import json, sys
+try:
+    procs = json.load(open(sys.argv[1]))["result"]["runningProcesses"]
+except Exception:
+    sys.exit(0)
+want = sys.argv[2]
+hits = [p for p in procs
+        if (p.get("executable") or "").rsplit("/", 1)[-1] == want
+        and p.get("processIdentifier")]
+if hits:
+    # Newest pid: if the app was relaunched, the old one is the wrong target.
+    print(max(int(p["processIdentifier"]) for p in hits))
+PY
+}
+
+# =============================================================================
 # Record + watchdog
 # =============================================================================
 # Returns via globals: RECORD_STATUS=ok|hung|failed, RECORD_EC=int
@@ -328,12 +360,41 @@ run_xctrace_record() {
     return 0
   fi
 
+  # Resolve the target to a live pid BEFORE recording.
+  #
+  # First live attempt against a visible device died with
+  #   Cannot find process matching name: MobileSafari   (exit 19)
+  # and the name was not wrong — MobileSafari was the exact executable name,
+  # and it was running minutes later. iOS had simply suspended or reaped it
+  # between the operator's acknowledgement and the record starting. Attaching
+  # by name means that race decides the run, and reports it as a cryptic 19.
+  #
+  # Asking the device which processes exist turns "not running" into a sentence
+  # the operator can act on, before anything is recorded.
+  local attach_pid=""
+  attach_pid="$(resolve_device_pid "$attach")" || true
+  if [[ -z "$attach_pid" ]]; then
+    RECORD_STATUS="failed"
+    RECORD_EC=0
+    {
+      echo "status=TARGET_NOT_RUNNING"
+      echo "attach_name=$attach"
+      echo "note=process_absent_on_device_at_record_time; not_a_parse_or_schema_problem"
+      echo "remedy=launch_and_keep_it_foreground_then_retry"
+    } >"$SESSION_DIR/record_${label}_status.txt"
+    log "record[$label]: '$attach' is not running on the device — cannot attach"
+    log "record[$label]: launch it, keep it in the foreground, and re-run"
+    return 0
+  fi
+  log "record[$label]: resolved $attach -> pid $attach_pid"
+  echo "attach_pid=$attach_pid" >>"$SESSION_DIR/record_${label}_status.txt"
+
   # Live: never trust --time-limit alone.
   set +e
   "$XCTRACE" record \
     --template 'Network' \
     --device "$UDID" \
-    --attach "$attach" \
+    --attach "$attach_pid" \
     --time-limit "${RECORD_SECS}s" \
     --output "$out_trace" \
     --no-prompt \
