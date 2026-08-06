@@ -4,7 +4,7 @@
 # Allowed shape (exact):
 #   env -u CARGO_TARGET_DIR npx --no-install tauri ios build \
 #     --ci --target aarch64 \
-#     --features pocket-brain,secure-vault,flavor-live \
+#     --features "$VALIDATED_FEATURES" \
 #     --build-number "$VALIDATED_BUILD_NUMBER" \
 #     --export-method app-store-connect
 #
@@ -30,7 +30,7 @@ command -v python3 >/dev/null 2>&1 || die "python3 required"
 command -v npx >/dev/null 2>&1 || die "npx required"
 
 # --- policy / decision fail-closed ---
-BUILD_NUMBER="$(python3 - <<'PY' "$POLICY" "$ELIG" "$EXPORT"
+POLICY_OUT="$(python3 - <<'PY' "$POLICY" "$ELIG" "$EXPORT"
 import json, sys
 policy_path, elig_path, export_path = sys.argv[1:4]
 p = json.load(open(policy_path, encoding="utf-8"))
@@ -45,8 +45,13 @@ if p.get("export_method") != "app-store-connect":
     fail("policy export_method must be app-store-connect")
 if p.get("signing_mode") != "manual":
     fail("policy signing_mode must be manual")
+# The allowlist is the contract; the policy is data checked against it. Any
+# feature that can open a socket must never reach a release build — egress-live
+# pulls in reqwest/rustls/hickory and would make the shipped binary capable of
+# network I/O, which §15.2 clause 1 forbids outright.
+ALLOWED_FEATURES = ["pocket-brain", "secure-vault", "flavor-live"]
 feats = p.get("features_exact")
-if feats != ["pocket-brain", "secure-vault", "flavor-live"]:
+if feats != ALLOWED_FEATURES:
     fail(f"features_exact mismatch: {feats}")
 bn = p.get("build_number")
 if not isinstance(bn, int) or bn < 1:
@@ -81,7 +86,10 @@ if plist_val != x["its_app_uses_non_exempt_encryption"]:
         f"{plist_val!r} != decision {x['its_app_uses_non_exempt_encryption']!r})"
     )
 
+# Emit both, so the build argv is derived from the same validated policy that
+# was just checked — not from a second copy of the list living in the argv.
 print(bn)
+print(",".join(feats))
 PY
 )" || die "policy/decision gate failed (eligibility/export compliance)"
 
@@ -132,13 +140,22 @@ check_gguf() {
 check_gguf "$SRC_GGUF" SOURCE
 
 cd "$DESKTOP"
-export VALIDATED_BUILD_NUMBER="$BUILD_NUMBER"
-echo "ios_release_build: invoking fixed release command build_number=$VALIDATED_BUILD_NUMBER"
+
+# Split what the policy gate emitted. Both values come from the JSON that was
+# just validated, so the argv cannot drift from the policy the way a second
+# hardcoded copy could — measured 2026-08-06: adding egress-live to the argv
+# alone left every CI check green, because the policy check and the build
+# command were two unrelated strings that merely happened to agree.
+VALIDATED_BUILD_NUMBER="$(printf '%s\n' "$POLICY_OUT" | sed -n '1p')"
+VALIDATED_FEATURES="$(printf '%s\n' "$POLICY_OUT" | sed -n '2p')"
+export VALIDATED_BUILD_NUMBER
+[[ -n "$VALIDATED_FEATURES" ]] || die "policy gate emitted no feature list"
+echo "ios_release_build: invoking fixed release command build_number=$VALIDATED_BUILD_NUMBER features=$VALIDATED_FEATURES"
 
 # Exact allowed command — no --debug/--no-sign/--open/--ignore-version-mismatches/--config.
 env -u CARGO_TARGET_DIR npx --no-install tauri ios build \
   --ci \
   --target aarch64 \
-  --features pocket-brain,secure-vault,flavor-live \
+  --features "$VALIDATED_FEATURES" \
   --build-number "$VALIDATED_BUILD_NUMBER" \
   --export-method app-store-connect

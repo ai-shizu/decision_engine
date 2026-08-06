@@ -64,6 +64,17 @@ jobs:
           echo "REAL GGUF THREE-POINT: NOT MEASURED"
           echo "PHYSICAL-DEVICE HMR: NOT MEASURED"
 
+      # Until now nothing stopped a networking feature reaching the shipped
+      # build: the policy checked features_exact against an allowlist, the argv
+      # carried its own copy of the list, and adding egress-live to the argv
+      # alone left every check green. Measured, not supposed.
+      - name: Release feature allowlist mutation drill (egress-live must RED)
+        run: |
+          set -euo pipefail
+          chmod +x scripts/ios_release_features_mutation_drill.sh
+          T4F_LOG_DIR="${RUNNER_TEMP}/t4f-release-features" \
+            bash scripts/ios_release_features_mutation_drill.sh
+
       - name: Upload config receipts (no secrets / no IPA / no GGUF)
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
